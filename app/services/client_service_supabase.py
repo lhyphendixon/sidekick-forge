@@ -3,7 +3,7 @@ Enhanced Client management service using Supabase only (no Redis)
 """
 import json
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import HTTPException
 from supabase import create_client, Client as SupabaseClient
 import httpx
@@ -32,7 +32,7 @@ class ClientService:
             raise HTTPException(status_code=400, detail=f"Client with ID {client_data.id} already exists")
         
         # Create client object with all fields
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Extract settings into separate columns
         settings = client_data.settings or ClientSettings()
@@ -108,7 +108,7 @@ class ClientService:
             update_dict["settings"] = merged_settings
         
         if update_dict:
-            update_dict["updated_at"] = datetime.utcnow().isoformat()
+            update_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
             
             result = self.supabase.table(self.table_name).update(update_dict).eq("id", client_id).execute()
             
@@ -278,7 +278,7 @@ class ClientService:
                                 setattr(client.settings.api_keys, key, value)
                     
                     # Update the client in database with synced settings
-                    update_dict = {"settings": client.settings.dict(), "updated_at": datetime.utcnow().isoformat()}
+                    update_dict = {"settings": client.settings.dict(), "updated_at": datetime.now(timezone.utc).isoformat()}
                     self.supabase.table(self.table_name).update(update_dict).eq("id", client_id).execute()
                     
                 except Exception as e:

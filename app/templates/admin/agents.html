@@ -8,15 +8,15 @@
     <div class="mb-6">
         <div class="flex items-center justify-between">
             <div>
-                <h1 class="text-2xl font-bold text-gray-900">Agent Management</h1>
-                <p class="text-gray-600">Manage AI agents across all clients</p>
+                <h1 class="text-2xl font-bold text-dark-text">Agent Management</h1>
+                <p class="text-dark-text-secondary">Manage AI agents across all clients</p>
             </div>
             <div class="flex gap-2">
-                <button class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium"
+                <button class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all"
                         onclick="showAddAgentModal()">
                     Add Agent
                 </button>
-                <button class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium"
+                <button class="btn-secondary px-4 py-2 rounded text-sm font-medium transition-all"
                         onclick="createDefaultAgents()">
                     Create Defaults
                 </button>
@@ -25,17 +25,17 @@
     </div>
 
     <!-- Client Filter and Agent Stats -->
-    <div class="mb-6 bg-white rounded-lg shadow p-4">
+    <div class="mb-6 bg-dark-surface rounded-lg border border-dark-border p-4">
         <div class="flex items-center justify-between">
             <div class="flex items-center space-x-4">
                 <select id="clientFilter" onchange="filterByClient()" 
-                        class="border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                        class="bg-dark-elevated border-dark-border text-dark-text rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     <option value="">All Clients</option>
                     {% for client in clients %}
                     <option value="{{ client.id }}">{{ client.name }}</option>
                     {% endfor %}
                 </select>
-                <div class="text-sm text-gray-600">
+                <div class="text-sm text-dark-text-secondary">
                     <span id="agentCount">{{ agents|length }}</span> agents total
                 </div>
             </div>
@@ -45,58 +45,58 @@
     <!-- Agents Grid -->
     <div id="agentsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {% for agent in agents %}
-        <div class="agent-card bg-white rounded-lg shadow p-6" data-client-id="{{ agent.client_id }}">
+        <div class="agent-card client-card bg-dark-surface rounded-lg border border-dark-border p-6" data-client-id="{{ agent.client_id }}">
             <div class="flex justify-between items-start mb-4">
                 <div class="flex-1">
-                    <h3 class="text-lg font-medium text-gray-900 mb-1">{{ agent.name }}</h3>
-                    <p class="text-sm text-blue-600 font-medium">{{ agent.client_name }}</p>
-                    <p class="text-xs text-gray-500">{{ agent.slug }}</p>
+                    <h3 class="text-lg font-medium text-dark-text mb-1">{{ agent.name }}</h3>
+                    <p class="text-sm text-brand-teal font-medium">{{ agent.client_name }}</p>
+                    <p class="text-xs text-dark-text-secondary">{{ agent.slug }}</p>
                 </div>
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {% if agent.enabled %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {% if agent.enabled %}bg-brand-teal/20 text-brand-teal{% else %}bg-dark-elevated text-dark-text-secondary{% endif %}">
                     {% if agent.enabled %}Active{% else %}Inactive{% endif %}
                 </span>
             </div>
             
             {% if agent.description %}
-            <p class="text-sm text-gray-600 mb-4">{{ agent.description }}</p>
+            <p class="text-sm text-dark-text-secondary mb-4">{{ agent.description }}</p>
             {% endif %}
             
-            <div class="text-sm text-gray-600 space-y-2 mb-4">
+            <div class="text-sm text-dark-text-secondary space-y-2 mb-4">
                 <div class="flex justify-between">
                     <span>Voice Provider:</span>
-                    <span class="font-medium">{{ agent.voice_settings.provider|title }}</span>
+                    <span class="font-medium text-dark-text">{{ agent.voice_settings.provider|title }}</span>
                 </div>
                 <div class="flex justify-between">
                     <span>Voice ID:</span>
-                    <span class="font-medium">{{ agent.voice_settings.voice_id }}</span>
+                    <span class="font-medium text-dark-text">{{ agent.voice_settings.voice_id }}</span>
                 </div>
                 <div class="flex justify-between">
                     <span>Temperature:</span>
-                    <span class="font-medium">{{ agent.voice_settings.temperature }}</span>
+                    <span class="font-medium text-dark-text">{{ agent.voice_settings.temperature }}</span>
                 </div>
             </div>
             
-            <div class="mt-4 pt-4 border-t">
-                <div class="text-xs text-gray-500 mb-2">System Prompt Preview</div>
-                <p class="text-xs text-gray-700 line-clamp-2">
+            <div class="mt-4 pt-4 border-t border-dark-border">
+                <div class="text-xs text-dark-text-secondary mb-2">System Prompt Preview</div>
+                <p class="text-xs text-dark-text-secondary line-clamp-2">
                     {{ agent.system_prompt[:80] }}{% if agent.system_prompt|length > 80 %}...{% endif %}
                 </p>
             </div>
             
             <div class="mt-4 flex justify-between">
                 <a href="/admin/agents/{{ agent.client_id }}/{{ agent.slug }}" 
-                   class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                   class="text-brand-teal hover:text-brand-teal/80 text-sm font-medium transition-colors">
                     Edit
                 </a>
                 <button onclick="confirmDeleteAgent('{{ agent.client_id }}', '{{ agent.slug }}', '{{ agent.name }}')" 
-                        class="text-red-600 hover:text-red-800 text-sm font-medium">
+                        class="text-brand-salmon hover:text-brand-salmon/80 text-sm font-medium transition-colors">
                     Delete
                 </button>
             </div>
         </div>
         {% else %}
         <div class="col-span-full">
-            <div class="bg-white rounded-lg shadow p-8 text-center">
+            <div class="bg-dark-surface rounded-lg border border-dark-border p-8 text-center">
                 <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 48 48">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
                           d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />

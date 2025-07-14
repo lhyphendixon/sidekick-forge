@@ -10,10 +10,54 @@
     
     <!-- Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Custom Tailwind config with brand colors
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        // Brand colors
+                        'brand-teal': '#01a4a6',
+                        'brand-orange': '#fc7244',
+                        'brand-salmon': '#f56453',
+                        // Dark mode colors
+                        'dark-bg': '#0f0f0f',
+                        'dark-surface': '#1a1a1a',
+                        'dark-elevated': '#252525',
+                        'dark-border': '#2a2a2a',
+                        'dark-text': '#e0e0e0',
+                        'dark-text-secondary': '#a0a0a0'
+                    }
+                }
+            }
+        }
+    </script>
     
     <!-- Custom admin styles -->
     <style>
-        /* Custom admin styling */
+        /* Dark mode base styles */
+        body {
+            background-color: #0f0f0f;
+            color: #e0e0e0;
+        }
+        
+        /* Custom scrollbar for dark mode */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #01a4a6;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #018789;
+        }
+        
+        /* Status indicators with better dark mode colors */
         .status-indicator {
             display: inline-block;
             width: 12px;
@@ -21,23 +65,65 @@
             border-radius: 50%;
             margin-right: 8px;
         }
-        .status-running { background-color: #10b981; }
-        .status-stopped { background-color: #ef4444; }
-        .status-starting { background-color: #f59e0b; }
+        .status-running { background-color: #01a4a6; }
+        .status-stopped { background-color: #f56453; }
+        .status-starting { background-color: #fc7244; }
         .status-error { background-color: #dc2626; }
         
+        /* Metric cards with brand gradient */
         .metric-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #01a4a6 0%, #018789 100%);
             color: white;
+            border: 1px solid rgba(1, 164, 166, 0.3);
         }
         
+        /* Card hover effects */
         .client-card {
-            transition: transform 0.2s ease-in-out;
+            transition: all 0.2s ease-in-out;
+            background-color: #1a1a1a;
+            border: 1px solid #2a2a2a;
         }
         .client-card:hover {
             transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(1, 164, 166, 0.2);
+            border-color: #01a4a6;
         }
         
+        /* Form inputs dark mode */
+        input, textarea, select {
+            background-color: #252525 !important;
+            border-color: #2a2a2a !important;
+            color: #e0e0e0 !important;
+        }
+        input:focus, textarea:focus, select:focus {
+            border-color: #01a4a6 !important;
+            box-shadow: 0 0 0 3px rgba(1, 164, 166, 0.1) !important;
+        }
+        
+        /* Button styles */
+        .btn-primary {
+            background-color: #01a4a6;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #018789;
+        }
+        .btn-secondary {
+            background-color: #fc7244;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background-color: #e05d34;
+        }
+        .btn-danger {
+            background-color: #f56453;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #e34c3a;
+        }
+        
+        /* HTMX indicators */
         .htmx-indicator {
             opacity: 0;
             transition: opacity 500ms ease-in;
@@ -49,10 +135,10 @@
             opacity: 1;
         }
         
-        /* Loading spinner */
+        /* Loading spinner with brand color */
         .spinner {
-            border: 2px solid #f3f3f3;
-            border-top: 2px solid #3498db;
+            border: 2px solid #2a2a2a;
+            border-top: 2px solid #01a4a6;
             border-radius: 50%;
             width: 20px;
             height: 20px;
@@ -64,43 +150,58 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        
+        /* Navigation active state */
+        .nav-active {
+            background-color: rgba(1, 164, 166, 0.1);
+            color: #01a4a6;
+            border-left: 3px solid #01a4a6;
+        }
+        
+        /* Links */
+        a {
+            color: #01a4a6;
+        }
+        a:hover {
+            color: #018789;
+        }
     </style>
     
     {% block extra_head %}{% endblock %}
 </head>
-<body class="bg-gray-100">
+<body class="bg-dark-bg text-dark-text">
     <!-- Navigation Header -->
-    <nav class="bg-white shadow-lg">
+    <nav class="bg-dark-surface border-b border-dark-border">
         <div class="max-w-7xl mx-auto px-4">
             <div class="flex justify-between h-16">
                 <div class="flex items-center">
                     <div class="flex-shrink-0">
-                        <h1 class="text-xl font-bold text-gray-800">Autonomite Admin</h1>
+                        <h1 class="text-xl font-bold text-brand-teal">Autonomite Admin</h1>
                     </div>
                     <div class="hidden md:block">
-                        <div class="ml-10 flex items-baseline space-x-4">
+                        <div class="ml-10 flex items-baseline space-x-2">
                             <a href="/admin/" 
-                               class="{% if request.url.path == '/admin/' %}bg-blue-100 text-blue-700{% else %}text-gray-500 hover:text-gray-700{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                               class="{% if request.url.path == '/admin/' %}nav-active{% else %}text-dark-text-secondary hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Dashboard
                             </a>
                             <a href="/admin/clients" 
-                               class="{% if '/admin/clients' in request.url.path %}bg-blue-100 text-blue-700{% else %}text-gray-500 hover:text-gray-700{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                               class="{% if '/admin/clients' in request.url.path %}nav-active{% else %}text-dark-text-secondary hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Clients
                             </a>
                             <a href="/admin/agents" 
-                               class="{% if '/admin/agents' in request.url.path %}bg-blue-100 text-blue-700{% else %}text-gray-500 hover:text-gray-700{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                               class="{% if '/admin/agents' in request.url.path %}nav-active{% else %}text-dark-text-secondary hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Agents
                             </a>
                             <a href="/admin/monitoring" 
-                               class="{% if '/admin/monitoring' in request.url.path %}bg-blue-100 text-blue-700{% else %}text-gray-500 hover:text-gray-700{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                               class="{% if '/admin/monitoring' in request.url.path %}nav-active{% else %}text-dark-text-secondary hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Monitoring
                             </a>
                         </div>
                     </div>
                 </div>
                 <div class="flex items-center">
-                    <div class="text-sm text-gray-600">
-                        Welcome, {{ user.username }}
+                    <div class="text-sm text-dark-text-secondary">
+                        Welcome, {{ user.username if user else 'Admin' }}
                     </div>
                     <!-- Auto-refresh indicator -->
                     <div class="ml-4">

@@ -8,10 +8,10 @@
     <div class="mb-6">
         <div class="flex items-center justify-between">
             <div>
-                <h1 class="text-2xl font-bold text-gray-900">Client Management</h1>
-                <p class="text-gray-600">Manage client configurations and API keys</p>
+                <h1 class="text-2xl font-bold text-dark-text">Client Management</h1>
+                <p class="text-dark-text-secondary">Manage client configurations and API keys</p>
             </div>
-            <button class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium"
+            <button class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all"
                     onclick="showAddClientModal()">
                 Add Client
             </button>
@@ -21,53 +21,53 @@
     <!-- Clients Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {% for client in clients %}
-        <div class="bg-white rounded-lg shadow p-6">
+        <div class="client-card bg-dark-surface rounded-lg border border-dark-border p-6">
             <div class="flex justify-between items-start mb-4">
-                <h3 class="text-lg font-medium text-gray-900">{{ client.name }}</h3>
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {% if client.active %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                <h3 class="text-lg font-medium text-dark-text">{{ client.name }}</h3>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {% if client.active %}bg-brand-teal/20 text-brand-teal{% else %}bg-dark-elevated text-dark-text-secondary{% endif %}">
                     {% if client.active %}Active{% else %}Inactive{% endif %}
                 </span>
             </div>
             
-            <div class="text-sm text-gray-600 space-y-2">
-                <p><strong>ID:</strong> {{ client.id }}</p>
+            <div class="text-sm text-dark-text-secondary space-y-2">
+                <p><strong class="text-dark-text">ID:</strong> {{ client.id }}</p>
                 {% if client.domain %}
-                <p><strong>Domain:</strong> {{ client.domain }}</p>
+                <p><strong class="text-dark-text">Domain:</strong> {{ client.domain }}</p>
                 {% endif %}
                 {% if client.description %}
                 <p class="mt-2">{{ client.description }}</p>
                 {% endif %}
             </div>
             
-            <div class="mt-4 pt-4 border-t">
-                <div class="text-xs text-gray-500 mb-2">Configuration Status</div>
+            <div class="mt-4 pt-4 border-t border-dark-border">
+                <div class="text-xs text-dark-text-secondary mb-2">Configuration Status</div>
                 <div class="flex gap-2 flex-wrap">
-                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium {% if client.settings.supabase %}bg-green-100 text-green-800{% else %}bg-red-100 text-red-800{% endif %}">
+                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium {% if client.settings.supabase %}bg-brand-teal/20 text-brand-teal{% else %}bg-brand-salmon/20 text-brand-salmon{% endif %}">
                         Supabase
                     </span>
-                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium {% if client.settings.livekit %}bg-green-100 text-green-800{% else %}bg-red-100 text-red-800{% endif %}">
+                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium {% if client.settings.livekit %}bg-brand-teal/20 text-brand-teal{% else %}bg-brand-salmon/20 text-brand-salmon{% endif %}">
                         LiveKit
                     </span>
                 </div>
             </div>
             
             <div class="mt-4 flex justify-between">
-                <a href="/admin/clients/{{ client.id }}" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                <a href="/admin/clients/{{ client.id }}" class="text-brand-teal hover:text-brand-teal/80 text-sm font-medium transition-colors">
                     Edit
                 </a>
-                <button onclick="confirmDeleteClient('{{ client.id }}', '{{ client.name }}')" class="text-red-600 hover:text-red-800 text-sm font-medium">
+                <button onclick="confirmDeleteClient('{{ client.id }}', '{{ client.name }}')" class="text-brand-salmon hover:text-brand-salmon/80 text-sm font-medium transition-colors">
                     Delete
                 </button>
             </div>
         </div>
         {% else %}
         <div class="col-span-full">
-            <div class="bg-white rounded-lg shadow p-8 text-center">
-                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 48 48">
+            <div class="bg-dark-surface rounded-lg border border-dark-border p-8 text-center">
+                <svg class="mx-auto h-12 w-12 text-dark-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 48 48">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
                           d="M34 40h10v-4a6 6 0 00-10.712-3.714M34 40H14m20 0v-4c0-1.313-.253-2.566-.712-3.714M14 40H4v-4a6 6 0 0110.712-3.714M14 40v-4c0-1.313.253-2.566.712-3.714m0 0A8.002 8.002 0 0122 6a8.002 8.002 0 017.288 11.286" />
                 </svg>
-                <p class="text-gray-500 mb-4 mt-4">No clients found. Click "Add Client" to create your first client.</p>
+                <p class="text-dark-text-secondary mb-4 mt-4">No clients found. Click "Add Client" to create your first client.</p>
             </div>
         </div>
         {% endfor %}
@@ -77,12 +77,12 @@
 <!-- Add Client Modal -->
 <div id="addClientModal" class="hidden fixed z-10 inset-0 overflow-y-auto">
     <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeAddClientModal()"></div>
+        <div class="fixed inset-0 bg-black bg-opacity-75 transition-opacity" onclick="closeAddClientModal()"></div>
         
-        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full">
+        <div class="inline-block align-bottom bg-dark-surface rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full border border-dark-border">
             <form id="addClientForm">
-                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                    <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                <div class="bg-dark-surface px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                    <h3 class="text-lg leading-6 font-medium text-dark-text mb-4">
                         Add New Client
                     </h3>
                     
