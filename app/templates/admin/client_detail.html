@@ -1,0 +1,438 @@
+{% extends "admin/base.html" %}
+
+{% block title %}{{ client.name }} - Client Configuration{% endblock %}
+
+{% block extra_head %}
+<!-- Icons -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4">
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 flex items-center">
+                <a href="/admin/clients" class="text-gray-400 hover:text-gray-600 mr-3">
+                    <i class="bi bi-arrow-left"></i>
+                </a>
+                {{ client.name }}
+            </h1>
+            <p class="text-gray-600 mt-1">Client ID: {{ client.id }}</p>
+        </div>
+        <div class="flex items-center space-x-3">
+            <span class="px-3 py-1 rounded-full text-sm font-medium {% if client.status == 'active' %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                {{ client.status|capitalize }}
+            </span>
+            <button onclick="saveClient()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
+                <i class="bi bi-save mr-2"></i>Save Changes
+            </button>
+            <button onclick="syncAgents()" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
+                <i class="bi bi-arrow-repeat mr-2"></i>Sync Agents
+            </button>
+        </div>
+    </div>
+
+    <form id="clientForm">
+        <!-- Basic Information -->
+        <div class="bg-white rounded-lg shadow mb-6">
+            <div class="border-b border-gray-200 px-6 py-4">
+                <h5 class="text-lg font-semibold text-gray-900">Basic Information</h5>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Client Name</label>
+                        <input type="text" id="clientName" value="{{ client.name }}" required
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Domain</label>
+                        <input type="text" id="clientDomain" value="{{ client.domain or '' }}" 
+                               placeholder="e.g., myclient.com"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                    <textarea id="clientDescription" rows="2"
+                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">{{ client.description or '' }}</textarea>
+                </div>
+                <div class="flex items-center">
+                    <input type="checkbox" id="clientActive" {% if client.status == 'active' %}checked{% endif %}
+                           class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                    <label for="clientActive" class="ml-2 text-sm text-gray-700">
+                        Client is active
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Supabase Configuration -->
+        <div class="bg-white rounded-lg shadow mb-6">
+            <div class="border-b border-gray-200 px-6 py-4">
+                <h5 class="text-lg font-semibold text-gray-900">Supabase Configuration</h5>
+            </div>
+            <div class="p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Supabase URL</label>
+                    <input type="url" id="supabaseUrl" value="{{ client.settings.supabase.url }}" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Anonymous Key</label>
+                        <div class="relative">
+                            <input type="password" id="supabaseAnonKey" 
+                                   value="{{ client.settings.supabase.anon_key }}" required
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('supabaseAnonKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Service Role Key</label>
+                        <div class="relative">
+                            <input type="password" id="supabaseServiceKey" 
+                                   value="{{ client.settings.supabase.service_role_key }}" required
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('supabaseServiceKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LiveKit Configuration -->
+        <div class="bg-white rounded-lg shadow mb-6">
+            <div class="border-b border-gray-200 px-6 py-4">
+                <h5 class="text-lg font-semibold text-gray-900">LiveKit Configuration</h5>
+            </div>
+            <div class="p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">LiveKit Server URL</label>
+                    <input type="url" id="livekitUrl" value="{{ client.settings.livekit.server_url }}" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">API Key</label>
+                        <input type="text" id="livekitApiKey" value="{{ client.settings.livekit.api_key }}" required
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">API Secret</label>
+                        <div class="relative">
+                            <input type="password" id="livekitApiSecret" 
+                                   value="{{ client.settings.livekit.api_secret }}" required
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('livekitApiSecret')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Keys -->
+        <div class="bg-white rounded-lg shadow mb-6">
+            <div class="border-b border-gray-200 px-6 py-4">
+                <h5 class="text-lg font-semibold text-gray-900">API Keys</h5>
+            </div>
+            <div class="p-6">
+                <!-- LLM Providers -->
+                <h6 class="text-md font-medium text-gray-700 mb-4">LLM Providers</h6>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">OpenAI API Key</label>
+                        <div class="relative">
+                            <input type="password" id="openaiKey" 
+                                   value="{{ client.settings.api_keys.openai_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('openaiKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Groq API Key</label>
+                        <div class="relative">
+                            <input type="password" id="groqKey" 
+                                   value="{{ client.settings.api_keys.groq_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('groqKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">DeepInfra API Key</label>
+                        <div class="relative">
+                            <input type="password" id="deepinfraKey" 
+                                   value="{{ client.settings.api_keys.deepinfra_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('deepinfraKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Replicate API Key</label>
+                        <div class="relative">
+                            <input type="password" id="replicateKey" 
+                                   value="{{ client.settings.api_keys.replicate_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('replicateKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Voice Providers -->
+                <h6 class="text-md font-medium text-gray-700 mb-4">Voice Providers</h6>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Deepgram API Key</label>
+                        <div class="relative">
+                            <input type="password" id="deepgramKey" 
+                                   value="{{ client.settings.api_keys.deepgram_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('deepgramKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">ElevenLabs API Key</label>
+                        <div class="relative">
+                            <input type="password" id="elevenlabsKey" 
+                                   value="{{ client.settings.api_keys.elevenlabs_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('elevenlabsKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Cartesia API Key</label>
+                        <div class="relative">
+                            <input type="password" id="cartesiaKey" 
+                                   value="{{ client.settings.api_keys.cartesia_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('cartesiaKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Speechify API Key</label>
+                        <div class="relative">
+                            <input type="password" id="speechifyKey" 
+                                   value="{{ client.settings.api_keys.speechify_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('speechifyKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Embedding & Reranking Providers -->
+                <h6 class="text-md font-medium text-gray-700 mb-4">Embedding & Reranking Providers</h6>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Novita API Key</label>
+                        <div class="relative">
+                            <input type="password" id="novitaKey" 
+                                   value="{{ client.settings.api_keys.novita_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('novitaKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Cohere API Key</label>
+                        <div class="relative">
+                            <input type="password" id="cohereKey" 
+                                   value="{{ client.settings.api_keys.cohere_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('cohereKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">SiliconFlow API Key</label>
+                        <div class="relative">
+                            <input type="password" id="siliconflowKey" 
+                                   value="{{ client.settings.api_keys.siliconflow_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('siliconflowKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Jina API Key</label>
+                        <div class="relative">
+                            <input type="password" id="jinaKey" 
+                                   value="{{ client.settings.api_keys.jina_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button type="button" onclick="togglePassword('jinaKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+function togglePassword(fieldId) {
+    const field = document.getElementById(fieldId);
+    const button = field.nextElementSibling;
+    const icon = button.querySelector('i');
+    
+    if (field.type === 'password') {
+        field.type = 'text';
+        icon.classList.remove('bi-eye');
+        icon.classList.add('bi-eye-slash');
+    } else {
+        field.type = 'password';
+        icon.classList.remove('bi-eye-slash');
+        icon.classList.add('bi-eye');
+    }
+}
+
+async function saveClient() {
+    const form = document.getElementById('clientForm');
+    if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+    }
+    
+    const updateData = {
+        name: document.getElementById('clientName').value,
+        description: document.getElementById('clientDescription').value || null,
+        domain: document.getElementById('clientDomain').value || null,
+        active: document.getElementById('clientActive').checked,
+        settings: {
+            supabase: {
+                url: document.getElementById('supabaseUrl').value,
+                anon_key: document.getElementById('supabaseAnonKey').value,
+                service_role_key: document.getElementById('supabaseServiceKey').value
+            },
+            livekit: {
+                server_url: document.getElementById('livekitUrl').value,
+                api_key: document.getElementById('livekitApiKey').value,
+                api_secret: document.getElementById('livekitApiSecret').value
+            },
+            api_keys: {
+                openai_api_key: document.getElementById('openaiKey').value || null,
+                groq_api_key: document.getElementById('groqKey').value || null,
+                deepinfra_api_key: document.getElementById('deepinfraKey').value || null,
+                replicate_api_key: document.getElementById('replicateKey').value || null,
+                deepgram_api_key: document.getElementById('deepgramKey').value || null,
+                elevenlabs_api_key: document.getElementById('elevenlabsKey').value || null,
+                cartesia_api_key: document.getElementById('cartesiaKey').value || null,
+                speechify_api_key: document.getElementById('speechifyKey').value || null,
+                novita_api_key: document.getElementById('novitaKey').value || null,
+                cohere_api_key: document.getElementById('cohereKey').value || null,
+                siliconflow_api_key: document.getElementById('siliconflowKey').value || null,
+                jina_api_key: document.getElementById('jinaKey').value || null
+            }
+        }
+    };
+    
+    try {
+        const response = await fetch(`/api/v1/clients/{{ client.id }}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(updateData)
+        });
+        
+        if (response.ok) {
+            // Show success message
+            showNotification('success', 'Client configuration saved successfully!');
+        } else {
+            const error = await response.json();
+            showNotification('error', 'Error saving client: ' + (error.detail || 'Unknown error'));
+        }
+    } catch (error) {
+        showNotification('error', 'Error saving client: ' + error.message);
+    }
+}
+
+function showNotification(type, message) {
+    const notification = document.createElement('div');
+    notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg transition-all duration-300 transform translate-x-0 ${
+        type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+    }`;
+    notification.innerHTML = `
+        <div class="flex items-center">
+            <i class="bi ${type === 'success' ? 'bi-check-circle' : 'bi-x-circle'} mr-2"></i>
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(notification);
+    
+    // Fade in
+    setTimeout(() => notification.classList.add('opacity-100'), 10);
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+        notification.classList.add('opacity-0', 'translate-x-full');
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
+}
+
+async function syncAgents() {
+    showNotification('success', 'Starting agent sync...');
+    
+    try {
+        const response = await fetch(`/api/v1/agents/client/{{ client.id }}/sync`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            showNotification('success', result.message || 'Agents synced successfully!');
+            
+            // Refresh the page after a moment to show updated agents
+            setTimeout(() => {
+                window.location.href = '/admin/agents';
+            }, 2000);
+        } else {
+            const error = await response.json();
+            showNotification('error', 'Error syncing agents: ' + (error.detail || 'Unknown error'));
+        }
+    } catch (error) {
+        showNotification('error', 'Error syncing agents: ' + error.message);
+    }
+}
+</script>
+{% endblock %}

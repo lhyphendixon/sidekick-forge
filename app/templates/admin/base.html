@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Autonomite Admin{% endblock %}</title>
+    
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom admin styles -->
+    <style>
+        /* Custom admin styling */
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-running { background-color: #10b981; }
+        .status-stopped { background-color: #ef4444; }
+        .status-starting { background-color: #f59e0b; }
+        .status-error { background-color: #dc2626; }
+        
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .client-card {
+            transition: transform 0.2s ease-in-out;
+        }
+        .client-card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .htmx-indicator {
+            opacity: 0;
+            transition: opacity 500ms ease-in;
+        }
+        .htmx-request .htmx-indicator {
+            opacity: 1;
+        }
+        .htmx-request.htmx-indicator {
+            opacity: 1;
+        }
+        
+        /* Loading spinner */
+        .spinner {
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-gray-100">
+    <!-- Navigation Header -->
+    <nav class="bg-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <h1 class="text-xl font-bold text-gray-800">Autonomite Admin</h1>
+                    </div>
+                    <div class="hidden md:block">
+                        <div class="ml-10 flex items-baseline space-x-4">
+                            <a href="/admin/" 
+                               class="{% if request.url.path == '/admin/' %}bg-blue-100 text-blue-700{% else %}text-gray-500 hover:text-gray-700{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                                Dashboard
+                            </a>
+                            <a href="/admin/clients" 
+                               class="{% if '/admin/clients' in request.url.path %}bg-blue-100 text-blue-700{% else %}text-gray-500 hover:text-gray-700{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                                Clients
+                            </a>
+                            <a href="/admin/agents" 
+                               class="{% if '/admin/agents' in request.url.path %}bg-blue-100 text-blue-700{% else %}text-gray-500 hover:text-gray-700{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                                Agents
+                            </a>
+                            <a href="/admin/monitoring" 
+                               class="{% if '/admin/monitoring' in request.url.path %}bg-blue-100 text-blue-700{% else %}text-gray-500 hover:text-gray-700{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                                Monitoring
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <div class="text-sm text-gray-600">
+                        Welcome, {{ user.username }}
+                    </div>
+                    <!-- Auto-refresh indicator -->
+                    <div class="ml-4">
+                        <div class="htmx-indicator spinner" id="global-indicator"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Global Auto-refresh Stats (every 30 seconds) -->
+    <div hx-get="/admin/partials/stats" 
+         hx-trigger="every 30s" 
+         hx-target="#stats-container"
+         hx-swap="innerHTML"
+         hx-indicator="#global-indicator">
+    </div>
+
+    <!-- HTMX Configuration -->
+    <script>
+        // Configure HTMX
+        htmx.config.globalViewTransitions = true;
+        htmx.config.timeout = 10000; // 10 second timeout
+        
+        // Add loading states
+        document.addEventListener('htmx:beforeRequest', function(event) {
+            // Add loading class to trigger element
+            event.detail.elt.classList.add('opacity-50');
+        });
+        
+        document.addEventListener('htmx:afterRequest', function(event) {
+            // Remove loading class
+            event.detail.elt.classList.remove('opacity-50');
+            
+            // Handle errors
+            if (event.detail.xhr.status >= 400) {
+                console.error('HTMX request failed:', event.detail.xhr.status);
+                // Could show error notification here
+            }
+        });
+        
+        // Auto-refresh page elements
+        document.addEventListener('DOMContentLoaded', function() {
+            // Update timestamp every second
+            function updateTimestamp() {
+                const timestampElements = document.querySelectorAll('.timestamp');
+                timestampElements.forEach(element => {
+                    const timestamp = element.getAttribute('data-timestamp');
+                    if (timestamp) {
+                        const date = new Date(timestamp);
+                        element.textContent = date.toLocaleString();
+                    }
+                });
+            }
+            
+            setInterval(updateTimestamp, 1000);
+            updateTimestamp();
+        });
+    </script>
+
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>
