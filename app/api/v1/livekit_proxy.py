@@ -10,12 +10,12 @@ import time
 
 from app.models.wordpress_site import WordPressSite
 from app.api.v1.wordpress_sites import validate_wordpress_auth
-from app.services.client_service_hybrid import ClientService
-from app.services.agent_service import AgentService
+from app.services.client_service_supabase_enhanced import ClientService
+from app.services.agent_service_supabase import AgentService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/livekit", tags=["livekit-proxy"])
+router = APIRouter(prefix="/livekit", tags=["livekit-proxy"])
 
 
 class RoomCreateRequest(BaseModel):

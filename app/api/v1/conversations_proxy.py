@@ -9,7 +9,7 @@ import uuid
 
 from app.models.wordpress_site import WordPressSite
 from app.api.v1.wordpress_sites import validate_wordpress_auth
-from app.services.client_service_hybrid import ClientService
+from app.services.client_service_supabase_enhanced import ClientService
 import redis
 from redis.exceptions import RedisError
 

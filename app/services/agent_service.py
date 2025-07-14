@@ -191,6 +191,49 @@ class AgentService:
         # Get from client's Supabase
         supabase = await self._get_client_supabase(client_id)
         if not supabase:
+            # Try alternative Redis format before giving up
+            print(f"No Supabase for client {client_id}, trying Redis fallback")
+            alt_cache_key = f"agents:{client_id}:list"
+            alt_cached_list = self.redis.get(alt_cache_key)
+            print(f"Redis fallback key {alt_cache_key} exists: {alt_cached_list is not None}")
+            
+            if alt_cached_list:
+                try:
+                    agent_slugs = json.loads(alt_cached_list)
+                    agents = []
+                    for slug in agent_slugs:
+                        # Try to get agent from Redis using format: agent:{client_id}:{slug}
+                        agent_data_key = f"agent:{client_id}:{slug}"
+                        agent_data = self.redis.get(agent_data_key)
+                        if agent_data:
+                            try:
+                                agent_dict = json.loads(agent_data)
+                                # Convert to AgentInDB object
+                                agent = AgentInDB(
+                                    id=agent_dict.get("id", ""),
+                                    slug=agent_dict.get("slug", slug),
+                                    name=agent_dict.get("name", ""),
+                                    description=agent_dict.get("description", ""),
+                                    system_prompt=agent_dict.get("system_prompt", ""),
+                                    enabled=agent_dict.get("enabled", True),
+                                    client_id=client_id,
+                                    created_at=datetime.fromisoformat(agent_dict.get("created_at", datetime.now().isoformat()).replace("Z", "+00:00")),
+                                    updated_at=datetime.fromisoformat(agent_dict.get("updated_at", datetime.now().isoformat()).replace("Z", "+00:00")),
+                                    voice_settings=agent_dict.get("voice_settings", {}),
+                                    llm_settings=agent_dict.get("llm_settings", {}),
+                                    tools_config=agent_dict.get("tools_config", {}),
+                                    webhooks=agent_dict.get("webhooks", {}),
+                                    agent_image=agent_dict.get("agent_image"),
+                                    active=agent_dict.get("active", agent_dict.get("enabled", True))
+                                )
+                                agents.append(agent)
+                            except Exception as parse_error:
+                                print(f"Error parsing agent {slug}: {parse_error}")
+                                continue
+                    return agents
+                except Exception as e:
+                    print(f"Error processing alternative cache: {e}")
+            
             return []
         
         try:

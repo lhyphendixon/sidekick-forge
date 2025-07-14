@@ -1,34 +1,16 @@
 """
-Agents API endpoints for multi-tenant agent management
+Agents API endpoints for multi-tenant agent management (Supabase only)
 """
-import redis
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.models.agent import Agent, AgentCreate, AgentUpdate, AgentInDB, AgentWithClient
-from app.services.agent_service import AgentService
-from app.services.client_service_hybrid import ClientService
-from app.core.dependencies import get_redis_client
+from app.services.agent_service_supabase import AgentService
+from app.services.client_service_supabase import ClientService
+from app.core.dependencies import get_client_service, get_agent_service
 
 router = APIRouter(prefix="/agents", tags=["agents"])
-
-
-def get_client_service(redis_client: redis.Redis = Depends(get_redis_client)) -> ClientService:
-    """Get client service instance"""
-    import os
-    # Use the same master Supabase credentials as in simple_main.py
-    master_supabase_url = os.getenv("MASTER_SUPABASE_URL", "https://xyzxyzxyzxyzxyzxyz.supabase.co")
-    master_supabase_key = os.getenv("MASTER_SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh5enh5enh5enh5enh5enh5eiIsInJvbGUiOiJzZXJ2aWNlX3JvbGUiLCJpYXQiOjE2NDYyMzkwMjIsImV4cCI6MTk2MTgxNTAyMn0.dummy-key-for-testing")
-    return ClientService(master_supabase_url, master_supabase_key, redis_client)
-
-
-def get_agent_service(
-    redis_client: redis.Redis = Depends(get_redis_client),
-    client_service: ClientService = Depends(get_client_service)
-) -> AgentService:
-    """Get agent service instance"""
-    return AgentService(client_service, redis_client)
 
 
 class AgentResponse(BaseModel):
@@ -38,10 +20,10 @@ class AgentResponse(BaseModel):
     data: Optional[Any] = None
 
 
-@router.get("/", response_model=List[AgentWithClient])
+@router.get("/", response_model=List[Dict[str, Any]])
 async def get_all_agents(
     service: AgentService = Depends(get_agent_service)
-) -> List[AgentWithClient]:
+) -> List[Dict[str, Any]]:
     """Get all agents across all clients with client info"""
     return await service.get_all_agents_with_clients()
 

@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     jwt_expiration_minutes: int = Field(default=1440, env="JWT_EXPIRATION_MINUTES")
     
     # Supabase Configuration (CRITICAL: Both service and anon keys needed)
-    supabase_url: str = Field(default="https://demo.supabase.co", env="SUPABASE_URL")
-    supabase_service_role_key: str = Field(default="demo-key", env="SUPABASE_SERVICE_KEY")
+    supabase_url: str = Field(default="https://yuowazxcxwhczywurmmw.supabase.co", env="SUPABASE_URL")
+    supabase_service_role_key: str = Field(default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY", env="SUPABASE_SERVICE_KEY")
     supabase_anon_key: str = Field(default="demo-anon", env="SUPABASE_ANON_KEY")
     
     # Supabase Auth Configuration
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     
     # LiveKit Configuration (primary platform)
     livekit_url: str = Field(default="wss://demo.livekit.cloud", env="LIVEKIT_URL")
-    livekit_api_key: str = Field(default="demo-key", env="LIVEKIT_API_KEY")
+    livekit_api_key: str = Field(default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY", env="LIVEKIT_API_KEY")
     livekit_api_secret: str = Field(default="demo-secret", env="LIVEKIT_API_SECRET")
     
     # AI Provider API Keys
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     n8n_rag_webhook_url: Optional[str] = Field(None, env="N8N_RAG_WEBHOOK_URL")
     
     # Redis Configuration
-    redis_host: str = Field(default="redis", env="REDIS_HOST")
+    redis_host: str = Field(default="localhost", env="REDIS_HOST")
     redis_port: int = Field(default=6379, env="REDIS_PORT")
     redis_db: int = Field(default=0, env="REDIS_DB")
     

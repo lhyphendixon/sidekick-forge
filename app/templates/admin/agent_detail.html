@@ -29,7 +29,7 @@
             <button onclick="saveAgent()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
                 <i class="bi bi-save mr-2"></i>Save Changes
             </button>
-            {% if agent.latest_config %}
+            {% if latest_config %}
             <button onclick="syncFromConfig()" class="bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
                 <i class="bi bi-arrow-repeat mr-2"></i>Sync from Config
             </button>
@@ -411,8 +411,8 @@ async function saveAgent() {
     };
     
     try {
-        const response = await fetch(`/api/v1/agents/client/{{ agent.client_id }}/{{ agent.slug }}`, {
-            method: 'PUT',
+        const response = await fetch(`/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/update`, {
+            method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(updateData)
         });

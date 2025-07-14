@@ -14,7 +14,8 @@ class SupabaseConfig(BaseModel):
     
     @validator('url')
     def validate_url(cls, v):
-        if not v.startswith(('http://', 'https://')):
+        # Allow empty URLs for clients without Supabase configured
+        if v and not v.startswith(('http://', 'https://')):
             raise ValueError('URL must start with http:// or https://')
         return v
 

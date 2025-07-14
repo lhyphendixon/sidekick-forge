@@ -46,7 +46,7 @@
         </div>
     </div>
 
-    <form id="editClientForm">
+    <form id="editClientForm" action="/admin/clients/{{ client.id }}/update" method="POST">
         <div class="bg-white shadow rounded-lg">
             <div class="px-6 py-4 border-b">
                 <h2 class="text-lg font-medium text-gray-900">Basic Information</h2>
@@ -60,20 +60,20 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Client Name</label>
-                        <input type="text" id="clientName" value="{{ client.name }}" required
+                        <input type="text" id="clientName" name="name" value="{{ client.name }}" required
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                 </div>
                 
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Description</label>
-                    <textarea id="clientDescription" rows="2"
+                    <textarea id="clientDescription" name="description" rows="2"
                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">{{ client.description or '' }}</textarea>
                 </div>
                 
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Domain</label>
-                    <input type="text" id="clientDomain" value="{{ client.domain or '' }}"
+                    <input type="text" id="clientDomain" name="domain" value="{{ client.domain or '' }}"
                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
                            placeholder="e.g., myclient.com">
                 </div>
@@ -95,19 +95,19 @@
             <div class="px-6 py-4 space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Supabase URL</label>
-                    <input type="url" id="supabaseUrl" value="{{ client.settings.supabase.url }}" required
+                    <input type="url" id="supabaseUrl" name="supabase_url" value="{{ client.settings.supabase.url }}" required
                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                 </div>
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Anon Key</label>
-                        <input type="password" id="supabaseAnonKey" value="{{ client.settings.supabase.anon_key }}" required
+                        <input type="password" id="supabaseAnonKey" name="supabase_anon_key" value="{{ client.settings.supabase.anon_key }}" required
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Service Role Key</label>
-                        <input type="password" id="supabaseServiceKey" value="{{ client.settings.supabase.service_role_key }}" required
+                        <input type="password" id="supabaseServiceKey" name="supabase_service_key" value="{{ client.settings.supabase.service_role_key }}" required
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                 </div>
@@ -326,58 +326,6 @@ async function manualSync() {
     }
 }
 
-document.getElementById('editClientForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    
-    const updateData = {
-        name: document.getElementById('clientName').value,
-        description: document.getElementById('clientDescription').value || null,
-        domain: document.getElementById('clientDomain').value || null,
-        active: document.getElementById('clientActive').checked,
-        settings: {
-            supabase: {
-                url: document.getElementById('supabaseUrl').value,
-                anon_key: document.getElementById('supabaseAnonKey').value,
-                service_role_key: document.getElementById('supabaseServiceKey').value
-            },
-            livekit: {
-                server_url: document.getElementById('livekitUrl').value,
-                api_key: document.getElementById('livekitApiKey').value,
-                api_secret: document.getElementById('livekitApiSecret').value
-            }
-        }
-    };
-    
-    // Include API keys if present
-    const apiKeyInputs = document.querySelectorAll('input[data-api-key]');
-    if (apiKeyInputs.length > 0) {
-        updateData.settings.api_keys = {};
-        apiKeyInputs.forEach(input => {
-            const key = input.getAttribute('data-api-key');
-            const value = input.value;
-            if (value) {
-                updateData.settings.api_keys[key] = value;
-            }
-        });
-    }
-    
-    try {
-        const response = await fetch(`/api/v1/clients/${clientId}`, {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(updateData)
-        });
-        
-        if (response.ok) {
-            alert('Client settings saved successfully');
-            window.location.href = '/admin/clients';
-        } else {
-            const error = await response.json();
-            alert('Error saving client: ' + (error.detail || 'Unknown error'));
-        }
-    } catch (error) {
-        alert('Error saving client: ' + error.message);
-    }
-});
+// Remove the submit event listener - let the form submit naturally
 </script>
 {% endblock %}

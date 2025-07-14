@@ -12,10 +12,9 @@ import json
 import uuid
 import tempfile
 
-from app.services.agent_service import AgentService
-from app.services.client_service_hybrid import ClientService
-from app.core.dependencies import get_redis_client
-import redis
+from app.services.agent_service_supabase import AgentService
+from app.services.client_service_supabase import ClientService
+from app.core.dependencies import get_client_service, get_agent_service
 import os
 
 logger = logging.getLogger(__name__)
@@ -60,20 +59,7 @@ class TriggerAgentResponse(BaseModel):
     agent_info: Optional[Dict[str, Any]] = None
 
 
-def get_client_service(redis_client: redis.Redis = Depends(get_redis_client)) -> ClientService:
-    """Get client service instance"""
-    import os
-    master_supabase_url = os.getenv("MASTER_SUPABASE_URL", "https://xyzxyzxyzxyzxyzxyz.supabase.co")
-    master_supabase_key = os.getenv("MASTER_SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh5enh5enh5enh5enh5enh5eiIsInJvbGUiOiJzZXJ2aWNlX3JvbGUiLCJpYXQiOjE2NDYyMzkwMjIsImV4cCI6MTk2MTgxNTAyMn0.dummy-key-for-testing")
-    return ClientService(master_supabase_url, master_supabase_key, redis_client)
-
-
-def get_agent_service(
-    redis_client: redis.Redis = Depends(get_redis_client),
-    client_service: ClientService = Depends(get_client_service)
-) -> AgentService:
-    """Get agent service instance"""
-    return AgentService(client_service, redis_client)
+# Using dependencies from core module - no need to redefine here
 
 
 @router.post("/trigger-agent", response_model=TriggerAgentResponse)

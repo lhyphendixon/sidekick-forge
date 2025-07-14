@@ -7,21 +7,16 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import os
-import redis
 
 from app.models.client import Client, ClientCreate, ClientUpdate, ClientInDB
-from app.services.client_service_hybrid import ClientService
-from app.core.dependencies import get_redis_client
+from app.services.client_service_supabase import ClientService
+from app.core.dependencies import get_client_service
 
-router = APIRouter()
+router = APIRouter(prefix="/clients", tags=["clients"])
 templates = Jinja2Templates(directory="app/templates")
 
 
-def get_client_service(redis_client: redis.Redis = Depends(get_redis_client)) -> ClientService:
-    """Get client service instance"""
-    MASTER_SUPABASE_URL = os.getenv("MASTER_SUPABASE_URL", "https://YOUR_MASTER_PROJECT.supabase.co")
-    MASTER_SUPABASE_KEY = os.getenv("MASTER_SUPABASE_SERVICE_KEY", "YOUR_MASTER_SERVICE_KEY")
-    return ClientService(MASTER_SUPABASE_URL, MASTER_SUPABASE_KEY, redis_client)
+# Client service is now injected directly from dependencies_supabase
 
 
 @router.get("/", response_model=List[Client])

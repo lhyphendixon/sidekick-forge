@@ -24,7 +24,7 @@
             <span class="px-3 py-1 rounded-full text-sm font-medium {% if client.status == 'active' %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
                 {{ client.status|capitalize }}
             </span>
-            <button onclick="saveClient()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
+            <button type="submit" form="clientForm" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
                 <i class="bi bi-save mr-2"></i>Save Changes
             </button>
             <button onclick="syncAgents()" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
@@ -33,7 +33,7 @@
         </div>
     </div>
 
-    <form id="clientForm">
+    <form id="clientForm" action="/admin/clients/{{ client.id }}/update" method="POST">
         <!-- Basic Information -->
         <div class="bg-white rounded-lg shadow mb-6">
             <div class="border-b border-gray-200 px-6 py-4">
@@ -43,19 +43,19 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Client Name</label>
-                        <input type="text" id="clientName" value="{{ client.name }}" required
+                        <input type="text" id="clientName" name="name" value="{{ client.name }}" required
                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Domain</label>
-                        <input type="text" id="clientDomain" value="{{ client.domain or '' }}" 
+                        <input type="text" id="clientDomain" name="domain" value="{{ client.domain or '' }}" 
                                placeholder="e.g., myclient.com"
                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                 </div>
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
-                    <textarea id="clientDescription" rows="2"
+                    <textarea id="clientDescription" name="description" rows="2"
                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">{{ client.description or '' }}</textarea>
                 </div>
                 <div class="flex items-center">
@@ -76,14 +76,14 @@
             <div class="p-6">
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Supabase URL</label>
-                    <input type="url" id="supabaseUrl" value="{{ client.settings.supabase.url }}" required
+                    <input type="url" id="supabaseUrl" name="supabase_url" value="{{ client.settings.supabase.url }}" required
                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Anonymous Key</label>
                         <div class="relative">
-                            <input type="password" id="supabaseAnonKey" 
+                            <input type="password" id="supabaseAnonKey" name="supabase_anon_key"
                                    value="{{ client.settings.supabase.anon_key }}" required
                                    class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                             <button type="button" onclick="togglePassword('supabaseAnonKey')"
@@ -95,7 +95,7 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Service Role Key</label>
                         <div class="relative">
-                            <input type="password" id="supabaseServiceKey" 
+                            <input type="password" id="supabaseServiceKey" name="supabase_service_key"
                                    value="{{ client.settings.supabase.service_role_key }}" required
                                    class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                             <button type="button" onclick="togglePassword('supabaseServiceKey')"
@@ -327,64 +327,7 @@ function togglePassword(fieldId) {
     }
 }
 
-async function saveClient() {
-    const form = document.getElementById('clientForm');
-    if (!form.checkValidity()) {
-        form.reportValidity();
-        return;
-    }
-    
-    const updateData = {
-        name: document.getElementById('clientName').value,
-        description: document.getElementById('clientDescription').value || null,
-        domain: document.getElementById('clientDomain').value || null,
-        active: document.getElementById('clientActive').checked,
-        settings: {
-            supabase: {
-                url: document.getElementById('supabaseUrl').value,
-                anon_key: document.getElementById('supabaseAnonKey').value,
-                service_role_key: document.getElementById('supabaseServiceKey').value
-            },
-            livekit: {
-                server_url: document.getElementById('livekitUrl').value,
-                api_key: document.getElementById('livekitApiKey').value,
-                api_secret: document.getElementById('livekitApiSecret').value
-            },
-            api_keys: {
-                openai_api_key: document.getElementById('openaiKey').value || null,
-                groq_api_key: document.getElementById('groqKey').value || null,
-                deepinfra_api_key: document.getElementById('deepinfraKey').value || null,
-                replicate_api_key: document.getElementById('replicateKey').value || null,
-                deepgram_api_key: document.getElementById('deepgramKey').value || null,
-                elevenlabs_api_key: document.getElementById('elevenlabsKey').value || null,
-                cartesia_api_key: document.getElementById('cartesiaKey').value || null,
-                speechify_api_key: document.getElementById('speechifyKey').value || null,
-                novita_api_key: document.getElementById('novitaKey').value || null,
-                cohere_api_key: document.getElementById('cohereKey').value || null,
-                siliconflow_api_key: document.getElementById('siliconflowKey').value || null,
-                jina_api_key: document.getElementById('jinaKey').value || null
-            }
-        }
-    };
-    
-    try {
-        const response = await fetch(`/api/v1/clients/{{ client.id }}`, {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(updateData)
-        });
-        
-        if (response.ok) {
-            // Show success message
-            showNotification('success', 'Client configuration saved successfully!');
-        } else {
-            const error = await response.json();
-            showNotification('error', 'Error saving client: ' + (error.detail || 'Unknown error'));
-        }
-    } catch (error) {
-        showNotification('error', 'Error saving client: ' + error.message);
-    }
-}
+// Form will submit naturally when Save Changes button is clicked
 
 function showNotification(type, message) {
     const notification = document.createElement('div');
