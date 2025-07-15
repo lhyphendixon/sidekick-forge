@@ -308,6 +308,59 @@
             </div>
         </div>
     </form>
+
+    <!-- WordPress Sites Section -->
+    <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+        <div class="border-b border-dark-border px-6 py-4">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h5 class="text-lg font-semibold text-dark-text">WordPress Sites</h5>
+                    <p class="text-sm text-dark-text-secondary">Manage WordPress sites and their API credentials</p>
+                </div>
+                <button onclick="showAddSiteModal()" class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all">
+                    <i class="bi bi-plus-circle mr-2"></i>Add Site
+                </button>
+            </div>
+        </div>
+        <div class="p-6">
+            <div id="wordpress-sites-container">
+                <div class="text-center py-8">
+                    <i class="bi bi-arrow-clockwise animate-spin text-brand-teal text-2xl mb-2"></i>
+                    <p class="text-dark-text-secondary">Loading WordPress sites...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Site Modal -->
+<div id="addSiteModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden">
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-dark-surface rounded-lg border border-dark-border p-6 max-w-md w-full">
+            <h3 class="text-lg font-semibold text-dark-text mb-4">Add WordPress Site</h3>
+            <form id="addSiteForm">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-dark-text mb-2">Domain</label>
+                    <input type="text" name="domain" placeholder="example.com" required
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-dark-text mb-2">Site Name</label>
+                    <input type="text" name="site_name" placeholder="My WordPress Site" required
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-dark-text mb-2">Admin Email</label>
+                    <input type="email" name="admin_email" placeholder="admin@example.com" required
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+                <div class="flex gap-3 justify-end">
+                    <button type="button" onclick="hideAddSiteModal()" class="btn-secondary px-4 py-2 rounded">Cancel</button>
+                    <button type="submit" class="btn-primary px-4 py-2 rounded">Add Site</button>
+                </div>
+            </form>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -375,6 +428,199 @@ async function syncAgents() {
         }
     } catch (error) {
         showNotification('error', 'Error syncing agents: ' + error.message);
+    }
+}
+
+// WordPress Sites Management
+const clientId = '{{ client.id }}';
+
+// Load WordPress sites on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadWordPressSites();
+});
+
+async function loadWordPressSites() {
+    try {
+        const response = await fetch(`/admin/clients/${clientId}/wordpress-sites`);
+        const data = await response.json();
+        
+        const container = document.getElementById('wordpress-sites-container');
+        
+        if (data.success && data.sites.length > 0) {
+            container.innerHTML = '';
+            data.sites.forEach(site => {
+                const siteDiv = createSiteElement(site);
+                container.appendChild(siteDiv);
+            });
+        } else {
+            container.innerHTML = `
+                <div class="text-center py-8">
+                    <i class="bi bi-wordpress text-dark-text-secondary text-4xl mb-4"></i>
+                    <h3 class="text-lg font-medium text-dark-text mb-2">No WordPress Sites</h3>
+                    <p class="text-dark-text-secondary">Add your first WordPress site to get started</p>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('Error loading WordPress sites:', error);
+        document.getElementById('wordpress-sites-container').innerHTML = `
+            <div class="text-center py-8">
+                <i class="bi bi-exclamation-triangle text-red-500 text-2xl mb-2"></i>
+                <p class="text-dark-text-secondary">Failed to load WordPress sites</p>
+            </div>
+        `;
+    }
+}
+
+function createSiteElement(site) {
+    const div = document.createElement('div');
+    div.className = 'bg-dark-elevated rounded-lg border border-dark-border p-4 mb-4';
+    div.innerHTML = `
+        <div class="flex justify-between items-start mb-4">
+            <div>
+                <h6 class="text-lg font-medium text-dark-text">${site.site_name}</h6>
+                <p class="text-sm text-dark-text-secondary">${site.domain}</p>
+                <span class="inline-block px-2 py-1 text-xs rounded-full mt-2 ${site.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                    ${site.is_active ? 'Active' : 'Inactive'}
+                </span>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="regenerateKeys('${site.id}')" class="btn-secondary px-3 py-1 text-xs rounded">
+                    <i class="bi bi-arrow-clockwise mr-1"></i>Regenerate Keys
+                </button>
+                <button onclick="deleteSite('${site.id}')" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 text-xs rounded">
+                    <i class="bi bi-trash mr-1"></i>Delete
+                </button>
+            </div>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-dark-text mb-2">API Key</label>
+                <div class="relative">
+                    <input type="password" value="${site.api_key}" readonly id="apiKey-${site.id}"
+                           class="w-full px-3 py-2 pr-10 bg-dark-surface border border-dark-border text-dark-text rounded-md text-sm font-mono">
+                    <button type="button" onclick="togglePasswordField('apiKey-${site.id}')"
+                            class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-dark-text mb-2">API Secret</label>
+                <div class="relative">
+                    <input type="password" value="${site.api_secret}" readonly id="apiSecret-${site.id}"
+                           class="w-full px-3 py-2 pr-10 bg-dark-surface border border-dark-border text-dark-text rounded-md text-sm font-mono">
+                    <button type="button" onclick="togglePasswordField('apiSecret-${site.id}')"
+                            class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mt-3 p-3 bg-dark-surface rounded border border-dark-border">
+            <p class="text-xs text-dark-text-secondary mb-2"><strong>WordPress Plugin Configuration:</strong></p>
+            <code class="text-xs text-brand-teal">API Key: ${site.api_key}<br>API Secret: ${site.api_secret}<br>Backend URL: https://agents.autonomite.net</code>
+        </div>
+    `;
+    return div;
+}
+
+function togglePasswordField(fieldId) {
+    const field = document.getElementById(fieldId);
+    const button = field.nextElementSibling;
+    const icon = button.querySelector('i');
+    
+    if (field.type === 'password') {
+        field.type = 'text';
+        icon.classList.remove('bi-eye');
+        icon.classList.add('bi-eye-slash');
+    } else {
+        field.type = 'password';
+        icon.classList.remove('bi-eye-slash');
+        icon.classList.add('bi-eye');
+    }
+}
+
+function showAddSiteModal() {
+    document.getElementById('addSiteModal').classList.remove('hidden');
+}
+
+function hideAddSiteModal() {
+    document.getElementById('addSiteModal').classList.add('hidden');
+    document.getElementById('addSiteForm').reset();
+}
+
+// Handle add site form submission
+document.getElementById('addSiteForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    
+    try {
+        const response = await fetch(`/admin/clients/${clientId}/wordpress-sites`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('success', 'WordPress site added successfully');
+            hideAddSiteModal();
+            loadWordPressSites();
+        } else {
+            showNotification('error', 'Failed to add site: ' + result.error);
+        }
+    } catch (error) {
+        showNotification('error', 'Error adding site: ' + error.message);
+    }
+});
+
+async function regenerateKeys(siteId) {
+    if (!confirm('Are you sure you want to regenerate API keys? The old keys will stop working immediately.')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/admin/wordpress-sites/${siteId}/regenerate-keys`, {
+            method: 'POST'
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('success', 'API keys regenerated successfully');
+            loadWordPressSites();
+        } else {
+            showNotification('error', 'Failed to regenerate keys: ' + result.error);
+        }
+    } catch (error) {
+        showNotification('error', 'Error regenerating keys: ' + error.message);
+    }
+}
+
+async function deleteSite(siteId) {
+    if (!confirm('Are you sure you want to delete this WordPress site? This action cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/admin/wordpress-sites/${siteId}`, {
+            method: 'DELETE'
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('success', 'WordPress site deleted successfully');
+            loadWordPressSites();
+        } else {
+            showNotification('error', 'Failed to delete site: ' + result.error);
+        }
+    } catch (error) {
+        showNotification('error', 'Error deleting site: ' + error.message);
     }
 }
 </script>

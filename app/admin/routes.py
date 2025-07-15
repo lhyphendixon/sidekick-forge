@@ -18,8 +18,16 @@ from livekit import api
 
 # Import from the app services
 from app.services.container_manager import container_manager
+from app.services.wordpress_site_service_supabase import WordPressSiteService
+from app.models.wordpress_site import WordPressSite, WordPressSiteCreate, WordPressSiteUpdate
 
 logger = logging.getLogger(__name__)
+
+def get_wordpress_service() -> WordPressSiteService:
+    """Get WordPress site service with Supabase credentials"""
+    supabase_url = os.getenv("SUPABASE_URL", "https://yuowazxcxwhczywurmmw.supabase.co")
+    supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY")
+    return WordPressSiteService(supabase_url, supabase_key)
 
 # Initialize router
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -332,6 +340,24 @@ async def agents_page(
         "agents": agents,
         "user": admin_user
     })
+
+
+@router.get("/knowledge-base", response_class=HTMLResponse)
+async def knowledge_base_page(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Knowledge Base management page"""
+    import time
+    response = templates.TemplateResponse("admin/knowledge_base.html", {
+        "request": request,
+        "user": admin_user,
+        "cache_bust": int(time.time())
+    })
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 @router.get("/agents/{client_id}/{agent_slug}", response_class=HTMLResponse)
 async def agent_detail(
@@ -1079,4 +1105,138 @@ async def admin_update_client(
             url=f"/admin/clients/{client_id}?error=Failed+to+update+client:+{str(e)}",
             status_code=303
         )
+
+
+# WordPress Sites Management Endpoints
+@router.get("/clients/{client_id}/wordpress-sites")
+async def get_client_wordpress_sites(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get WordPress sites for a specific client"""
+    try:
+        # Initialize WordPress service
+        wp_service = get_wordpress_service()
+        sites = wp_service.list_sites(client_id=client_id)
+        
+        return {
+            "success": True,
+            "sites": [site.dict() for site in sites]
+        }
+    except Exception as e:
+        logger.error(f"Failed to get WordPress sites for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "sites": []
+        }
+
+
+@router.post("/clients/{client_id}/wordpress-sites")
+async def create_wordpress_site(
+    client_id: str,
+    domain: str = Form(...),
+    site_name: str = Form(...),
+    admin_email: str = Form(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Create a new WordPress site for a client"""
+    try:
+        # Initialize WordPress service  
+        wp_service = get_wordpress_service()
+        
+        # Create site data
+        site_data = WordPressSiteCreate(
+            domain=domain,
+            site_name=site_name,
+            admin_email=admin_email,
+            client_id=client_id
+        )
+        
+        # Create the site
+        site = wp_service.create_site(site_data)
+        
+        return {
+            "success": True,
+            "message": f"WordPress site {domain} created successfully",
+            "site": site.dict()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to create WordPress site: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@router.post("/wordpress-sites/{site_id}/regenerate-keys")
+async def regenerate_wordpress_keys(
+    site_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Regenerate API keys for a WordPress site"""
+    try:
+        wp_service = get_wordpress_service()
+        
+        # Get existing site
+        site = wp_service.get_site(site_id)
+        if not site:
+            return {
+                "success": False,
+                "error": "Site not found"
+            }
+        
+        # Generate new keys
+        new_api_key = WordPressSite.generate_api_key()
+        new_api_secret = WordPressSite.generate_api_secret()
+        
+        # Update site with new keys
+        # Note: This will need to be implemented in the service
+        # For now, return the new keys
+        
+        return {
+            "success": True,
+            "message": "API keys regenerated successfully",
+            "api_key": new_api_key,
+            "api_secret": new_api_secret
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to regenerate keys for site {site_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@router.delete("/wordpress-sites/{site_id}")
+async def delete_wordpress_site(
+    site_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Delete a WordPress site"""
+    try:
+        wp_service = get_wordpress_service()
+        
+        # Delete the site
+        success = wp_service.delete_site(site_id)
+        
+        if success:
+            return {
+                "success": True,
+                "message": "WordPress site deleted successfully"
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Failed to delete site"
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to delete site {site_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
 

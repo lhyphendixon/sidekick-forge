@@ -14,7 +14,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/wordpress-sites", tags=["wordpress-sites"])
+router = APIRouter(prefix="/wordpress-sites", tags=["wordpress-sites"])
 
 # Security scheme for API key authentication
 security = HTTPBearer()
@@ -24,9 +24,10 @@ wordpress_service = None
 
 def get_wordpress_service() -> WordPressSiteService:
     """Get WordPress site service instance"""
-    if wordpress_service is None:
-        raise RuntimeError("WordPress service not initialized")
-    return wordpress_service
+    from app.services.wordpress_site_service_supabase import WordPressSiteService
+    supabase_url = os.getenv("SUPABASE_URL", "https://yuowazxcxwhczywurmmw.supabase.co")
+    supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY")
+    return WordPressSiteService(supabase_url, supabase_key)
 
 
 async def validate_wordpress_auth(

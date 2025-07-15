@@ -21,6 +21,13 @@ class WordPressSiteService:
     def __init__(self, supabase_url: str, supabase_key: str):
         self.supabase = create_client(supabase_url, supabase_key)
         self.table_name = "wordpress_sites"
+    
+    def _map_db_to_model(self, db_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Map database fields to model fields"""
+        # Map site_url to domain for the model
+        if 'site_url' in db_data:
+            db_data['domain'] = db_data['site_url']
+        return db_data
         
     async def ensure_table_exists(self):
         """Ensure the wordpress_sites table exists in Supabase"""
@@ -30,29 +37,33 @@ class WordPressSiteService:
         
     def create_site(self, site_data: WordPressSiteCreate) -> WordPressSite:
         """Create a new WordPress site registration"""
-        site_dict = site_data.model_dump()
         
         # Generate unique ID, API key and secret
         site_id = str(uuid.uuid4())
         api_key = WordPressSite.generate_api_key()
         api_secret = WordPressSite.generate_api_secret()
         
-        # Add generated fields
-        site_dict.update({
+        # Create site dict matching actual table structure
+        site_dict = {
             "id": site_id,
             "api_key": api_key,
             "api_secret": api_secret,
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "site_url": site_data.domain,  # Table uses 'site_url' not 'domain'
+            "site_name": site_data.site_name,
+            "admin_email": site_data.admin_email,
+            "client_id": site_data.client_id,  # Should be UUID format
+            "is_active": True,
+            "metadata": {},
             "request_count": 0
-        })
+        }
         
         # Store in Supabase
         try:
             result = self.supabase.table(self.table_name).insert(site_dict).execute()
             if result.data:
                 logger.info(f"WordPress site {site_id} created in Supabase")
-                return WordPressSite(**result.data[0])
+                mapped_data = self._map_db_to_model(result.data[0])
+                return WordPressSite(**mapped_data)
             else:
                 raise Exception("Failed to create site in Supabase")
         except Exception as e:
@@ -64,7 +75,8 @@ class WordPressSiteService:
         try:
             result = self.supabase.table(self.table_name).select("*").eq("id", site_id).execute()
             if result.data:
-                return WordPressSite(**result.data[0])
+                mapped_data = self._map_db_to_model(result.data[0])
+                return WordPressSite(**mapped_data)
         except Exception as e:
             logger.error(f"Error fetching site from Supabase: {e}")
             
@@ -78,9 +90,10 @@ class WordPressSiteService:
             domain = domain.split('://', 1)[1]
             
         try:
-            result = self.supabase.table(self.table_name).select("*").eq("domain", domain).execute()
+            result = self.supabase.table(self.table_name).select("*").eq("site_url", domain).execute()
             if result.data:
-                return WordPressSite(**result.data[0])
+                mapped_data = self._map_db_to_model(result.data[0])
+                return WordPressSite(**mapped_data)
         except Exception as e:
             logger.error(f"Error fetching site by domain from Supabase: {e}")
             
@@ -91,7 +104,8 @@ class WordPressSiteService:
         try:
             result = self.supabase.table(self.table_name).select("*").eq("api_key", api_key).execute()
             if result.data:
-                return WordPressSite(**result.data[0])
+                mapped_data = self._map_db_to_model(result.data[0])
+                return WordPressSite(**mapped_data)
         except Exception as e:
             logger.error(f"Error fetching site by API key from Supabase: {e}")
             
@@ -113,7 +127,8 @@ class WordPressSiteService:
             result = self.supabase.table(self.table_name).update(update_dict).eq("id", site_id).execute()
             if result.data:
                 logger.info(f"WordPress site {site_id} updated in Supabase")
-                return WordPressSite(**result.data[0])
+                mapped_data = self._map_db_to_model(result.data[0])
+                return WordPressSite(**mapped_data)
         except Exception as e:
             logger.error(f"Error updating site in Supabase: {e}")
             return None
@@ -161,11 +176,21 @@ class WordPressSiteService:
                 query = query.eq("is_active", is_active)
                 
             result = query.execute()
-            sites = [WordPressSite(**site) for site in result.data]
+            sites = [WordPressSite(**self._map_db_to_model(site)) for site in result.data]
         except Exception as e:
             logger.error(f"Error listing sites from Supabase: {e}")
                     
         return sites
+    
+    def delete_site(self, site_id: str) -> bool:
+        """Delete a WordPress site"""
+        try:
+            result = self.supabase.table(self.table_name).delete().eq("id", site_id).execute()
+            logger.info(f"WordPress site {site_id} deleted from Supabase")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting site from Supabase: {e}")
+            return False
         
     def get_site_stats(self, site_id: str) -> Optional[WordPressSiteStats]:
         """Get statistics for a WordPress site"""
