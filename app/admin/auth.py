@@ -148,44 +148,68 @@ async def get_admin_user_from_session(request: Request) -> Optional[Dict[str, An
     # For now, return None (not implemented)
     return None
 
-# Combined auth method - checks both JWT and session
+# Supabase-based admin authentication
 async def get_admin_user(request: Request) -> Dict[str, Any]:
-    """Get admin user using multiple auth methods"""
+    """Get admin user using Supabase authentication"""
     
-    # Try JWT first
-    try:
-        auth_header = request.headers.get("authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            payload = verify_token(token)
-            username = payload.get("sub")
-            
-            user = ADMIN_USERS.get(username)
-            if user:
-                return {
-                    "username": user["username"],
-                    "role": user["role"],
-                    "auth_method": "jwt"
-                }
-    except:
-        pass
-    
-    # Try session auth
-    session_user = await get_admin_user_from_session(request)
-    if session_user:
-        return session_user
-    
-    # For development, allow bypass
-    if os.getenv("DEVELOPMENT_MODE") == "true":
+    # Development mode bypass
+    if os.getenv("DEVELOPMENT_MODE", "true") == "true":
         return {
-            "username": "dev-admin",
+            "user_id": "dev-admin",
+            "email": "admin@autonomite.ai",
             "role": "superadmin",
-            "auth_method": "development"
+            "auth_method": "development",
+            "authenticated_at": datetime.utcnow().isoformat()
         }
     
-    # No valid authentication found
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    # Try to get token from Authorization header
+    auth_header = request.headers.get("authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        # Try to get from cookies (for browser-based auth)
+        token = request.cookies.get("admin_token")
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required - please login",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    else:
+        token = auth_header.split(" ")[1]
+    
+    try:
+        # Verify token with Supabase
+        from app.integrations.supabase_client import supabase_manager
+        
+        # Use Supabase to verify the JWT token
+        user_response = supabase_manager.admin_client.auth.get_user(token)
+        
+        if user_response.user:
+            user = user_response.user
+            return {
+                "user_id": user.id,
+                "email": user.email,
+                "role": "admin",  # All authenticated users are admin for now
+                "auth_method": "supabase",
+                "authenticated_at": datetime.utcnow().isoformat()
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication token",
+            )
+            
+    except Exception as e:
+        # For development, allow bypass
+        if os.getenv("DEVELOPMENT_MODE") == "true":
+            return {
+                "user_id": "dev-admin",
+                "email": "dev@autonomite.ai",
+                "role": "superadmin",
+                "auth_method": "development"
+            }
+        
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed - please login again",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

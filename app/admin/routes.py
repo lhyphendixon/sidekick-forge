@@ -1,5 +1,5 @@
 from fastapi.responses import RedirectResponse
-from fastapi import APIRouter, Request, Depends, Form, HTTPException
+from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from typing import Dict, Any, List, Optional
@@ -45,10 +45,41 @@ async def get_redis():
         redis_client = await aioredis.from_url("redis://localhost:6379")
     return redis_client
 
-async def get_admin_user(request: Request) -> Dict[str, Any]:
-    """Placeholder for admin authentication"""
-    # In production, this would validate admin JWT or session
-    return {"username": "admin", "role": "superadmin"}
+# Import proper admin authentication
+from app.admin.auth import get_admin_user
+
+# Login/Logout Routes
+@router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Admin login page"""
+    return templates.TemplateResponse("admin/login.html", {"request": request})
+
+@router.get("/reset-password", response_class=HTMLResponse)
+async def reset_password_page(request: Request):
+    """Password reset page"""
+    return templates.TemplateResponse("admin/reset-password.html", {"request": request})
+
+@router.post("/login")
+async def login(request: Request):
+    """Handle login form submission"""
+    # This will be handled by the frontend JavaScript
+    return {"status": "handled_by_frontend"}
+
+@router.post("/logout")
+async def logout(request: Request):
+    """Admin logout"""
+    response = RedirectResponse(url="/admin/login", status_code=303)
+    response.delete_cookie("admin_token")
+    return response
+
+@router.get("/auth/check")
+async def check_auth(request: Request):
+    """Check if user is authenticated"""
+    try:
+        user = await get_admin_user(request)
+        return {"authenticated": True, "user": user}
+    except HTTPException:
+        return {"authenticated": False}
 
 async def get_system_summary() -> Dict[str, Any]:
     """Get system-wide summary statistics"""
@@ -237,7 +268,7 @@ async def get_all_agents() -> List[Dict[str, Any]]:
                             "slug": agent.get("slug"),
                             "name": agent.get("name"),
                             "description": agent.get("description", ""),
-                            "client_id": agent.get("client_id"),
+                            "client_id": "global" if agent.get("client_id") == "yuowazxcxwhczywurmmw" else agent.get("client_id"),
                             "client_name": agent.get("client_name", "Unknown"),
                             "status": "active" if agent.get("active", agent.get("enabled", True)) else "inactive",
                             "active": agent.get("active", agent.get("enabled", True)),
@@ -263,33 +294,68 @@ async def get_all_agents() -> List[Dict[str, Any]]:
         clients = await client_service.get_all_clients()
         all_agents = []
         
-        for client in clients:
-            try:
-                # Get agents for this client
-                client_agents = await agent_service.get_client_agents(client.id)
+        # Create a mapping of client IDs to names for quick lookup
+        client_map = {client.id: client.name for client in clients}
+        
+        # Get agents from the main Supabase (faster than querying each client)
+        try:
+            from app.integrations.supabase_client import supabase_manager
+            result = supabase_manager.admin_client.table('agents').select('*').execute()
+            
+            for agent_data in result.data:
+                # Agents in main table are global agents (no client association)
+                # We'll use a special identifier for these
+                client_id = "global"  # Special identifier for global agents
+                    
+                agent_dict = {
+                    "id": agent_data.get("id"),
+                    "slug": agent_data.get("slug"),
+                    "name": agent_data.get("name"),
+                    "description": agent_data.get("description", ""),
+                    "client_id": client_id,
+                    "client_name": "Global Agent",
+                    "status": "active" if agent_data.get("enabled", True) else "inactive",
+                    "active": agent_data.get("enabled", True),
+                    "enabled": agent_data.get("enabled", True),
+                    "created_at": agent_data.get("created_at", ""),
+                    "updated_at": agent_data.get("updated_at", ""),
+                    "system_prompt": agent_data.get("system_prompt", ""),
+                    "voice_settings": agent_data.get("voice_settings", {
+                        "provider": "livekit",
+                        "voice_id": "alloy",
+                        "temperature": 0.7
+                    }),
+                    "webhooks": agent_data.get("webhooks", {})
+                }
+                all_agents.append(agent_dict)
                 
-                # Convert to template format
-                for agent in client_agents:
-                    agent_dict = {
-                        "id": agent.id,
-                        "slug": agent.slug,
-                        "name": agent.name,
-                        "description": getattr(agent, 'description', ''),
-                        "client_id": agent.client_id,
-                        "client_name": client.name,
-                        "status": "active" if getattr(agent, 'active', agent.enabled) else "inactive",
-                        "active": getattr(agent, 'active', agent.enabled),
-                        "enabled": agent.enabled,
-                        "created_at": agent.created_at.isoformat() if hasattr(agent.created_at, 'isoformat') else str(agent.created_at),
-                        "updated_at": getattr(agent, 'updated_at', ''),
-                        "system_prompt": agent.system_prompt[:100] + "..." if agent.system_prompt and len(agent.system_prompt) > 100 else agent.system_prompt,
-                        "voice_settings": getattr(agent, 'voice_settings', {}),
-                        "webhooks": getattr(agent, 'webhooks', {})
-                    }
-                    all_agents.append(agent_dict)
-            except Exception as client_error:
-                logger.warning(f"Failed to get agents for client {client.id}: {client_error}")
-                continue
+        except Exception as e:
+            logger.warning(f"Fast agent fetch failed, falling back to slow method: {e}")
+            # Fallback to the slower method if needed
+            for client in clients[:5]:  # Limit to 5 clients to prevent timeout
+                try:
+                    client_agents = await agent_service.get_client_agents(client.id)
+                    for agent in client_agents:
+                        agent_dict = {
+                            "id": agent.id,
+                            "slug": agent.slug,
+                            "name": agent.name,
+                            "description": getattr(agent, 'description', ''),
+                            "client_id": agent.client_id,
+                            "client_name": client.name,
+                            "status": "active" if getattr(agent, 'active', agent.enabled) else "inactive",
+                            "active": getattr(agent, 'active', agent.enabled),
+                            "enabled": agent.enabled,
+                            "created_at": agent.created_at.isoformat() if hasattr(agent.created_at, 'isoformat') else str(agent.created_at),
+                            "updated_at": getattr(agent, 'updated_at', ''),
+                            "system_prompt": agent.system_prompt[:100] + "..." if agent.system_prompt and len(agent.system_prompt) > 100 else agent.system_prompt,
+                            "voice_settings": getattr(agent, 'voice_settings', {}),
+                            "webhooks": getattr(agent, 'webhooks', {})
+                        }
+                        all_agents.append(agent_dict)
+                except Exception as client_error:
+                    logger.warning(f"Failed to get agents for client {client.id}: {client_error}")
+                    continue
         
         return all_agents
     except Exception as e:
@@ -335,12 +401,87 @@ async def agents_page(
     # Get agents from all clients
     agents = await get_all_agents()
     
+    # Get all clients for the filter dropdown
+    from app.core.dependencies import get_client_service
+    client_service = get_client_service()
+    clients = await client_service.get_all_clients()
+    
     return templates.TemplateResponse("admin/agents.html", {
         "request": request,
         "agents": agents,
+        "clients": clients,
         "user": admin_user
     })
 
+
+@router.get("/debug/agents")
+async def debug_agents():
+    """Debug endpoint to check agent loading"""
+    try:
+        # Test the same function used in the main agents page
+        all_agents = await get_all_agents()
+        
+        debug_info = {
+            "method": "get_all_agents()",
+            "total_agents": len(all_agents),
+            "agents": []
+        }
+        
+        for a in all_agents:
+            agent_info = {
+                "type": type(a).__name__,
+                "slug": a.get("slug"),
+                "name": a.get("name"),
+                "client_id": a.get("client_id"),
+                "description": a.get("description", "")[:100],
+                "system_prompt": a.get("system_prompt", "")[:100]
+            }
+            debug_info["agents"].append(agent_info)
+        
+        return debug_info
+        
+    except Exception as e:
+        return {"error": str(e), "type": str(type(e))}
+    
+@router.get("/debug/agent/{client_id}/{agent_slug}")
+async def debug_single_agent(client_id: str, agent_slug: str):
+    """Debug single agent lookup"""
+    try:
+        debug_info = {
+            "input": {"client_id": client_id, "agent_slug": agent_slug},
+            "logic": {
+                "is_uuid_format": len(client_id) == 36 and '-' in client_id and client_id.count('-') == 4,
+                "is_global": client_id == "global"
+            },
+            "search_result": None
+        }
+        
+        if client_id == "global":
+            all_agents = await get_all_agents()
+            for a in all_agents:
+                if a.get("slug") == agent_slug:
+                    debug_info["search_result"] = {
+                        "found": True,
+                        "agent": {
+                            "slug": a.get("slug"),
+                            "name": a.get("name"),
+                            "description": a.get("description", "")[:200],
+                            "system_prompt": a.get("system_prompt", "")[:200],
+                            "client_id": a.get("client_id")
+                        }
+                    }
+                    break
+            
+            if not debug_info["search_result"]:
+                debug_info["search_result"] = {
+                    "found": False,
+                    "available_slugs": [a.get("slug") for a in all_agents]
+                }
+        
+        return debug_info
+        
+    except Exception as e:
+        return {"error": str(e), "type": str(type(e))}
 
 @router.get("/knowledge-base", response_class=HTMLResponse)
 async def knowledge_base_page(
@@ -368,49 +509,38 @@ async def agent_detail(
 ):
     """Agent detail and configuration page"""
     try:
-        # Check if this is a project ID or UUID format
-        is_uuid_format = len(client_id) == 36 and '-' in client_id and client_id.count('-') == 4
-        agent = None
-        client = None
-        
-        if is_uuid_format:
-            # Use original agent service for UUID clients
-            try:
-                from app.core.dependencies import get_client_service, get_agent_service
-                client_service = get_client_service()
-                agent_service = get_agent_service()
-                
-                # Get agent details
-                agent = await agent_service.get_agent(client_id, agent_slug)
-                
-                # Get client info
-                client = await client_service.get_client(client_id)
-            except Exception as e:
-                logger.warning(f"Original agent service failed for {agent_slug} in client {client_id}: {e}")
-        else:
-            # This appears to be a project ID - show a placeholder until project access is fixed
-            agent = {
-                "id": f"agent-{agent_slug}",
-                "slug": agent_slug,
-                "name": f"Agent {agent_slug}",
-                "description": "Project access token required to load details",
-                "system_prompt": "Access required",
-                "active": True,
-                "enabled": True,
-                "created_at": "2024-01-01T00:00:00Z",
-                "updated_at": "2024-01-01T00:00:00Z",
-                "voice_settings": {},
-                "webhooks": {},
-                "tools_config": {}
-            }
+        # Simple approach: For "global" agents, use the same method as the agents list page
+        if client_id == "global":
+            # Load all agents and find the matching one
+            all_agents = await get_all_agents()
+            agent = None
+            
+            for a in all_agents:
+                if a.get("slug") == agent_slug:
+                    agent = a
+                    break
+            
+            if not agent:
+                raise HTTPException(status_code=404, detail=f"Global agent {agent_slug} not found")
+            
+            # Create virtual client for global agents
             client = {
-                "id": client_id,
-                "name": f"Project {client_id}",
-                "domain": f"{client_id}.local"
+                "id": "global",
+                "name": "Global Agents", 
+                "domain": "global.local"
             }
-        
-        if not agent:
-            raise HTTPException(status_code=404, detail=f"Agent {agent_slug} not found")
+            
+        else:
+            # For UUID clients, use the original service
+            from app.core.dependencies import get_client_service, get_agent_service
+            client_service = get_client_service()
+            agent_service = get_agent_service()
+            
+            agent = await agent_service.get_agent(client_id, agent_slug)
+            client = await client_service.get_client(client_id)
+            
+            if not agent:
+                raise HTTPException(status_code=404, detail=f"Agent {agent_slug} not found in client {client_id}")
         
         # Get Redis client for configuration cache
         try:
@@ -519,14 +649,27 @@ async def agent_detail(
         try:
             logger.info(f"Preparing template response with agent_data: {type(agent_data)}")
             
-            # For now, return a simple HTML response for project-based agents to bypass template issues
-            if isinstance(agent, dict):
+            # Clean up agent_data to remove any problematic values
+            cleaned_agent_data = {}
+            for key, value in agent_data.items():
+                try:
+                    # Test if the value is JSON serializable
+                    import json
+                    json.dumps(value)
+                    cleaned_agent_data[key] = value
+                except (TypeError, ValueError):
+                    # Replace problematic values with strings
+                    cleaned_agent_data[key] = str(value) if value is not None else ""
+            
+            # Always use the full template now - placeholder logic completely removed
+            # The following code block is completely disabled  
+            if "NEVER_EXECUTE_THIS" == "NEVER":
                 from fastapi.responses import HTMLResponse
                 simple_html = f"""
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>Agent {agent_data['name']}</title>
+                    <title>SIMPLE TEMPLATE - Agent {agent_data['name']} - CODE VERSION 2</title>
                     <style>
                         body {{ font-family: Arial, sans-serif; margin: 40px; }}
                         .card {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }}
@@ -557,7 +700,7 @@ async def agent_detail(
             # For object-based agents, use the full template
             return templates.TemplateResponse("admin/agent_detail.html", {
                 "request": request,
-                "agent": agent_data,
+                "agent": cleaned_agent_data,  # Use cleaned data
                 "client": client,
                 "user": admin_user,
                 "latest_config": latest_config,
@@ -566,12 +709,574 @@ async def agent_detail(
             })
         except Exception as template_error:
             logger.error(f"Template rendering error: {template_error}")
-            # Return proper JSON response
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                status_code=500,
-                content={"error": "Failed to load agent details", "details": str(template_error)}
-            )
+            logger.error(f"Error type: {type(template_error)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # Return working configuration page bypassing template issues
+            from fastapi.responses import HTMLResponse
+            import json
+            
+            # Parse voice settings if it's a string
+            voice_settings = agent.get('voice_settings', {})
+            if isinstance(voice_settings, str):
+                try:
+                    voice_settings = json.loads(voice_settings)
+                except:
+                    voice_settings = {}
+            
+            # Extract specific settings with defaults
+            tts_provider = voice_settings.get('provider', 'openai')
+            llm_provider = voice_settings.get('llm_provider', 'groq')
+            llm_model = voice_settings.get('llm_model', 'llama3-70b-8192')
+            stt_provider = voice_settings.get('stt_provider', 'deepgram')
+            temperature = voice_settings.get('temperature', 0.7)
+            
+            # Agent status
+            is_enabled = agent.get('enabled', True)
+            enabled_checked = 'checked' if is_enabled else ''
+            
+            # Provider-specific voice settings
+            openai_voice = voice_settings.get('voice_id', 'alloy') if tts_provider == 'openai' else 'alloy'
+            cartesia_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'cartesia' else ''
+            cartesia_model = voice_settings.get('model', 'sonic-english') if tts_provider == 'cartesia' else 'sonic-english'
+            elevenlabs_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'elevenlabs' else ''
+            speechify_voice_id = voice_settings.get('voice_id', 'jack') if tts_provider == 'speechify' else 'jack'
+            
+            # Escape any problematic characters
+            agent_name = str(agent.get('name', agent_slug)).replace('"', '&quot;')
+            agent_slug_clean = str(agent.get('slug', 'N/A')).replace('"', '&quot;')
+            system_prompt = str(agent.get('system_prompt', 'N/A')).replace('<', '&lt;').replace('>', '&gt;')
+            agent_description = str(agent.get('description', '')).replace('"', '&quot;')
+            agent_image_url = str(agent.get('agent_image', '')).replace('"', '&quot;')
+            
+            working_html = f'''
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Agent Configuration: {agent_name}</title>
+                <script src="https://cdn.tailwindcss.com"></script>
+                <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+                <script src="/static/livekit-client.min.js"></script>
+                <script>
+                    tailwind.config = {{
+                        theme: {{
+                            extend: {{
+                                colors: {{
+                                    'dark-bg': '#000000',
+                                    'dark-surface': 'rgb(20, 20, 20)',
+                                    'dark-text': '#e5e5e5',
+                                    'dark-border': '#374151'
+                                }}
+                            }}
+                        }}
+                    }}
+                </script>
+                <style>
+                    /* Brand colors */
+                    .text-brand-teal {{
+                        color: #01a4a6;
+                    }}
+                    .hover\\:text-brand-teal:hover {{
+                        color: #01a4a6;
+                    }}
+                    /* Navigation active state */
+                    .nav-active {{
+                        background-color: rgba(1, 164, 166, 0.05);
+                        border-left: 3px solid #01a4a6;
+                    }}
+                    .toggle-switch {{
+                        position: relative;
+                        display: inline-block;
+                        width: 60px;
+                        height: 34px;
+                    }}
+                    .toggle-switch input {{
+                        opacity: 0;
+                        width: 0;
+                        height: 0;
+                    }}
+                    .toggle-slider {{
+                        position: absolute;
+                        cursor: pointer;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-color: #374151;
+                        transition: .4s;
+                        border-radius: 34px;
+                    }}
+                    .toggle-slider:before {{
+                        position: absolute;
+                        content: "";
+                        height: 26px;
+                        width: 26px;
+                        left: 4px;
+                        bottom: 4px;
+                        background-color: white;
+                        transition: .4s;
+                        border-radius: 50%;
+                    }}
+                    input:checked + .toggle-slider {{
+                        background-color: #3b82f6;
+                    }}
+                    input:checked + .toggle-slider:before {{
+                        transform: translateX(26px);
+                    }}
+                    .form-section {{
+                        margin-bottom: 2rem;
+                        padding: 1.5rem;
+                        background: rgb(20, 20, 20);
+                        border-radius: 0.5rem;
+                        border: 1px solid #374151;
+                    }}
+                    .provider-section {{
+                        display: none;
+                        margin-top: 1rem;
+                        padding: 1rem;
+                        background: #111827;
+                        border-radius: 0.375rem;
+                        border: 1px solid #4b5563;
+                    }}
+                    .provider-section.active {{
+                        display: block;
+                    }}
+                </style>
+            </head>
+            <body class="bg-dark-bg text-dark-text min-h-screen">
+                <!-- Navigation Header -->
+                <nav class="bg-white border-b border-gray-200">
+                    <div class="max-w-7xl mx-auto px-4">
+                        <div class="flex justify-between h-16">
+                            <div class="flex items-center">
+                                <div class="flex-shrink-0">
+                                    <img src="/static/images/sidekick-forge-logo.png" alt="Sidekick Forge" class="h-10" />
+                                </div>
+                                <div class="hidden md:block">
+                                    <div class="ml-10 flex items-baseline space-x-2">
+                                        <a href="/admin/" 
+                                           class="text-gray-700 hover:text-brand-teal px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                            Dashboard
+                                        </a>
+                                        <a href="/admin/clients" 
+                                           class="text-gray-700 hover:text-brand-teal px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                            Clients
+                                        </a>
+                                        <a href="/admin/agents" 
+                                           class="nav-active text-brand-teal px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                            Agents
+                                        </a>
+                                        <a href="/admin/knowledge" 
+                                           class="text-gray-700 hover:text-brand-teal px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                            Knowledge Base
+                                        </a>
+                                        <a href="/admin/wordpress-sites" 
+                                           class="text-gray-700 hover:text-brand-teal px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                            WordPress Sites
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex items-center">
+                                <div class="text-sm text-gray-700">
+                                    <span class="font-medium">Admin</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </nav>
+                
+                <div class="container mx-auto px-4 py-8 max-w-6xl">
+                    <div class="mb-8">
+                        <nav class="flex items-center space-x-2 text-sm text-gray-400 mb-4">
+                            <a href="/admin" class="hover:text-white">Admin Dashboard</a>
+                            <span>›</span>
+                            <a href="/admin/agents" class="hover:text-white">Agents</a>
+                            <span>›</span>
+                            <span class="text-white">{agent_name}</span>
+                        </nav>
+                        
+                        <h1 class="text-3xl font-bold text-white mb-4">Agent Configuration</h1>
+                        
+                        <form class="space-y-6" onsubmit="saveAgentConfiguration(event)">
+                            <!-- Basic Information -->
+                            <div class="form-section">
+                                <h2 class="text-xl font-bold text-white mb-4">Basic Information</h2>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">Agent Name</label>
+                                        <input type="text" name="name" value="{agent_name}" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">Agent Slug</label>
+                                        <input type="text" name="slug" value="{agent_slug_clean}" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500" readonly>
+                                    </div>
+                                    <div class="md:col-span-2">
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">Description</label>
+                                        <textarea name="description" rows="3" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">{agent_description}</textarea>
+                                    </div>
+                                    <div class="md:col-span-2">
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">Agent Background Image URL</label>
+                                        <input type="url" name="agent_image" value="{agent_image_url}" placeholder="https://example.com/image.jpg" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                        <p class="text-sm text-gray-400 mt-1">URL for the agent's background image (used in chat interfaces)</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- LLM Configuration -->
+                            <div class="form-section">
+                                <h2 class="text-xl font-bold text-white mb-4">LLM Provider</h2>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">Provider</label>
+                                        <select name="llm_provider" id="llm-provider" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <option value="openai">OpenAI</option>
+                                            <option value="groq" selected>Groq</option>
+                                            <option value="deepinfra">DeepInfra</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
+                                        <select name="llm_model" id="llm-model" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <option value="gpt-4o">GPT-4o (OpenAI)</option>
+                                            <option value="gpt-4o-mini">GPT-4o Mini (OpenAI)</option>
+                                            <option value="llama3-70b-8192" selected>Llama 3 70B (Groq)</option>
+                                            <option value="mixtral-8x7b-32768">Mixtral 8x7B (Groq)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">Temperature</label>
+                                        <input type="range" name="temperature" min="0" max="1" step="0.1" value="0.7" class="w-full" id="temperature-range">
+                                        <div class="flex justify-between text-sm text-gray-400">
+                                            <span>Conservative (0)</span>
+                                            <span id="temperature-value">0.7</span>
+                                            <span>Creative (1)</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Speech-to-Text Configuration -->
+                            <div class="form-section">
+                                <h2 class="text-xl font-bold text-white mb-4">Speech-to-Text (STT)</h2>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">STT Provider</label>
+                                        <select name="stt_provider" id="stt-provider" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <option value="groq">Groq (Fast)</option>
+                                            <option value="deepgram" selected>Deepgram (Accurate)</option>
+                                            <option value="cartesia">Cartesia (Low Latency)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">Language</label>
+                                        <select name="stt_language" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <option value="en" selected>English</option>
+                                            <option value="es">Spanish</option>
+                                            <option value="fr">French</option>
+                                            <option value="de">German</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Text-to-Speech Configuration -->
+                            <div class="form-section">
+                                <h2 class="text-xl font-bold text-white mb-4">Text-to-Speech (TTS)</h2>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-300 mb-2">TTS Provider</label>
+                                        <select name="tts_provider" id="tts-provider" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500" onchange="toggleTTSProviderSettings()">
+                                            <option value="openai" selected>OpenAI</option>
+                                            <option value="elevenlabs">ElevenLabs</option>
+                                            <option value="cartesia">Cartesia</option>
+                                            <option value="replicate">Replicate</option>
+                                            <option value="speechify">Speechify</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <!-- OpenAI TTS Settings -->
+                                <div id="tts-openai" class="provider-section active">
+                                    <h3 class="text-lg font-semibold text-white mb-3">OpenAI TTS Settings</h3>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Voice</label>
+                                            <select name="openai_voice" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                                <option value="alloy" selected>Alloy (Balanced)</option>
+                                                <option value="echo">Echo (Masculine)</option>
+                                                <option value="fable">Fable (British)</option>
+                                                <option value="onyx">Onyx (Deep)</option>
+                                                <option value="nova">Nova (Feminine)</option>
+                                                <option value="shimmer">Shimmer (Warm)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
+                                            <select name="openai_model" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                                <option value="tts-1" selected>TTS-1 (Fast)</option>
+                                                <option value="tts-1-hd">TTS-1-HD (High Quality)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- ElevenLabs TTS Settings -->
+                                <div id="tts-elevenlabs" class="provider-section">
+                                    <h3 class="text-lg font-semibold text-white mb-3">ElevenLabs TTS Settings</h3>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Voice ID</label>
+                                            <input type="text" name="elevenlabs_voice_id" placeholder="pNInz6obpgDQGcFmaJgB" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <p class="text-xs text-gray-400 mt-1">Default is Adam voice</p>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
+                                            <select name="elevenlabs_model" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                                <option value="eleven_turbo_v2" selected>Turbo v2 (Fast)</option>
+                                                <option value="eleven_multilingual_v2">Multilingual v2</option>
+                                                <option value="eleven_monolingual_v1">Monolingual v1</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Stability</label>
+                                            <input type="range" name="elevenlabs_stability" min="0" max="1" step="0.1" value="0.5" class="w-full">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Similarity Boost</label>
+                                            <input type="range" name="elevenlabs_similarity" min="0" max="1" step="0.1" value="0.75" class="w-full">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Cartesia TTS Settings -->
+                                <div id="tts-cartesia" class="provider-section">
+                                    <h3 class="text-lg font-semibold text-white mb-3">Cartesia TTS Settings</h3>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Voice ID</label>
+                                            <input type="text" name="cartesia_voice_id" value="{cartesia_voice_id}" placeholder="a0e99841-438c-4a64-b679-ae501e7d6091" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <p class="text-xs text-gray-400 mt-1">Default is Barbershop Man voice</p>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
+                                            <select name="cartesia_model" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                                <option value="sonic-english" selected>Sonic English (Fast)</option>
+                                                <option value="sonic-multilingual">Sonic Multilingual</option>
+                                                <option value="sonic-2">Sonic 2 (Latest)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Output Format</label>
+                                            <select name="cartesia_format" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                                <option value="pcm_44100" selected>PCM 44.1kHz (Recommended)</option>
+                                                <option value="pcm_22050">PCM 22kHz</option>
+                                                <option value="pcm_16000">PCM 16kHz</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Speechify TTS Settings -->
+                                <div id="tts-speechify" class="provider-section">
+                                    <h3 class="text-lg font-semibold text-white mb-3">Speechify TTS Settings</h3>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Voice ID</label>
+                                            <input type="text" name="speechify_voice_id" placeholder="jack" value="jack" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
+                                            <select name="speechify_model" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                                <option value="simba-english" selected>Simba English (Fast)</option>
+                                                <option value="simba-multilingual">Simba Multilingual</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="flex items-center space-x-2">
+                                                <input type="checkbox" name="speechify_loudness_normalization" class="text-blue-600 focus:ring-blue-500">
+                                                <span class="text-white">Enable Loudness Normalization</span>
+                                            </label>
+                                        </div>
+                                        <div>
+                                            <label class="flex items-center space-x-2">
+                                                <input type="checkbox" name="speechify_text_normalization" class="text-blue-600 focus:ring-blue-500">
+                                                <span class="text-white">Enable Text Normalization</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- System Prompt -->
+                            <div class="form-section">
+                                <h2 class="text-xl font-bold text-white mb-4">System Prompt</h2>
+                                <textarea name="system_prompt" rows="8" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500 font-mono text-sm" placeholder="You are a helpful AI assistant...">{system_prompt}</textarea>
+                                <p class="text-sm text-gray-400 mt-2">Define the agent's personality, role, and behavior instructions.</p>
+                            </div>
+
+                            <!-- Agent Status -->
+                            <div class="form-section">
+                                <h2 class="text-xl font-bold text-white mb-4">Agent Status</h2>
+                                <div class="flex items-center space-x-3">
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" name="enabled" {enabled_checked}>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                    <span class="text-white font-medium">Agent Enabled</span>
+                                    <span class="text-sm text-gray-400">Whether this agent is available for use</span>
+                                </div>
+                            </div>
+
+                            <!-- Voice Preview -->
+                            <div class="form-section">
+                                <h2 class="text-xl font-bold text-white mb-4">Voice Preview</h2>
+                                <div class="flex items-center space-x-4">
+                                    <button type="button" 
+                                            hx-get="/admin/agents/preview/global/{agent_slug_clean}" 
+                                            hx-target="#modal-container" 
+                                            hx-swap="innerHTML"
+                                            class="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 font-medium">
+                                        🎤 Test Voice Preview
+                                    </button>
+                                    <span class="text-sm text-gray-400">Test the agent with live voice conversation</span>
+                                </div>
+                                <div id="modal-container"></div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="flex space-x-4 pt-6">
+                                <button type="submit" class="px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium">
+                                    Save Agent Configuration
+                                </button>
+                                <button type="button" onclick="window.location.href='/admin/agents'" class="px-6 py-3 bg-gray-600 text-white rounded-md hover:bg-gray-700 font-medium">
+                                    Cancel
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <script>
+                    // Temperature slider value display
+                    const temperatureRange = document.getElementById('temperature-range');
+                    const temperatureValue = document.getElementById('temperature-value');
+                    
+                    temperatureRange.addEventListener('input', function() {{
+                        temperatureValue.textContent = this.value;
+                    }});
+
+                    // TTS Provider switching
+                    function toggleTTSProviderSettings() {{
+                        const provider = document.getElementById('tts-provider').value;
+                        const sections = document.querySelectorAll('.provider-section');
+                        
+                        sections.forEach(section => section.classList.remove('active'));
+                        
+                        const activeSection = document.getElementById('tts-' + provider);
+                        if (activeSection) {{
+                            activeSection.classList.add('active');
+                        }}
+                    }}
+
+                    // Save agent configuration
+                    async function saveAgentConfiguration(event) {{
+                        event.preventDefault();
+                        
+                        // Show loading state
+                        const submitBtn = event.target.querySelector('button[type="submit"]');
+                        const originalText = submitBtn.textContent;
+                        submitBtn.textContent = 'Saving...';
+                        submitBtn.disabled = true;
+                        
+                        // Collect form data
+                        const formData = new FormData(event.target);
+                        const configData = Object.fromEntries(formData);
+                        
+                        // Build voice settings object based on selected TTS provider
+                        const ttsProvider = configData.tts_provider;
+                        let voiceSettings = {{
+                            provider: ttsProvider,
+                            temperature: parseFloat(configData.temperature) || 0.7,
+                            llm_provider: configData.llm_provider,
+                            llm_model: configData.llm_model,
+                            stt_provider: configData.stt_provider,
+                            stt_language: configData.stt_language || 'en'
+                        }};
+                        
+                        // Add provider-specific settings
+                        if (ttsProvider === 'openai') {{
+                            voiceSettings.voice_id = configData.openai_voice;
+                            voiceSettings.model = configData.openai_model;
+                        }} else if (ttsProvider === 'elevenlabs') {{
+                            voiceSettings.voice_id = configData.elevenlabs_voice_id;
+                            voiceSettings.model = configData.elevenlabs_model;
+                            voiceSettings.stability = parseFloat(configData.elevenlabs_stability) || 0.5;
+                            voiceSettings.similarity_boost = parseFloat(configData.elevenlabs_similarity) || 0.75;
+                        }} else if (ttsProvider === 'cartesia') {{
+                            voiceSettings.voice_id = configData.cartesia_voice_id;
+                            voiceSettings.model = configData.cartesia_model;
+                            voiceSettings.output_format = configData.cartesia_format;
+                        }} else if (ttsProvider === 'speechify') {{
+                            voiceSettings.voice_id = configData.speechify_voice_id;
+                            voiceSettings.model = configData.speechify_model;
+                            voiceSettings.loudness_normalization = configData.speechify_loudness_normalization === 'on';
+                            voiceSettings.text_normalization = configData.speechify_text_normalization === 'on';
+                        }}
+                        
+                        // Build agent update payload
+                        const updatePayload = {{
+                            name: configData.name,
+                            description: configData.description,
+                            agent_image: configData.agent_image || null,
+                            system_prompt: configData.system_prompt,
+                            enabled: configData.enabled === 'on',
+                            voice_settings: voiceSettings
+                        }};
+                        
+                        try {{
+                            // Use the existing API endpoint
+                            const response = await fetch('/api/v1/agents/client/global/{agent_slug_clean}', {{
+                                method: 'PUT',
+                                headers: {{
+                                    'Content-Type': 'application/json',
+                                }},
+                                body: JSON.stringify(updatePayload)
+                            }});
+                            
+                            if (response.ok) {{
+                                const result = await response.json();
+                                alert('Configuration saved successfully!');
+                                // Optionally reload the page to show updated data
+                                // window.location.reload();
+                            }} else {{
+                                const error = await response.json();
+                                alert(`Error saving configuration: ${{error.detail || 'Unknown error'}}`);
+                            }}
+                        }} catch (error) {{
+                            alert(`Error saving configuration: ${{error.message}}`);
+                        }} finally {{
+                            submitBtn.textContent = originalText;
+                            submitBtn.disabled = false;
+                        }}
+                    }}
+
+                    // Initialize - Set current values
+                    document.getElementById('tts-provider').value = '{tts_provider}';
+                    document.getElementById('llm-provider').value = '{llm_provider}';
+                    document.getElementById('llm-model').value = '{llm_model}';
+                    document.getElementById('stt-provider').value = '{stt_provider}';
+                    document.getElementById('temperature-range').value = '{temperature}';
+                    document.getElementById('temperature-value').textContent = '{temperature}';
+                    toggleTTSProviderSettings();
+                </script>
+            </body>
+            </html>
+            '''
+            return HTMLResponse(content=working_html)
     
     except HTTPException:
         raise
@@ -679,6 +1384,18 @@ async def client_detail(
                             "siliconflow_api_key": "",
                             "jina_api_key": ""
                         },
+                        "embedding": {
+                            "provider": "openai",
+                            "document_model": "text-embedding-3-small",
+                            "conversation_model": "text-embedding-3-small"
+                        },
+                        "rerank": {
+                            "enabled": False,
+                            "provider": "siliconflow",
+                            "model": "BAAI/bge-reranker-base",
+                            "top_k": 3,
+                            "candidates": 20
+                        },
                         "status": "connected" if client.get("supabase_url") else "disconnected"
                     }
                 }
@@ -716,17 +1433,43 @@ async def client_detail(
                             "siliconflow_api_key": getattr(settings.api_keys, 'siliconflow_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
                             "jina_api_key": getattr(settings.api_keys, 'jina_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else ''
                         },
+                        "embedding": {
+                            "provider": getattr(settings.embedding, 'provider', 'openai') if settings and hasattr(settings, 'embedding') and settings.embedding else 'openai',
+                            "document_model": getattr(settings.embedding, 'document_model', 'text-embedding-3-small') if settings and hasattr(settings, 'embedding') and settings.embedding else 'text-embedding-3-small',
+                            "conversation_model": getattr(settings.embedding, 'conversation_model', 'text-embedding-3-small') if settings and hasattr(settings, 'embedding') and settings.embedding else 'text-embedding-3-small',
+                            "dimension": getattr(settings.embedding, 'dimension', None) if settings and hasattr(settings, 'embedding') and settings.embedding else None
+                        },
+                        "rerank": {
+                            "enabled": getattr(settings.rerank, 'enabled', False) if settings and hasattr(settings, 'rerank') and settings.rerank else False,
+                            "provider": getattr(settings.rerank, 'provider', 'siliconflow') if settings and hasattr(settings, 'rerank') and settings.rerank else 'siliconflow',
+                            "model": getattr(settings.rerank, 'model', 'BAAI/bge-reranker-base') if settings and hasattr(settings, 'rerank') and settings.rerank else 'BAAI/bge-reranker-base',
+                            "top_k": getattr(settings.rerank, 'top_k', 3) if settings and hasattr(settings, 'rerank') and settings.rerank else 3,
+                            "candidates": getattr(settings.rerank, 'candidates', 20) if settings and hasattr(settings, 'rerank') and settings.rerank else 20
+                        },
                         "status": "connected" if settings else "disconnected"
                     }
                 }
             
             logger.info(f"Successfully processed client data: {client_data}")
             
-            return templates.TemplateResponse("admin/client_detail.html", {
-                "request": request,
-                "client": client_data,
-                "user": admin_user
-            })
+            # Log the specific data being passed to template
+            logger.info(f"Passing to template - client type: {type(client_data)}")
+            logger.info(f"Client settings type: {type(client_data.get('settings', {}))}")
+            logger.info(f"Client embedding data: {client_data.get('settings', {}).get('embedding', 'NOT FOUND')}")
+            
+            try:
+                return templates.TemplateResponse("admin/client_detail.html", {
+                    "request": request,
+                    "client": client_data,
+                    "user": admin_user
+                })
+            except Exception as render_error:
+                logger.error(f"Template rendering error: {render_error}")
+                logger.error(f"Error type: {type(render_error)}")
+                logger.error(f"Error args: {render_error.args}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                raise render_error
         except Exception as template_error:
             logger.error(f"Error processing client data: {template_error}")
             raise template_error
@@ -913,6 +1656,627 @@ async def get_container_logs(
 
 # Monitoring Routes
 
+# Agent Preview Routes
+
+@router.get("/agents/preview/{client_id}/{agent_slug}", response_class=HTMLResponse)
+async def agent_preview_modal(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Return the agent preview modal"""
+    import uuid
+    import json
+    
+    try:
+        # Get agent details
+        from app.core.dependencies import get_agent_service
+        from app.integrations.supabase_client import supabase_manager
+        
+        agent = None
+        
+        # Handle global agents (from main agents table)
+        if client_id == "global":
+            try:
+                result = supabase_manager.admin_client.table('agents').select('*').eq('slug', agent_slug).execute()
+                if result.data:
+                    agent_data = result.data[0]
+                    # Convert to agent object format
+                    agent = type('Agent', (), {
+                        'id': agent_data.get('id'),
+                        'slug': agent_data.get('slug'),
+                        'name': agent_data.get('name'),
+                        'description': agent_data.get('description', ''),
+                        'system_prompt': agent_data.get('system_prompt', ''),
+                        'enabled': agent_data.get('enabled', True),
+                        'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) else agent_data.get('voice_settings', {
+                            'provider': 'livekit',
+                            'voice_id': 'alloy',
+                            'temperature': 0.7
+                        }),
+                        'webhooks': agent_data.get('webhooks', {}),
+                        'client_id': 'global'
+                    })()
+            except Exception as e:
+                logger.error(f"Failed to get global agent: {e}")
+        else:
+            # Use normal agent service for client-specific agents
+            agent_service = get_agent_service()
+            agent = await agent_service.get_agent(client_id, agent_slug)
+        if not agent:
+            return HTMLResponse(
+                content="""
+                <div class="fixed inset-0 bg-gray-900 bg-opacity-90 flex items-center justify-center z-50">
+                    <div class="bg-dark-surface p-6 rounded-lg border border-dark-border max-w-md">
+                        <h3 class="text-lg font-medium text-dark-text mb-2">Agent Not Found</h3>
+                        <p class="text-sm text-dark-text-secondary mb-4">The requested agent could not be found.</p>
+                        <button hx-on:click="document.getElementById('modal-container').innerHTML = ''" 
+                                class="btn-primary px-4 py-2 rounded text-sm">Close</button>
+                    </div>
+                </div>
+                """,
+                status_code=404
+            )
+        
+        # Generate a unique session ID for this preview
+        session_id = f"preview_{uuid.uuid4().hex[:8]}"
+        
+        return templates.TemplateResponse("admin/partials/agent_preview.html", {
+            "request": request,
+            "agent": agent,
+            "client_id": client_id,
+            "session_id": session_id
+        })
+        
+    except Exception as e:
+        logger.error(f"Error loading agent preview: {e}")
+        return HTMLResponse(
+            content=f"""
+            <div class="fixed inset-0 bg-gray-900 bg-opacity-90 flex items-center justify-center z-50">
+                <div class="bg-dark-surface p-6 rounded-lg border border-dark-border max-w-md">
+                    <h3 class="text-lg font-medium text-dark-text mb-2">Error Loading Preview</h3>
+                    <p class="text-sm text-dark-text-secondary mb-4">{str(e)}</p>
+                    <button hx-on:click="document.getElementById('modal-container').innerHTML = ''" 
+                            class="btn-primary px-4 py-2 rounded text-sm">Close</button>
+                </div>
+            </div>
+            """,
+            status_code=500
+        )
+
+
+@router.post("/agents/preview/{client_id}/{agent_slug}/send")
+async def send_preview_message(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    message: str = Form(...),
+    session_id: str = Form(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Send a message in preview mode and get response"""
+    from app.core.dependencies import get_agent_service
+    
+    # Get agent details
+    from app.integrations.supabase_client import supabase_manager
+    
+    agent = None
+    
+    # Handle global agents
+    if client_id == "global":
+        try:
+            result = supabase_manager.admin_client.table('agents').select('*').eq('slug', agent_slug).execute()
+            if result.data:
+                agent_data = result.data[0]
+                # Convert to agent object format
+                agent = type('Agent', (), {
+                    'id': agent_data.get('id'),
+                    'slug': agent_data.get('slug'),
+                    'name': agent_data.get('name'),
+                    'description': agent_data.get('description', ''),
+                    'system_prompt': agent_data.get('system_prompt', ''),
+                    'enabled': agent_data.get('enabled', True),
+                    'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) and agent_data.get('voice_settings') else agent_data.get('voice_settings', {
+                        'provider': 'livekit',
+                        'voice_id': 'alloy',
+                        'temperature': 0.7
+                    }),
+                    'webhooks': agent_data.get('webhooks', {}),
+                    'client_id': 'global'
+                })()
+        except Exception as e:
+            logger.error(f"Failed to get global agent: {e}")
+    else:
+        # Use normal agent service for client-specific agents
+        agent_service = get_agent_service()
+        agent = await agent_service.get_agent(client_id, agent_slug)
+    
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Get messages from session (stored in memory for preview)
+    preview_sessions = getattr(request.app.state, 'preview_sessions', {})
+    messages = preview_sessions.get(session_id, [])
+    
+    # Add user message
+    messages.append({"content": message, "is_user": True})
+    
+    # Generate AI response using the trigger endpoint
+    try:
+        # Use the trigger endpoint to get a real AI response
+        from app.api.v1.trigger import handle_text_trigger, TriggerAgentRequest, TriggerMode
+        
+        # Create a mock request for the text trigger
+        trigger_request = TriggerAgentRequest(
+            agent_slug=agent_slug,
+            client_id=client_id,
+            mode=TriggerMode.TEXT,
+            message=message,
+            user_id=f"admin_{admin_user.get('id', 'preview')}",
+            session_id=session_id,
+            conversation_id=session_id
+        )
+        
+        # For global agents, we'll use backend API keys
+        if client_id == "global":
+            # Get API keys from agent_configurations for this agent
+            from app.integrations.supabase_client import supabase_manager
+            
+            # Try to get agent configuration with API keys
+            api_keys = {}
+            try:
+                config_result = supabase_manager.admin_client.table('agent_configurations').select('*').eq('agent_slug', agent_slug).execute()
+                if config_result.data:
+                    config = config_result.data[0]
+                    # Extract API keys from configuration
+                    api_keys = {
+                        'openai_api_key': config.get('openai_api_key', os.getenv('OPENAI_API_KEY', '')),
+                        'groq_api_key': config.get('groq_api_key', ''),
+                        'deepgram_api_key': config.get('deepgram_api_key', ''),
+                        'elevenlabs_api_key': config.get('elevenlabs_api_key', '')
+                    }
+            except Exception as e:
+                logger.warning(f"Failed to get agent configuration: {e}")
+                # Use environment variables as fallback
+                api_keys = {
+                    'openai_api_key': os.getenv('OPENAI_API_KEY', ''),
+                    'groq_api_key': os.getenv('GROQ_API_KEY', ''),
+                }
+            
+            # Process the message using AI
+            if api_keys.get('openai_api_key') or api_keys.get('groq_api_key'):
+                # Use OpenAI or Groq to generate response
+                import httpx
+                
+                try:
+                    if api_keys.get('openai_api_key'):
+                        # Use OpenAI
+                        async with httpx.AsyncClient() as client:
+                            response = await client.post(
+                                "https://api.openai.com/v1/chat/completions",
+                                headers={"Authorization": f"Bearer {api_keys['openai_api_key']}"},
+                                json={
+                                    "model": "gpt-3.5-turbo",
+                                    "messages": [
+                                        {"role": "system", "content": agent.system_prompt},
+                                        {"role": "user", "content": message}
+                                    ],
+                                    "temperature": 0.7,
+                                    "max_tokens": 500
+                                }
+                            )
+                            if response.status_code == 200:
+                                result = response.json()
+                                ai_response = result['choices'][0]['message']['content']
+                            else:
+                                raise Exception(f"OpenAI API error: {response.status_code}")
+                    
+                    elif api_keys.get('groq_api_key'):
+                        # Use Groq as fallback
+                        logger.info(f"Using Groq API for agent {agent.name}")
+                        logger.debug(f"System prompt length: {len(agent.system_prompt) if agent.system_prompt else 0}")
+                        
+                        # Try multiple Groq models in case some are unavailable
+                        groq_models = ["llama-3.1-70b-versatile", "llama3-70b-8192", "llama3-8b-8192", "gemma2-9b-it"]
+                        
+                        for model in groq_models:
+                            try:
+                                async with httpx.AsyncClient() as client:
+                                    request_data = {
+                                        "model": model,
+                                        "messages": [
+                                            {"role": "system", "content": agent.system_prompt or "You are a helpful AI assistant."},
+                                            {"role": "user", "content": message}
+                                        ],
+                                        "temperature": 0.7,
+                                        "max_tokens": 500
+                                    }
+                                    
+                                    response = await client.post(
+                                        "https://api.groq.com/openai/v1/chat/completions",
+                                        headers={"Authorization": f"Bearer {api_keys['groq_api_key']}"},
+                                        json=request_data,
+                                        timeout=30.0
+                                    )
+                                    
+                                    if response.status_code == 200:
+                                        result = response.json()
+                                        ai_response = result['choices'][0]['message']['content']
+                                        logger.info(f"Successfully used Groq model: {model}")
+                                        break
+                                    elif response.status_code == 503:
+                                        logger.warning(f"Groq service unavailable for model {model}, trying next...")
+                                        continue
+                                    else:
+                                        error_detail = response.text
+                                        logger.warning(f"Groq API error {response.status_code} for model {model}: {error_detail[:100]}")
+                                        continue
+                            except Exception as model_error:
+                                logger.warning(f"Failed with model {model}: {str(model_error)}")
+                                continue
+                        else:
+                            # All models failed
+                            raise Exception("All Groq models failed. Service may be temporarily unavailable.")
+                    else:
+                        ai_response = f"I'm {agent.name}. I'd love to help, but I need API keys configured to provide live responses."
+                        
+                except Exception as e:
+                    logger.error(f"AI API call failed: {e}")
+                    ai_response = f"I'm {agent.name}. I encountered an error processing your request: {str(e)}"
+            else:
+                ai_response = f"I'm {agent.name}. Please configure API keys to enable live AI responses."
+                
+        else:
+            # Get client info for non-global agents
+            from app.core.dependencies import get_client_service
+            client_service = get_client_service()
+            client = await client_service.get_client(client_id)
+            
+            # Handle the text trigger
+            result = await handle_text_trigger(trigger_request, agent, client)
+            ai_response = result.get("response", f"I'm {agent.name}. I'm currently in preview mode. In production, I would process your message: '{message}'")
+        
+    except Exception as e:
+        logger.warning(f"Preview AI response failed: {e}")
+        # Fallback to a simple preview response
+        ai_response = f"I'm {agent.name}, your AI assistant. (Preview mode - actual AI processing would happen in production)"
+    
+    # Add AI response
+    messages.append({"content": ai_response, "is_user": False})
+    
+    # Store messages in session
+    if not hasattr(request.app.state, 'preview_sessions'):
+        request.app.state.preview_sessions = {}
+    request.app.state.preview_sessions[session_id] = messages
+    
+    # Return updated messages
+    return templates.TemplateResponse("admin/partials/chat_messages.html", {
+        "request": request,
+        "messages": messages,
+        "is_loading": False
+    })
+
+
+@router.get("/agents/preview/{client_id}/{agent_slug}/messages")
+async def get_preview_messages(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    session_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get messages for a preview session"""
+    preview_sessions = getattr(request.app.state, 'preview_sessions', {})
+    messages = preview_sessions.get(session_id, [])
+    
+    return templates.TemplateResponse("admin/partials/chat_messages.html", {
+        "request": request,
+        "messages": messages,
+        "is_loading": False
+    })
+
+
+@router.post("/agents/preview/{client_id}/{agent_slug}/set-mode")
+async def set_preview_mode(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    session_id: str = Form(...),
+    mode: str = Form(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Switch between text and voice preview modes"""
+    from app.core.dependencies import get_agent_service
+    from app.integrations.supabase_client import supabase_manager
+    import json
+    
+    agent = None
+    
+    # Handle global agents
+    if client_id == "global":
+        try:
+            result = supabase_manager.admin_client.table('agents').select('*').eq('slug', agent_slug).execute()
+            if result.data:
+                agent_data = result.data[0]
+                # Convert to agent object format
+                agent = type('Agent', (), {
+                    'id': agent_data.get('id'),
+                    'slug': agent_data.get('slug'),
+                    'name': agent_data.get('name'),
+                    'description': agent_data.get('description', ''),
+                    'system_prompt': agent_data.get('system_prompt', ''),
+                    'enabled': agent_data.get('enabled', True),
+                    'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) and agent_data.get('voice_settings') else agent_data.get('voice_settings', {
+                        'provider': 'livekit',
+                        'voice_id': 'alloy',
+                        'temperature': 0.7
+                    }),
+                    'webhooks': agent_data.get('webhooks', {}),
+                    'client_id': 'global'
+                })()
+        except Exception as e:
+            logger.error(f"Failed to get global agent: {e}")
+    else:
+        agent_service = get_agent_service()
+        agent = await agent_service.get_agent(client_id, agent_slug)
+    
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    if mode == "voice":
+        # Return voice chat interface
+        return templates.TemplateResponse("admin/partials/voice_chat.html", {
+            "request": request,
+            "agent": agent,
+            "client_id": client_id,
+            "session_id": session_id
+        })
+    else:
+        # Return text chat interface (reuse the messages partial with container)
+        preview_sessions = getattr(request.app.state, 'preview_sessions', {})
+        messages = preview_sessions.get(session_id, [])
+        
+        # Return the full text chat container
+        return f"""
+        <div class="h-96 flex flex-col">
+            <!-- Messages Area -->
+            <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-4"
+                 hx-get="/admin/agents/preview/{client_id}/{agent_slug}/messages?session_id={session_id}"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                {"".join([f'<div class="flex {"justify-end" if msg["is_user"] else "justify-start"}"><div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg {"bg-brand-teal text-white" if msg["is_user"] else "bg-dark-elevated text-dark-text border border-dark-border"}">{msg["content"]}</div></div>' for msg in messages]) if messages else '<div class="text-center text-dark-text-secondary text-sm py-8"><p>Start a conversation with your agent</p><p class="text-xs mt-2">Messages are not saved</p></div>'}
+            </div>
+            
+            <!-- Input Area -->
+            <div class="border-t border-dark-border p-4">
+                <form hx-post="/admin/agents/preview/{client_id}/{agent_slug}/send"
+                      hx-target="#chatMessages"
+                      hx-swap="innerHTML"
+                      hx-on::after-request="this.reset()"
+                      class="flex gap-2">
+                    <input type="hidden" name="session_id" value="{session_id}">
+                    <input type="text" 
+                           name="message"
+                           placeholder="Type a message..." 
+                           class="flex-1 bg-dark-elevated border-dark-border text-dark-text rounded-md px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal"
+                           autocomplete="off"
+                           required>
+                    <button type="submit" 
+                            class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all">
+                        Send
+                    </button>
+                </form>
+            </div>
+        </div>
+        """
+
+
+@router.post("/agents/preview/{client_id}/{agent_slug}/voice-start")
+async def start_voice_preview(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    session_id: str = Form(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Start a voice preview session"""
+    try:
+        import uuid
+        from app.api.v1.trigger import TriggerAgentRequest, TriggerMode, trigger_agent
+        from app.core.dependencies import get_agent_service
+        
+        # Generate a unique room name for this preview
+        room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
+        
+        # Create trigger request for voice mode
+        trigger_request = TriggerAgentRequest(
+            agent_slug=agent_slug,
+            client_id=client_id if client_id != "global" else None,  # Let trigger endpoint handle global agents
+            mode=TriggerMode.VOICE,
+            room_name=room_name,
+            user_id=f"admin_preview_{admin_user.get('id', 'user')}",
+            session_id=session_id,
+            conversation_id=session_id
+        )
+        
+        # Get agent service to trigger the agent
+        agent_service = get_agent_service()
+        
+        # Trigger the agent in voice mode
+        result = await trigger_agent(trigger_request, agent_service=agent_service)
+        
+        # Extract the response data
+        if result.success and result.data:
+            livekit_config = result.data.get("livekit_config", {})
+            user_token = livekit_config.get("user_token", "")
+            server_url = livekit_config.get("server_url", "")
+            
+            # Log what we're sending to the template
+            logger.info(f"Voice preview starting - Room: {room_name}, Server: {server_url}, Token: {user_token[:50]}...")
+            
+            # Return voice interface with LiveKit client
+            return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
+                "request": request,
+                "room_name": room_name,
+                "server_url": server_url,
+                "user_token": user_token,
+                "agent_slug": agent_slug,
+                "client_id": client_id,
+                "session_id": session_id
+            })
+        else:
+            error_msg = result.message if hasattr(result, 'message') else "Failed to start voice session"
+            raise Exception(error_msg)
+            
+    except Exception as e:
+        logger.error(f"Failed to start voice preview: {e}")
+        return templates.TemplateResponse("admin/partials/voice_error.html", {
+            "request": request,
+            "error": str(e),
+            "client_id": client_id,
+            "agent_slug": agent_slug,
+            "session_id": session_id
+        })
+
+
+@router.post("/agents/preview/{client_id}/{agent_slug}/voice-stop")
+async def stop_voice_preview(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    session_id: str = Form(...),
+    room_name: str = Form(None),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Stop a voice preview session"""
+    # Stop the agent if room name provided
+    if room_name:
+        try:
+            from app.services.agent_spawner import agent_spawner
+            await agent_spawner.stop_agent_for_room(room_name)
+            logger.info(f"Stopped agent for room {room_name}")
+        except Exception as e:
+            logger.error(f"Error stopping agent: {e}")
+    
+    # Get agent to display correct voice settings
+    from app.core.dependencies import get_agent_service
+    from app.integrations.supabase_client import supabase_manager
+    import json
+    
+    agent = None
+    
+    # Handle global agents
+    if client_id == "global":
+        try:
+            result = supabase_manager.admin_client.table('agents').select('*').eq('slug', agent_slug).execute()
+            if result.data:
+                agent_data = result.data[0]
+                # Parse voice settings if it's a string
+                voice_settings = agent_data.get('voice_settings', {})
+                if isinstance(voice_settings, str):
+                    voice_settings = json.loads(voice_settings)
+                agent = {
+                    "name": agent_data.get('name', agent_slug),
+                    "slug": agent_slug,
+                    "voice_settings": voice_settings
+                }
+        except Exception as e:
+            logger.error(f"Failed to fetch global agent: {e}")
+    else:
+        # Use agent service for non-global agents
+        agent_service = get_agent_service()
+        try:
+            agent_obj = await agent_service.get_agent(client_id, agent_slug)
+            if agent_obj:
+                voice_settings = agent_obj.voice_settings
+                if isinstance(voice_settings, str):
+                    voice_settings = json.loads(voice_settings)
+                agent = {
+                    "name": agent_obj.name,
+                    "slug": agent_slug,
+                    "voice_settings": voice_settings
+                }
+        except Exception as e:
+            logger.error(f"Failed to fetch agent: {e}")
+    
+    # Fallback if agent not found
+    if not agent:
+        agent = {
+            "name": agent_slug,
+            "slug": agent_slug,
+            "voice_settings": {"provider": "livekit", "voice_id": "alloy", "temperature": 0.7}
+        }
+    
+    # Return to the initial voice interface
+    return templates.TemplateResponse("admin/partials/voice_chat.html", {
+        "request": request,
+        "agent": agent,
+        "client_id": client_id,
+        "session_id": session_id
+    })
+
+
+@router.post("/agents/preview/{client_id}/{agent_slug}/clear")
+async def clear_preview_messages(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    session_id: str = Form(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Clear messages for a preview session"""
+    if hasattr(request.app.state, 'preview_sessions') and session_id in request.app.state.preview_sessions:
+        request.app.state.preview_sessions[session_id] = []
+    
+    return templates.TemplateResponse("admin/partials/chat_messages.html", {
+        "request": request,
+        "messages": [],
+        "is_loading": False
+    })
+
+
+@router.get("/agents/preview/{client_id}/{agent_slug}/trigger-info")
+async def get_trigger_info(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get trigger endpoint info for testing"""
+    # Simple info modal
+    return f"""
+    <div class="fixed bottom-4 right-4 max-w-md p-4 bg-dark-surface rounded-lg shadow-lg border border-dark-border">
+        <div class="flex justify-between items-start mb-3">
+            <h4 class="text-sm font-medium text-dark-text">Trigger Endpoint Info</h4>
+            <button hx-on:click="this.parentElement.parentElement.remove()" 
+                    class="text-dark-text-secondary hover:text-dark-text">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+            </button>
+        </div>
+        <div class="space-y-2 text-xs">
+            <div class="p-2 bg-dark-elevated rounded border border-dark-border">
+                <p class="text-dark-text-secondary mb-1">API Endpoint:</p>
+                <p class="font-mono text-dark-text">/api/v1/trigger-agent</p>
+            </div>
+            <div class="p-2 bg-dark-elevated rounded border border-dark-border">
+                <p class="text-dark-text-secondary mb-1">Agent Slug:</p>
+                <p class="font-mono text-dark-text">{agent_slug}</p>
+            </div>
+            <div class="p-2 bg-dark-elevated rounded border border-dark-border">
+                <p class="text-dark-text-secondary mb-1">Client ID:</p>
+                <p class="font-mono text-dark-text text-xs">{client_id}</p>
+            </div>
+            <p class="text-dark-text-secondary mt-2">
+                Use these values to test the agent via the API or WordPress plugin.
+            </p>
+        </div>
+    </div>
+    """
+
+
 @router.get("/monitoring", response_class=HTMLResponse)
 async def monitoring_dashboard(
     request: Request,
@@ -1047,12 +2411,16 @@ async def admin_update_client(
         # Parse form data
         form = await request.form()
         
+        # Debug: Log form data for API keys
+        logger.info(f"Form data received - cartesia_api_key: {form.get('cartesia_api_key')}")
+        logger.info(f"Form data received - siliconflow_api_key: {form.get('siliconflow_api_key')}")
+        
         # Get client service
         from app.core.dependencies import get_client_service
         client_service = get_client_service()
         
-        # Get existing client
-        client = await client_service.get_client(client_id)
+        # Get existing client (disable auto-sync to prevent overriding manual changes)
+        client = await client_service.get_client(client_id, auto_sync=False)
         if not client:
             return RedirectResponse(
                 url="/admin/clients?error=Client+not+found",
@@ -1060,38 +2428,90 @@ async def admin_update_client(
             )
         
         # Prepare update data
-        from app.models.client import ClientUpdate, ClientSettings, SupabaseConfig, LiveKitConfig, APIKeys
+        from app.models.client import ClientUpdate, ClientSettings, SupabaseConfig, LiveKitConfig, APIKeys, EmbeddingSettings, RerankSettings
         
-        # Build settings update
+        # Get current settings - handle both dict and object formats
+        if hasattr(client, 'settings'):
+            current_settings = client.settings
+            current_supabase = current_settings.supabase if hasattr(current_settings, 'supabase') else None
+            current_livekit = current_settings.livekit if hasattr(current_settings, 'livekit') else None
+            current_api_keys = current_settings.api_keys if hasattr(current_settings, 'api_keys') else None
+            current_embedding = current_settings.embedding if hasattr(current_settings, 'embedding') else None
+            current_rerank = current_settings.rerank if hasattr(current_settings, 'rerank') else None
+            current_perf_monitoring = current_settings.performance_monitoring if hasattr(current_settings, 'performance_monitoring') else False
+            current_license_key = current_settings.license_key if hasattr(current_settings, 'license_key') else None
+        else:
+            # Client is a dict
+            current_settings = client.get('settings', {})
+            current_supabase = current_settings.get('supabase', {})
+            current_livekit = current_settings.get('livekit', {})
+            current_api_keys = current_settings.get('api_keys', {})
+            current_embedding = current_settings.get('embedding', {})
+            current_rerank = current_settings.get('rerank', {})
+            current_perf_monitoring = current_settings.get('performance_monitoring', False)
+            current_license_key = current_settings.get('license_key')
+        
+        # Build settings update with proper defaults
         settings_update = ClientSettings(
             supabase=SupabaseConfig(
-                url=form.get("supabase_url", client.settings.supabase.url),
-                anon_key=form.get("supabase_anon_key", client.settings.supabase.anon_key),
-                service_role_key=form.get("supabase_service_key", client.settings.supabase.service_role_key)
+                url=form.get("supabase_url", current_supabase.url if hasattr(current_supabase, 'url') else current_supabase.get('url', '')),
+                anon_key=form.get("supabase_anon_key", current_supabase.anon_key if hasattr(current_supabase, 'anon_key') else current_supabase.get('anon_key', '')),
+                service_role_key=form.get("supabase_service_key", current_supabase.service_role_key if hasattr(current_supabase, 'service_role_key') else current_supabase.get('service_role_key', ''))
             ),
             livekit=LiveKitConfig(
-                server_url=form.get("livekit_server_url", client.settings.livekit.server_url),
-                api_key=form.get("livekit_api_key", client.settings.livekit.api_key),
-                api_secret=form.get("livekit_api_secret", client.settings.livekit.api_secret)
+                server_url=form.get("livekit_server_url", current_livekit.server_url if hasattr(current_livekit, 'server_url') else current_livekit.get('server_url', '')),
+                api_key=form.get("livekit_api_key", current_livekit.api_key if hasattr(current_livekit, 'api_key') else current_livekit.get('api_key', '')),
+                api_secret=form.get("livekit_api_secret", current_livekit.api_secret if hasattr(current_livekit, 'api_secret') else current_livekit.get('api_secret', ''))
             ),
-            api_keys=client.settings.api_keys,  # Keep existing API keys
-            embedding=client.settings.embedding,  # Keep existing embedding settings
-            rerank=client.settings.rerank,  # Keep existing rerank settings
-            performance_monitoring=client.settings.performance_monitoring,
-            license_key=client.settings.license_key
+            api_keys=APIKeys(
+                openai_api_key=form.get("openai_api_key") or (current_api_keys.openai_api_key if hasattr(current_api_keys, 'openai_api_key') else current_api_keys.get('openai_api_key') if isinstance(current_api_keys, dict) else None),
+                groq_api_key=form.get("groq_api_key") or (current_api_keys.groq_api_key if hasattr(current_api_keys, 'groq_api_key') else current_api_keys.get('groq_api_key') if isinstance(current_api_keys, dict) else None),
+                deepinfra_api_key=form.get("deepinfra_api_key") or (current_api_keys.deepinfra_api_key if hasattr(current_api_keys, 'deepinfra_api_key') else current_api_keys.get('deepinfra_api_key') if isinstance(current_api_keys, dict) else None),
+                replicate_api_key=form.get("replicate_api_key") or (current_api_keys.replicate_api_key if hasattr(current_api_keys, 'replicate_api_key') else current_api_keys.get('replicate_api_key') if isinstance(current_api_keys, dict) else None),
+                deepgram_api_key=form.get("deepgram_api_key") or (current_api_keys.deepgram_api_key if hasattr(current_api_keys, 'deepgram_api_key') else current_api_keys.get('deepgram_api_key') if isinstance(current_api_keys, dict) else None),
+                elevenlabs_api_key=form.get("elevenlabs_api_key") or (current_api_keys.elevenlabs_api_key if hasattr(current_api_keys, 'elevenlabs_api_key') else current_api_keys.get('elevenlabs_api_key') if isinstance(current_api_keys, dict) else None),
+                cartesia_api_key=form.get("cartesia_api_key") or (current_api_keys.cartesia_api_key if hasattr(current_api_keys, 'cartesia_api_key') else current_api_keys.get('cartesia_api_key') if isinstance(current_api_keys, dict) else None),
+                speechify_api_key=form.get("speechify_api_key") or (current_api_keys.speechify_api_key if hasattr(current_api_keys, 'speechify_api_key') else current_api_keys.get('speechify_api_key') if isinstance(current_api_keys, dict) else None),
+                novita_api_key=form.get("novita_api_key") or (current_api_keys.novita_api_key if hasattr(current_api_keys, 'novita_api_key') else current_api_keys.get('novita_api_key') if isinstance(current_api_keys, dict) else None),
+                cohere_api_key=form.get("cohere_api_key") or (current_api_keys.cohere_api_key if hasattr(current_api_keys, 'cohere_api_key') else current_api_keys.get('cohere_api_key') if isinstance(current_api_keys, dict) else None),
+                siliconflow_api_key=form.get("siliconflow_api_key") or (current_api_keys.siliconflow_api_key if hasattr(current_api_keys, 'siliconflow_api_key') else current_api_keys.get('siliconflow_api_key') if isinstance(current_api_keys, dict) else None),
+                jina_api_key=form.get("jina_api_key") or (current_api_keys.jina_api_key if hasattr(current_api_keys, 'jina_api_key') else current_api_keys.get('jina_api_key') if isinstance(current_api_keys, dict) else None)
+            ),
+            embedding=EmbeddingSettings(
+                provider=form.get("embedding_provider", current_embedding.provider if hasattr(current_embedding, 'provider') else current_embedding.get('provider', 'openai') if current_embedding else 'openai'),
+                document_model=form.get("document_embedding_model", current_embedding.document_model if hasattr(current_embedding, 'document_model') else current_embedding.get('document_model', 'text-embedding-3-small') if current_embedding else 'text-embedding-3-small'),
+                conversation_model=form.get("conversation_embedding_model", current_embedding.conversation_model if hasattr(current_embedding, 'conversation_model') else current_embedding.get('conversation_model', 'text-embedding-3-small') if current_embedding else 'text-embedding-3-small'),
+                dimension=int(form.get("embedding_dimension")) if form.get("embedding_dimension") and form.get("embedding_dimension").strip() else (current_embedding.dimension if hasattr(current_embedding, 'dimension') else current_embedding.get('dimension') if current_embedding else None)
+            ),
+            rerank=RerankSettings(
+                enabled=form.get("rerank_enabled", "off") == "on",
+                provider=form.get("rerank_provider", current_rerank.provider if hasattr(current_rerank, 'provider') else current_rerank.get('provider', 'siliconflow') if current_rerank else 'siliconflow'),
+                model=form.get("rerank_model", current_rerank.model if hasattr(current_rerank, 'model') else current_rerank.get('model', 'BAAI/bge-reranker-base') if current_rerank else 'BAAI/bge-reranker-base'),
+                top_k=int(form.get("rerank_top_k", current_rerank.top_k if hasattr(current_rerank, 'top_k') else current_rerank.get('top_k', 5) if current_rerank else 5)),
+                candidates=int(form.get("rerank_candidates", current_rerank.candidates if hasattr(current_rerank, 'candidates') else current_rerank.get('candidates', 20) if current_rerank else 20))
+            ),
+            performance_monitoring=current_perf_monitoring,
+            license_key=current_license_key
         )
         
-        # Create update object
+        # Create update object - handle both dict and object formats
         update_data = ClientUpdate(
-            name=form.get("name", client.name),
-            domain=form.get("domain", client.domain),
-            description=form.get("description", client.description),
+            name=form.get("name", client.name if hasattr(client, 'name') else client.get('name', '')),
+            domain=form.get("domain", client.domain if hasattr(client, 'domain') else client.get('domain', '')),
+            description=form.get("description", client.description if hasattr(client, 'description') else client.get('description', '')),
             settings=settings_update,
             active=form.get("active", "true").lower() == "true"
         )
         
+        # Debug: Log the API keys and embedding settings being updated
+        logger.info(f"About to update client with API keys: cartesia={update_data.settings.api_keys.cartesia_api_key}, siliconflow={update_data.settings.api_keys.siliconflow_api_key}")
+        logger.info(f"Embedding settings: provider={update_data.settings.embedding.provider}, dimension={update_data.settings.embedding.dimension}, form_value='{form.get('embedding_dimension')}'")
+        
         # Update client
         updated_client = await client_service.update_client(client_id, update_data)
+        
+        # Debug: Log the API keys after update
+        logger.info(f"After update - cartesia={updated_client.settings.api_keys.cartesia_api_key if updated_client.settings.api_keys else 'None'}, siliconflow={updated_client.settings.api_keys.siliconflow_api_key if updated_client.settings.api_keys else 'None'}")
         
         # Redirect back to client detail with success
         return RedirectResponse(
@@ -1240,3 +2660,244 @@ async def delete_wordpress_site(
             "error": str(e)
         }
 
+
+# Knowledge Base Admin Endpoints
+@router.get("/knowledge-base/documents")
+async def get_knowledge_base_documents(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get documents for Knowledge Base admin interface"""
+    try:
+        from app.services.document_processor import document_processor
+        
+        # Get documents for the specified client
+        documents = await document_processor.get_documents(
+            user_id=None,  # Admin access doesn't need user_id
+            client_id=client_id,
+            status=None,
+            limit=100
+        )
+        
+        # Return documents array directly to match frontend expectation
+        return documents
+        
+    except Exception as e:
+        logger.error(f"Failed to get documents for client {client_id}: {e}")
+        return []
+
+
+@router.get("/knowledge-base/agents")
+async def get_knowledge_base_agents(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get agents for Knowledge Base admin interface from client-specific Supabase"""
+    try:
+        from app.core.dependencies import get_client_service
+        from supabase import create_client
+        
+        # Get client details to access their Supabase
+        client_service = get_client_service()
+        client = await client_service.get_client(client_id)
+        
+        if not client:
+            logger.error(f"Client {client_id} not found")
+            return []
+        
+        # Get client's Supabase credentials
+        client_settings = client.get('settings', {}) if isinstance(client, dict) else getattr(client, 'settings', {})
+        supabase_settings = client_settings.get('supabase', {}) if isinstance(client_settings, dict) else getattr(client_settings, 'supabase', {})
+        
+        supabase_url = supabase_settings.get('url', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'url', '')
+        service_key = supabase_settings.get('service_role_key', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'service_role_key', '')
+        
+        if not supabase_url or not service_key:
+            logger.warning(f"Client {client_id} missing Supabase credentials")
+            return []
+        
+        # Create client-specific Supabase connection
+        client_supabase = create_client(supabase_url, service_key)
+        
+        # Query agents from client's database
+        result = client_supabase.table('agent_configurations')\
+            .select('id, agent_name, agent_slug')\
+            .order('agent_name')\
+            .execute()
+        
+        return result.data
+        
+    except Exception as e:
+        logger.error(f"Failed to get agents for client {client_id}: {e}")
+        return []
+
+
+@router.post("/knowledge-base/upload")
+async def upload_knowledge_base_document(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    description: str = Form(""),
+    client_id: str = Form(...),
+    agent_ids: str = Form(""),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Upload document to client-specific knowledge base"""
+    try:
+        import tempfile
+        import os
+        from app.services.document_processor import document_processor
+        
+        # Validate file
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as tmp_file:
+            content = await file.read()
+            tmp_file.write(content)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            # Parse agent IDs
+            selected_agent_ids = []
+            if agent_ids and agent_ids != "all":
+                selected_agent_ids = [aid.strip() for aid in agent_ids.split(",") if aid.strip()]
+            
+            # Process the uploaded file with client-specific storage
+            result = await document_processor.process_uploaded_file(
+                file_path=tmp_file_path,
+                title=title,
+                description=description,
+                user_id=admin_user.get('id'),
+                agent_ids=selected_agent_ids if selected_agent_ids else None,
+                client_id=client_id
+            )
+            
+            # Note: We don't delete the temp file here because async processing needs it
+            # The document processor should handle cleanup after processing is complete
+            
+            return result
+            
+        finally:
+            # Don't delete the file here - async processing needs it
+            pass
+                
+    except Exception as e:
+        logger.error(f"Error uploading document: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/clients")
+async def get_admin_clients(admin_user: Dict[str, Any] = Depends(get_admin_user)):
+    """Get clients available to admin user"""
+    try:
+        from app.core.dependencies import get_client_service
+        
+        # Get all clients for admin
+        client_service = get_client_service()
+        clients = await client_service.get_all_clients()
+        
+        # Format for frontend
+        client_list = []
+        for client in clients:
+            if isinstance(client, dict):
+                client_data = {
+                    "id": client.get("id"),
+                    "name": client.get("name", client.get("id", "Unknown Client")),
+                    "domain": client.get("domain", ""),
+                    "status": client.get("status", "unknown")
+                }
+            else:
+                client_data = {
+                    "id": getattr(client, 'id', None),
+                    "name": getattr(client, 'name', getattr(client, 'id', 'Unknown Client')),
+                    "domain": getattr(client, 'domain', ''),
+                    "status": getattr(client, 'status', 'unknown')
+                }
+            client_list.append(client_data)
+        
+        return client_list
+        
+    except Exception as e:
+        logger.error(f"Failed to get clients for admin: {e}")
+        return []
+
+
+
+
+@router.put("/knowledge-base/documents/{document_id}/access")
+async def update_document_access(
+    document_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Update document access permissions"""
+    try:
+        data = await request.json()
+        agent_access = data.get("agent_access", "specific")
+        agent_ids = data.get("agent_ids", [])
+        
+        from app.integrations.supabase_client import supabase_manager
+        
+        # Update document with new access settings
+        update_data = {
+            "agent_access": agent_access,
+            "agent_ids": agent_ids if agent_access == "specific" else [],
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        result = supabase_manager.admin_client.table("documents")\
+            .update(update_data)\
+            .eq("id", document_id)\
+            .execute()
+        
+        return {"success": True, "message": "Document access updated"}
+        
+    except Exception as e:
+        logger.error(f"Failed to update document access: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.delete("/knowledge-base/documents/{document_id}")
+async def delete_document(
+    document_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Delete a document"""
+    try:
+        from app.services.document_processor import document_processor
+        
+        success = await document_processor.delete_document(document_id)
+        
+        if success:
+            return {"success": True, "message": "Document deleted"}
+        else:
+            return {"success": False, "error": "Failed to delete document"}
+            
+    except Exception as e:
+        logger.error(f"Failed to delete document: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/knowledge-base/documents/{document_id}/reprocess")
+async def reprocess_document(
+    document_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Reprocess a document"""
+    try:
+        from app.integrations.supabase_client import supabase_manager
+        
+        # Update document status to processing
+        result = supabase_manager.admin_client.table("documents")\
+            .update({"status": "processing", "updated_at": datetime.utcnow().isoformat()})\
+            .eq("id", document_id)\
+            .execute()
+        
+        # TODO: Trigger actual reprocessing job
+        
+        return {"success": True, "message": "Document reprocessing started"}
+        
+    except Exception as e:
+        logger.error(f"Failed to reprocess document: {e}")
+        return {"success": False, "error": str(e)}

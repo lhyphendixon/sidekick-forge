@@ -66,15 +66,15 @@ class LiveKitManager:
                 can_publish_data=True
             )
         
-        # Create access token
+        # Create access token using proper LiveKit SDK methods
         token = api.AccessToken(self.api_key, self.api_secret)
-        token.identity = identity
-        token.video_grants = permissions
+        token = token.with_identity(identity)
+        token = token.with_grants(permissions)
         
         if metadata:
-            token.metadata = str(metadata)
+            token = token.with_metadata(str(metadata))
         
-        token.ttl = timedelta(seconds=ttl)
+        token = token.with_ttl(timedelta(seconds=ttl))
         
         return token.to_jwt()
     
@@ -118,17 +118,18 @@ class LiveKitManager:
     ) -> Dict[str, Any]:
         """Create a LiveKit room"""
         try:
-            room_service = api.RoomServiceClient(
-                self.url,
-                self.api_key,
-                self.api_secret
+            # Use LiveKitAPI instead of RoomServiceClient
+            livekit_api = api.LiveKitAPI(
+                url=self.url,
+                api_key=self.api_key,
+                api_secret=self.api_secret
             )
             
             # Generate room name if not provided
             if not name:
                 name = f"room_{int(time.time() * 1000)}"
             
-            room = await room_service.create_room(
+            room = await livekit_api.room.create_room(
                 api.CreateRoomRequest(
                     name=name,
                     empty_timeout=empty_timeout,
@@ -152,13 +153,13 @@ class LiveKitManager:
     async def get_room(self, room_name: str) -> Optional[Dict[str, Any]]:
         """Get room information"""
         try:
-            room_service = api.RoomServiceClient(
-                self.url,
-                self.api_key,
-                self.api_secret
+            livekit_api = api.LiveKitAPI(
+                url=self.url,
+                api_key=self.api_key,
+                api_secret=self.api_secret
             )
             
-            rooms = await room_service.list_rooms(
+            rooms = await livekit_api.room.list_rooms(
                 api.ListRoomsRequest(names=[room_name])
             )
             

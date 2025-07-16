@@ -24,19 +24,19 @@ class Settings(BaseSettings):
     # Supabase Configuration (CRITICAL: Both service and anon keys needed)
     supabase_url: str = Field(default="https://yuowazxcxwhczywurmmw.supabase.co", env="SUPABASE_URL")
     supabase_service_role_key: str = Field(default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY", env="SUPABASE_SERVICE_KEY")
-    supabase_anon_key: str = Field(default="demo-anon", env="SUPABASE_ANON_KEY")
+    supabase_anon_key: str = Field(default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODQ1NzMsImV4cCI6MjA1MTM2MDU3M30.SmqTIWrScKQWkJ2_PICWVJYpRSKfvqkRcjMMt0ApH1U", env="SUPABASE_ANON_KEY")
     
     # Supabase Auth Configuration
-    supabase_auth_enabled: bool = Field(default=False, env="SUPABASE_AUTH_ENABLED")
+    supabase_auth_enabled: bool = Field(default=True, env="SUPABASE_AUTH_ENABLED")
     supabase_jwt_secret: str = Field(default="demo-jwt", env="SUPABASE_JWT_SECRET")
     
     # Database (using Supabase)
     database_url: Optional[str] = Field(None, env="DATABASE_URL")
     
     # LiveKit Configuration (primary platform)
-    livekit_url: str = Field(default="wss://demo.livekit.cloud", env="LIVEKIT_URL")
-    livekit_api_key: str = Field(default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY", env="LIVEKIT_API_KEY")
-    livekit_api_secret: str = Field(default="demo-secret", env="LIVEKIT_API_SECRET")
+    livekit_url: str = Field(default="wss://litebridge-hw6srhvi.livekit.cloud", env="LIVEKIT_URL")
+    livekit_api_key: str = Field(default="APIUtuiQ47BQBsk", env="LIVEKIT_API_KEY")
+    livekit_api_secret: str = Field(default="rVdSevKfORf5hNfvrsek4joeyrwjhdbkC1HIBsdfQcjM", env="LIVEKIT_API_SECRET")
     
     # AI Provider API Keys
     openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")

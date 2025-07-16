@@ -61,6 +61,7 @@ class EmbeddingSettings(BaseModel):
     provider: str = Field(default="novita", description="Embedding provider")
     document_model: str = Field(default="Qwen/Qwen2.5-72B-Instruct", description="Document embedding model")
     conversation_model: str = Field(default="Qwen/Qwen2.5-72B-Instruct", description="Conversation embedding model")
+    dimension: Optional[int] = Field(default=None, description="Embedding dimension (e.g., 1024 for Qwen/Qwen3-Embedding-0.6B, 4096 for Qwen/Qwen3-Embedding-8B)")
 
 
 class RerankSettings(BaseModel):

@@ -70,7 +70,63 @@ async def update_agent(
     service: AgentService = Depends(get_agent_service)
 ) -> AgentInDB:
     """Update an agent"""
-    return await service.update_agent(client_id, agent_slug, update_data)
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Updating agent {agent_slug} for client {client_id}")
+    logger.info(f"Update data received: {update_data.dict()}")
+    
+    # Handle global agents specially
+    if client_id == "global":
+        # For global agents, update directly in main Supabase
+        from app.integrations.supabase_client import supabase_manager
+        import json
+        from datetime import datetime
+        
+        try:
+            # Build update dictionary
+            update_dict = json.loads(update_data.json(exclude_unset=True))
+            if update_dict:
+                update_dict["updated_at"] = datetime.utcnow().isoformat()
+                
+                # Convert voice_settings to JSON string if present (it's already properly serialized from json())
+                if "voice_settings" in update_dict and update_dict["voice_settings"]:
+                    update_dict["voice_settings"] = json.dumps(update_dict["voice_settings"])
+                
+                # Update in main agents table
+                result = supabase_manager.admin_client.table("agents").update(update_dict).eq("slug", agent_slug).execute()
+                
+                if result.data and len(result.data) > 0:
+                    agent_data = result.data[0]
+                    # Parse JSON fields back
+                    if isinstance(agent_data.get("voice_settings"), str):
+                        try:
+                            agent_data["voice_settings"] = json.loads(agent_data["voice_settings"])
+                        except:
+                            agent_data["voice_settings"] = {}
+                    
+                    # Parse webhooks if present
+                    if isinstance(agent_data.get("webhooks"), str):
+                        try:
+                            agent_data["webhooks"] = json.loads(agent_data["webhooks"])
+                        except:
+                            agent_data["webhooks"] = {}
+                    
+                    # Add client_id for global agents
+                    agent_data["client_id"] = "global"
+                    
+                    from app.models.agent import Agent
+                    return Agent(**agent_data)
+                else:
+                    raise HTTPException(status_code=404, detail=f"Agent {agent_slug} not found")
+        except Exception as e:
+            import traceback
+            logger.error(f"Failed to update global agent {agent_slug}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Update data: {update_dict}")
+            raise HTTPException(status_code=500, detail=f"Failed to update global agent: {str(e)}")
+    else:
+        # Regular client-specific update
+        return await service.update_agent(client_id, agent_slug, update_data)
 
 
 @router.delete("/client/{client_id}/{agent_slug}")

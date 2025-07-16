@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiveKit Connection Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #1a1a1a; color: white; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #2d5a2d; }
+        .error { background: #5a2d2d; }
+        .info { background: #2d4a5a; }
+        .warning { background: #5a5a2d; }
+        button { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        #console { background: #000; border: 1px solid #555; padding: 10px; height: 300px; overflow-y: auto; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <h1>LiveKit Frontend Connection Test</h1>
+    <p>This test will validate the exact same connection used by the voice preview.</p>
+    
+    <div class="status info">
+        <strong>Testing:</strong> wss://litebridge-hw6srhvi.livekit.cloud
+    </div>
+    
+    <button class="btn-primary" onclick="testConnection()">Test LiveKit Connection</button>
+    <button class="btn-success" onclick="testMicrophone()">Test Microphone</button>
+    <button class="btn-danger" onclick="clearConsole()">Clear Console</button>
+    
+    <h3>Console Output:</h3>
+    <div id="console"></div>
+    
+    <!-- Load LiveKit Client SDK (Local) -->
+    <script src="/static/livekit-client.min.js"></script>
+    
+    <script>
+        // Console output to our custom div
+        function log(message, type = 'info') {
+            const console_div = document.getElementById('console');
+            const timestamp = new Date().toLocaleTimeString();
+            const color = type === 'error' ? '#ff6b6b' : type === 'success' ? '#51cf66' : type === 'warning' ? '#ffd43b' : '#74c0fc';
+            console_div.innerHTML += `<div style="color: ${color}">[${timestamp}] ${message}</div>`;
+            console_div.scrollTop = console_div.scrollHeight;
+            
+            // Also log to browser console
+            console.log(message);
+        }
+        
+        function clearConsole() {
+            document.getElementById('console').innerHTML = '';
+        }
+        
+        // Test microphone permissions
+        async function testMicrophone() {
+            log('🎤 Testing microphone permissions...', 'info');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                log('✅ Microphone permission granted!', 'success');
+                
+                // Stop the stream
+                stream.getTracks().forEach(track => track.stop());
+                log('🔇 Microphone stream stopped', 'info');
+            } catch (error) {
+                log(`❌ Microphone permission denied: ${error.message}`, 'error');
+            }
+        }
+        
+        // Test LiveKit connection with exact same parameters as production
+        async function testConnection() {
+            log('🔍 Starting LiveKit connection test...', 'info');
+            
+            // Check if LiveKit client is loaded
+            if (typeof LivekitClient === 'undefined') {
+                log('❌ LiveKit client SDK not loaded!', 'error');
+                return;
+            }
+            log('✅ LiveKit client SDK loaded successfully', 'success');
+            log(`📦 LiveKit version: ${LivekitClient.version || 'unknown'}`, 'info');
+            
+            // Production values (same as backend generates)
+            const serverUrl = 'wss://litebridge-hw6srhvi.livekit.cloud';
+            const roomName = 'test_frontend_connection';
+            
+            // Generate a test token (we'll get this from backend)
+            log('🔑 Getting access token from backend...', 'info');
+            try {
+                const response = await fetch('/api/v1/trigger-agent', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        agent_slug: 'clarence-coherence',
+                        mode: 'voice',
+                        room_name: roomName,
+                        user_id: 'test_frontend_user',
+                        client_id: 'df91fd06-816f-4273-a903-5a4861277040'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                if (!result.success || !result.data?.livekit_config?.user_token) {
+                    throw new Error('No user token in response');
+                }
+                
+                const userToken = result.data.livekit_config.user_token;
+                log('✅ Got access token from backend', 'success');
+                log(`📋 Room: ${roomName}`, 'info');
+                log(`🔗 Server: ${serverUrl}`, 'info');
+                log(`🎫 Token length: ${userToken.length} chars`, 'info');
+                
+                // Create room instance
+                log('🏗️ Creating LiveKit room instance...', 'info');
+                const room = new LivekitClient.Room({
+                    adaptiveStream: true,
+                    dynacast: true,
+                    logLevel: 'debug'
+                });
+                
+                // Set up event handlers
+                room.on('connected', () => {
+                    log('🎉 Successfully connected to LiveKit room!', 'success');
+                });
+                
+                room.on('disconnected', () => {
+                    log('👋 Disconnected from LiveKit room', 'warning');
+                });
+                
+                room.on('participantConnected', (participant) => {
+                    log(`👤 Participant connected: ${participant.identity}`, 'info');
+                });
+                
+                room.on('error', (error) => {
+                    log(`❌ LiveKit error: ${error.message}`, 'error');
+                });
+                
+                // Try to connect
+                log('🚀 Attempting to connect to LiveKit room...', 'info');
+                const startTime = Date.now();
+                
+                try {
+                    await room.connect(serverUrl, userToken);
+                    const connectTime = Date.now() - startTime;
+                    log(`✅ Connected successfully in ${connectTime}ms!`, 'success');
+                    
+                    // Try to enable microphone
+                    log('🎤 Enabling microphone...', 'info');
+                    try {
+                        await room.localParticipant.setMicrophoneEnabled(true);
+                        log('✅ Microphone enabled successfully!', 'success');
+                    } catch (micError) {
+                        log(`⚠️ Microphone error: ${micError.message}`, 'warning');
+                    }
+                    
+                    // Keep connected for a few seconds
+                    log('⏳ Staying connected for 5 seconds...', 'info');
+                    setTimeout(() => {
+                        room.disconnect();
+                        log('✅ Test completed successfully!', 'success');
+                    }, 5000);
+                    
+                } catch (connectError) {
+                    log(`❌ Connection failed: ${connectError.message}`, 'error');
+                    log(`🔍 Error type: ${connectError.constructor.name}`, 'error');
+                    if (connectError.stack) {
+                        log(`📚 Stack trace: ${connectError.stack}`, 'error');
+                    }
+                }
+                
+            } catch (tokenError) {
+                log(`❌ Failed to get token: ${tokenError.message}`, 'error');
+            }
+        }
+        
+        // Initial setup
+        window.addEventListener('load', () => {
+            log('🌐 Page loaded successfully', 'info');
+            log('🔍 Browser: ' + navigator.userAgent, 'info');
+            log('🔒 Protocol: ' + location.protocol, 'info');
+            
+            if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+                log('⚠️ WARNING: Not using HTTPS. WebRTC may not work!', 'warning');
+            }
+        });
+    </script>
+</body>
+</html>

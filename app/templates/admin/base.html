@@ -3,10 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Autonomite Admin{% endblock %}</title>
+    <title>{% block title %}Sidekick Forge Admin{% endblock %}</title>
     
     <!-- HTMX -->
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    
+    <!-- Supabase -->
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
     
     <!-- Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -21,8 +24,8 @@
                         'brand-orange': '#fc7244',
                         'brand-salmon': '#f56453',
                         // Dark mode colors
-                        'dark-bg': '#0f0f0f',
-                        'dark-surface': '#1a1a1a',
+                        'dark-bg': '#000000',
+                        'dark-surface': 'rgb(20, 20, 20)',
                         'dark-elevated': '#252525',
                         'dark-border': '#2a2a2a',
                         'dark-text': '#e0e0e0',
@@ -37,7 +40,7 @@
     <style>
         /* Dark mode base styles */
         body {
-            background-color: #0f0f0f;
+            background-color: #000000;
             color: #e0e0e0;
         }
         
@@ -153,8 +156,7 @@
         
         /* Navigation active state */
         .nav-active {
-            background-color: rgba(1, 164, 166, 0.1);
-            color: #01a4a6;
+            background-color: rgba(1, 164, 166, 0.05);
             border-left: 3px solid #01a4a6;
         }
         
@@ -171,40 +173,53 @@
 </head>
 <body class="bg-dark-bg text-dark-text">
     <!-- Navigation Header -->
-    <nav class="bg-dark-surface border-b border-dark-border">
+    <nav class="bg-white border-b border-gray-200">
         <div class="max-w-7xl mx-auto px-4">
             <div class="flex justify-between h-16">
                 <div class="flex items-center">
                     <div class="flex-shrink-0">
-                        <h1 class="text-xl font-bold text-brand-teal">Autonomite Admin</h1>
+                        <img src="/static/images/sidekick-forge-logo.png" alt="Sidekick Forge" class="h-10" />
                     </div>
                     <div class="hidden md:block">
                         <div class="ml-10 flex items-baseline space-x-2">
                             <a href="/admin/" 
-                               class="{% if request.url.path == '/admin/' %}nav-active{% else %}text-dark-text-secondary hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                               class="{% if request.url.path == '/admin/' %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Dashboard
                             </a>
                             <a href="/admin/clients" 
-                               class="{% if '/admin/clients' in request.url.path %}nav-active{% else %}text-dark-text-secondary hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                               class="{% if '/admin/clients' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Clients
                             </a>
                             <a href="/admin/agents" 
-                               class="{% if '/admin/agents' in request.url.path %}nav-active{% else %}text-dark-text-secondary hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                               class="{% if '/admin/agents' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Agents
                             </a>
+                            <a href="/admin/knowledge-base" 
+                               class="{% if '/admin/knowledge-base' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Knowledge Base
+                            </a>
                             <a href="/admin/monitoring" 
-                               class="{% if '/admin/monitoring' in request.url.path %}nav-active{% else %}text-dark-text-secondary hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                               class="{% if '/admin/monitoring' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Monitoring
                             </a>
                         </div>
                     </div>
                 </div>
-                <div class="flex items-center">
-                    <div class="text-sm text-dark-text-secondary">
-                        Welcome, {{ user.username if user else 'Admin' }}
+                <div class="flex items-center space-x-4">
+                    <div class="text-sm text-gray-600">
+                        Welcome, <span id="current-user-display" class="text-gray-800">{{ user.email if user and user.email else user.username if user else 'Admin' }}</span>
                     </div>
+                    
+                    <!-- Logout button -->
+                    <button 
+                        onclick="logout()" 
+                        class="text-sm text-gray-600 hover:text-brand-teal transition-all px-2 py-1 rounded border border-gray-300 hover:border-brand-teal"
+                    >
+                        Logout
+                    </button>
+                    
                     <!-- Auto-refresh indicator -->
-                    <div class="ml-4">
+                    <div>
                         <div class="htmx-indicator spinner" id="global-indicator"></div>
                     </div>
                 </div>
@@ -248,8 +263,77 @@
             }
         });
         
-        // Auto-refresh page elements
-        document.addEventListener('DOMContentLoaded', function() {
+        // Initialize Supabase client for logout
+        const supabaseUrl = 'https://yuowazxcxwhczywurmmw.supabase.co';
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODQ1NzMsImV4cCI6MjA1MTM2MDU3M30.SmqTIWrScKQWkJ2_PICWVJYpRSKfvqkRcjMMt0ApH1U';
+        const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+        
+        // Logout function
+        async function logout() {
+            try {
+                // Sign out from Supabase
+                await supabase.auth.signOut();
+                
+                // Clear local storage
+                localStorage.removeItem('admin_token');
+                
+                // Clear admin token cookie
+                document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+                
+                // Redirect to login page
+                window.location.href = '/admin/login';
+            } catch (error) {
+                console.error('Logout error:', error);
+                // Still redirect even if there's an error
+                localStorage.removeItem('admin_token');
+                document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+                window.location.href = '/admin/login';
+            }
+        }
+        
+        // Check authentication on page load
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Skip auth check on login and reset-password pages
+            const currentPath = window.location.pathname;
+            if (currentPath.includes('/admin/login') || currentPath.includes('/admin/reset-password')) {
+                return;
+            }
+            
+            // Check if in development mode - check for DEVELOPMENT_MODE cookie or specific hosts
+            const devModeCookie = document.cookie.split('; ').find(row => row.startsWith('DEVELOPMENT_MODE='));
+            const isDevelopment = (devModeCookie && devModeCookie.split('=')[1] === 'true') ||
+                                window.location.hostname === 'localhost' || 
+                                window.location.hostname === '127.0.0.1' || 
+                                window.location.hostname.includes('.local');
+            
+            // Check for admin token in cookies first
+            const adminToken = document.cookie.split('; ').find(row => row.startsWith('admin_token='));
+            const hasAdminToken = adminToken && adminToken.split('=')[1] && adminToken.split('=')[1] !== '';
+            
+            // In development mode with a token (including dev-token), skip Supabase check
+            if (isDevelopment && hasAdminToken) {
+                const userDisplay = document.getElementById('current-user-display');
+                if (userDisplay) {
+                    userDisplay.textContent = 'Dev Admin';
+                }
+                return;
+            }
+            
+            // Check if user is authenticated with Supabase
+            const { data: { session } } = await supabase.auth.getSession();
+            
+            if (!session && !hasAdminToken) {
+                // Not authenticated, redirect to login
+                window.location.href = '/admin/login';
+                return;
+            } else if (session) {
+                // Update user display
+                const userDisplay = document.getElementById('current-user-display');
+                if (userDisplay && session.user) {
+                    userDisplay.textContent = session.user.email || session.user.user_metadata?.username || 'Admin';
+                }
+            }
+            
             // Update timestamp every second
             function updateTimestamp() {
                 const timestampElements = document.querySelectorAll('.timestamp');
@@ -265,7 +349,13 @@
             setInterval(updateTimestamp, 1000);
             updateTimestamp();
         });
+        
+        // Make logout function global
+        window.logout = logout;
     </script>
+
+    <!-- Load LiveKit Client SDK globally for HTMX modal use -->
+    <script src="/static/livekit-client.min.js"></script>
 
     {% block extra_scripts %}{% endblock %}
 </body>

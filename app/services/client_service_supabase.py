@@ -346,10 +346,72 @@ class ClientService:
                         "server_url": config.get('livekit_url', ''),
                         "api_key": config.get('livekit_api_key', ''),
                         "api_secret": config.get('livekit_api_secret', '')
-                    },
-                    "message": f"Successfully synced settings for agent: {config.get('agent_name', 'Unknown')}"
+                    }
                 }
                 
+                # Also fetch from global_settings table
+                global_settings_url = f"{supabase_url}/rest/v1/global_settings?select=*"
+                
+                try:
+                    global_response = await client.get(global_settings_url, headers=headers, timeout=10.0)
+                    global_response.raise_for_status()
+                    
+                    global_data = global_response.json()
+                    
+                    # Build a dict of global settings
+                    global_settings_dict = {}
+                    for setting in global_data:
+                        setting_key = setting.get('setting_key', '')
+                        setting_value = setting.get('setting_value', '')
+                        if setting_key:
+                            global_settings_dict[setting_key] = setting_value
+                    
+                    # Merge API keys from global_settings
+                    # Only update if the key exists in global_settings and has a non-empty value
+                    api_key_mappings = [
+                        'openai_api_key', 'groq_api_key', 'deepinfra_api_key', 'replicate_api_key',
+                        'deepgram_api_key', 'elevenlabs_api_key', 'cartesia_api_key', 'speechify_api_key',
+                        'novita_api_key', 'cohere_api_key', 'siliconflow_api_key', 'jina_api_key'
+                    ]
+                    
+                    for key in api_key_mappings:
+                        if key in global_settings_dict and global_settings_dict[key]:
+                            settings["api_keys"][key] = global_settings_dict[key]
+                    
+                    # Extract embedding settings
+                    settings["embedding"] = {
+                        "provider": global_settings_dict.get('embedding_provider', 'openai'),
+                        "document_model": global_settings_dict.get('embedding_model_documents', 'text-embedding-3-small'),
+                        "conversation_model": global_settings_dict.get('embedding_model_conversations', 'text-embedding-3-small')
+                    }
+                    
+                    # Extract rerank settings
+                    settings["rerank"] = {
+                        "enabled": global_settings_dict.get('rerank_enabled', 'false').lower() == 'true',
+                        "provider": global_settings_dict.get('rerank_provider', 'siliconflow'),
+                        "model": global_settings_dict.get('rerank_model', 'BAAI/bge-reranker-base'),
+                        "top_k": int(global_settings_dict.get('rerank_top_k', '3')),
+                        "candidates": int(global_settings_dict.get('rerank_candidates', '20'))
+                    }
+                    
+                except Exception as e:
+                    # Log but don't fail if global_settings fetch fails
+                    print(f"Failed to fetch global_settings: {e}")
+                    # Use defaults
+                    settings["embedding"] = {
+                        "provider": "openai",
+                        "document_model": "text-embedding-3-small",
+                        "conversation_model": "text-embedding-3-small"
+                    }
+                    settings["rerank"] = {
+                        "enabled": False,
+                        "provider": "siliconflow",
+                        "model": "BAAI/bge-reranker-base",
+                        "top_k": 3,
+                        "candidates": 20
+                    }
+                
+                settings["message"] = f"Successfully synced settings for agent: {config.get('agent_name', 'Unknown')}"
                 return settings
                 
             except httpx.HTTPStatusError as e:

@@ -1,0 +1,172 @@
+<!-- Agent Preview Modal (HTMX Partial) -->
+<div class="fixed z-10 inset-0 overflow-y-auto" id="previewModal">
+    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-900 bg-opacity-90 transition-opacity" 
+             hx-on:click="document.getElementById('modal-container').innerHTML = ''"></div>
+        
+        <div class="inline-block align-bottom bg-dark-surface rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full">
+            <div class="bg-dark-surface">
+                <!-- Modal Header -->
+                <div class="px-6 pt-5 pb-4 border-b border-dark-border">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h3 class="text-lg font-medium text-dark-text">
+                                Preview: {{ agent.name }}
+                            </h3>
+                            <p class="text-sm text-dark-text-secondary mt-1">Test your agent with voice or text</p>
+                        </div>
+                        <button hx-on:click="document.getElementById('modal-container').innerHTML = ''" 
+                                class="text-dark-text-secondary hover:text-dark-text transition-colors">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Mode Selector -->
+                <div class="p-4 border-b border-dark-border">
+                    <div class="flex gap-2">
+                        <button id="textModeBtn"
+                                onclick="switchMode('text', this)"
+                                data-mode="text"
+                                hx-post="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/set-mode"
+                                hx-vals='{"session_id": "{{ session_id }}", "mode": "text"}'
+                                hx-target="#previewContent"
+                                hx-swap="innerHTML"
+                                class="mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-brand-teal text-white transition-all">
+                            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path>
+                            </svg>
+                            Text Chat
+                        </button>
+                        <button id="voiceModeBtn"
+                                onclick="switchMode('voice', this)"
+                                data-mode="voice"
+                                hx-post="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/set-mode"
+                                hx-vals='{"session_id": "{{ session_id }}", "mode": "voice"}'
+                                hx-target="#previewContent"
+                                hx-swap="innerHTML"
+                                class="mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border hover:bg-dark-border transition-all">
+                            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+                            </svg>
+                            Voice Chat
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Content Area -->
+                <div id="previewContent">
+                    <!-- Text Chat Container (Default) -->
+                    <div class="h-96 flex flex-col">
+                        <!-- Messages Area -->
+                        <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-4"
+                             hx-get="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/messages?session_id={{ session_id }}"
+                             hx-trigger="load"
+                             hx-swap="innerHTML">
+                            <div class="text-center text-dark-text-secondary text-sm py-8">
+                                <p>Start a conversation with your agent</p>
+                                <p class="text-xs mt-2">Messages are not saved</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Input Area -->
+                        <div class="border-t border-dark-border p-4">
+                            <form hx-post="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/send"
+                                  hx-target="#chatMessages"
+                                  hx-swap="innerHTML"
+                                  hx-on::after-request="this.reset()"
+                                  class="flex gap-2">
+                                <input type="hidden" name="session_id" value="{{ session_id }}">
+                                <input type="text" 
+                                       name="message"
+                                       placeholder="Type a message..." 
+                                       class="flex-1 bg-dark-elevated border-dark-border text-dark-text rounded-md px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal"
+                                       autocomplete="off"
+                                       required>
+                                <button type="submit" 
+                                        class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all">
+                                    Send
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Modal Footer -->
+                <div class="bg-dark-elevated px-6 py-3 border-t border-dark-border">
+                    <div class="flex items-center justify-between">
+                        <div class="text-xs text-dark-text-secondary">
+                            <span id="previewModeIndicator">Preview mode - Text chat interface</span>
+                        </div>
+                        <div class="flex gap-2">
+                            <button hx-post="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/clear"
+                                    hx-vals='{"session_id": "{{ session_id }}"}'
+                                    hx-target="#chatMessages"
+                                    hx-swap="innerHTML"
+                                    class="text-sm text-brand-teal hover:text-brand-teal/80 transition-colors">
+                                Clear Chat
+                            </button>
+                            <button hx-get="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/trigger-info"
+                                    hx-target="#triggerInfo"
+                                    hx-swap="innerHTML"
+                                    class="text-sm text-brand-orange hover:text-brand-orange/80 transition-colors">
+                                Test Info
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="triggerInfo"></div>
+
+<script>
+// Track current mode
+let currentMode = 'text';
+
+function switchMode(mode, button) {
+    // If already in this mode, do nothing
+    if (currentMode === mode) {
+        return false;
+    }
+    
+    // Update current mode
+    currentMode = mode;
+    
+    // Update button styles
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+        if (btn.dataset.mode === mode) {
+            btn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-brand-teal text-white transition-all';
+        } else {
+            btn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border hover:bg-dark-border transition-all';
+        }
+    });
+    
+    // Update mode indicator
+    const indicator = document.getElementById('previewModeIndicator');
+    if (indicator) {
+        indicator.textContent = mode === 'text' ? 'Preview mode - Text chat interface' : 'Preview mode - Voice chat interface';
+    }
+    
+    // Allow HTMX to proceed with the request
+    return true;
+}
+
+// Set up HTMX to respect our mode check
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+        // Intercept HTMX before it sends
+        btn.addEventListener('htmx:beforeRequest', function(evt) {
+            const mode = this.dataset.mode;
+            if (currentMode === mode) {
+                // Cancel the request if already in this mode
+                evt.preventDefault();
+                return false;
+            }
+        });
+    });
+});
+</script>

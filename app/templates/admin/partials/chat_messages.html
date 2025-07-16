@@ -1,0 +1,31 @@
+{% if messages %}
+    {% for message in messages %}
+    <div class="flex {% if message.is_user %}justify-end{% else %}justify-start{% endif %}">
+        <div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg {% if message.is_user %}bg-brand-teal text-white{% else %}bg-dark-elevated text-dark-text border border-dark-border{% endif %}">
+            {{ message.content }}
+        </div>
+    </div>
+    {% endfor %}
+    
+    {% if is_loading %}
+    <div class="flex justify-start" id="loadingIndicator">
+        <div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">
+            <div class="flex space-x-2">
+                <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay: 0ms"></div>
+                <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay: 150ms"></div>
+                <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay: 300ms"></div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+{% else %}
+    <div class="text-center text-dark-text-secondary text-sm py-8">
+        <p>Start a conversation with your agent</p>
+        <p class="text-xs mt-2">Messages are not saved</p>
+    </div>
+{% endif %}
+
+<script>
+// Auto-scroll to bottom when new messages are loaded
+document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+</script>

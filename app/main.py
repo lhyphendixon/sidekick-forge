@@ -15,21 +15,63 @@ from app.utils.exceptions import APIException
 from app.integrations.supabase_client import supabase_manager
 from app.integrations.livekit_client import livekit_manager
 from app.services.container_manager import container_manager
+import redis.asyncio as aioredis
 
 # Configure logging
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger("autonomite_saas")
 
+# Initialize Redis client
+redis_client = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
+    global redis_client
+    
     # Startup
     logger.info("Starting Autonomite SaaS Backend")
+    
+    # Initialize Redis
+    redis_client = await aioredis.from_url(settings.redis_url)
     
     # Initialize connections
     await supabase_manager.initialize()
     await livekit_manager.initialize()
     await container_manager.initialize()
+    
+    # Initialize services for proxy endpoints
+    from app.services.client_service_supabase_enhanced import ClientService
+    from app.services.agent_service_supabase import AgentService
+    from app.services.wordpress_site_service import WordPressSiteService
+    
+    client_service = ClientService(settings.supabase_url, settings.supabase_service_role_key, redis_client)
+    agent_service = AgentService(client_service, redis_client)
+    wordpress_site_service = WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key, redis_client)
+    
+    # Inject services into proxy modules
+    import app.api.v1.livekit_proxy as livekit_proxy_api
+    import app.api.v1.conversations_proxy as conversations_proxy_api
+    import app.api.v1.documents_proxy as documents_proxy_api
+    import app.api.v1.text_chat_proxy as text_chat_proxy_api
+    import app.api.v1.wordpress_sites as wordpress_sites_api
+    
+    # Initialize proxy services
+    livekit_proxy_api.client_service = client_service
+    livekit_proxy_api.agent_service = agent_service
+    
+    conversations_proxy_api.redis_client = redis_client
+    conversations_proxy_api.client_service = client_service
+    
+    documents_proxy_api.redis_client = redis_client
+    
+    text_chat_proxy_api.redis_client = redis_client
+    text_chat_proxy_api.client_service = client_service
+    text_chat_proxy_api.agent_service = agent_service
+    
+    wordpress_sites_api.wordpress_service = wordpress_site_service
+    
+    logger.info("All services initialized successfully")
     
     yield
     
@@ -37,6 +79,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Autonomite SaaS Backend")
     await supabase_manager.close()
     await livekit_manager.close()
+    if redis_client:
+        await redis_client.close()
     # Note: container_manager doesn't need explicit closing
 
 # Create FastAPI app
@@ -52,6 +96,7 @@ app = FastAPI(
         {"name": "sessions", "description": "LiveKit session creation and management"},
         {"name": "conversations", "description": "Conversation storage and retrieval"},
         {"name": "documents", "description": "RAG document processing"},
+        {"name": "knowledge-base", "description": "Knowledge base document upload and management"},
         {"name": "tools", "description": "Tool configuration and proxy"},
         {"name": "wordpress", "description": "WordPress plugin integration"},
         {"name": "auth", "description": "Authentication and authorization"},
@@ -85,6 +130,27 @@ app.mount("/static", StaticFiles(directory="/opt/autonomite-saas/app/static"), n
 # Include admin dashboard (full version with all features)
 from app.admin.routes import router as admin_router
 app.include_router(admin_router)
+
+# Custom exception handler for admin authentication redirects
+from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi import Request
+
+@app.exception_handler(401)
+async def auth_exception_handler(request: Request, exc):
+    """Redirect to login page for unauthorized HTML requests to admin"""
+    accept_header = request.headers.get("accept", "")
+    is_browser_request = "text/html" in accept_header
+    is_admin_path = request.url.path.startswith("/admin") and not request.url.path.endswith("/login")
+    
+    if is_browser_request and is_admin_path:
+        # Redirect to login page
+        return RedirectResponse(url="/admin/login", status_code=303)
+    else:
+        # Return normal JSON error for API requests
+        return JSONResponse(
+            status_code=401,
+            content={"detail": str(exc.detail) if hasattr(exc, 'detail') else "Unauthorized"}
+        )
 
 # Include webhook routers
 from app.api.webhooks import livekit_router, supabase_router

@@ -23,6 +23,20 @@ class VoiceSettings(BaseModel):
     voice_id: Optional[str] = Field(default="alloy", description="Voice ID for the provider")
     temperature: float = Field(default=0.7, ge=0.0, le=1.0, description="Creativity level")
     
+    # LLM and STT settings
+    llm_provider: Optional[str] = Field(None, description="LLM provider (openai, groq, etc)")
+    llm_model: Optional[str] = Field(None, description="LLM model to use")
+    stt_provider: Optional[str] = Field(None, description="STT provider (deepgram, groq, etc)")
+    stt_language: Optional[str] = Field(default="en", description="STT language")
+    
+    # TTS provider-specific settings
+    model: Optional[str] = Field(None, description="TTS model (for providers that support multiple models)")
+    output_format: Optional[str] = Field(None, description="Output format (for Cartesia)")
+    stability: Optional[float] = Field(None, description="Voice stability (for ElevenLabs)")
+    similarity_boost: Optional[float] = Field(None, description="Voice similarity boost (for ElevenLabs)")
+    loudness_normalization: Optional[bool] = Field(None, description="Loudness normalization (for Speechify)")
+    text_normalization: Optional[bool] = Field(None, description="Text normalization (for Speechify)")
+    
     # Provider-specific settings
     provider_config: Dict[str, Any] = Field(default_factory=dict)
 
