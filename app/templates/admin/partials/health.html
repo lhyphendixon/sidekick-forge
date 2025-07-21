@@ -1,0 +1,82 @@
+<!-- System Health Status -->
+<div class="space-y-3">
+    {% for health_status in health_statuses %}
+    <div class="flex items-center justify-between p-3 rounded-lg {% if health_status.healthy %}bg-brand-teal/10 border border-brand-teal/30{% else %}bg-brand-salmon/10 border border-brand-salmon/30{% endif %}">
+        <div class="flex items-center">
+            <div class="status-indicator {% if health_status.healthy %}status-running{% else %}status-error{% endif %}"></div>
+            <div>
+                <h5 class="text-sm font-medium {% if health_status.healthy %}text-brand-teal{% else %}text-brand-salmon{% endif %}">
+                    {{ health_status.client_name }}
+                </h5>
+                <p class="text-xs {% if health_status.healthy %}text-brand-teal/80{% else %}text-brand-salmon/80{% endif %}">
+                    {% if health_status.healthy %}
+                        All systems operational
+                    {% else %}
+                        Health check failed
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+        
+        <!-- Health Details -->
+        <div class="text-right">
+            <div class="flex space-x-2 text-xs">
+                {% for check_name, check_data in health_status.checks.items() %}
+                <span class="px-2 py-1 rounded {% if check_data.healthy %}bg-brand-teal/20 text-brand-teal{% else %}bg-brand-salmon/20 text-brand-salmon{% endif %}">
+                    {{ check_name }}
+                </span>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="text-center py-4 text-dark-text-secondary">
+        <svg class="mx-auto h-8 w-8 text-dark-text-secondary mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <p class="text-sm">No health data available</p>
+        <button class="mt-2 text-xs text-brand-teal hover:text-brand-teal/80"
+                hx-post="/admin/actions/run-health-checks"
+                hx-target="closest div"
+                hx-swap="outerHTML">
+            Run Health Checks
+        </button>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Overall Health Summary -->
+{% if health_statuses %}
+<div class="mt-4 pt-3 border-t border-dark-border">
+    {% set healthy_count = health_statuses|selectattr('healthy')|list|length %}
+    {% set total_count = health_statuses|length %}
+    
+    <div class="flex items-center justify-between text-sm">
+        <span class="text-dark-text-secondary">
+            System Health: {{ healthy_count }}/{{ total_count }} services healthy
+        </span>
+        <div class="flex items-center">
+            {% if healthy_count == total_count %}
+            <svg class="h-4 w-4 text-brand-teal mr-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+            </svg>
+            <span class="text-brand-teal font-medium">All systems operational</span>
+            {% else %}
+            <svg class="h-4 w-4 text-brand-salmon mr-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+            </svg>
+            <span class="text-brand-salmon font-medium">Issues detected</span>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Health Progress Bar -->
+    <div class="mt-2">
+        <div class="bg-dark-elevated rounded-full h-2">
+            <div class="{% if healthy_count == total_count %}bg-brand-teal{% elif healthy_count > total_count / 2 %}bg-brand-orange{% else %}bg-brand-salmon{% endif %} h-2 rounded-full transition-all duration-300"
+                 style="width: {{ (healthy_count / total_count * 100)|round }}%"></div>
+        </div>
+    </div>
+</div>
+{% endif %}

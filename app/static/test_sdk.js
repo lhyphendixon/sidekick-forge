@@ -1,0 +1,1 @@
+console.log('Testing LiveKit client...'); if (typeof LivekitClient \!== 'undefined') { console.log('✅ LiveKit client loaded successfully\!', LivekitClient); } else { console.log('❌ LiveKit client not found'); }

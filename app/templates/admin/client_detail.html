@@ -1,0 +1,910 @@
+{% extends "admin/base.html" %}
+
+{% block title %}{{ client.name }} - Client Configuration{% endblock %}
+
+{% block extra_head %}
+<!-- Icons -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4">
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold text-dark-text flex items-center">
+                <a href="/admin/clients" class="text-dark-text-secondary hover:text-brand-teal mr-3">
+                    <i class="bi bi-arrow-left"></i>
+                </a>
+                {{ client.name }}
+            </h1>
+            <p class="text-dark-text-secondary mt-1">Client ID: {{ client.id }}</p>
+        </div>
+        <div class="flex items-center space-x-3">
+            <span class="px-3 py-1 rounded-full text-sm font-medium {% if client.status == 'active' %}bg-brand-teal/20 text-brand-teal{% else %}bg-dark-elevated text-dark-text-secondary{% endif %}">
+                {{ client.status|capitalize }}
+            </span>
+            <button type="submit" form="clientForm" class="btn-primary font-medium py-2 px-4 rounded-lg flex items-center transition-all">
+                <i class="bi bi-save mr-2"></i>Save Changes
+            </button>
+            <button onclick="syncAgents()" class="btn-secondary font-medium py-2 px-4 rounded-lg flex items-center transition-all">
+                <i class="bi bi-arrow-repeat mr-2"></i>Sync Agents
+            </button>
+        </div>
+    </div>
+
+    <form id="clientForm" action="/admin/clients/{{ client.id }}/update" method="POST">
+        <!-- Basic Information -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Basic Information</h5>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Client Name</label>
+                        <input type="text" id="clientName" name="name" value="{{ client.name }}" required
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Domain</label>
+                        <input type="text" id="clientDomain" name="domain" value="{{ client.domain or '' }}" 
+                               placeholder="e.g., myclient.com"
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                    </div>
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-dark-text mb-2">Description</label>
+                    <textarea id="clientDescription" name="description" rows="2"
+                              class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">{{ client.description or '' }}</textarea>
+                </div>
+                <div class="flex items-center">
+                    <input type="checkbox" id="clientActive" {% if client.status == 'active' %}checked{% endif %}
+                           class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal">
+                    <label for="clientActive" class="ml-2 text-sm text-dark-text">
+                        Client is active
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Supabase Configuration -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Supabase Configuration</h5>
+            </div>
+            <div class="p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-dark-text mb-2">Supabase URL</label>
+                    <input type="url" id="supabaseUrl" name="supabase_url" value="{{ client.settings.get('supabase', {}).get('url', '') }}" required
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Anonymous Key</label>
+                        <div class="relative">
+                            <input type="password" id="supabaseAnonKey" name="supabase_anon_key"
+                                   value="{{ client.settings.get('supabase', {}).get('anon_key', '') }}" required
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('supabaseAnonKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Service Role Key</label>
+                        <div class="relative">
+                            <input type="password" id="supabaseServiceKey" name="supabase_service_key"
+                                   value="{{ client.settings.get('supabase', {}).get('service_role_key', '') }}" required
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('supabaseServiceKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LiveKit Configuration -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">LiveKit Configuration</h5>
+            </div>
+            <div class="p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-dark-text mb-2">LiveKit Server URL</label>
+                    <input type="url" id="livekitUrl" name="livekit_server_url" value="{{ client.settings.get('livekit', {}).get('server_url', '') }}" required
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">API Key</label>
+                        <input type="text" id="livekitApiKey" name="livekit_api_key" value="{{ client.settings.get('livekit', {}).get('api_key', '') }}" required
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">API Secret</label>
+                        <div class="relative">
+                            <input type="password" id="livekitApiSecret" name="livekit_api_secret"
+                                   value="{{ client.settings.get('livekit', {}).get('api_secret', '') }}" required
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('livekitApiSecret')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Keys -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">API Keys</h5>
+            </div>
+            <div class="p-6">
+                <!-- LLM Providers -->
+                <h6 class="text-md font-medium text-dark-text mb-4">LLM Providers</h6>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">OpenAI API Key</label>
+                        <div class="relative">
+                            <input type="password" id="openaiKey" name="openai_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('openai_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('openaiKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Groq API Key</label>
+                        <div class="relative">
+                            <input type="password" id="groqKey" name="groq_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('groq_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('groqKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">DeepInfra API Key</label>
+                        <div class="relative">
+                            <input type="password" id="deepinfraKey" name="deepinfra_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('deepinfra_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('deepinfraKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Replicate API Key</label>
+                        <div class="relative">
+                            <input type="password" id="replicateKey" name="replicate_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('replicate_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('replicateKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Voice Providers -->
+                <h6 class="text-md font-medium text-dark-text mb-4">Voice Providers</h6>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Deepgram API Key</label>
+                        <div class="relative">
+                            <input type="password" id="deepgramKey" name="deepgram_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('deepgram_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('deepgramKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">ElevenLabs API Key</label>
+                        <div class="relative">
+                            <input type="password" id="elevenlabsKey" name="elevenlabs_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('elevenlabs_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('elevenlabsKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Cartesia API Key</label>
+                        <div class="relative">
+                            <input type="password" id="cartesiaKey" name="cartesia_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('cartesia_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('cartesiaKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Speechify API Key</label>
+                        <div class="relative">
+                            <input type="password" id="speechifyKey" name="speechify_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('speechify_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('speechifyKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Embedding & Reranking Providers -->
+                <h6 class="text-md font-medium text-dark-text mb-4">Embedding & Reranking Providers</h6>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Novita API Key</label>
+                        <div class="relative">
+                            <input type="password" id="novitaKey" name="novita_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('novita_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('novitaKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Cohere API Key</label>
+                        <div class="relative">
+                            <input type="password" id="cohereKey" name="cohere_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('cohere_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('cohereKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">SiliconFlow API Key</label>
+                        <div class="relative">
+                            <input type="password" id="siliconflowKey" name="siliconflow_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('siliconflow_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('siliconflowKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Jina API Key</label>
+                        <div class="relative">
+                            <input type="password" id="jinaKey" name="jina_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('jina_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('jinaKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Embedding Configuration -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Embedding Configuration</h5>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Embedding Provider</label>
+                        <select id="embeddingProvider" name="embedding_provider" 
+                                class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <option value="openai" {% if client.settings.get('embedding', {}).get('provider') == 'openai' %}selected{% endif %}>OpenAI</option>
+                            <option value="deepinfra" {% if client.settings.get('embedding', {}).get('provider') == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
+                            <option value="novita" {% if client.settings.get('embedding', {}).get('provider') == 'novita' %}selected{% endif %}>Novita AI</option>
+                            <option value="siliconflow" {% if client.settings.get('embedding', {}).get('provider') == 'siliconflow' %}selected{% endif %}>SiliconFlow</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Document Embedding Model</label>
+                        <select id="documentEmbeddingModel" name="document_embedding_model"
+                                class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <option value="text-embedding-3-small" {% if client.settings.get('embedding', {}).get('document_model') == 'text-embedding-3-small' %}selected{% endif %}>text-embedding-3-small (OpenAI)</option>
+                            <option value="text-embedding-3-large" {% if client.settings.get('embedding', {}).get('document_model') == 'text-embedding-3-large' %}selected{% endif %}>text-embedding-3-large (OpenAI)</option>
+                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %}>Qwen/Qwen2.5-72B-Instruct</option>
+                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %}>Qwen3-Embedding-0.6B (Fastest)</option>
+                            <option value="Qwen/Qwen3-Embedding-4B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-4B' %}selected{% endif %}>Qwen3-Embedding-4B (Balanced)</option>
+                            <option value="Qwen/Qwen3-Embedding-8B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %}>Qwen3-Embedding-8B (Highest Quality)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Conversation Embedding Model</label>
+                        <select id="conversationEmbeddingModel" name="conversation_embedding_model"
+                                class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <option value="text-embedding-3-small" {% if client.settings.get('embedding', {}).get('conversation_model') == 'text-embedding-3-small' %}selected{% endif %}>text-embedding-3-small (OpenAI)</option>
+                            <option value="text-embedding-3-large" {% if client.settings.get('embedding', {}).get('conversation_model') == 'text-embedding-3-large' %}selected{% endif %}>text-embedding-3-large (OpenAI)</option>
+                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %}>Qwen/Qwen2.5-72B-Instruct</option>
+                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %}>Qwen3-Embedding-0.6B (Fastest)</option>
+                            <option value="Qwen/Qwen3-Embedding-4B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-4B' %}selected{% endif %}>Qwen3-Embedding-4B (Balanced)</option>
+                            <option value="Qwen/Qwen3-Embedding-8B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %}>Qwen3-Embedding-8B (Highest Quality)</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- Embedding Dimension for Qwen Models -->
+                <div class="mt-6" id="embeddingDimensionSection" style="display: none;">
+                    <label class="block text-sm font-medium text-dark-text mb-2">Embedding Dimension</label>
+                    <select id="embeddingDimension" name="embedding_dimension" 
+                            class="w-full md:w-1/3 px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                        <option value="">Auto (Model Default)</option>
+                        <option value="1024" {% if client.settings.get('embedding', {}).get('dimension') == 1024 %}selected{% endif %}>1024 dimensions</option>
+                        <option value="2048" {% if client.settings.get('embedding', {}).get('dimension') == 2048 %}selected{% endif %}>2048 dimensions</option>
+                        <option value="4096" {% if client.settings.get('embedding', {}).get('dimension') == 4096 %}selected{% endif %}>4096 dimensions</option>
+                    </select>
+                    <div class="mt-2 text-xs text-dark-text-secondary">
+                        <p><strong>Model Dimension Support:</strong></p>
+                        <p>• Qwen3-Embedding-0.6B: Up to 1024 dimensions (recommended: 1024)</p>
+                        <p>• Qwen3-Embedding-4B: Up to 2048 dimensions (recommended: 1024 or 2048)</p>
+                        <p>• Qwen3-Embedding-8B: Up to 4096 dimensions (recommended: 1024, 2048, or 4096)</p>
+                        <p class="mt-1">Lower dimensions = faster processing, smaller storage. Higher dimensions = better accuracy.</p>
+                    </div>
+                </div>
+                
+                <div class="mt-4">
+                    <p class="text-sm text-dark-text-secondary">
+                        <i class="bi bi-info-circle mr-1"></i>
+                        Make sure you have the appropriate API key configured for your selected embedding provider above.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reranking Configuration -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Reranking Configuration</h5>
+            </div>
+            <div class="p-6">
+                <div class="mb-4">
+                    <label class="flex items-center cursor-pointer">
+                        <input type="checkbox" id="rerankEnabled" name="rerank_enabled" 
+                               {% if client.settings.get('rerank', {}).get('enabled') %}checked{% endif %}
+                               class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal mr-2">
+                        <span class="text-sm font-medium text-dark-text">Enable Reranking</span>
+                    </label>
+                    <p class="text-sm text-dark-text-secondary mt-1 ml-6">Improve search relevance by reranking results</p>
+                </div>
+                
+                <div id="rerankingOptions" class="{% if not client.settings.get('rerank', {}).get('enabled') %}opacity-50{% endif %}">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                        <div>
+                            <label class="block text-sm font-medium text-dark-text mb-2">Reranking Provider</label>
+                            <select id="rerankProvider" name="rerank_provider"
+                                    {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
+                                    class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                                <option value="none" {% if client.settings.get('rerank', {}).get('provider') == 'none' %}selected{% endif %}>None</option>
+                                <option value="siliconflow" {% if client.settings.get('rerank', {}).get('provider') == 'siliconflow' %}selected{% endif %}>SiliconFlow</option>
+                                <option value="cohere" {% if client.settings.get('rerank', {}).get('provider') == 'cohere' %}selected{% endif %}>Cohere</option>
+                                <option value="jina" {% if client.settings.get('rerank', {}).get('provider') == 'jina' %}selected{% endif %}>Jina</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-dark-text mb-2">Reranking Model</label>
+                            <select id="rerankModel" name="rerank_model"
+                                    {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
+                                    class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                                <!-- SiliconFlow Models -->
+                                <option value="Qwen/Qwen3-Reranker-0.6B" {% if client.settings.get('rerank', {}).get('model') == 'Qwen/Qwen3-Reranker-0.6B' %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-0.6B (Fastest)</option>
+                                <option value="Qwen/Qwen3-Reranker-2B" {% if client.settings.get('rerank', {}).get('model') == 'Qwen/Qwen3-Reranker-2B' %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-2B (Balanced)</option>
+                                <option value="BAAI/bge-reranker-base" {% if client.settings.get('rerank', {}).get('model') == 'BAAI/bge-reranker-base' %}selected{% endif %} data-provider="siliconflow">BGE Reranker Base</option>
+                                <!-- Cohere Models -->
+                                <option value="rerank-english-v3.0" {% if client.settings.get('rerank', {}).get('model') == 'rerank-english-v3.0' %}selected{% endif %} data-provider="cohere">Rerank English v3.0</option>
+                                <option value="rerank-multilingual-v3.0" {% if client.settings.get('rerank', {}).get('model') == 'rerank-multilingual-v3.0' %}selected{% endif %} data-provider="cohere">Rerank Multilingual v3.0</option>
+                                <!-- Jina Models -->
+                                <option value="jina-reranker-v2-base-multilingual" {% if client.settings.get('rerank', {}).get('model') == 'jina-reranker-v2-base-multilingual' %}selected{% endif %} data-provider="jina">Jina Reranker v2 Multilingual</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-sm font-medium text-dark-text mb-2">Top K Results</label>
+                            <input type="number" id="rerankTopK" name="rerank_top_k" 
+                                   value="{{ client.settings.get('rerank', {}).get('top_k') }}" min="1" max="20"
+                                   {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
+                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <p class="text-xs text-dark-text-secondary mt-1">Number of results to return after reranking (1-20)</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-dark-text mb-2">Rerank Candidates</label>
+                            <input type="number" id="rerankCandidates" name="rerank_candidates" 
+                                   value="{{ client.settings.get('rerank', {}).get('candidates') }}" min="5" max="50"
+                                   {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
+                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <p class="text-xs text-dark-text-secondary mt-1">Number of candidates to consider for reranking (5-50)</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </form>
+
+    <!-- WordPress Sites Section -->
+    <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+        <div class="border-b border-dark-border px-6 py-4">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h5 class="text-lg font-semibold text-dark-text">WordPress Sites</h5>
+                    <p class="text-sm text-dark-text-secondary">Manage WordPress sites and their API credentials</p>
+                </div>
+                <button onclick="showAddSiteModal()" class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all">
+                    <i class="bi bi-plus-circle mr-2"></i>Add Site
+                </button>
+            </div>
+        </div>
+        <div class="p-6">
+            <div id="wordpress-sites-container">
+                <div class="text-center py-8">
+                    <i class="bi bi-arrow-clockwise animate-spin text-brand-teal text-2xl mb-2"></i>
+                    <p class="text-dark-text-secondary">Loading WordPress sites...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Site Modal -->
+<div id="addSiteModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden">
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-dark-surface rounded-lg border border-dark-border p-6 max-w-md w-full">
+            <h3 class="text-lg font-semibold text-dark-text mb-4">Add WordPress Site</h3>
+            <form id="addSiteForm">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-dark-text mb-2">Domain</label>
+                    <input type="text" name="domain" placeholder="example.com" required
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-dark-text mb-2">Site Name</label>
+                    <input type="text" name="site_name" placeholder="My WordPress Site" required
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-dark-text mb-2">Admin Email</label>
+                    <input type="email" name="admin_email" placeholder="admin@example.com" required
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+                <div class="flex gap-3 justify-end">
+                    <button type="button" onclick="hideAddSiteModal()" class="btn-secondary px-4 py-2 rounded">Cancel</button>
+                    <button type="submit" class="btn-primary px-4 py-2 rounded">Add Site</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function togglePassword(fieldId) {
+    const field = document.getElementById(fieldId);
+    const button = field.nextElementSibling;
+    const icon = button.querySelector('i');
+    
+    if (field.type === 'password') {
+        field.type = 'text';
+        icon.classList.remove('bi-eye');
+        icon.classList.add('bi-eye-slash');
+    } else {
+        field.type = 'password';
+        icon.classList.remove('bi-eye-slash');
+        icon.classList.add('bi-eye');
+    }
+}
+
+// Handle embedding provider change
+document.getElementById('embeddingProvider').addEventListener('change', function() {
+    updateEmbeddingModels();
+});
+
+// Handle embedding model changes to update dimension visibility
+document.getElementById('documentEmbeddingModel').addEventListener('change', function() {
+    updateDimensionVisibility();
+});
+
+document.getElementById('conversationEmbeddingModel').addEventListener('change', function() {
+    updateDimensionVisibility();
+});
+
+// Handle reranking enable/disable
+document.getElementById('rerankEnabled').addEventListener('change', function() {
+    const options = document.getElementById('rerankingOptions');
+    const inputs = options.querySelectorAll('select, input');
+    
+    if (this.checked) {
+        options.classList.remove('opacity-50');
+        inputs.forEach(input => input.disabled = false);
+    } else {
+        options.classList.add('opacity-50');
+        inputs.forEach(input => input.disabled = true);
+    }
+});
+
+// Handle reranking provider change
+document.getElementById('rerankProvider').addEventListener('change', function() {
+    updateRerankingModels();
+});
+
+function updateEmbeddingModels() {
+    const provider = document.getElementById('embeddingProvider').value;
+    const docModelSelect = document.getElementById('documentEmbeddingModel');
+    const convModelSelect = document.getElementById('conversationEmbeddingModel');
+    
+    // Store current selections
+    const currentDocModel = docModelSelect.value;
+    const currentConvModel = convModelSelect.value;
+    
+    // Clear options
+    docModelSelect.innerHTML = '';
+    convModelSelect.innerHTML = '';
+    
+    let options = [];
+    
+    if (provider === 'openai') {
+        options = [
+            { value: 'text-embedding-3-small', text: 'text-embedding-3-small' },
+            { value: 'text-embedding-3-large', text: 'text-embedding-3-large' }
+        ];
+    } else if (provider === 'deepinfra' || provider === 'novita') {
+        options = [
+            { value: 'Qwen/Qwen3-Embedding-0.6B', text: 'Qwen3-Embedding-0.6B (Fastest)' },
+            { value: 'Qwen/Qwen3-Embedding-4B', text: 'Qwen3-Embedding-4B (Balanced)' },
+            { value: 'Qwen/Qwen3-Embedding-8B', text: 'Qwen3-Embedding-8B (Highest Quality)' }
+        ];
+    } else if (provider === 'siliconflow') {
+        options = [
+            { value: 'Qwen/Qwen3-Embedding-0.6B', text: 'Qwen3-Embedding-0.6B (Fastest)' },
+            { value: 'Qwen/Qwen3-Embedding-4B', text: 'Qwen3-Embedding-4B (Balanced)' },
+            { value: 'Qwen/Qwen3-Embedding-8B', text: 'Qwen3-Embedding-8B (Highest Quality)' }
+        ];
+    }
+    
+    // Add options to both selects
+    options.forEach(opt => {
+        const docOption = new Option(opt.text, opt.value);
+        const convOption = new Option(opt.text, opt.value);
+        
+        // Restore selection if possible
+        if (opt.value === currentDocModel) docOption.selected = true;
+        if (opt.value === currentConvModel) convOption.selected = true;
+        
+        docModelSelect.appendChild(docOption);
+        convModelSelect.appendChild(convOption);
+    });
+    
+    // If no selection was restored, select the first option
+    if (!docModelSelect.value && options.length > 0) {
+        docModelSelect.value = options[0].value;
+    }
+    if (!convModelSelect.value && options.length > 0) {
+        convModelSelect.value = options[0].value;
+    }
+    
+    // Update dimension visibility
+    updateDimensionVisibility();
+}
+
+function updateDimensionVisibility() {
+    const provider = document.getElementById('embeddingProvider').value;
+    const docModel = document.getElementById('documentEmbeddingModel').value;
+    const convModel = document.getElementById('conversationEmbeddingModel').value;
+    const dimensionSection = document.getElementById('embeddingDimensionSection');
+    
+    // Show dimension selector if provider is deepinfra and either model is a Qwen embedding model
+    const isDeepinfra = provider === 'deepinfra';
+    const hasQwenEmbedding = (docModel && docModel.includes('Qwen') && docModel.includes('Embedding')) || 
+                            (convModel && convModel.includes('Qwen') && convModel.includes('Embedding'));
+    
+    if (isDeepinfra && hasQwenEmbedding) {
+        dimensionSection.style.display = 'block';
+    } else {
+        dimensionSection.style.display = 'none';
+    }
+}
+
+function updateRerankingModels() {
+    const provider = document.getElementById('rerankProvider').value;
+    const modelSelect = document.getElementById('rerankModel');
+    const currentModel = modelSelect.value;
+    
+    // Show/hide options based on provider
+    const options = modelSelect.querySelectorAll('option');
+    options.forEach(option => {
+        const optionProvider = option.getAttribute('data-provider');
+        if (provider === 'none' || optionProvider === provider) {
+            option.style.display = '';
+        } else {
+            option.style.display = 'none';
+        }
+    });
+    
+    // If current selection is hidden, select first visible option
+    const currentOption = modelSelect.querySelector(`option[value="${currentModel}"]`);
+    if (currentOption && currentOption.style.display === 'none') {
+        const firstVisible = modelSelect.querySelector(`option[data-provider="${provider}"]:not([style*="display: none"])`);
+        if (firstVisible) {
+            modelSelect.value = firstVisible.value;
+        }
+    }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    updateEmbeddingModels();
+    updateDimensionVisibility();
+    updateRerankingModels();
+});
+
+// Form will submit naturally when Save Changes button is clicked
+
+function showNotification(type, message) {
+    const notification = document.createElement('div');
+    notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg transition-all duration-300 transform translate-x-0 ${
+        type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+    }`;
+    notification.innerHTML = `
+        <div class="flex items-center">
+            <i class="bi ${type === 'success' ? 'bi-check-circle' : 'bi-x-circle'} mr-2"></i>
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(notification);
+    
+    // Fade in
+    setTimeout(() => notification.classList.add('opacity-100'), 10);
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+        notification.classList.add('opacity-0', 'translate-x-full');
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
+}
+
+async function syncAgents() {
+    showNotification('success', 'Starting agent sync...');
+    
+    try {
+        const response = await fetch(`/api/v1/agents/client/{{ client.id }}/sync`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            showNotification('success', result.message || 'Agents synced successfully!');
+            
+            // Refresh the page after a moment to show updated agents
+            setTimeout(() => {
+                window.location.href = '/admin/agents';
+            }, 2000);
+        } else {
+            const error = await response.json();
+            showNotification('error', 'Error syncing agents: ' + (error.detail || 'Unknown error'));
+        }
+    } catch (error) {
+        showNotification('error', 'Error syncing agents: ' + error.message);
+    }
+}
+
+// WordPress Sites Management
+const clientId = '{{ client.id }}';
+
+// Load WordPress sites on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadWordPressSites();
+});
+
+async function loadWordPressSites() {
+    try {
+        const response = await fetch(`/admin/clients/${clientId}/wordpress-sites`);
+        const data = await response.json();
+        
+        const container = document.getElementById('wordpress-sites-container');
+        
+        if (data.success && data.sites.length > 0) {
+            container.innerHTML = '';
+            data.sites.forEach(site => {
+                const siteDiv = createSiteElement(site);
+                container.appendChild(siteDiv);
+            });
+        } else {
+            container.innerHTML = `
+                <div class="text-center py-8">
+                    <i class="bi bi-wordpress text-dark-text-secondary text-4xl mb-4"></i>
+                    <h3 class="text-lg font-medium text-dark-text mb-2">No WordPress Sites</h3>
+                    <p class="text-dark-text-secondary">Add your first WordPress site to get started</p>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('Error loading WordPress sites:', error);
+        document.getElementById('wordpress-sites-container').innerHTML = `
+            <div class="text-center py-8">
+                <i class="bi bi-exclamation-triangle text-red-500 text-2xl mb-2"></i>
+                <p class="text-dark-text-secondary">Failed to load WordPress sites</p>
+            </div>
+        `;
+    }
+}
+
+function createSiteElement(site) {
+    const div = document.createElement('div');
+    div.className = 'bg-dark-elevated rounded-lg border border-dark-border p-4 mb-4';
+    div.innerHTML = `
+        <div class="flex justify-between items-start mb-4">
+            <div>
+                <h6 class="text-lg font-medium text-dark-text">${site.site_name}</h6>
+                <p class="text-sm text-dark-text-secondary">${site.domain}</p>
+                <span class="inline-block px-2 py-1 text-xs rounded-full mt-2 ${site.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                    ${site.is_active ? 'Active' : 'Inactive'}
+                </span>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="regenerateKeys('${site.id}')" class="btn-secondary px-3 py-1 text-xs rounded">
+                    <i class="bi bi-arrow-clockwise mr-1"></i>Regenerate Keys
+                </button>
+                <button onclick="deleteSite('${site.id}')" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 text-xs rounded">
+                    <i class="bi bi-trash mr-1"></i>Delete
+                </button>
+            </div>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-dark-text mb-2">API Key</label>
+                <div class="relative">
+                    <input type="password" value="${site.api_key}" readonly id="apiKey-${site.id}"
+                           class="w-full px-3 py-2 pr-10 bg-dark-surface border border-dark-border text-dark-text rounded-md text-sm font-mono">
+                    <button type="button" onclick="togglePasswordField('apiKey-${site.id}')"
+                            class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-dark-text mb-2">API Secret</label>
+                <div class="relative">
+                    <input type="password" value="${site.api_secret}" readonly id="apiSecret-${site.id}"
+                           class="w-full px-3 py-2 pr-10 bg-dark-surface border border-dark-border text-dark-text rounded-md text-sm font-mono">
+                    <button type="button" onclick="togglePasswordField('apiSecret-${site.id}')"
+                            class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mt-3 p-3 bg-dark-surface rounded border border-dark-border">
+            <p class="text-xs text-dark-text-secondary mb-2"><strong>WordPress Plugin Configuration:</strong></p>
+            <code class="text-xs text-brand-teal">API Key: ${site.api_key}<br>API Secret: ${site.api_secret}<br>Backend URL: https://agents.autonomite.net</code>
+        </div>
+    `;
+    return div;
+}
+
+function togglePasswordField(fieldId) {
+    const field = document.getElementById(fieldId);
+    const button = field.nextElementSibling;
+    const icon = button.querySelector('i');
+    
+    if (field.type === 'password') {
+        field.type = 'text';
+        icon.classList.remove('bi-eye');
+        icon.classList.add('bi-eye-slash');
+    } else {
+        field.type = 'password';
+        icon.classList.remove('bi-eye-slash');
+        icon.classList.add('bi-eye');
+    }
+}
+
+function showAddSiteModal() {
+    document.getElementById('addSiteModal').classList.remove('hidden');
+}
+
+function hideAddSiteModal() {
+    document.getElementById('addSiteModal').classList.add('hidden');
+    document.getElementById('addSiteForm').reset();
+}
+
+// Handle add site form submission
+document.getElementById('addSiteForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    
+    try {
+        const response = await fetch(`/admin/clients/${clientId}/wordpress-sites`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('success', 'WordPress site added successfully');
+            hideAddSiteModal();
+            loadWordPressSites();
+        } else {
+            showNotification('error', 'Failed to add site: ' + result.error);
+        }
+    } catch (error) {
+        showNotification('error', 'Error adding site: ' + error.message);
+    }
+});
+
+async function regenerateKeys(siteId) {
+    if (!confirm('Are you sure you want to regenerate API keys? The old keys will stop working immediately.')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/admin/wordpress-sites/${siteId}/regenerate-keys`, {
+            method: 'POST'
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('success', 'API keys regenerated successfully');
+            loadWordPressSites();
+        } else {
+            showNotification('error', 'Failed to regenerate keys: ' + result.error);
+        }
+    } catch (error) {
+        showNotification('error', 'Error regenerating keys: ' + error.message);
+    }
+}
+
+async function deleteSite(siteId) {
+    if (!confirm('Are you sure you want to delete this WordPress site? This action cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/admin/wordpress-sites/${siteId}`, {
+            method: 'DELETE'
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('success', 'WordPress site deleted successfully');
+            loadWordPressSites();
+        } else {
+            showNotification('error', 'Failed to delete site: ' + result.error);
+        }
+    } catch (error) {
+        showNotification('error', 'Error deleting site: ' + error.message);
+    }
+}
+</script>
+{% endblock %}

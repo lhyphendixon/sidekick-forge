@@ -1,0 +1,64 @@
+<!-- Voice Chat Interface -->
+<style>
+    .htmx-indicator {
+        display: none;
+    }
+    .htmx-request .htmx-indicator {
+        display: inline-block;
+    }
+    .htmx-request #buttonText {
+        display: none;
+    }
+</style>
+<div class="h-96 flex flex-col items-center justify-center p-8">
+    <div class="text-center space-y-6">
+        <!-- Voice Status -->
+        <div id="voiceStatus" class="text-dark-text-secondary">
+            <svg class="w-16 h-16 mx-auto mb-4 text-dark-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+            </svg>
+            <p class="text-lg font-medium text-dark-text mb-2">Voice Chat Preview</p>
+            <p class="text-sm">Click the button below to start a voice conversation</p>
+        </div>
+        
+        <!-- Voice Control Button -->
+        <button id="voiceControlBtn"
+                hx-post="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/voice-start"
+                hx-vals='{"session_id": "{{ session_id }}"}'
+                hx-target="#previewContent"
+                hx-swap="innerHTML"
+                hx-timeout="30000"
+                hx-indicator="#loadingIndicator"
+                class="inline-flex items-center gap-3 px-6 py-3 bg-brand-teal text-white rounded-lg hover:bg-brand-teal/90 transition-all">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+            </svg>
+            <span id="buttonText">Start Voice Chat</span>
+            <div id="loadingIndicator" class="htmx-indicator">
+                <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+        </button>
+        
+        <!-- Voice Info -->
+        <div class="mt-8 p-4 bg-dark-elevated rounded-lg border border-dark-border">
+            <h4 class="text-sm font-medium text-dark-text mb-2">Voice Settings</h4>
+            <div class="space-y-1 text-xs text-dark-text-secondary">
+                <p>Provider: <span class="text-dark-text">{{ agent.voice_settings.provider|title }}</span></p>
+                <p>Voice ID: <span class="text-dark-text">{{ agent.voice_settings.voice_id }}</span></p>
+                <p>Temperature: <span class="text-dark-text">{{ agent.voice_settings.temperature }}</span></p>
+            </div>
+        </div>
+        
+        <!-- LiveKit Room Info (will be populated when voice starts) -->
+        <div id="livekitInfo" class="hidden mt-4 p-4 bg-dark-elevated rounded-lg border border-dark-border">
+            <h4 class="text-sm font-medium text-dark-text mb-2">Connection Info</h4>
+            <div class="space-y-1 text-xs text-dark-text-secondary">
+                <p>Room: <span id="roomName" class="text-dark-text font-mono"></span></p>
+                <p>Status: <span id="connectionStatus" class="text-brand-teal">Connecting...</span></p>
+            </div>
+        </div>
+    </div>
+</div>

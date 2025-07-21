@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent Debug Dashboard</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        'dark-bg': '#0f0f0f',
+                        'dark-surface': '#1a1a1a',
+                        'dark-elevated': '#2a2a2a',
+                        'dark-border': '#3a3a3a',
+                        'dark-text': '#e0e0e0',
+                        'dark-text-secondary': '#a0a0a0',
+                        'brand-teal': '#00d4d4',
+                        'brand-orange': '#ff6b35',
+                        'brand-salmon': '#ff4365'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-dark-bg text-dark-text">
+    <div class="container mx-auto p-6">
+        <h1 class="text-3xl font-bold mb-8 text-brand-teal">Voice Agent Debug Dashboard</h1>
+        
+        <!-- Test Controls -->
+        <div class="bg-dark-surface rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">Quick Tests</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button onclick="runE2ETests()" 
+                        class="bg-brand-teal text-white px-4 py-2 rounded hover:bg-brand-teal/80 transition">
+                    Run E2E Tests
+                </button>
+                <button onclick="testLiveKitConnection()" 
+                        class="bg-brand-orange text-white px-4 py-2 rounded hover:bg-brand-orange/80 transition">
+                    Test LiveKit
+                </button>
+                <button onclick="checkContainers()" 
+                        class="bg-dark-elevated text-dark-text border border-dark-border px-4 py-2 rounded hover:bg-dark-border transition">
+                    Check Containers
+                </button>
+            </div>
+        </div>
+        
+        <!-- Real-time Logs -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Backend Logs -->
+            <div class="bg-dark-surface rounded-lg p-6">
+                <h3 class="text-lg font-semibold mb-4 flex items-center justify-between">
+                    Backend Logs
+                    <span class="text-xs text-dark-text-secondary">Auto-refresh: 5s</span>
+                </h3>
+                <div id="backendLogs" 
+                     class="bg-dark-elevated rounded p-4 h-96 overflow-y-auto font-mono text-xs"
+                     hx-get="/admin/debug/backend-logs"
+                     hx-trigger="load, every 5s"
+                     hx-swap="innerHTML">
+                    <div class="text-dark-text-secondary">Loading logs...</div>
+                </div>
+            </div>
+            
+            <!-- Agent Container Logs -->
+            <div class="bg-dark-surface rounded-lg p-6">
+                <h3 class="text-lg font-semibold mb-4">Agent Container Logs</h3>
+                <select id="containerSelect" 
+                        class="w-full mb-4 bg-dark-elevated border border-dark-border rounded px-3 py-2"
+                        onchange="updateContainerLogs()">
+                    <option value="">Select a container...</option>
+                </select>
+                <div id="containerLogs" 
+                     class="bg-dark-elevated rounded p-4 h-96 overflow-y-auto font-mono text-xs">
+                    <div class="text-dark-text-secondary">Select a container to view logs</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Test Results -->
+        <div class="bg-dark-surface rounded-lg p-6 mt-6">
+            <h3 class="text-lg font-semibold mb-4">Test Results</h3>
+            <div id="testResults" class="space-y-2">
+                <div class="text-dark-text-secondary">No tests run yet</div>
+            </div>
+        </div>
+        
+        <!-- Active Operations -->
+        <div class="bg-dark-surface rounded-lg p-6 mt-6">
+            <h3 class="text-lg font-semibold mb-4">Active Operations</h3>
+            <div id="activeOperations" 
+                 hx-get="/admin/debug/active-operations"
+                 hx-trigger="load, every 2s"
+                 hx-swap="innerHTML">
+                <div class="text-dark-text-secondary">Loading...</div>
+            </div>
+        </div>
+        
+        <!-- WebSocket Connection for Real-time Updates -->
+        <div class="fixed bottom-4 right-4 bg-dark-surface rounded-lg p-4 shadow-lg">
+            <div class="flex items-center space-x-2">
+                <div id="wsStatus" class="w-3 h-3 bg-red-500 rounded-full"></div>
+                <span class="text-sm">Debug Stream</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let selectedContainer = null;
+        
+        // Initialize WebSocket for real-time updates
+        function initWebSocket() {
+            const wsUrl = `ws://${window.location.host}/admin/debug/stream`;
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('Debug stream connected');
+                document.getElementById('wsStatus').classList.remove('bg-red-500');
+                document.getElementById('wsStatus').classList.add('bg-green-500');
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleDebugMessage(data);
+            };
+            
+            ws.onclose = () => {
+                console.log('Debug stream disconnected');
+                document.getElementById('wsStatus').classList.remove('bg-green-500');
+                document.getElementById('wsStatus').classList.add('bg-red-500');
+                // Reconnect after 3 seconds
+                setTimeout(initWebSocket, 3000);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+        
+        function handleDebugMessage(data) {
+            switch(data.type) {
+                case 'log':
+                    appendLog(data.source, data.message);
+                    break;
+                case 'test_result':
+                    updateTestResult(data);
+                    break;
+                case 'operation_update':
+                    // Trigger HTMX refresh of active operations
+                    htmx.trigger('#activeOperations', 'refresh');
+                    break;
+            }
+        }
+        
+        function appendLog(source, message) {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `<div class="mb-1"><span class="text-dark-text-secondary">[${timestamp}]</span> ${message}</div>`;
+            
+            if (source === 'backend') {
+                const logsDiv = document.getElementById('backendLogs');
+                logsDiv.innerHTML += logEntry;
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+                
+                // Keep only last 100 entries
+                const entries = logsDiv.children;
+                while (entries.length > 100) {
+                    entries[0].remove();
+                }
+            }
+        }
+        
+        async function runE2ETests() {
+            const resultsDiv = document.getElementById('testResults');
+            resultsDiv.innerHTML = '<div class="text-brand-teal">Running E2E tests...</div>';
+            
+            try {
+                const response = await fetch('/admin/debug/run-e2e-tests', {
+                    method: 'POST'
+                });
+                const results = await response.json();
+                displayTestResults(results);
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="text-red-500">Error: ${error.message}</div>`;
+            }
+        }
+        
+        function displayTestResults(results) {
+            const resultsDiv = document.getElementById('testResults');
+            let html = `
+                <div class="mb-4 p-4 bg-dark-elevated rounded">
+                    <div class="flex justify-between mb-2">
+                        <span class="font-semibold">Test Summary</span>
+                        <span class="text-sm">Success Rate: ${results.success_rate}</span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 text-sm">
+                        <div>Total: ${results.total_tests}</div>
+                        <div class="text-green-500">Passed: ${results.passed}</div>
+                        <div class="text-red-500">Failed: ${results.failed}</div>
+                    </div>
+                </div>
+            `;
+            
+            html += '<div class="space-y-2">';
+            results.results.forEach(test => {
+                const icon = test.passed ? '✅' : '❌';
+                const bgColor = test.passed ? 'bg-green-900/20' : 'bg-red-900/20';
+                html += `
+                    <div class="p-3 ${bgColor} rounded">
+                        <div class="flex items-center justify-between">
+                            <span>${icon} ${test.name}</span>
+                            <span class="text-xs text-dark-text-secondary">${test.timestamp}</span>
+                        </div>
+                        ${test.error ? `<div class="text-sm text-red-400 mt-1">Error: ${test.error}</div>` : ''}
+                    </div>
+                `;
+            });
+            html += '</div>';
+            
+            resultsDiv.innerHTML = html;
+        }
+        
+        async function testLiveKitConnection() {
+            const resultsDiv = document.getElementById('testResults');
+            resultsDiv.innerHTML = '<div class="text-brand-orange">Testing LiveKit connection...</div>';
+            
+            try {
+                const response = await fetch('/admin/debug/test-livekit');
+                const result = await response.json();
+                
+                const status = result.success ? '✅ Connected' : '❌ Failed';
+                const details = result.success 
+                    ? `Rooms: ${result.rooms_count}` 
+                    : `Error: ${result.error}`;
+                
+                resultsDiv.innerHTML = `
+                    <div class="p-4 bg-dark-elevated rounded">
+                        <div class="font-semibold mb-2">LiveKit Connection Test</div>
+                        <div>${status}</div>
+                        <div class="text-sm text-dark-text-secondary">${details}</div>
+                    </div>
+                `;
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="text-red-500">Error: ${error.message}</div>`;
+            }
+        }
+        
+        async function checkContainers() {
+            try {
+                const response = await fetch('/admin/debug/containers');
+                const containers = await response.json();
+                
+                const select = document.getElementById('containerSelect');
+                select.innerHTML = '<option value="">Select a container...</option>';
+                
+                containers.forEach(container => {
+                    const option = document.createElement('option');
+                    option.value = container.name;
+                    option.textContent = `${container.name} (${container.status})`;
+                    select.appendChild(option);
+                });
+                
+                // Display container summary
+                const resultsDiv = document.getElementById('testResults');
+                const running = containers.filter(c => c.status === 'running').length;
+                resultsDiv.innerHTML = `
+                    <div class="p-4 bg-dark-elevated rounded">
+                        <div class="font-semibold mb-2">Container Status</div>
+                        <div>Total: ${containers.length}</div>
+                        <div class="text-green-500">Running: ${running}</div>
+                        <div class="text-red-500">Not Running: ${containers.length - running}</div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error checking containers:', error);
+            }
+        }
+        
+        async function updateContainerLogs() {
+            const container = document.getElementById('containerSelect').value;
+            if (!container) return;
+            
+            selectedContainer = container;
+            const logsDiv = document.getElementById('containerLogs');
+            logsDiv.innerHTML = '<div class="text-dark-text-secondary">Loading logs...</div>';
+            
+            try {
+                const response = await fetch(`/admin/debug/container-logs/${container}`);
+                const logs = await response.json();
+                
+                logsDiv.innerHTML = logs.logs.map(line => 
+                    `<div class="mb-1 ${line.includes('ERROR') ? 'text-red-400' : ''}">${line}</div>`
+                ).join('');
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+            } catch (error) {
+                logsDiv.innerHTML = `<div class="text-red-500">Error: ${error.message}</div>`;
+            }
+        }
+        
+        // Auto-refresh container logs if selected
+        setInterval(() => {
+            if (selectedContainer) {
+                updateContainerLogs();
+            }
+        }, 5000);
+        
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', () => {
+            initWebSocket();
+            checkContainers();
+        });
+    </script>
+</body>
+</html>

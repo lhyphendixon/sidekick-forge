@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autonomite-fastapi
+    env_file:
+      - /opt/autonomite-saas/env/.env
+    environment:
+      - APP_ENV=production
+    volumes:
+      - /opt/autonomite-saas/logs/app:/app/logs
+      - /opt/autonomite-saas/data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # For container management
+    networks:
+      - autonomite-network
+      - autonomite-agents-network  # Access to agent containers
+    depends_on:
+      - redis
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    container_name: autonomite-redis
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - /opt/autonomite-saas/data/redis:/data
+    networks:
+      - autonomite-network
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Container for building agent images
+  agent-builder:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    image: autonomite/livekit-agent:latest
+    container_name: autonomite-agent-builder
+    command: echo "Agent image built successfully"
+    profiles:
+      - build
+
+networks:
+  autonomite-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+  
+  autonomite-agents-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+    labels:
+      managed_by: "autonomite-saas"
+
+# No local volumes in production - using mounted directories

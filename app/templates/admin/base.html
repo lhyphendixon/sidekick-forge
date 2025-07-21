@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Sidekick Forge Admin{% endblock %}</title>
+    
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    
+    <!-- Supabase -->
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Custom Tailwind config with brand colors
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        // Brand colors
+                        'brand-teal': '#01a4a6',
+                        'brand-orange': '#fc7244',
+                        'brand-salmon': '#f56453',
+                        // Dark mode colors
+                        'dark-bg': '#000000',
+                        'dark-surface': 'rgb(20, 20, 20)',
+                        'dark-elevated': '#252525',
+                        'dark-border': '#2a2a2a',
+                        'dark-text': '#e0e0e0',
+                        'dark-text-secondary': '#a0a0a0'
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Custom admin styles -->
+    <style>
+        /* Dark mode base styles */
+        body {
+            background-color: #000000;
+            color: #e0e0e0;
+        }
+        
+        /* Custom scrollbar for dark mode */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #01a4a6;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #018789;
+        }
+        
+        /* Status indicators with better dark mode colors */
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-running { background-color: #01a4a6; }
+        .status-stopped { background-color: #f56453; }
+        .status-starting { background-color: #fc7244; }
+        .status-error { background-color: #dc2626; }
+        
+        /* Metric cards with brand gradient */
+        .metric-card {
+            background: linear-gradient(135deg, #01a4a6 0%, #018789 100%);
+            color: white;
+            border: 1px solid rgba(1, 164, 166, 0.3);
+        }
+        
+        /* Card hover effects */
+        .client-card {
+            transition: all 0.2s ease-in-out;
+            background-color: #1a1a1a;
+            border: 1px solid #2a2a2a;
+        }
+        .client-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(1, 164, 166, 0.2);
+            border-color: #01a4a6;
+        }
+        
+        /* Form inputs dark mode */
+        input, textarea, select {
+            background-color: #252525 !important;
+            border-color: #2a2a2a !important;
+            color: #e0e0e0 !important;
+        }
+        input:focus, textarea:focus, select:focus {
+            border-color: #01a4a6 !important;
+            box-shadow: 0 0 0 3px rgba(1, 164, 166, 0.1) !important;
+        }
+        
+        /* Button styles */
+        .btn-primary {
+            background-color: #01a4a6;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #018789;
+        }
+        .btn-secondary {
+            background-color: #fc7244;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background-color: #e05d34;
+        }
+        .btn-danger {
+            background-color: #f56453;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #e34c3a;
+        }
+        
+        /* HTMX indicators */
+        .htmx-indicator {
+            opacity: 0;
+            transition: opacity 500ms ease-in;
+        }
+        .htmx-request .htmx-indicator {
+            opacity: 1;
+        }
+        .htmx-request.htmx-indicator {
+            opacity: 1;
+        }
+        
+        /* Loading spinner with brand color */
+        .spinner {
+            border: 2px solid #2a2a2a;
+            border-top: 2px solid #01a4a6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Navigation active state */
+        .nav-active {
+            background-color: rgba(1, 164, 166, 0.05);
+            border-left: 3px solid #01a4a6;
+        }
+        
+        /* Links */
+        a {
+            color: #01a4a6;
+        }
+        a:hover {
+            color: #018789;
+        }
+    </style>
+    
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-dark-bg text-dark-text">
+    <!-- Navigation Header -->
+    <nav class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <img src="/static/images/sidekick-forge-logo.png" alt="Sidekick Forge" class="h-10" />
+                    </div>
+                    <div class="hidden md:block">
+                        <div class="ml-10 flex items-baseline space-x-2">
+                            <a href="/admin/" 
+                               class="{% if request.url.path == '/admin/' %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Dashboard
+                            </a>
+                            <a href="/admin/clients" 
+                               class="{% if '/admin/clients' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Clients
+                            </a>
+                            <a href="/admin/agents" 
+                               class="{% if '/admin/agents' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Agents
+                            </a>
+                            <a href="/admin/knowledge-base" 
+                               class="{% if '/admin/knowledge-base' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Knowledge Base
+                            </a>
+                            <a href="/admin/monitoring" 
+                               class="{% if '/admin/monitoring' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Monitoring
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div class="text-sm text-gray-600">
+                        Welcome, <span id="current-user-display" class="text-gray-800">{{ user.email if user and user.email else user.username if user else 'Admin' }}</span>
+                    </div>
+                    
+                    <!-- Logout button -->
+                    <button 
+                        onclick="logout()" 
+                        class="text-sm text-gray-600 hover:text-brand-teal transition-all px-2 py-1 rounded border border-gray-300 hover:border-brand-teal"
+                    >
+                        Logout
+                    </button>
+                    
+                    <!-- Auto-refresh indicator -->
+                    <div>
+                        <div class="htmx-indicator spinner" id="global-indicator"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Global Auto-refresh Stats (every 30 seconds) -->
+    <div hx-get="/admin/partials/stats" 
+         hx-trigger="every 30s" 
+         hx-target="#stats-container"
+         hx-swap="innerHTML"
+         hx-indicator="#global-indicator">
+    </div>
+
+    <!-- HTMX Configuration -->
+    <script>
+        // Configure HTMX
+        htmx.config.globalViewTransitions = true;
+        htmx.config.timeout = 10000; // 10 second timeout
+        
+        // Add loading states
+        document.addEventListener('htmx:beforeRequest', function(event) {
+            // Add loading class to trigger element
+            event.detail.elt.classList.add('opacity-50');
+        });
+        
+        document.addEventListener('htmx:afterRequest', function(event) {
+            // Remove loading class
+            event.detail.elt.classList.remove('opacity-50');
+            
+            // Handle errors
+            if (event.detail.xhr.status >= 400) {
+                console.error('HTMX request failed:', event.detail.xhr.status);
+                // Could show error notification here
+            }
+        });
+        
+        // Initialize Supabase client for logout
+        const supabaseUrl = 'https://yuowazxcxwhczywurmmw.supabase.co';
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODQ1NzMsImV4cCI6MjA1MTM2MDU3M30.SmqTIWrScKQWkJ2_PICWVJYpRSKfvqkRcjMMt0ApH1U';
+        const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+        
+        // Logout function
+        async function logout() {
+            try {
+                // Sign out from Supabase
+                await supabase.auth.signOut();
+                
+                // Clear local storage
+                localStorage.removeItem('admin_token');
+                
+                // Clear admin token cookie
+                document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+                
+                // Redirect to login page
+                window.location.href = '/admin/login';
+            } catch (error) {
+                console.error('Logout error:', error);
+                // Still redirect even if there's an error
+                localStorage.removeItem('admin_token');
+                document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+                window.location.href = '/admin/login';
+            }
+        }
+        
+        // Check authentication on page load
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Skip auth check on login and reset-password pages
+            const currentPath = window.location.pathname;
+            if (currentPath.includes('/admin/login') || currentPath.includes('/admin/reset-password')) {
+                return;
+            }
+            
+            // Check if in development mode - check for DEVELOPMENT_MODE cookie or specific hosts
+            const devModeCookie = document.cookie.split('; ').find(row => row.startsWith('DEVELOPMENT_MODE='));
+            const isDevelopment = (devModeCookie && devModeCookie.split('=')[1] === 'true') ||
+                                window.location.hostname === 'localhost' || 
+                                window.location.hostname === '127.0.0.1' || 
+                                window.location.hostname.includes('.local');
+            
+            // Check for admin token in cookies first
+            const adminToken = document.cookie.split('; ').find(row => row.startsWith('admin_token='));
+            const hasAdminToken = adminToken && adminToken.split('=')[1] && adminToken.split('=')[1] !== '';
+            
+            // In development mode with a token (including dev-token), skip Supabase check
+            if (isDevelopment && hasAdminToken) {
+                const userDisplay = document.getElementById('current-user-display');
+                if (userDisplay) {
+                    userDisplay.textContent = 'Dev Admin';
+                }
+                return;
+            }
+            
+            // Check if user is authenticated with Supabase
+            const { data: { session } } = await supabase.auth.getSession();
+            
+            if (!session && !hasAdminToken) {
+                // Not authenticated, redirect to login
+                window.location.href = '/admin/login';
+                return;
+            } else if (session) {
+                // Update user display
+                const userDisplay = document.getElementById('current-user-display');
+                if (userDisplay && session.user) {
+                    userDisplay.textContent = session.user.email || session.user.user_metadata?.username || 'Admin';
+                }
+            }
+            
+            // Update timestamp every second
+            function updateTimestamp() {
+                const timestampElements = document.querySelectorAll('.timestamp');
+                timestampElements.forEach(element => {
+                    const timestamp = element.getAttribute('data-timestamp');
+                    if (timestamp) {
+                        const date = new Date(timestamp);
+                        element.textContent = date.toLocaleString();
+                    }
+                });
+            }
+            
+            setInterval(updateTimestamp, 1000);
+            updateTimestamp();
+        });
+        
+        // Make logout function global
+        window.logout = logout;
+    </script>
+
+    <!-- Load LiveKit Client SDK globally for HTMX modal use -->
+    <script src="/static/livekit-client.min.js" onload="console.log('✅ LiveKit SDK loaded successfully'); window.livekitSDKLoaded = true; window.LiveKitSDK = window.LivekitClient || window.LiveKit || window.livekit; console.log('LiveKit SDK exposed as:', window.LiveKitSDK);" onerror="console.error('❌ LiveKit SDK failed to load'); window.livekitSDKLoaded = false;"></script>
+    
+    <!-- Ensure LiveKit SDK is available globally -->
+    <script>
+        // Wait for SDK and set consistent global
+        window.addEventListener('DOMContentLoaded', function() {
+            if (window.LivekitClient && !window.LiveKitSDK) {
+                window.LiveKitSDK = window.LivekitClient;
+                console.log('✅ LiveKit SDK set globally as window.LiveKitSDK');
+            }
+        });
+    </script>
+
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

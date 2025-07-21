@@ -1,0 +1,1143 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Knowledge Base - Autonomite Admin{% endblock %}
+
+{% block extra_head %}
+<!-- File upload styling -->
+<style>
+.upload-area {
+    border: 2px dashed #2a2a2a;
+    border-radius: 8px;
+    padding: 40px;
+    text-align: center;
+    background: #1a1a1a;
+    transition: all 0.3s ease;
+}
+
+.upload-area:hover {
+    border-color: #01a4a6;
+    background: #252525;
+}
+
+.upload-area.drag-over {
+    border-color: #01a4a6;
+    background: #252525;
+    transform: scale(1.02);
+}
+
+.file-input {
+    display: none;
+}
+
+.upload-icon {
+    font-size: 48px;
+    color: #01a4a6;
+    margin-bottom: 16px;
+}
+
+.file-list {
+    margin-top: 20px;
+}
+
+.files-container {
+    max-height: 400px;
+    overflow-y: auto;
+    padding-right: 8px;
+}
+
+/* Custom scrollbar for files container */
+.files-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+.files-container::-webkit-scrollbar-track {
+    background: #1a1a1a;
+    border-radius: 4px;
+}
+
+.files-container::-webkit-scrollbar-thumb {
+    background: #2a2a2a;
+    border-radius: 4px;
+}
+
+.files-container::-webkit-scrollbar-thumb:hover {
+    background: #3a3a3a;
+}
+
+.file-item {
+    display: flex;
+    align-items: center;
+    justify-content: between;
+    padding: 12px;
+    background: #252525;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    margin-bottom: 8px;
+}
+
+.file-info {
+    flex: 1;
+}
+
+.file-name {
+    font-weight: 500;
+    color: #e0e0e0;
+}
+
+.file-size {
+    font-size: 12px;
+    color: #a0a0a0;
+}
+
+.file-remove {
+    color: #f56453;
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.file-remove:hover {
+    color: #ff6b5a;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #2a2a2a;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 8px 0;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #01a4a6, #fc7244);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.status-badge {
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.status-processing {
+    background: #fc7244;
+    color: white;
+}
+
+.status-ready {
+    background: #01a4a6;
+    color: white;
+}
+
+.status-error {
+    background: #f56453;
+    color: white;
+}
+
+.agent-selection {
+    background: #252525;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 16px 0;
+}
+
+.agent-checkbox {
+    display: flex;
+    align-items: center;
+    margin: 8px 0;
+}
+
+.agent-checkbox input {
+    margin-right: 8px;
+}
+
+.document-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.document-card {
+    background: #252525;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    padding: 20px;
+    transition: all 0.3s ease;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+}
+
+.document-card:hover {
+    border-color: #01a4a6;
+    transform: translateY(-2px);
+}
+
+.document-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #e0e0e0;
+    margin-bottom: 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-height: 1.4;
+    max-height: 2.8em;
+}
+
+.document-meta {
+    font-size: 12px;
+    color: #a0a0a0;
+    margin-bottom: 12px;
+    flex-grow: 1;
+}
+
+.document-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: auto;
+    padding-top: 16px;
+}
+
+.btn-small {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4">
+    <!-- Page Header -->
+    <div class="mb-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-dark-text">Knowledge Base</h1>
+                <p class="text-dark-text-secondary">Upload and manage documents for AI agent training</p>
+            </div>
+            <div class="flex gap-3">
+                <button id="refresh-btn" class="btn-secondary px-4 py-2 rounded text-sm font-medium transition-all">
+                    <i class="fas fa-sync-alt mr-2"></i>Refresh
+                </button>
+                <button id="stats-btn" class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all">
+                    <i class="fas fa-chart-bar mr-2"></i>Statistics
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Section -->
+    <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+        <div class="border-b border-dark-border px-6 py-4">
+            <h2 class="text-lg font-semibold text-dark-text">Upload Documents</h2>
+            <p class="text-sm text-dark-text-secondary">Supported formats: PDF, DOC, DOCX, TXT, MD (50MB max per file)</p>
+        </div>
+        <div class="p-6">
+            <!-- Client Selection (for admins with multiple client access) -->
+            <div id="client-selection" class="mb-6" style="display: none;">
+                <label for="client-select" class="block text-sm font-medium text-dark-text mb-2">Select Client</label>
+                <select id="client-select" class="w-full bg-dark-elevated border border-dark-border text-dark-text rounded px-4 py-2">
+                    <!-- Clients will be loaded here -->
+                </select>
+            </div>
+            
+            <!-- Agent Selection (appears after client selection) -->
+            <div id="agent-selection" class="mb-6 overflow-hidden transition-all duration-500 ease-in-out" style="max-height: 0; opacity: 0;">
+                <h4 class="text-md font-medium text-dark-text mb-3">Grant Access to Agents</h4>
+                <div class="mb-4">
+                    <div class="agent-checkbox">
+                        <input type="checkbox" id="all-agents" value="all">
+                        <label for="all-agents" class="text-dark-text font-medium">All Agents (Current and Future)</label>
+                    </div>
+                    <p class="text-xs text-dark-text-secondary mt-1 ml-6">Documents will be available to all existing agents and any new agents created in the future</p>
+                </div>
+                <div id="specific-agents">
+                    <p class="text-sm text-dark-text-secondary mb-2">Or select specific agents:</p>
+                    <div id="agents-list" class="max-h-48 overflow-y-auto space-y-2">
+                        <!-- Agents will be loaded here dynamically -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Drag & Drop Upload Area -->
+            <div id="upload-area" class="upload-area">
+                <div class="upload-icon">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                </div>
+                <h3 class="text-lg font-medium text-dark-text mb-2">Drop files here or click to browse</h3>
+                <p class="text-sm text-dark-text-secondary mb-4">You can upload multiple files at once</p>
+                <input type="file" id="file-input" class="file-input" multiple accept=".pdf,.doc,.docx,.txt,.md">
+                <button id="browse-btn" class="btn-primary px-6 py-2 rounded transition-all">
+                    Choose Files
+                </button>
+            </div>
+
+            <!-- Selected Files List -->
+            <div id="file-list" class="file-list" style="display: none;">
+                <h4 class="text-md font-medium text-dark-text mb-3">Selected Files</h4>
+                <div id="files-container" class="files-container"></div>
+            </div>
+
+
+            <!-- Upload Controls -->
+            <div id="upload-controls" class="flex gap-3 mt-6" style="display: none;">
+                <button id="upload-btn" class="btn-primary px-6 py-2 rounded transition-all">
+                    <i class="fas fa-upload mr-2"></i>Upload Documents
+                </button>
+                <button id="clear-btn" class="btn-secondary px-6 py-2 rounded transition-all">
+                    <i class="fas fa-trash mr-2"></i>Clear All
+                </button>
+            </div>
+
+            <!-- Upload Progress -->
+            <div id="upload-progress" class="mt-6" style="display: none;">
+                <h4 class="text-md font-medium text-dark-text mb-3">Upload Progress</h4>
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <p id="progress-text" class="text-sm text-dark-text-secondary mt-2">Preparing upload...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Documents List -->
+    <div class="bg-dark-surface rounded-lg border border-dark-border">
+        <div class="border-b border-dark-border px-6 py-4">
+            <div class="flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-dark-text">Uploaded Documents</h2>
+                <div class="flex gap-2">
+                    <select id="status-filter" class="bg-dark-elevated border-dark-border text-dark-text rounded px-3 py-1 text-sm">
+                        <option value="">All Status</option>
+                        <option value="processing">Processing</option>
+                        <option value="ready">Ready</option>
+                        <option value="error">Error</option>
+                    </select>
+                    <button id="filter-btn" class="btn-secondary px-3 py-1 text-sm rounded">
+                        <i class="fas fa-filter"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="p-6">
+            <div id="documents-container" class="document-grid">
+                <!-- Documents will be loaded here -->
+            </div>
+            <div id="documents-loading" class="text-center py-8">
+                <i class="fas fa-spinner fa-spin text-brand-teal text-2xl mb-2"></i>
+                <p class="text-dark-text-secondary">Loading documents...</p>
+            </div>
+            <div id="documents-empty" class="text-center py-8" style="display: none;">
+                <i class="fas fa-file-alt text-dark-text-secondary text-4xl mb-4"></i>
+                <h3 class="text-lg font-medium text-dark-text mb-2">No Documents Yet</h3>
+                <p class="text-dark-text-secondary">Upload your first document to get started</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50" style="display: none;">
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-dark-surface rounded-lg border border-dark-border p-6 max-w-md w-full">
+            <h3 class="text-lg font-semibold text-dark-text mb-4">Delete Document</h3>
+            <p class="text-dark-text-secondary mb-6">Are you sure you want to delete this document? This action cannot be undone.</p>
+            <div class="flex gap-3 justify-end">
+                <button id="cancel-delete" class="btn-secondary px-4 py-2 rounded">Cancel</button>
+                <button id="confirm-delete" class="bg-brand-salmon hover:bg-brand-salmon/80 text-white px-4 py-2 rounded transition-all">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Access Management Modal -->
+<div id="access-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50" style="display: none;">
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-dark-surface rounded-lg border border-dark-border p-6 max-w-md w-full">
+            <h3 class="text-lg font-semibold text-dark-text mb-4">Manage Document Access</h3>
+            <div id="access-modal-content">
+                <div class="mb-4">
+                    <div class="agent-checkbox">
+                        <input type="checkbox" id="modal-all-agents" value="all">
+                        <label for="modal-all-agents" class="text-dark-text font-medium">All Agents (Current and Future)</label>
+                    </div>
+                </div>
+                <div id="modal-specific-agents">
+                    <p class="text-sm text-dark-text-secondary mb-2">Or select specific agents:</p>
+                    <div id="modal-agents-list" class="max-h-48 overflow-y-auto">
+                        <!-- Agent checkboxes will be loaded here -->
+                    </div>
+                </div>
+            </div>
+            <div class="flex gap-3 justify-end mt-6">
+                <button id="cancel-access" class="btn-secondary px-4 py-2 rounded">Cancel</button>
+                <button id="save-access" class="btn-primary px-4 py-2 rounded">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// Cache bust: {{ cache_bust }} - v7
+class KnowledgeBaseManager {
+    constructor() {
+        this.selectedFiles = [];
+        this.agents = [];
+        this.clients = [];
+        this.currentClient = null;
+        this.isMultiClient = false;
+        this.init();
+    }
+
+    async init() {
+        await this.loadUserInfo();
+        this.setupEventListeners();
+        await this.loadAgents();
+        await this.loadDocuments();
+        
+        // Auto-refresh every 60 seconds, but only if not actively uploading
+        this.refreshInterval = setInterval(() => {
+            // Don't refresh if user is currently uploading or if upload controls are visible
+            const uploadProgress = document.getElementById('upload-progress');
+            const uploadControls = document.getElementById('upload-controls');
+            const isUploading = uploadProgress && uploadProgress.style.display !== 'none';
+            const hasSelectedFiles = uploadControls && uploadControls.style.display !== 'none';
+            
+            if (!isUploading && !hasSelectedFiles) {
+                this.loadDocuments(true); // Silent refresh
+            }
+        }, 60000);
+    }
+
+    async loadUserInfo() {
+        try {
+            console.log('Loading user info and clients...');
+            // Check if user has access to multiple clients
+            const response = await fetch('/admin/api/clients', {
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                }
+            });
+            
+            console.log('Clients API response status:', response.status);
+            
+            if (response.ok) {
+                const clients = await response.json();
+                console.log('Received clients:', clients);
+                this.clients = Array.isArray(clients) ? clients : [];
+                
+                if (this.clients.length > 1) {
+                    console.log('Multiple clients detected, showing client selection');
+                    this.isMultiClient = true;
+                    this.showClientSelection();
+                    this.currentClient = this.clients[0].id; // Default to first client
+                } else if (this.clients.length === 1) {
+                    console.log('Single client detected:', this.clients[0]);
+                    this.currentClient = this.clients[0].id;
+                } else {
+                    console.log('No clients found, using fallback');
+                    // Fallback for development mode
+                    this.currentClient = 'autonomite';
+                }
+                console.log('Current client set to:', this.currentClient);
+            } else {
+                console.log('Clients API failed, using fallback');
+                // Fallback for development mode
+                this.currentClient = 'autonomite';
+            }
+        } catch (error) {
+            console.error('Failed to load user info:', error);
+            this.currentClient = 'autonomite';
+        }
+    }
+
+    showClientSelection() {
+        console.log('Showing client selection with clients:', this.clients);
+        const clientSelection = document.getElementById('client-selection');
+        const clientSelect = document.getElementById('client-select');
+        
+        if (!clientSelection) {
+            console.error('Client selection element not found!');
+            return;
+        }
+        
+        clientSelection.style.display = 'block';
+        clientSelect.innerHTML = '';
+        
+        this.clients.forEach(client => {
+            const option = document.createElement('option');
+            option.value = client.id;
+            option.textContent = client.name;
+            clientSelect.appendChild(option);
+            console.log('Added client option:', client.name, client.id);
+        });
+        
+        clientSelect.addEventListener('change', async (e) => {
+            this.currentClient = e.target.value;
+            console.log('Client changed to:', this.currentClient);
+            await this.loadAgents();
+            await this.loadDocuments();
+        });
+    }
+    
+    showAgentSelection() {
+        console.log('Showing agent selection');
+        const agentSelection = document.getElementById('agent-selection');
+        if (!agentSelection) {
+            console.error('Agent selection element not found!');
+            return;
+        }
+        
+        // Animate in with max-height and opacity
+        agentSelection.style.maxHeight = '500px';
+        agentSelection.style.opacity = '1';
+    }
+    
+    hideAgentSelection() {
+        console.log('Hiding agent selection');
+        const agentSelection = document.getElementById('agent-selection');
+        if (!agentSelection) return;
+        
+        // Animate out
+        agentSelection.style.maxHeight = '0';
+        agentSelection.style.opacity = '0';
+    }
+
+    setupEventListeners() {
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('file-input');
+        const browseBtn = document.getElementById('browse-btn');
+        const uploadBtn = document.getElementById('upload-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const refreshBtn = document.getElementById('refresh-btn');
+        const filterBtn = document.getElementById('filter-btn');
+
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('drag-over');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('drag-over');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+            this.handleFiles(e.dataTransfer.files);
+        });
+
+        // File input
+        browseBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => this.handleFiles(e.target.files));
+
+        // Upload controls
+        uploadBtn.addEventListener('click', () => this.uploadFiles());
+        clearBtn.addEventListener('click', () => this.clearFiles());
+        refreshBtn.addEventListener('click', () => this.loadDocuments());
+        filterBtn.addEventListener('click', () => this.loadDocuments());
+
+        // Agent selection
+        document.getElementById('all-agents').addEventListener('change', (e) => {
+            const specificAgents = document.querySelectorAll('#specific-agents input[type="checkbox"]');
+            specificAgents.forEach(cb => {
+                cb.disabled = e.target.checked;
+                if (e.target.checked) cb.checked = false;
+            });
+        });
+
+        // Modal events
+        document.getElementById('cancel-delete').addEventListener('click', () => {
+            document.getElementById('delete-modal').style.display = 'none';
+        });
+    }
+
+    handleFiles(files) {
+        const allowedTypes = ['pdf', 'doc', 'docx', 'txt', 'md'];
+        const maxSize = 50 * 1024 * 1024; // 50MB
+
+        Array.from(files).forEach(file => {
+            const extension = file.name.split('.').pop().toLowerCase();
+            
+            if (!allowedTypes.includes(extension)) {
+                this.showNotification(`Invalid file type: ${file.name}`, 'error');
+                return;
+            }
+
+            if (file.size > maxSize) {
+                this.showNotification(`File too large: ${file.name}`, 'error');
+                return;
+            }
+
+            // Check for duplicates
+            if (this.selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
+                this.showNotification(`File already selected: ${file.name}`, 'warning');
+                return;
+            }
+
+            this.selectedFiles.push({
+                file: file,
+                id: Date.now() + Math.random(),
+                title: file.name.replace(/\.[^/.]+$/, ""), // Remove extension
+                description: ""
+            });
+        });
+
+        this.updateFileList();
+        this.updateUI();
+    }
+
+    updateFileList() {
+        const container = document.getElementById('files-container');
+        container.innerHTML = '';
+
+        this.selectedFiles.forEach((fileObj, index) => {
+            const fileDiv = document.createElement('div');
+            fileDiv.className = 'file-item';
+            fileDiv.innerHTML = `
+                <div class="file-info">
+                    <div class="file-name">${fileObj.file.name}</div>
+                    <div class="file-size">${this.formatFileSize(fileObj.file.size)}</div>
+                    <input type="text" placeholder="Document title (optional)" 
+                           class="w-full mt-2 px-2 py-1 bg-dark-elevated border border-dark-border rounded text-sm text-dark-text"
+                           value="${fileObj.title}" onchange="kbManager.updateFileTitle(${index}, this.value)">
+                    <textarea placeholder="Description (optional)" 
+                              class="w-full mt-2 px-2 py-1 bg-dark-elevated border border-dark-border rounded text-sm text-dark-text resize-none"
+                              rows="2" onchange="kbManager.updateFileDescription(${index}, this.value)">${fileObj.description}</textarea>
+                </div>
+                <div class="file-remove" onclick="kbManager.removeFile(${index})">
+                    <i class="fas fa-times"></i>
+                </div>
+            `;
+            container.appendChild(fileDiv);
+        });
+    }
+
+    updateFileTitle(index, title) {
+        if (this.selectedFiles[index]) {
+            this.selectedFiles[index].title = title;
+        }
+    }
+
+    updateFileDescription(index, description) {
+        if (this.selectedFiles[index]) {
+            this.selectedFiles[index].description = description;
+        }
+    }
+
+    removeFile(index) {
+        this.selectedFiles.splice(index, 1);
+        this.updateFileList();
+        this.updateUI();
+    }
+
+    clearFiles() {
+        this.selectedFiles = [];
+        document.getElementById('file-input').value = '';
+        this.updateFileList();
+        this.updateUI();
+    }
+
+    updateUI() {
+        const hasFiles = this.selectedFiles.length > 0;
+        document.getElementById('file-list').style.display = hasFiles ? 'block' : 'none';
+        document.getElementById('upload-controls').style.display = hasFiles ? 'flex' : 'none';
+        
+        // Only show agent selection if we have files AND agents loaded
+        if (hasFiles && this.agents.length > 0) {
+            this.showAgentSelection();
+        } else {
+            this.hideAgentSelection();
+        }
+    }
+
+    async loadAgents() {
+        try {
+            const token = localStorage.getItem('admin_token');
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            
+            const response = await fetch(`/admin/knowledge-base/agents?client_id=${this.currentClient}`, {
+                headers: headers
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const agents = await response.json();
+            this.agents = Array.isArray(agents) ? agents : [];
+            this.updateAgentsList();
+            
+            // Show agent selection after loading agents
+            if (this.agents.length > 0) {
+                this.showAgentSelection();
+            } else {
+                this.hideAgentSelection();
+            }
+        } catch (error) {
+            console.error('Failed to load agents:', error);
+            this.agents = [];
+            this.updateAgentsList();
+        }
+    }
+
+    updateAgentsList() {
+        const container = document.getElementById('agents-list');
+        container.innerHTML = '';
+
+        if (!Array.isArray(this.agents)) {
+            console.warn('Agents is not an array:', this.agents);
+            this.agents = [];
+            this.showNotification('Failed to load agents - using empty list', 'warning');
+        }
+
+        this.agents.forEach(agent => {
+            const agentDiv = document.createElement('div');
+            agentDiv.className = 'agent-checkbox';
+            agentDiv.innerHTML = `
+                <input type="checkbox" id="agent-${agent.id}" value="${agent.id}">
+                <label for="agent-${agent.id}" class="text-dark-text">${agent.agent_name || agent.name} (${agent.agent_slug || agent.slug})</label>
+            `;
+            container.appendChild(agentDiv);
+        });
+
+        // Add event listeners
+        const specificCheckboxes = container.querySelectorAll('input[type="checkbox"]');
+        specificCheckboxes.forEach(cb => {
+            cb.addEventListener('change', () => {
+                if (cb.checked) {
+                    document.getElementById('all-agents').checked = false;
+                }
+            });
+        });
+    }
+
+    async uploadFiles() {
+        if (this.selectedFiles.length === 0) return;
+        
+        // Validate client selection
+        if (!this.currentClient) {
+            this.showNotification('Please select a client before uploading documents', 'error');
+            return;
+        }
+
+        const uploadProgress = document.getElementById('upload-progress');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+        
+        uploadProgress.style.display = 'block';
+        document.getElementById('upload-btn').disabled = true;
+
+        try {
+            // Get selected agents
+            const allAgents = document.getElementById('all-agents').checked;
+            let selectedAgents = [];
+            
+            if (!allAgents) {
+                const specificCheckboxes = document.querySelectorAll('#specific-agents input[type="checkbox"]:checked');
+                selectedAgents = Array.from(specificCheckboxes).map(cb => cb.value);
+            }
+
+            const totalFiles = this.selectedFiles.length;
+            let completed = 0;
+
+            for (let i = 0; i < this.selectedFiles.length; i++) {
+                const fileObj = this.selectedFiles[i];
+                progressText.textContent = `Uploading ${fileObj.file.name} (${i + 1}/${totalFiles})...`;
+
+                const formData = new FormData();
+                formData.append('file', fileObj.file);
+                formData.append('title', fileObj.title || fileObj.file.name);
+                formData.append('description', fileObj.description || '');
+                formData.append('client_id', this.currentClient);
+                
+                if (allAgents) {
+                    formData.append('agent_ids', 'all');
+                } else {
+                    formData.append('agent_ids', selectedAgents.join(','));
+                }
+
+                const response = await fetch('/admin/knowledge-base/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                
+                if (!result.success) {
+                    this.showNotification(`Failed to upload ${fileObj.file.name}: ${result.message}`, 'error');
+                } else {
+                    completed++;
+                }
+
+                // Update progress
+                const progress = ((i + 1) / totalFiles) * 100;
+                progressFill.style.width = `${progress}%`;
+            }
+
+            progressText.textContent = `Upload complete! ${completed}/${totalFiles} files uploaded successfully.`;
+            
+            if (completed > 0) {
+                this.showNotification(`Successfully uploaded ${completed} documents`, 'success');
+                this.clearFiles();
+                this.loadDocuments();
+            }
+
+        } catch (error) {
+            this.showNotification('Upload failed: ' + error.message, 'error');
+        } finally {
+            document.getElementById('upload-btn').disabled = false;
+            setTimeout(() => {
+                uploadProgress.style.display = 'none';
+                progressFill.style.width = '0%';
+            }, 3000);
+        }
+    }
+
+    async loadDocuments(silent = false) {
+        const container = document.getElementById('documents-container');
+        const loading = document.getElementById('documents-loading');
+        const empty = document.getElementById('documents-empty');
+
+        // Only show loading indicator if not a silent refresh
+        if (!silent) {
+            loading.style.display = 'block';
+            container.style.display = 'none';
+            empty.style.display = 'none';
+        }
+
+        try {
+            const statusFilter = document.getElementById('status-filter').value;
+            let url = `/admin/knowledge-base/documents?client_id=${this.currentClient}`;
+            if (statusFilter) {
+                url += `&status=${statusFilter}`;
+            }
+
+            const token = localStorage.getItem('admin_token');
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
+            const response = await fetch(url, {
+                headers: headers
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const documents = await response.json();
+            const documentArray = Array.isArray(documents) ? documents : [];
+
+            // Only hide loading if it was shown (not silent refresh)
+            if (!silent) {
+                loading.style.display = 'none';
+            }
+
+            if (documentArray.length === 0) {
+                if (!silent) {
+                    empty.style.display = 'block';
+                }
+                return;
+            }
+
+            container.style.display = 'grid';
+            container.innerHTML = '';
+
+            documentArray.forEach(doc => {
+                const docCard = this.createDocumentCard(doc);
+                container.appendChild(docCard);
+            });
+
+        } catch (error) {
+            if (!silent) {
+                loading.style.display = 'none';
+                this.showNotification('Failed to load documents: ' + error.message, 'error');
+            }
+            // For silent refresh errors, just log them without showing notifications
+            else {
+                console.warn('Silent document refresh failed:', error.message);
+            }
+        }
+    }
+
+    createDocumentCard(doc) {
+        const card = document.createElement('div');
+        card.className = 'document-card';
+        
+        const statusClass = `status-${doc.status}`;
+        const fileSize = this.formatFileSize(doc.file_size);
+        const uploadDate = new Date(doc.created_at).toLocaleDateString();
+        
+        // Determine agent access display
+        let agentAccessText = '';
+        if (doc.agent_access === 'all') {
+            agentAccessText = '<i class="fas fa-globe text-brand-teal mr-1"></i>All Agents';
+        } else if (doc.agent_ids && doc.agent_ids.length > 0) {
+            const agentCount = doc.agent_ids.length;
+            agentAccessText = `<i class="fas fa-robot text-brand-orange mr-1"></i>${agentCount} Agent${agentCount > 1 ? 's' : ''}`;
+        } else {
+            agentAccessText = '<i class="fas fa-ban text-dark-text-secondary mr-1"></i>No Access';
+        }
+
+        card.innerHTML = `
+            <div class="document-title">${doc.title}</div>
+            <div class="document-meta">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="status-badge ${statusClass}">${doc.status}</span>
+                    <span class="text-brand-teal text-xs">${doc.file_type.toUpperCase()}</span>
+                </div>
+                <div class="text-xs">
+                    <div>Size: ${fileSize}</div>
+                    <div>Uploaded: ${uploadDate}</div>
+                    <div>Chunks: ${doc.chunk_count || 0}</div>
+                    <div class="mt-1">${agentAccessText}</div>
+                </div>
+            </div>
+            <div class="document-actions">
+                ${doc.status === 'processing' ? `
+                    <button class="btn-secondary btn-small" onclick="kbManager.reprocessDocument('${doc.id}')">
+                        <i class="fas fa-redo mr-1"></i>Retry
+                    </button>
+                ` : ''}
+                <button class="btn-secondary btn-small" onclick="kbManager.manageAccess('${doc.id}', '${doc.agent_access}', '${(doc.agent_ids || []).join(',')}')">
+                    <i class="fas fa-users mr-1"></i>Access
+                </button>
+                <button class="bg-brand-salmon hover:bg-brand-salmon/80 text-white btn-small" onclick="kbManager.deleteDocument('${doc.id}')">
+                    <i class="fas fa-trash mr-1"></i>Delete
+                </button>
+            </div>
+        `;
+
+        return card;
+    }
+
+    async deleteDocument(documentId) {
+        const modal = document.getElementById('delete-modal');
+        const confirmBtn = document.getElementById('confirm-delete');
+        
+        modal.style.display = 'flex';
+        
+        confirmBtn.onclick = async () => {
+            try {
+                const token = localStorage.getItem('admin_token');
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+                
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+                
+                const response = await fetch(`/admin/knowledge-base/documents/${documentId}`, {
+                    method: 'DELETE',
+                    headers: headers
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    this.showNotification('Document deleted successfully', 'success');
+                    this.loadDocuments();
+                } else {
+                    this.showNotification('Failed to delete document', 'error');
+                }
+            } catch (error) {
+                this.showNotification('Error deleting document: ' + error.message, 'error');
+            } finally {
+                modal.style.display = 'none';
+            }
+        };
+    }
+
+    async reprocessDocument(documentId) {
+        try {
+            const token = localStorage.getItem('admin_token');
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            
+            const response = await fetch(`/admin/knowledge-base/documents/${documentId}/reprocess`, {
+                method: 'POST',
+                headers: headers
+            });
+
+            const result = await response.json();
+            
+            if (result.success) {
+                this.showNotification('Document reprocessing started', 'success');
+                this.loadDocuments();
+            } else {
+                this.showNotification('Failed to reprocess document', 'error');
+            }
+        } catch (error) {
+            this.showNotification('Error reprocessing document: ' + error.message, 'error');
+        }
+    }
+
+    manageAccess(documentId, currentAccess, currentAgentIds) {
+        const modal = document.getElementById('access-modal');
+        const modalAllAgents = document.getElementById('modal-all-agents');
+        const modalAgentsList = document.getElementById('modal-agents-list');
+        const saveBtn = document.getElementById('save-access');
+        const cancelBtn = document.getElementById('cancel-access');
+        
+        // Reset modal state
+        modalAllAgents.checked = currentAccess === 'all';
+        modalAgentsList.innerHTML = '';
+        
+        // Populate agents list
+        const currentAgentIdArray = currentAgentIds ? currentAgentIds.split(',').filter(id => id) : [];
+        
+        this.agents.forEach(agent => {
+            const agentDiv = document.createElement('div');
+            agentDiv.className = 'agent-checkbox mb-2';
+            const isChecked = currentAgentIdArray.includes(agent.id);
+            agentDiv.innerHTML = `
+                <input type="checkbox" id="modal-agent-${agent.id}" value="${agent.id}" ${isChecked ? 'checked' : ''} ${currentAccess === 'all' ? 'disabled' : ''}>
+                <label for="modal-agent-${agent.id}" class="text-dark-text">${agent.agent_name || agent.name}</label>
+            `;
+            modalAgentsList.appendChild(agentDiv);
+        });
+        
+        // Handle all agents checkbox
+        modalAllAgents.addEventListener('change', (e) => {
+            const specificCheckboxes = modalAgentsList.querySelectorAll('input[type="checkbox"]');
+            specificCheckboxes.forEach(cb => {
+                cb.disabled = e.target.checked;
+                if (e.target.checked) cb.checked = false;
+            });
+        });
+        
+        // Handle specific agent checkboxes
+        modalAgentsList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            cb.addEventListener('change', () => {
+                if (cb.checked) {
+                    modalAllAgents.checked = false;
+                }
+            });
+        });
+        
+        // Show modal
+        modal.style.display = 'flex';
+        
+        // Handle save
+        saveBtn.onclick = async () => {
+            try {
+                const allAgents = modalAllAgents.checked;
+                let selectedAgents = [];
+                
+                if (!allAgents) {
+                    const checkboxes = modalAgentsList.querySelectorAll('input[type="checkbox"]:checked');
+                    selectedAgents = Array.from(checkboxes).map(cb => cb.value);
+                }
+                
+                const response = await fetch(`/admin/knowledge-base/documents/${documentId}/access`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                    },
+                    body: JSON.stringify({
+                        agent_access: allAgents ? 'all' : 'specific',
+                        agent_ids: selectedAgents
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    this.showNotification('Document access updated successfully', 'success');
+                    await this.loadDocuments();
+                } else {
+                    this.showNotification('Failed to update document access', 'error');
+                }
+            } catch (error) {
+                this.showNotification('Error updating access: ' + error.message, 'error');
+            } finally {
+                modal.style.display = 'none';
+            }
+        };
+        
+        // Handle cancel
+        cancelBtn.onclick = () => {
+            modal.style.display = 'none';
+        };
+    }
+
+    formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    showNotification(message, type = 'info') {
+        // Create notification element
+        const notification = document.createElement('div');
+        notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50 text-white`;
+        
+        switch (type) {
+            case 'success':
+                notification.style.background = '#01a4a6';
+                break;
+            case 'error':
+                notification.style.background = '#f56453';
+                break;
+            case 'warning':
+                notification.style.background = '#fc7244';
+                break;
+            default:
+                notification.style.background = '#4a5568';
+        }
+        
+        notification.textContent = message;
+        document.body.appendChild(notification);
+        
+        // Auto remove after 3 seconds
+        setTimeout(() => {
+            notification.remove();
+        }, 3000);
+    }
+    
+    // Clean up resources when leaving the page
+    cleanup() {
+        if (this.refreshInterval) {
+            clearInterval(this.refreshInterval);
+            this.refreshInterval = null;
+        }
+    }
+}
+
+// Initialize when page loads
+let kbManager;
+document.addEventListener('DOMContentLoaded', () => {
+    kbManager = new KnowledgeBaseManager();
+});
+</script>
+{% endblock %}

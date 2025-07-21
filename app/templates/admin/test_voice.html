@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent Test</title>
+    <script src="https://unpkg.com/@livekit/components-react@2.0.0/dist/livekit-components.umd.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 5px;
+            background: #e8f5e9;
+            border: 1px solid #4CAF50;
+        }
+        .error {
+            background: #ffebee;
+            border: 1px solid #f44336;
+            color: #c62828;
+        }
+        .participants {
+            margin-top: 20px;
+        }
+        .participant {
+            padding: 10px;
+            margin: 5px 0;
+            background: #f0f0f0;
+            border-radius: 5px;
+        }
+        .log {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            margin: 2px 0;
+            padding: 2px 5px;
+        }
+        .log-entry.info { color: #1976d2; }
+        .log-entry.success { color: #388e3c; }
+        .log-entry.error { color: #d32f2f; }
+        .log-entry.agent { color: #7b1fa2; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Voice Agent Test</h1>
+        
+        <div id="status" class="status">
+            Ready to start test
+        </div>
+        
+        <div>
+            <button id="startBtn" onclick="startTest()">Start Voice Test</button>
+            <button id="stopBtn" onclick="stopTest()" disabled>Stop Test</button>
+            <button id="speakBtn" onclick="testSpeak()" disabled>Test Speak</button>
+        </div>
+        
+        <div class="participants">
+            <h3>Room Participants:</h3>
+            <div id="participantsList">No participants yet</div>
+        </div>
+        
+        <div class="log">
+            <h3>Event Log:</h3>
+            <div id="eventLog"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/livekit-client@2.0.2/dist/livekit-client.umd.min.js"></script>
+    <script>
+        let room;
+        let localParticipant;
+        
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('eventLog');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function updateStatus(message, isError = false) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = isError ? 'status error' : 'status';
+        }
+        
+        function updateParticipants() {
+            const listDiv = document.getElementById('participantsList');
+            const participants = Array.from(room.remoteParticipants.values());
+            
+            if (participants.length === 0) {
+                listDiv.innerHTML = '<div class="participant">No remote participants</div>';
+                return;
+            }
+            
+            listDiv.innerHTML = participants.map(p => {
+                const tracks = Array.from(p.trackPublications.values());
+                const audioTracks = tracks.filter(t => t.kind === 'audio');
+                return `
+                    <div class="participant">
+                        <strong>${p.identity}</strong> 
+                        ${p.metadata ? `(${p.metadata})` : ''}
+                        - Audio tracks: ${audioTracks.length}
+                        ${audioTracks.length > 0 ? '🔊' : '🔇'}
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        async function startTest() {
+            try {
+                log('Starting voice test...', 'info');
+                updateStatus('Requesting agent trigger...');
+                
+                // First trigger the agent
+                const response = await fetch('/api/v1/trigger-agent', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        agent_slug: 'clarence-coherence',
+                        mode: 'voice',
+                        room_name: `test-voice-${Date.now()}`,
+                        user_id: 'test-user',
+                        client_id: 'df91fd06-816f-4273-a903-5a4861277040'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Trigger failed: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                const token = data.data.livekit_config.user_token;
+                const serverUrl = data.data.livekit_config.server_url;
+                const roomName = data.data.room_name;
+                
+                log(`Agent triggered in room: ${roomName}`, 'success');
+                updateStatus('Connecting to LiveKit room...');
+                
+                // Create room and connect
+                room = new LiveKitClient.Room({
+                    adaptiveStream: true,
+                    dynacast: true,
+                    videoCaptureDefaults: {
+                        resolution: LiveKitClient.VideoPresets.h720.resolution
+                    }
+                });
+                
+                // Set up event handlers
+                room.on('participantConnected', (participant) => {
+                    log(`Participant connected: ${participant.identity}`, 'agent');
+                    updateParticipants();
+                });
+                
+                room.on('participantDisconnected', (participant) => {
+                    log(`Participant disconnected: ${participant.identity}`, 'info');
+                    updateParticipants();
+                });
+                
+                room.on('trackPublished', (publication, participant) => {
+                    log(`Track published by ${participant.identity}: ${publication.kind}`, 'agent');
+                    updateParticipants();
+                });
+                
+                room.on('trackSubscribed', (track, publication, participant) => {
+                    log(`Subscribed to ${track.kind} track from ${participant.identity}`, 'success');
+                    
+                    if (track.kind === 'audio') {
+                        // Attach audio track to play it
+                        const audio = new Audio();
+                        track.attach(audio);
+                        audio.play().catch(e => log(`Audio play error: ${e.message}`, 'error'));
+                        log('🔊 Agent audio should now be playing!', 'success');
+                    }
+                });
+                
+                room.on('trackUnsubscribed', (track, publication, participant) => {
+                    log(`Unsubscribed from ${track.kind} track`, 'info');
+                    track.detach();
+                });
+                
+                room.on('activeSpeakersChanged', (speakers) => {
+                    if (speakers.length > 0) {
+                        const speakerNames = speakers.map(s => s.identity).join(', ');
+                        log(`Active speakers: ${speakerNames}`, 'agent');
+                    }
+                });
+                
+                // Connect to room
+                await room.connect(serverUrl, token);
+                localParticipant = room.localParticipant;
+                
+                log(`Connected as: ${localParticipant.identity}`, 'success');
+                updateStatus(`Connected to room: ${roomName}`);
+                
+                // Enable microphone
+                try {
+                    await room.localParticipant.setMicrophoneEnabled(true);
+                    log('Microphone enabled', 'success');
+                } catch (e) {
+                    log(`Microphone error: ${e.message}`, 'error');
+                }
+                
+                // Update UI
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                document.getElementById('speakBtn').disabled = false;
+                
+                updateParticipants();
+                
+            } catch (error) {
+                log(`Error: ${error.message}`, 'error');
+                updateStatus(`Error: ${error.message}`, true);
+            }
+        }
+        
+        async function stopTest() {
+            try {
+                if (room) {
+                    log('Disconnecting from room...', 'info');
+                    room.disconnect();
+                    room = null;
+                    localParticipant = null;
+                }
+                
+                updateStatus('Disconnected');
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                document.getElementById('speakBtn').disabled = true;
+                
+                document.getElementById('participantsList').innerHTML = '<div class="participant">No participants</div>';
+                
+            } catch (error) {
+                log(`Stop error: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testSpeak() {
+            try {
+                log('Testing speech (say "Hello agent")', 'info');
+                // The agent should respond when it hears speech
+            } catch (error) {
+                log(`Speak error: ${error.message}`, 'error');
+            }
+        }
+    </script>
+</body>
+</html>

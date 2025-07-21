@@ -1,0 +1,208 @@
+<!-- Container Detail Modal Content -->
+<div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+    <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg leading-6 font-medium text-gray-900">
+            Container Details: {{ container.client_name|default(container.client_id) }}
+        </h3>
+        <button class="text-gray-400 hover:text-gray-600" onclick="document.getElementById('modal').classList.add('hidden')">
+            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+        </button>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Container Status -->
+        <div class="bg-gray-50 rounded-lg p-4">
+            <h4 class="font-medium text-gray-900 mb-3">Container Status</h4>
+            <div class="space-y-2">
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Status:</span>
+                    <span class="flex items-center">
+                        <div class="status-indicator status-{{ container.status|default('stopped') }} mr-2"></div>
+                        {{ container.status|default('stopped')|title }}
+                    </span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Container ID:</span>
+                    <span class="text-sm font-mono">{{ container.container_id[:12] if container.container_id else 'N/A' }}...</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Port:</span>
+                    <span>{{ container.external_port|default('N/A') }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Uptime:</span>
+                    <span>
+                        {% if container.uptime_seconds %}
+                        {{ (container.uptime_seconds / 3600)|round(1) }} hours
+                        {% else %}
+                        N/A
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Resource Usage -->
+        <div class="bg-gray-50 rounded-lg p-4">
+            <h4 class="font-medium text-gray-900 mb-3">Resource Usage</h4>
+            <div class="space-y-3">
+                <!-- CPU Usage -->
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-gray-600">CPU Usage</span>
+                        <span>{{ container.cpu_percent|default(0) }}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                             style="width: {{ container.cpu_percent|default(0) }}%"></div>
+                    </div>
+                </div>
+
+                <!-- Memory Usage -->
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-gray-600">Memory Usage</span>
+                        <span>{{ container.memory_rss_mb|default(0)|round }}MB</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        {% set memory_percent = (container.memory_rss_mb|default(0) / 2048 * 100)|round %}
+                        <div class="bg-green-600 h-2 rounded-full transition-all duration-300" 
+                             style="width: {{ memory_percent }}%"></div>
+                    </div>
+                </div>
+
+                <!-- Network -->
+                <div class="flex justify-between text-sm">
+                    <span class="text-gray-600">Network Connections:</span>
+                    <span>{{ container.network.total|default(0) if container.network else 0 }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Sessions -->
+        <div class="bg-gray-50 rounded-lg p-4">
+            <h4 class="font-medium text-gray-900 mb-3">Active Sessions</h4>
+            <div class="space-y-2">
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Total Sessions:</span>
+                    <span>{{ container.active_sessions|default(0) }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Voice Sessions:</span>
+                    <span>{{ container.voice_sessions|default(0) }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Text Sessions:</span>
+                    <span>{{ container.text_sessions|default(0) }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Health Status -->
+        <div class="bg-gray-50 rounded-lg p-4">
+            <h4 class="font-medium text-gray-900 mb-3">Health Status</h4>
+            {% if container.health %}
+            <div class="space-y-2">
+                {% for check_name, check_data in container.health.checks.items() %}
+                <div class="flex justify-between items-center">
+                    <span class="text-gray-600">{{ check_name|title }}:</span>
+                    <span class="flex items-center">
+                        {% if check_data.healthy %}
+                        <svg class="h-4 w-4 text-green-500 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-green-600 text-sm">Healthy</span>
+                        {% else %}
+                        <svg class="h-4 w-4 text-red-500 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-red-600 text-sm">Error</span>
+                        {% endif %}
+                    </span>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-sm">Health data not available</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Metrics Chart (placeholder) -->
+    <div class="mt-6 bg-gray-50 rounded-lg p-4">
+        <h4 class="font-medium text-gray-900 mb-3">Performance Metrics</h4>
+        <div class="h-32 bg-white rounded border flex items-center justify-center text-gray-500"
+             hx-get="/admin/partials/container/{{ container.client_id }}/metrics"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div class="text-center">
+                <div class="spinner mx-auto mb-2"></div>
+                Loading metrics...
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Logs -->
+    <div class="mt-6 bg-gray-50 rounded-lg p-4">
+        <h4 class="font-medium text-gray-900 mb-3">Recent Logs</h4>
+        <div class="bg-black text-green-400 p-3 rounded font-mono text-xs h-32 overflow-y-auto"
+             hx-get="/admin/containers/{{ container.client_id }}/logs?lines=20"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div class="text-center text-gray-500">
+                <div class="spinner mx-auto mb-2"></div>
+                Loading logs...
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Actions -->
+<div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+    <div class="flex space-x-3">
+        {% if container.status == 'running' %}
+        <button class="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded text-sm font-medium"
+                hx-post="/admin/containers/{{ container.client_id }}/restart"
+                hx-confirm="Restart this container? Active sessions will be interrupted."
+                hx-target="#modal-content"
+                hx-swap="outerHTML">
+            Restart Container
+        </button>
+        <button class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-medium"
+                hx-post="/admin/containers/{{ container.client_id }}/stop"
+                hx-confirm="Stop this container? Active sessions will be terminated."
+                hx-target="#modal-content"
+                hx-swap="outerHTML">
+            Stop Container
+        </button>
+        {% else %}
+        <button class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium"
+                hx-post="/admin/containers/{{ container.client_id }}/start"
+                hx-target="#modal-content"
+                hx-swap="outerHTML">
+            Start Container
+        </button>
+        {% endif %}
+        
+        <button class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium"
+                hx-get="/admin/containers/{{ container.client_id }}"
+                hx-target="#modal-content"
+                hx-swap="outerHTML">
+            Refresh
+        </button>
+        
+        <button class="bg-gray-300 hover:bg-gray-400 text-gray-700 px-4 py-2 rounded text-sm font-medium"
+                onclick="document.getElementById('modal').classList.add('hidden')">
+            Close
+        </button>
+    </div>
+</div>
+
+<!-- Auto-refresh container details every 10 seconds -->
+<div hx-get="/admin/partials/container/{{ container.client_id }}/status" 
+     hx-trigger="every 10s" 
+     hx-target=".bg-gray-50:first-child"
+     hx-swap="outerHTML">
+</div>

@@ -1,0 +1,161 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Dashboard - Autonomite Admin{% endblock %}
+
+{% block content %}
+<!-- Dashboard Header -->
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-dark-text">System Overview</h1>
+    <p class="text-dark-text-secondary">Monitor all clients and containers from a central dashboard</p>
+</div>
+
+<!-- Stats Overview -->
+<div id="stats-container" class="mb-8">
+    {% include "admin/partials/stats.html" %}
+</div>
+
+<!-- Main Dashboard Grid -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Active Clients Overview -->
+    <div class="bg-dark-surface rounded-lg border border-dark-border p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-medium text-dark-text">Active Clients</h3>
+            <div class="htmx-indicator spinner"></div>
+        </div>
+        
+        <div class="client-cards space-y-3" 
+             hx-get="/admin/partials/client-list" 
+             hx-trigger="load, every 15s"
+             hx-indicator="closest .bg-dark-surface .htmx-indicator">
+            <!-- Client cards loaded here -->
+            <div class="text-center py-8 text-dark-text-secondary">
+                <div class="spinner mx-auto mb-2"></div>
+                Loading clients...
+            </div>
+        </div>
+        
+        <div class="mt-4 pt-4 border-t border-dark-border">
+            <a href="/admin/clients" 
+               class="text-brand-teal hover:text-brand-teal/80 text-sm font-medium transition-colors">
+                View all clients →
+            </a>
+        </div>
+    </div>
+
+    <!-- System Health Overview -->
+    <div class="bg-dark-surface rounded-lg border border-dark-border p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-medium text-dark-text">System Health</h3>
+            <div class="htmx-indicator spinner"></div>
+        </div>
+        
+        <div hx-get="/admin/partials/health" 
+             hx-trigger="load, every 10s"
+             hx-indicator="closest .bg-dark-surface .htmx-indicator">
+            <!-- Health status loaded here -->
+            <div class="text-center py-8 text-dark-text-secondary">
+                <div class="spinner mx-auto mb-2"></div>
+                Checking system health...
+            </div>
+        </div>
+        
+        <div class="mt-4 pt-4 border-t border-dark-border">
+            <a href="/admin/monitoring" 
+               class="text-brand-teal hover:text-brand-teal/80 text-sm font-medium transition-colors">
+                View detailed monitoring →
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Activity -->
+<div class="mt-8 bg-dark-surface rounded-lg border border-dark-border">
+    <div class="p-6 border-b border-dark-border">
+        <h3 class="text-lg font-medium text-dark-text">Recent Activity</h3>
+    </div>
+    <div class="p-6">
+        <div class="space-y-4">
+            <!-- Activity items would be loaded here -->
+            <div class="flex items-center text-sm text-dark-text-secondary">
+                <div class="status-indicator status-running"></div>
+                <span class="timestamp" data-timestamp="{{ summary.timestamp }}">{{ summary.timestamp }}</span>
+                <span class="ml-2">System statistics updated</span>
+            </div>
+            
+            <div class="flex items-center text-sm text-dark-text-secondary">
+                <div class="status-indicator status-running"></div>
+                <span>{{ summary.active_containers }} containers running</span>
+            </div>
+            
+            <div class="flex items-center text-sm text-dark-text-secondary">
+                <div class="status-indicator status-running"></div>
+                <span>{{ summary.total_sessions }} active sessions</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="mt-8 bg-dark-surface rounded-lg border border-dark-border p-6">
+    <h3 class="text-lg font-medium text-dark-text mb-4">Quick Actions</h3>
+    <div class="flex flex-wrap gap-3">
+        <button class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all"
+                hx-post="/admin/actions/refresh-all-containers"
+                hx-confirm="Refresh all container metrics? This may take a moment."
+                hx-indicator="#global-indicator">
+            Refresh All Metrics
+        </button>
+        
+        <a href="/admin/monitoring/metrics?time_range=1h" 
+           class="bg-dark-elevated hover:bg-dark-border text-dark-text px-4 py-2 rounded text-sm font-medium transition-all inline-block">
+            View Metrics
+        </a>
+        
+        <button class="btn-secondary px-4 py-2 rounded text-sm font-medium transition-all"
+                hx-get="/admin/partials/health"
+                hx-target="closest .bg-dark-surface"
+                hx-swap="outerHTML">
+            Health Check
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Dashboard-specific JavaScript
+    document.addEventListener('DOMContentLoaded', function() {
+        // Update relative timestamps
+        function updateRelativeTime() {
+            const elements = document.querySelectorAll('[data-relative-time]');
+            elements.forEach(element => {
+                const timestamp = element.getAttribute('data-relative-time');
+                const date = new Date(timestamp);
+                const now = new Date();
+                const diff = now - date;
+                
+                const minutes = Math.floor(diff / 60000);
+                const hours = Math.floor(diff / 3600000);
+                const days = Math.floor(diff / 86400000);
+                
+                let relativeTime;
+                if (days > 0) {
+                    relativeTime = `${days}d ago`;
+                } else if (hours > 0) {
+                    relativeTime = `${hours}h ago`;
+                } else if (minutes > 0) {
+                    relativeTime = `${minutes}m ago`;
+                } else {
+                    relativeTime = 'Just now';
+                }
+                
+                element.textContent = relativeTime;
+            });
+        }
+        
+        // Update every minute
+        setInterval(updateRelativeTime, 60000);
+        updateRelativeTime();
+    });
+</script>
+{% endblock %}
