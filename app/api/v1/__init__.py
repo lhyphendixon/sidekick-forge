@@ -14,6 +14,7 @@ from .documents import router as documents_router
 from .documents_proxy import router as documents_proxy_router
 from .knowledge_base import router as knowledge_base_router
 from .livekit_proxy import router as livekit_proxy_router
+from .maintenance import router as maintenance_router
 from .sessions import router as sessions_router
 from .text_chat_proxy import router as text_chat_proxy_router
 from .tools import router as tools_router
@@ -22,6 +23,7 @@ from .trigger_v2 import router as trigger_v2_router
 from .workers import router as workers_router
 from .wordpress import router as wordpress_router
 from .wordpress_sites import router as wordpress_sites_router
+from .rooms import router as rooms_router
 
 # Create main API router
 api_router = APIRouter(prefix="/v1")
@@ -37,6 +39,7 @@ api_router.include_router(documents_router)
 api_router.include_router(documents_proxy_router)
 api_router.include_router(knowledge_base_router)
 api_router.include_router(livekit_proxy_router)
+api_router.include_router(maintenance_router)
 api_router.include_router(sessions_router)
 api_router.include_router(text_chat_proxy_router)
 api_router.include_router(tools_router)
@@ -45,5 +48,6 @@ api_router.include_router(trigger_v2_router)
 api_router.include_router(workers_router, prefix="/workers")
 api_router.include_router(wordpress_router)
 api_router.include_router(wordpress_sites_router)
+api_router.include_router(rooms_router)
 
 __all__ = ["api_router"]

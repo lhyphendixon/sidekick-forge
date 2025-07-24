@@ -80,7 +80,7 @@
                 
                 <div>
                     <label class="flex items-center">
-                        <input type="checkbox" id="clientActive" {% if client.active %}checked{% endif %}
+                        <input type="checkbox" id="clientActive" name="active" {% if client.active %}checked{% endif %}
                                class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
                         <span class="ml-2 text-sm text-gray-700">Active</span>
                     </label>
@@ -121,19 +121,19 @@
             <div class="px-6 py-4 space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700">LiveKit Server URL</label>
-                    <input type="url" id="livekitUrl" value="{{ client.settings.livekit.server_url }}" required
+                    <input type="url" id="livekitUrl" name="livekit_server_url" value="{{ client.settings.livekit.server_url }}" required
                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                 </div>
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">API Key</label>
-                        <input type="text" id="livekitApiKey" value="{{ client.settings.livekit.api_key }}" required
+                        <input type="text" id="livekitApiKey" name="livekit_api_key" value="{{ client.settings.livekit.api_key }}" required
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">API Secret</label>
-                        <input type="password" id="livekitApiSecret" value="{{ client.settings.livekit.api_secret }}" required
+                        <input type="password" id="livekitApiSecret" name="livekit_api_secret" value="{{ client.settings.livekit.api_secret }}" required
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                 </div>
@@ -152,75 +152,75 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700">OpenAI API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.openai_api_key or '' }}"
-                               data-api-key="openai_api_key"
+                               name="openai_api_key" data-api-key="openai_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Groq API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.groq_api_key or '' }}" data-api-key="groq_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.groq_api_key or '' }}" name="groq_api_key" data-api-key="groq_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">DeepInfra API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.deepinfra_api_key or '' }}" data-api-key="deepinfra_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.deepinfra_api_key or '' }}" name="deepinfra_api_key" data-api-key="deepinfra_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Replicate API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.replicate_api_key or '' }}" data-api-key="replicate_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.replicate_api_key or '' }}" name="replicate_api_key" data-api-key="replicate_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <!-- Voice/Speech Providers -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Deepgram API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.deepgram_api_key or '' }}" data-api-key="deepgram_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.deepgram_api_key or '' }}" name="deepgram_api_key" data-api-key="deepgram_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">ElevenLabs API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.elevenlabs_api_key or '' }}" data-api-key="elevenlabs_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.elevenlabs_api_key or '' }}" name="elevenlabs_api_key" data-api-key="elevenlabs_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Cartesia API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.cartesia_api_key or '' }}" data-api-key="cartesia_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.cartesia_api_key or '' }}" name="cartesia_api_key" data-api-key="cartesia_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Speechify API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.speechify_api_key or '' }}" data-api-key="speechify_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.speechify_api_key or '' }}" name="speechify_api_key" data-api-key="speechify_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <!-- Embedding/Reranking Providers -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Novita API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.novita_api_key or '' }}" data-api-key="novita_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.novita_api_key or '' }}" name="novita_api_key" data-api-key="novita_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Cohere API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.cohere_api_key or '' }}" data-api-key="cohere_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.cohere_api_key or '' }}" name="cohere_api_key" data-api-key="cohere_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">SiliconFlow API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.siliconflow_api_key or '' }}" data-api-key="siliconflow_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.siliconflow_api_key or '' }}" name="siliconflow_api_key" data-api-key="siliconflow_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Jina API Key</label>
-                        <input type="password" value="{{ client.settings.api_keys.jina_api_key or '' }}" data-api-key="jina_api_key"
+                        <input type="password" value="{{ client.settings.api_keys.jina_api_key or '' }}" name="jina_api_key" data-api-key="jina_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
                 </div>

@@ -7,8 +7,12 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from supabase import create_client, Client as SupabaseClient
 import httpx
+import asyncio
+import logging
 
 from app.models.client import Client, ClientCreate, ClientUpdate, ClientInDB, APIKeys, ClientSettings
+
+logger = logging.getLogger(__name__)
 
 
 class ClientService:
@@ -281,6 +285,10 @@ class ClientService:
                     update_dict = {"settings": client.settings.dict(), "updated_at": datetime.now(timezone.utc).isoformat()}
                     self.supabase.table(self.table_name).update(update_dict).eq("id", client_id).execute()
                     
+                    # Optionally validate API keys on load (log warnings only)
+                    if hasattr(client.settings, 'api_keys') and client.settings.api_keys:
+                        self._validate_api_keys_background(client_id, client.settings.api_keys)
+                    
                 except Exception as e:
                     # Log but don't fail if sync fails
                     print(f"Auto-sync failed for client {client_id}: {e}")
@@ -467,3 +475,40 @@ class ClientService:
             "active_list_cached": False,
             "message": "No caching in Supabase-only mode"
         }
+    
+    def _validate_api_keys_background(self, client_id: str, api_keys: APIKeys):
+        """Validate API keys in the background and log warnings"""
+        async def validate():
+            try:
+                from app.services.api_key_validator import api_key_validator
+                
+                # Collect non-empty API keys
+                keys_to_validate = {}
+                if api_keys:
+                    keys_dict = api_keys.dict() if hasattr(api_keys, 'dict') else api_keys
+                    for key_name, key_value in keys_dict.items():
+                        if key_value and key_name in [
+                            'siliconflow_api_key', 'openai_api_key', 'groq_api_key', 
+                            'cartesia_api_key', 'deepgram_api_key', 'elevenlabs_api_key',
+                            'novita_api_key', 'jina_api_key'
+                        ]:
+                            keys_to_validate[key_name] = key_value
+                
+                if keys_to_validate:
+                    results = await api_key_validator.validate_api_keys(keys_to_validate)
+                    for key_name, result in results.items():
+                        if not result['valid']:
+                            logger.warning(f"Client {client_id} has invalid {key_name}: {result['message']}")
+            except Exception as e:
+                logger.debug(f"Background API key validation failed for client {client_id}: {e}")
+        
+        # Run validation in background
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(validate())
+            else:
+                loop.run_until_complete(validate())
+        except Exception:
+            # Ignore errors in background validation
+            pass

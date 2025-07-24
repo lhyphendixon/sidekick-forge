@@ -28,7 +28,7 @@
                 <div class="p-4 border-b border-dark-border">
                     <div class="flex gap-2">
                         <button id="textModeBtn"
-                                onclick="switchMode('text', this)"
+                                onclick="window.switchMode('text', this)"
                                 data-mode="text"
                                 hx-post="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/set-mode"
                                 hx-vals='{"session_id": "{{ session_id }}", "mode": "text"}'
@@ -41,7 +41,7 @@
                             Text Chat
                         </button>
                         <button id="voiceModeBtn"
-                                onclick="switchMode('voice', this)"
+                                onclick="window.switchMode('voice', this)"
                                 data-mode="voice"
                                 hx-post="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/set-mode"
                                 hx-vals='{"session_id": "{{ session_id }}", "mode": "voice"}'
@@ -126,22 +126,26 @@
 
 <script src="https://unpkg.com/livekit-client@2.0.2/dist/livekit-client.umd.min.js"></script>
 <script>
-// Make LiveKit globally available for voice mode
-if (typeof LivekitClient !== 'undefined') {
-    window.LiveKitSDK = LivekitClient;
-    console.log('LiveKit SDK loaded and set globally');
-}
+(function() {
+    'use strict';
+    
+    // Make LiveKit globally available for voice mode
+    if (typeof LivekitClient !== 'undefined') {
+        window.LiveKitSDK = LivekitClient;
+        console.log('LiveKit SDK loaded and set globally');
+    }
+    
+    // Track current mode - use closure to avoid redeclaration
+    let currentMode = window.agentPreviewMode || 'text';
 
-// Track current mode
-let currentMode = 'text';
-
-function switchMode(mode, button) {
+    window.switchMode = function(mode, button) {
     // If already in this mode, do nothing
     if (currentMode === mode) {
         return false;
     }
     
     // Update current mode
+    window.agentPreviewMode = mode;
     currentMode = mode;
     
     // Update button styles
@@ -161,7 +165,7 @@ function switchMode(mode, button) {
     
     // Allow HTMX to proceed with the request
     return true;
-}
+    };
 
 // Set up HTMX to respect our mode check
 document.addEventListener('DOMContentLoaded', function() {
@@ -177,4 +181,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+
+})(); // Close the IIFE
 </script>

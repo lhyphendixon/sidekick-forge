@@ -5,6 +5,8 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 import os
 import json
+from collections import defaultdict
+import redis.asyncio as redis
 
 from app.config import settings
 from app.utils.exceptions import ServiceUnavailableError, ValidationError
@@ -14,21 +16,52 @@ logger = logging.getLogger(__name__)
 deployment_logger = ContainerDeploymentLogger()
 
 class ContainerManager:
-    """Manages Docker containers for client-specific agent instances"""
+    """Manages Docker containers for client-specific agent instances with pooling support"""
     
     def __init__(self):
         self.docker_client = None
         self.network_name = "autonomite-agents-network"
-        self.agent_image = "autonomite/agent-runtime:test-logging-fix"  # Fixed logging for test compatibility
+        self.agent_image = "autonomite/agent-runtime:chatcontent-fix"  # Fixed ChatContent issue
         self._initialized = False
+        
+        # Redis client for container state management
+        self.redis_client = None
+        
+        # Container pooling configuration
+        self.pools = defaultdict(list)  # client_id -> list of available container names
+        self.active_containers = defaultdict(dict)  # client_id -> {session_id: container_name}
+        self.container_reuse_counts = {}  # container_name -> reuse count
+        self.max_pool_size = 5  # Allow up to 5 containers per client in pool
+        self.max_reuse_count = 10  # Max reuses before container is recycled
+        
+        # Scale-to-zero configuration
+        self.idle_timeout_minutes = int(os.getenv("CONTAINER_IDLE_TIMEOUT_MINUTES", "30"))  # Default 30 minutes
+        self.min_pool_size = int(os.getenv("CONTAINER_MIN_POOL_SIZE", "0"))  # Can scale to zero
+        
+        # Redis key patterns
+        self.REDIS_IDLE_POOL_KEY = "client:{client_id}:container_pool:idle"
+        self.REDIS_BUSY_POOL_KEY = "client:{client_id}:container_pool:busy"
+        self.REDIS_CONTAINER_INFO_KEY = "container:{container_name}:info"
     
     async def initialize(self):
-        """Initialize Docker client and ensure network exists"""
+        """Initialize Docker client, Redis client, and ensure network exists"""
         if self._initialized:
             return
         
         try:
             self.docker_client = docker.from_env()
+            
+            # Initialize Redis client
+            try:
+                self.redis_client = await redis.from_url(
+                    settings.redis_url or "redis://localhost:6379",
+                    decode_responses=True
+                )
+                await self.redis_client.ping()
+                logger.info("✅ Connected to Redis for container state management")
+            except Exception as e:
+                logger.warning(f"Redis not available, using in-memory state: {e}")
+                self.redis_client = None
             
             # Ensure agent network exists
             try:
@@ -40,13 +73,353 @@ class ContainerManager:
                     labels={"managed_by": "autonomite-saas"}
                 )
             
+            # Restore warm pools from existing containers
+            await self._restore_container_pools()
+            
             self._initialized = True
-            logger.info("Container manager initialized successfully")
+            logger.info("Container manager initialized successfully with warm pool support")
             
         except Exception as e:
             logger.warning(f"Docker not available, container management disabled: {e}")
             self.docker_client = None
             self._initialized = True  # Still initialize but without Docker
+    
+    async def _restore_container_pools(self):
+        """Restore container pools from existing running containers"""
+        if not self.docker_client:
+            return
+            
+        try:
+            containers = self.docker_client.containers.list(filters={"name": "agent_"})
+            for container in containers:
+                if container.status == "running":
+                    # Extract client_id from container name
+                    parts = container.name.split("_")
+                    if len(parts) >= 3:
+                        client_id = parts[1]
+                        # Add to idle pool if container is healthy
+                        if container.attrs.get("State", {}).get("Health", {}).get("Status") == "healthy":
+                            await self._add_to_idle_pool(client_id, container.name)
+                            logger.info(f"♻️ Restored container {container.name} to warm pool for client {client_id}")
+        except Exception as e:
+            logger.error(f"Failed to restore container pools: {e}")
+    
+    async def _add_to_idle_pool(self, client_id: str, container_name: str, worker_id: Optional[str] = None):
+        """Add a container to the idle pool"""
+        if self.redis_client:
+            idle_key = self.REDIS_IDLE_POOL_KEY.format(client_id=client_id)
+            await self.redis_client.sadd(idle_key, container_name)
+            # Set container info
+            info_key = self.REDIS_CONTAINER_INFO_KEY.format(container_name=container_name)
+            await self.redis_client.hset(info_key, "last_used", datetime.now().isoformat())
+            await self.redis_client.hset(info_key, "idle_since", datetime.now().isoformat())
+            await self.redis_client.hset(info_key, "status", "idle")
+            if worker_id:
+                await self.redis_client.hset(info_key, "worker_id", worker_id)
+        else:
+            # Fallback to in-memory
+            self.pools[client_id].append(container_name)
+    
+    async def _get_from_idle_pool(self, client_id: str) -> Optional[str]:
+        """Get a container from the idle pool"""
+        if self.redis_client:
+            idle_key = self.REDIS_IDLE_POOL_KEY.format(client_id=client_id)
+            container_name = await self.redis_client.spop(idle_key)
+            if container_name:
+                # Mark as busy
+                busy_key = self.REDIS_BUSY_POOL_KEY.format(client_id=client_id)
+                await self.redis_client.sadd(busy_key, container_name)
+                info_key = self.REDIS_CONTAINER_INFO_KEY.format(container_name=container_name)
+                await self.redis_client.hset(info_key, "status", "busy")
+                await self.redis_client.hset(info_key, "acquired_at", datetime.now().isoformat())
+            return container_name
+        else:
+            # Fallback to in-memory
+            if self.pools[client_id]:
+                return self.pools[client_id].pop(0)
+            return None
+    
+    async def release_container_to_pool(self, client_id: str, container_name: str, worker_id: Optional[str] = None):
+        """Release a container back to the idle pool"""
+        if self.redis_client:
+            # Remove from busy set
+            busy_key = self.REDIS_BUSY_POOL_KEY.format(client_id=client_id)
+            await self.redis_client.srem(busy_key, container_name)
+            # Add to idle set with worker ID
+            await self._add_to_idle_pool(client_id, container_name, worker_id)
+            logger.info(f"♻️ Released container {container_name} back to idle pool for client {client_id}")
+        else:
+            # Fallback to in-memory
+            if container_name not in self.pools[client_id]:
+                self.pools[client_id].append(container_name)
+                logger.info(f"♻️ Released container {container_name} back to idle pool for client {client_id}")
+    
+    async def get_container_worker_id(self, container_name: str) -> Optional[str]:
+        """Get the LiveKit worker ID for a container"""
+        if self.redis_client:
+            info_key = self.REDIS_CONTAINER_INFO_KEY.format(container_name=container_name)
+            return await self.redis_client.hget(info_key, "worker_id")
+        return None
+    
+    async def verify_worker_registration(self, container_name: str, max_attempts: int = 5) -> bool:
+        """
+        Verify that a container's worker has registered with LiveKit.
+        This is critical for dispatch to work properly.
+        """
+        logger.info(f"🔍 Verifying worker registration for container {container_name}")
+        
+        for attempt in range(max_attempts):
+            try:
+                # Check if container is running
+                container = self.docker_client.containers.get(container_name)
+                if container.status != "running":
+                    logger.warning(f"Container {container_name} is not running (status: {container.status})")
+                    return False
+                
+                # Check container logs for registration confirmation
+                logs = container.logs(tail=50).decode('utf-8')
+                
+                # Look for registration patterns in logs
+                registration_patterns = [
+                    "Worker registered with LiveKit",
+                    "Successfully registered worker",
+                    "Worker ID:",
+                    "connected to LiveKit server",
+                    "Worker ready",
+                    "Registered with server"
+                ]
+                
+                for pattern in registration_patterns:
+                    if pattern.lower() in logs.lower():
+                        logger.info(f"✅ Worker registration confirmed for {container_name}: found '{pattern}'")
+                        return True
+                
+                # Also check Redis for worker ID if available
+                if self.redis_client:
+                    info_key = self.REDIS_CONTAINER_INFO_KEY.format(container_name=container_name)
+                    worker_id = await self.redis_client.hget(info_key, "worker_id")
+                    if worker_id:
+                        logger.info(f"✅ Worker registration confirmed via Redis: {worker_id}")
+                        return True
+                
+                if attempt < max_attempts - 1:
+                    logger.info(f"⏳ Waiting for worker registration... (attempt {attempt + 1}/{max_attempts})")
+                    await asyncio.sleep(1)
+                    
+            except Exception as e:
+                logger.error(f"Error checking worker registration: {e}")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(1)
+        
+        logger.warning(f"❌ Worker registration not confirmed for {container_name} after {max_attempts} attempts")
+        return False
+    
+    async def health_check_pool(self) -> Dict[str, Any]:
+        """Perform health checks on all containers in idle pools"""
+        if not self.docker_client:
+            return {"status": "skipped", "reason": "Docker not available"}
+        
+        results = {
+            "checked": 0,
+            "healthy": 0,
+            "unhealthy": 0,
+            "removed": []
+        }
+        
+        try:
+            if self.redis_client:
+                # Get all clients with pools
+                all_keys = await self.redis_client.keys("client:*:container_pool:idle")
+                
+                for key in all_keys:
+                    client_id = key.split(":")[1]
+                    idle_containers = await self.redis_client.smembers(key)
+                    
+                    for container_name in idle_containers:
+                        results["checked"] += 1
+                        
+                        try:
+                            container = self.docker_client.containers.get(container_name)
+                            
+                            # Check if container is running
+                            if container.status != "running":
+                                logger.warning(f"⚠️ Container {container_name} is not running, removing from pool")
+                                await self.redis_client.srem(key, container_name)
+                                results["unhealthy"] += 1
+                                results["removed"].append(container_name)
+                                continue
+                            
+                            # Check container health status
+                            health = container.attrs.get("State", {}).get("Health", {}).get("Status")
+                            if health == "healthy":
+                                results["healthy"] += 1
+                            else:
+                                logger.warning(f"⚠️ Container {container_name} is unhealthy: {health}")
+                                results["unhealthy"] += 1
+                                
+                                # Remove unhealthy containers from pool
+                                await self.redis_client.srem(key, container_name)
+                                results["removed"].append(container_name)
+                                
+                                # Stop and remove the container
+                                try:
+                                    container.stop(timeout=5)
+                                    container.remove(force=True)
+                                except:
+                                    pass
+                                    
+                        except docker.errors.NotFound:
+                            # Container doesn't exist, remove from pool
+                            logger.warning(f"⚠️ Container {container_name} not found, removing from pool")
+                            await self.redis_client.srem(key, container_name)
+                            results["unhealthy"] += 1
+                            results["removed"].append(container_name)
+            
+            else:
+                # In-memory pool check
+                for client_id, containers in self.pools.items():
+                    for container_name in containers[:]:  # Copy list to modify during iteration
+                        results["checked"] += 1
+                        
+                        try:
+                            container = self.docker_client.containers.get(container_name)
+                            if container.status == "running":
+                                results["healthy"] += 1
+                            else:
+                                results["unhealthy"] += 1
+                                self.pools[client_id].remove(container_name)
+                                results["removed"].append(container_name)
+                        except:
+                            results["unhealthy"] += 1
+                            self.pools[client_id].remove(container_name)
+                            results["removed"].append(container_name)
+            
+            logger.info(f"🏥 Pool health check complete: {results}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to perform pool health check: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    async def scale_to_zero_check(self) -> Dict[str, Any]:
+        """Check for idle containers and scale down after timeout period"""
+        if not self.docker_client:
+            return {"status": "skipped", "reason": "Docker not available"}
+        
+        results = {
+            "checked": 0,
+            "scaled_down": 0,
+            "containers_stopped": []
+        }
+        
+        try:
+            current_time = datetime.now()
+            
+            if self.redis_client:
+                # Get all clients with idle pools
+                all_keys = await self.redis_client.keys("client:*:container_pool:idle")
+                
+                for key in all_keys:
+                    client_id = key.split(":")[1]
+                    idle_containers = await self.redis_client.smembers(key)
+                    
+                    # Skip if pool is already at minimum size
+                    if len(idle_containers) <= self.min_pool_size:
+                        continue
+                    
+                    containers_to_remove = []
+                    
+                    for container_name in idle_containers:
+                        results["checked"] += 1
+                        
+                        # Get container idle time
+                        info_key = self.REDIS_CONTAINER_INFO_KEY.format(container_name=container_name)
+                        idle_since = await self.redis_client.hget(info_key, "idle_since")
+                        
+                        if idle_since:
+                            idle_time = current_time - datetime.fromisoformat(idle_since)
+                            idle_minutes = idle_time.total_seconds() / 60
+                            
+                            if idle_minutes > self.idle_timeout_minutes:
+                                # Check if removing this container would go below minimum
+                                remaining = len(idle_containers) - len(containers_to_remove) - 1
+                                if remaining >= self.min_pool_size:
+                                    containers_to_remove.append(container_name)
+                    
+                    # Stop and remove idle containers
+                    for container_name in containers_to_remove:
+                        try:
+                            container = self.docker_client.containers.get(container_name)
+                            container.stop(timeout=10)
+                            container.remove(force=True)
+                            
+                            # Remove from pool
+                            await self.redis_client.srem(key, container_name)
+                            
+                            # Clean up container info
+                            info_key = self.REDIS_CONTAINER_INFO_KEY.format(container_name=container_name)
+                            await self.redis_client.delete(info_key)
+                            
+                            results["scaled_down"] += 1
+                            results["containers_stopped"].append(container_name)
+                            
+                            logger.info(f"📉 Scaled down idle container: {container_name} (client: {client_id})")
+                            
+                        except Exception as e:
+                            logger.error(f"Failed to stop container {container_name}: {e}")
+            
+            else:
+                # In-memory pool check (simplified)
+                for client_id, containers in self.pools.items():
+                    if len(containers) > self.min_pool_size:
+                        # For in-memory, we can't track idle time precisely
+                        # So we'll just remove excess containers
+                        excess = len(containers) - self.min_pool_size
+                        for i in range(excess):
+                            if containers:
+                                container_name = containers.pop()
+                                try:
+                                    container = self.docker_client.containers.get(container_name)
+                                    container.stop(timeout=10)
+                                    container.remove(force=True)
+                                    results["scaled_down"] += 1
+                                    results["containers_stopped"].append(container_name)
+                                except:
+                                    pass
+            
+            if results["scaled_down"] > 0:
+                logger.info(f"♻️ Scale-to-zero check complete: {results}")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to perform scale-to-zero check: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    async def _update_container_session(self, container_name: str, room_name: str, session_id: str):
+        """Update container environment for new session"""
+        try:
+            # Write session info to a file that the container can read
+            session_info = {
+                "room_name": room_name,
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Store in Redis if available
+            if self.redis_client:
+                info_key = self.REDIS_CONTAINER_INFO_KEY.format(container_name=container_name)
+                await self.redis_client.hset(info_key, "current_room", room_name)
+                await self.redis_client.hset(info_key, "current_session", session_id)
+            
+            # Also write to a file the container can read
+            session_file = f"/tmp/{container_name}_session.json"
+            with open(session_file, 'w') as f:
+                json.dump(session_info, f)
+            
+            logger.info(f"📝 Updated container {container_name} with session {session_id} for room {room_name}")
+        except Exception as e:
+            logger.error(f"Failed to update container session: {e}")
     
     def get_container_name(self, site_id: str, agent_slug: str, session_id: str = None) -> str:
         """Generate container name for a client's agent, optionally with session"""
@@ -61,6 +434,266 @@ class ContainerManager:
         else:
             # Legacy format for backwards compatibility
             return f"agent_{safe_site_id}_{safe_agent_slug}"
+    
+    async def get_or_create_container(
+        self,
+        site_id: str,
+        agent_slug: str,
+        agent_config: Dict[str, Any],
+        site_config: Dict[str, Any],
+        session_id: str,
+        room_name: str
+    ) -> str:
+        """Get a container from warm pool or create a new persistent one"""
+        logger.info(f"🏊 Checking warm pool for client {site_id}, agent {agent_slug}")
+        
+        # Try to get a container from the idle pool first
+        container_name = await self._get_from_idle_pool(site_id)
+        
+        if container_name:
+            try:
+                # Verify the container is still running and healthy
+                container = self.docker_client.containers.get(container_name)
+                if container.status == "running":
+                    logger.info(f"✅ Acquired warm container {container_name} from pool for client {site_id}")
+                    
+                    # Update container with new session info
+                    await self._update_container_session(container_name, room_name, session_id)
+                    
+                    # Track active container
+                    self.active_containers[site_id][session_id] = container_name
+                    
+                    # Increment reuse count
+                    self.container_reuse_counts[container_name] = self.container_reuse_counts.get(container_name, 0) + 1
+                    logger.info(f"📊 Container {container_name} reused {self.container_reuse_counts[container_name]} times")
+                    
+                    return container_name
+                else:
+                    logger.warning(f"⚠️ Pooled container {container_name} is not running, removing from pool")
+                    # Remove unhealthy container
+                    try:
+                        container.remove(force=True)
+                    except:
+                        pass
+            except docker.errors.NotFound:
+                logger.warning(f"⚠️ Pooled container {container_name} no longer exists")
+        
+        # No container in pool, need to create a new one
+        logger.info(f"🏊 No warm containers available for client {site_id}, creating new persistent container")
+        
+        # First check if there's already a container for this room
+        try:
+            containers = self.docker_client.containers.list(filters={"name": "agent_"})
+            for container in containers:
+                # Check environment variables
+                env_vars = container.attrs['Config']['Env']
+                for env in env_vars:
+                    if env.startswith(f'ROOM_NAME={room_name}'):
+                        logger.warning(f"⚠️ Container {container.name} already exists for room {room_name}")
+                        # Return the existing container instead of creating a new one
+                        self.active_containers[site_id][session_id] = container.name
+                        return container.name
+                        
+            # For preview rooms, stop any existing containers for the same client/agent
+            # This prevents multiple containers from the same preview session
+            if room_name.startswith("preview_"):
+                target_prefix = f"agent_{site_id}_{agent_slug}_"
+                containers_to_stop = []
+                for container in containers:
+                    if container.name.startswith(target_prefix):
+                        # Check if it's a preview container
+                        env_vars = container.attrs['Config']['Env']
+                        for env in env_vars:
+                            if env.startswith('ROOM_NAME=preview_'):
+                                containers_to_stop.append(container)
+                                break
+                
+                # Stop old preview containers for this client/agent
+                for container in containers_to_stop:
+                    try:
+                        logger.info(f"🛑 Stopping old preview container {container.name} for new preview session")
+                        container.stop(timeout=5)
+                        container.remove(force=True)
+                    except Exception as e:
+                        logger.warning(f"Failed to stop old preview container {container.name}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error checking existing containers: {e}")
+        
+        # Check if we have a pooled container for this client
+        # TEMPORARILY DISABLED: Pooling causes LiveKit connection issues
+        if False and self.pools[site_id]:
+            # Get a container from the pool
+            container_name = self.pools[site_id].pop(0)
+            logger.info(f"♻️ Reusing pooled container {container_name} for client {site_id}")
+            
+            # Reset the container for new session
+            await self.reset_container(container_name, session_id, room_name, agent_config)
+            
+            # Track reuse
+            self.container_reuse_counts[container_name] = self.container_reuse_counts.get(container_name, 0) + 1
+            logger.info(f"📊 Container {container_name} reused {self.container_reuse_counts[container_name]} times")
+            
+            # Record active container
+            self.active_containers[site_id][session_id] = container_name
+            
+            # Log deployment as reused
+            deployment_logger.log_deployment(container_name, "pooled_reuse", {
+                "reuse_count": self.container_reuse_counts[container_name],
+                "client_id": site_id,
+                "session_id": session_id
+            })
+            
+            return container_name
+        else:
+            # No container in pool, create new one
+            logger.info(f"🆕 No pooled containers for client {site_id}, creating new one")
+            
+            # Deploy new container
+            container_info = await self.deploy_agent_container(
+                site_id=site_id,
+                agent_slug=agent_slug,
+                agent_config=agent_config,
+                site_config=site_config,
+                session_id=session_id
+            )
+            
+            container_name = container_info["name"]
+            
+            # Initialize reuse count
+            self.container_reuse_counts[container_name] = 1
+            
+            # Record active container
+            self.active_containers[site_id][session_id] = container_name
+            
+            return container_name
+    
+    async def reset_container(self, container_name: str, session_id: str, room_name: str, agent_config: Dict[str, Any]) -> bool:
+        """Reset container state for reuse with new session"""
+        try:
+            container = await self.get_container(container_name)
+            if not container:
+                logger.error(f"Container {container_name} not found for reset")
+                return False
+            
+            logger.info(f"🧹 Resetting container {container_name} for session {session_id}")
+            
+            # Execute reset commands inside container
+            reset_commands = [
+                # Clear conversation memory
+                "rm -rf /tmp/conversations/*",
+                # Clear any cached data
+                "rm -rf /tmp/cache/*",
+                # Clear metadata files
+                "rm -rf /tmp/job_metadata_*.json",
+                # Reset Python environment (if agent has a reset script)
+                "if [ -f /app/reset.py ]; then python /app/reset.py; fi"
+            ]
+            
+            for cmd in reset_commands:
+                try:
+                    container.exec_run(cmd, detach=False)
+                except Exception as e:
+                    logger.warning(f"Reset command failed: {cmd} - {e}")
+            
+            # Update environment variables for new session
+            # Note: We can't update env vars on running container, so we update via metadata file
+            metadata = {
+                "session_id": session_id,
+                "room_name": room_name,
+                "reset_at": datetime.utcnow().isoformat()
+            }
+            
+            metadata_path = f"/tmp/container_metadata_{container_name}.json"
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f)
+            
+            logger.info(f"✅ Container {container_name} reset completed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to reset container {container_name}: {e}")
+            return False
+    
+    async def return_container(self, site_id: str, session_id: str) -> bool:
+        """Return a container to the pool or destroy if over reuse limit"""
+        try:
+            # Find the container for this session
+            container_name = self.active_containers[site_id].get(session_id)
+            if not container_name:
+                logger.warning(f"No active container found for client {site_id}, session {session_id}")
+                return False
+            
+            # Remove from active containers
+            del self.active_containers[site_id][session_id]
+            
+            # Check reuse count
+            reuse_count = self.container_reuse_counts.get(container_name, 0)
+            
+            # Check if container is still healthy
+            container = await self.get_container(container_name)
+            if not container or container.status != "running":
+                logger.warning(f"Container {container_name} not healthy, removing")
+                await self.remove_container(container_name)
+                del self.container_reuse_counts[container_name]
+                return True
+            
+            # Decide whether to pool or destroy
+            current_pool_size = len(self.pools[site_id])
+            
+            if reuse_count >= self.max_reuse_count:
+                # Container has been reused too many times, destroy it
+                logger.info(f"🗑️ Container {container_name} reached max reuse ({reuse_count}), destroying")
+                await self.stop_container(container_name)
+                await self.remove_container(container_name)
+                del self.container_reuse_counts[container_name]
+            elif current_pool_size >= self.max_pool_size:
+                # Pool is full, destroy this container
+                logger.info(f"🗑️ Pool full for client {site_id}, destroying container {container_name}")
+                await self.stop_container(container_name)
+                await self.remove_container(container_name)
+                del self.container_reuse_counts[container_name]
+            else:
+                # Temporarily disable pooling - always destroy containers to ensure clean state
+                logger.info(f"🛑 Destroying container {container_name} (pooling disabled for LiveKit cleanup)")
+                await self.stop_container(container_name)
+                await self.remove_container(container_name)
+                if container_name in self.container_reuse_counts:
+                    del self.container_reuse_counts[container_name]
+                # Old pooling code (disabled):
+                # logger.info(f"🏊 Returning container {container_name} to pool for client {site_id}")
+                # self.pools[site_id].append(container_name)
+                
+                deployment_logger.log_deployment(container_name, "returned_to_pool", {
+                    "reuse_count": reuse_count,
+                    "pool_size": current_pool_size + 1,
+                    "client_id": site_id
+                })
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to return container for client {site_id}, session {session_id}: {e}")
+            return False
+    
+    async def cleanup_client_pool(self, site_id: str) -> int:
+        """Clean up all pooled containers for a client"""
+        cleaned = 0
+        
+        # Stop and remove all pooled containers
+        while self.pools[site_id]:
+            container_name = self.pools[site_id].pop()
+            try:
+                await self.stop_container(container_name)
+                await self.remove_container(container_name)
+                if container_name in self.container_reuse_counts:
+                    del self.container_reuse_counts[container_name]
+                cleaned += 1
+            except Exception as e:
+                logger.error(f"Failed to cleanup container {container_name}: {e}")
+        
+        logger.info(f"🧹 Cleaned up {cleaned} pooled containers for client {site_id}")
+        return cleaned
     
     async def deploy_agent_container(
         self,
@@ -121,6 +754,13 @@ class ContainerManager:
             
             # Prepare environment variables
             logger.info(f"Deploying container with site_id: {site_id}")
+            
+            # Debug: Log what LiveKit credentials we're receiving
+            logger.info(f"🔍 DEBUG: LiveKit credentials in agent_config:")
+            logger.info(f"   - URL from agent_config: {agent_config.get('livekit_url', 'MISSING')}")
+            logger.info(f"   - API Key from agent_config: {agent_config.get('livekit_api_key', 'MISSING')[:20]}..." if agent_config.get('livekit_api_key') else "   - API Key: MISSING")
+            logger.info(f"   - API Secret from agent_config: {'SET' if agent_config.get('livekit_api_secret') else 'MISSING'}")
+            
             env_vars = {
                 # Client identification
                 "SITE_ID": site_id,
@@ -130,10 +770,13 @@ class ContainerManager:
                 "CONTAINER_NAME": container_name,
                 "ROOM_NAME": agent_config.get("room_name", ""),  # Room the agent should join
                 
-                # LiveKit configuration - MUST come from client, no fallbacks!
-                "LIVEKIT_URL": agent_config.get("livekit_url"),
-                "LIVEKIT_API_KEY": agent_config.get("livekit_api_key"),
-                "LIVEKIT_API_SECRET": agent_config.get("livekit_api_secret"),
+                # Backend URL for pool release
+                "BACKEND_URL": f"http://host.docker.internal:8000",  # Use Docker host networking
+                
+                # LiveKit configuration - Use backend credentials for thin client architecture
+                "LIVEKIT_URL": settings.livekit_url,
+                "LIVEKIT_API_KEY": settings.livekit_api_key,
+                "LIVEKIT_API_SECRET": settings.livekit_api_secret,
                 
                 # Agent configuration
                 "AGENT_NAME": agent_config.get("agent_name", "Assistant"),
@@ -149,8 +792,9 @@ class ContainerManager:
                 "TTS_PROVIDER": agent_config.get("tts_provider", "openai"),
                 "TTS_MODEL": agent_config.get("tts_model", ""),
                 
-                # Supabase configuration (CRITICAL for agent operation)
+                # Supabase configuration (CRITICAL for agent operation and RAG)
                 "SUPABASE_URL": settings.supabase_url,
+                "SUPABASE_KEY": settings.supabase_service_role_key,  # For RAG system
                 "SUPABASE_ANON_KEY": settings.supabase_anon_key,
                 "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_role_key,
                 
@@ -161,6 +805,10 @@ class ContainerManager:
                 "DEEPGRAM_API_KEY": agent_config.get("deepgram_api_key", ""),
                 "CARTESIA_API_KEY": agent_config.get("cartesia_api_key", ""),
                 "ELEVEN_API_KEY": agent_config.get("elevenlabs_api_key", ""),
+                
+                # Embedding providers
+                "NOVITA_API_KEY": agent_config.get("novita_api_key", ""),
+                "SILICONFLOW_API_KEY": agent_config.get("siliconflow_api_key", ""),
                 
                 # Webhooks
                 "VOICE_CONTEXT_WEBHOOK_URL": agent_config.get("voice_context_webhook_url", ""),
@@ -192,6 +840,11 @@ class ContainerManager:
                 "name": container_name,
                 "environment": env_vars,
                 "network": self.network_name,
+                # Apply patch and start
+                "command": [
+                    "/bin/bash", "-c",
+                    "python3 /patch_chatmessage.py && ./start_agent.sh"
+                ],
                 "labels": {
                     "autonomite.site_id": site_id,
                     "autonomite.agent_slug": agent_slug,
@@ -203,7 +856,18 @@ class ContainerManager:
                 "mem_limit": resource_limits["memory"],
                 "cpu_quota": resource_limits["cpu_quota"],
                 "cpu_period": 100000,  # Period for CPU quota (100ms)
-                "detach": True
+                "detach": True,
+                # Mount /tmp directory to share metadata files and patch script
+                "volumes": {
+                    "/tmp": {
+                        "bind": "/tmp",
+                        "mode": "rw"
+                    },
+                    "/opt/autonomite-saas/agent-runtime/patch_chatmessage.py": {
+                        "bind": "/patch_chatmessage.py",
+                        "mode": "ro"
+                    }
+                }
                 # Health check disabled temporarily
                 # "healthcheck": {
                 #     "test": ["CMD", "curl", "-f", "http://localhost:8080/health"],
@@ -228,17 +892,40 @@ class ContainerManager:
                 }
             })
             
-            # Create and start container
-            container = self.docker_client.containers.run(**container_config)
+            # Create and start container with retry logic
+            max_retries = 3
+            retry_count = 0
+            container = None
             
-            logger.info(f"Deployed agent container: {container_name}")
+            while retry_count < max_retries:
+                try:
+                    container = self.docker_client.containers.run(**container_config)
+                    logger.info(f"Deployed agent container: {container_name} (attempt {retry_count + 1})")
+                    break
+                except docker.errors.APIError as e:
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        raise
+                    logger.warning(f"Container creation failed (attempt {retry_count}): {e}")
+                    await asyncio.sleep(2)  # Wait before retry
+            
+            if not container:
+                raise ServiceUnavailableError("Failed to create container after retries")
+            
             deployment_logger.log_deployment(container_name, "started", {
                 "container_id": container.id[:12],
-                "status": container.status
+                "status": container.status,
+                "retries": retry_count
             })
             
-            # Skip health check wait for now - container will become healthy on its own
-            # await self._wait_for_healthy(container_name, timeout=60)
+            # Wait for container to be running
+            await self._wait_for_container_running(container_name, timeout=30)
+            
+            # Check if container has basic connectivity
+            if await self._check_container_basic_health(container_name):
+                logger.info(f"✅ Container {container_name} is healthy")
+            else:
+                logger.warning(f"⚠️ Container {container_name} may have issues")
             
             return await self.get_container_info(container_name)
             
@@ -476,16 +1163,84 @@ class ContainerManager:
         seed = f"{site_id}:{settings.secret_key}:autonomite-internal"
         return hashlib.sha256(seed.encode()).hexdigest()
     
+    async def _wait_for_container_running(self, container_name: str, timeout: int = 30) -> bool:
+        """Wait for container to be in running state"""
+        start_time = asyncio.get_event_loop().time()
+        
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            container = await self.get_container(container_name)
+            if container and container.status == "running":
+                return True
+            elif container and container.status in ["exited", "dead"]:
+                # Container failed to start
+                logs = container.logs(tail=100).decode('utf-8')
+                logger.error(f"Container {container_name} failed to start. Last logs:\n{logs}")
+                return False
+            
+            await asyncio.sleep(1)
+        
+        logger.warning(f"Container {container_name} did not start within {timeout} seconds")
+        return False
+    
+    async def _check_container_basic_health(self, container_name: str) -> bool:
+        """Check basic health of container"""
+        try:
+            container = await self.get_container(container_name)
+            if not container:
+                return False
+            
+            # Check if container is still running
+            container.reload()
+            if container.status != "running":
+                return False
+            
+            # Check if main process is running
+            top_result = container.top()
+            if not top_result or 'Processes' not in top_result or not top_result['Processes']:
+                logger.warning(f"No processes found in container {container_name}")
+                return False
+            
+            # Check for python process
+            processes = top_result['Processes']
+            python_found = any('python' in ' '.join(proc) for proc in processes)
+            if not python_found:
+                logger.warning(f"Python process not found in container {container_name}")
+                return False
+            
+            # Check logs for startup errors
+            logs = container.logs(tail=50).decode('utf-8')
+            error_indicators = [
+                "ERROR",
+                "Failed to",
+                "Could not",
+                "Missing required",
+                "API key not found",
+                "Authentication failed"
+            ]
+            
+            for indicator in error_indicators:
+                if indicator in logs:
+                    logger.warning(f"Found error indicator '{indicator}' in container logs")
+                    # Don't fail on errors, just warn
+                    # return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking container health: {e}")
+            return False
+    
     async def stop_agent_for_room(self, room_name: str) -> Dict[str, Any]:
         """
         Stop agent containers associated with a specific room
         
-        This method replaces the old agent_spawner.stop_agent_for_room functionality
-        by finding and stopping containers that were created for the given room.
+        This method now returns containers to the pool instead of stopping them outright,
+        unless they've exceeded reuse limits or the pool is full.
         """
-        logger.info(f"Stopping agent containers for room {room_name}")
+        logger.info(f"🛑 Processing containers for room {room_name}")
         
         stopped_containers = []
+        returned_to_pool = []
         errors = []
         
         try:
@@ -503,10 +1258,12 @@ class ContainerManager:
                     
                     # Look for room name in environment variables
                     container_room = None
+                    site_id = None
                     for env in env_vars:
                         if env.startswith("ROOM_NAME="):
                             container_room = env.split("=", 1)[1]
-                            break
+                        elif env.startswith("SITE_ID="):
+                            site_id = env.split("=", 1)[1]
                     
                     # Also check metadata file path for room name
                     if not container_room:
@@ -515,17 +1272,46 @@ class ContainerManager:
                                 container_room = room_name
                                 break
                     
-                    # Stop container if it matches the room
+                    # Process container if it matches the room
                     if container_room == room_name:
-                        if container.status == "running":
-                            logger.info(f"Stopping container {container.name} for room {room_name}")
-                            container.stop(timeout=10)
-                            stopped_containers.append({
-                                "container_id": container.id[:12],
-                                "container_name": container.name,
-                                "room_name": room_name,
-                                "action": "stopped"
-                            })
+                        if container.status == "running" and site_id:
+                            # Try to find the session ID from active containers
+                            session_id = None
+                            for sid, cname in self.active_containers.get(site_id, {}).items():
+                                if cname == container.name:
+                                    session_id = sid
+                                    break
+                            
+                            if session_id:
+                                # Return container to pool
+                                logger.info(f"🏊 Attempting to return container {container.name} to pool")
+                                returned = await self.return_container(site_id, session_id)
+                                if returned:
+                                    returned_to_pool.append({
+                                        "container_id": container.id[:12],
+                                        "container_name": container.name,
+                                        "room_name": room_name,
+                                        "action": "returned_to_pool"
+                                    })
+                                else:
+                                    # If return failed, stop it
+                                    container.stop(timeout=10)
+                                    stopped_containers.append({
+                                        "container_id": container.id[:12],
+                                        "container_name": container.name,
+                                        "room_name": room_name,
+                                        "action": "stopped"
+                                    })
+                            else:
+                                # No session ID found, just stop it
+                                logger.warning(f"No session ID found for container {container.name}, stopping")
+                                container.stop(timeout=10)
+                                stopped_containers.append({
+                                    "container_id": container.id[:12],
+                                    "container_name": container.name,
+                                    "room_name": room_name,
+                                    "action": "stopped"
+                                })
                         else:
                             logger.info(f"Container {container.name} already stopped for room {room_name}")
                             stopped_containers.append({
@@ -536,7 +1322,7 @@ class ContainerManager:
                             })
                 
                 except Exception as e:
-                    error_msg = f"Error stopping container {container.name}: {str(e)}"
+                    error_msg = f"Error processing container {container.name}: {str(e)}"
                     logger.error(error_msg)
                     errors.append(error_msg)
             
@@ -557,8 +1343,9 @@ class ContainerManager:
                 "success": len(errors) == 0,
                 "room_name": room_name,
                 "stopped_containers": stopped_containers,
+                "returned_to_pool": returned_to_pool,
                 "errors": errors,
-                "message": f"Stopped {len(stopped_containers)} containers for room {room_name}"
+                "message": f"Processed {len(stopped_containers) + len(returned_to_pool)} containers for room {room_name} ({len(returned_to_pool)} returned to pool, {len(stopped_containers)} stopped)"
             }
             
         except Exception as e:

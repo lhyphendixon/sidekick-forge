@@ -80,6 +80,53 @@ services:
     profiles:
       - build
 
+  # Agent worker service - handles LiveKit agent dispatches
+  agent-worker:
+    image: autonomite/agent-runtime:latest
+    container_name: autonomite-agent-worker
+    env_file:
+      - /opt/autonomite-saas/env/.env
+    environment:
+      - AGENT_SLUG=session-agent-rag  # Default agent name
+      - CLIENT_ID=default
+      - LIVEKIT_URL=wss://litebridge-hw6srhvi.livekit.cloud
+      - LIVEKIT_API_KEY=APIUtuiQ47BQBsk
+      - LIVEKIT_API_SECRET=rVdSevKfORf5hNfvrsek4joeyrwjhdbkC1HIBsdfQcjM
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=INFO
+      - DEEPGRAM_API_KEY=test-deepgram-key
+      - OPENAI_API_KEY=sk-test-key-for-development
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - ELEVEN_LABS_API_KEY=${ELEVEN_LABS_API_KEY}
+      - CARTESIA_API_KEY=${CARTESIA_API_KEY}
+    volumes:
+      - /opt/autonomite-saas/agent-runtime/session_agent_rag.py:/app/session_agent_rag.py:ro
+    networks:
+      - autonomite-network
+      - autonomite-agents-network
+    depends_on:
+      - redis
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
 networks:
   autonomite-network:
     driver: bridge

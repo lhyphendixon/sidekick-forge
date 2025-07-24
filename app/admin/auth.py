@@ -155,7 +155,7 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
     # Development mode bypass
     if os.getenv("DEVELOPMENT_MODE", "true") == "true":
         return {
-            "user_id": "dev-admin",
+            "user_id": "351bb07b-03fc-4fb4-b09b-748ef8a72084",  # Use the actual user_id that owns the documents
             "email": "admin@autonomite.ai",
             "role": "superadmin",
             "auth_method": "development",
@@ -202,7 +202,7 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
         # For development, allow bypass
         if os.getenv("DEVELOPMENT_MODE") == "true":
             return {
-                "user_id": "dev-admin",
+                "user_id": "351bb07b-03fc-4fb4-b09b-748ef8a72084",  # Use the actual user_id that owns the documents
                 "email": "dev@autonomite.ai",
                 "role": "superadmin",
                 "auth_method": "development"

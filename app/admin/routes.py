@@ -1,5 +1,5 @@
 from fastapi.responses import RedirectResponse
-from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile
+from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from typing import Dict, Any, List, Optional
@@ -2078,6 +2078,7 @@ async def set_preview_mode(
 @router.post("/agents/preview/{client_id}/{agent_slug}/voice-start")
 async def start_voice_preview(
     request: Request,
+    background_tasks: BackgroundTasks,
     client_id: str,
     agent_slug: str,
     session_id: str = Form(...),
@@ -2090,16 +2091,33 @@ async def start_voice_preview(
         from app.core.dependencies import get_agent_service
         from app.integrations.livekit_client import livekit_manager
         
-        # Generate a unique room name for this preview
-        room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
+        # Generate a unique room name for this preview, but cache it by session to prevent duplicates
+        cache_key = f"preview_room_{client_id}_{agent_slug}_{session_id}"
+        room_name = request.app.state.preview_rooms.get(cache_key) if hasattr(request.app.state, 'preview_rooms') else None
+        
+        if not room_name:
+            room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
+            # Cache the room name for this session
+            if not hasattr(request.app.state, 'preview_rooms'):
+                request.app.state.preview_rooms = {}
+            request.app.state.preview_rooms[cache_key] = room_name
+            logger.info(f"🎯 Generated new preview room: {room_name} for session {session_id}")
+        else:
+            logger.info(f"♻️ Reusing cached preview room: {room_name} for session {session_id}")
         
         # Create trigger request for voice mode
+        # Use the actual admin user ID for RAG context
+        admin_user_id = admin_user.get('user_id') or admin_user.get('id')
+        if not admin_user_id:
+            # Fallback for preview
+            admin_user_id = f"admin_preview_{admin_user.get('email', 'user')}"
+        
         trigger_request = TriggerAgentRequest(
             agent_slug=agent_slug,
             client_id=client_id if client_id != "global" else None,  # Let trigger endpoint handle global agents
             mode=TriggerMode.VOICE,
             room_name=room_name,
-            user_id=f"admin_preview_{admin_user.get('id', 'user')}",
+            user_id=admin_user_id,  # Use actual admin user ID for RAG
             session_id=session_id,
             conversation_id=session_id
         )
@@ -2107,37 +2125,48 @@ async def start_voice_preview(
         # Get agent service to trigger the agent
         agent_service = get_agent_service()
         
-        # Trigger the agent in voice mode with a shorter timeout
+        # Trigger the agent in voice mode
+        logger.info(f"Triggering agent {agent_slug} for room {room_name}")
         
-        # Create a task for the trigger but don't wait for health checks
-        import asyncio
-        trigger_task = asyncio.create_task(
-            trigger_agent(trigger_request, agent_service=agent_service)
-        )
-        
-        # Wait for the trigger to complete (increased timeout for container creation)
+        # Call trigger_agent directly (synchronously)
         try:
-            await asyncio.wait_for(trigger_task, timeout=15.0)  # Increased from 5 to 15 seconds
-            result = trigger_task.result()
-        except asyncio.TimeoutError:
-            # Cancel the task if it times out
-            trigger_task.cancel()
-            logger.error(f"Trigger timed out after 15 seconds for room {room_name}")
+            result = await trigger_agent(trigger_request, http_request=request, background_tasks=background_tasks, agent_service=agent_service)
+            logger.info(f"Trigger result type: {type(result)}")
+            logger.info(f"Trigger result: {result if isinstance(result, dict) else 'Object with success=' + str(getattr(result, 'success', 'NO SUCCESS ATTR'))}")
             
-            # Don't proceed without the agent - return error
-            raise Exception("Failed to start agent container within timeout. Please try again.")
+            # This line was causing the error - trying to access .success on a dict
+            if isinstance(result, dict):
+                logger.info(f"Result is dict, success={result.get('success')}")
+            else:
+                logger.info(f"Result is object, success={result.success}")
+        except Exception as e:
+            logger.error(f"Error triggering agent: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
         
-        # Extract the response data
-        if result.success and result.data:
-            livekit_config = result.data.get("livekit_config", {})
+        # Extract the response data - handle both dict and object responses
+        if isinstance(result, dict):
+            # Handle dict response (from our voice mode fix)
+            success = result.get("success", False)
+            data = result.get("data", {})
+            message = result.get("message", "")
+        else:
+            # Handle object response
+            success = result.success
+            data = result.data
+            message = result.message if hasattr(result, 'message') else ""
+            
+        if success and data:
+            livekit_config = data.get("livekit_config", {})
             user_token = livekit_config.get("user_token", "")
             server_url = livekit_config.get("server_url", "")
             
             # Log what we're sending to the template
-            logger.info(f"Voice preview starting - Room: {room_name}, Server: {server_url}, Token: {user_token[:50]}...")
+            logger.info(f"Voice preview starting - Room: {room_name}, Server: {server_url}, Token: {user_token[:50] if user_token else 'No token'}...")
             
             # Return voice interface with LiveKit client
-            return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
+            return templates.TemplateResponse("admin/partials/voice_preview_live_v2.html", {
                 "request": request,
                 "room_name": room_name,
                 "server_url": server_url,
@@ -2147,7 +2176,7 @@ async def start_voice_preview(
                 "session_id": session_id
             })
         else:
-            error_msg = result.message if hasattr(result, 'message') else "Failed to start voice session"
+            error_msg = message or "Failed to start voice session"
             raise Exception(error_msg)
             
     except Exception as e:
@@ -2161,6 +2190,100 @@ async def start_voice_preview(
         })
 
 
+@router.get("/agents/preview/{client_id}/{agent_slug}/voice-status")
+async def get_voice_status(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    room_name: str,
+    session_id: str
+):
+    """Check the status of voice agent container creation"""
+    logger.info(f"Voice status check for room {room_name}, session {session_id}")
+    try:
+        import json
+        import os
+        
+        # Check the status file
+        status_file = f"/tmp/voice_trigger_{room_name}.status"
+        
+        if not os.path.exists(status_file):
+            logger.error(f"Status file not found: {status_file}")
+            # Default: show error
+            return HTMLResponse('''
+                <div class="h-96 flex items-center justify-center">
+                    <div class="text-center">
+                        <p class="text-red-500 mb-2">Session not found</p>
+                        <button onclick="location.reload()" class="px-4 py-2 bg-dark-elevated rounded">
+                            Try Again
+                        </button>
+                    </div>
+                </div>
+            ''')
+        
+        # Read the status
+        with open(status_file, 'r') as f:
+            content = f.read()
+        
+        if content == "pending":
+            # Still processing
+            return templates.TemplateResponse("admin/partials/voice_preview_loading.html", {
+                "request": request,
+                "room_name": room_name,
+                "agent_slug": agent_slug,
+                "client_id": client_id,
+                "session_id": session_id,
+                "message": "Container starting up..."
+            })
+        
+        # Parse the JSON result
+        try:
+            status_data = json.loads(content)
+            
+            if status_data.get("status") == "completed" and status_data.get("success"):
+                data = status_data.get("data", {})
+                livekit_config = data.get("livekit_config", {})
+                user_token = livekit_config.get("user_token", "")
+                server_url = livekit_config.get("server_url", "")
+                
+                # Clean up the status file
+                os.remove(status_file)
+                
+                # Return the actual voice interface
+                return templates.TemplateResponse("admin/partials/voice_preview_live_v2.html", {
+                    "request": request,
+                    "room_name": room_name,
+                    "server_url": server_url,
+                    "user_token": user_token,
+                    "agent_slug": agent_slug,
+                    "client_id": client_id,
+                    "session_id": session_id
+                })
+            else:
+                # Error occurred
+                error_msg = status_data.get("error", "Unknown error")
+                logger.error(f"Voice trigger failed: {error_msg}")
+                os.remove(status_file)
+        except json.JSONDecodeError:
+            logger.error(f"Invalid status file content: {content}")
+        
+        # Default: show error
+        return HTMLResponse('''
+            <div class="h-96 flex items-center justify-center">
+                <div class="text-center">
+                    <p class="text-red-500 mb-2">Failed to start voice agent</p>
+                    <button onclick="location.reload()" class="px-4 py-2 bg-dark-elevated rounded">
+                        Try Again
+                    </button>
+                </div>
+            </div>
+        ''')
+        
+    except Exception as e:
+        logger.error(f"Error checking voice status: {e}")
+        return HTMLResponse(f'<div class="text-red-500">Error: {str(e)}</div>')
+
+
 @router.post("/agents/preview/{client_id}/{agent_slug}/voice-stop")
 async def stop_voice_preview(
     request: Request,
@@ -2171,14 +2294,23 @@ async def stop_voice_preview(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Stop a voice preview session"""
-    # Stop the agent container if room name provided
-    if room_name:
+    # Return container to pool instead of stopping it
+    if room_name and session_id:
         try:
             from app.services.container_manager import container_manager
-            await container_manager.stop_agent_for_room(room_name)
-            logger.info(f"Stopped agent container for room {room_name}")
+            # Extract client ID from room name pattern: preview_clarence-coherence_XXXXXXXX
+            # The client_id is already provided as a parameter
+            
+            # Return container to pool for reuse
+            returned = await container_manager.return_container(client_id, session_id)
+            if returned:
+                logger.info(f"✅ Returned container to pool for client {client_id}, session {session_id}")
+            else:
+                # Fallback to stopping if return fails
+                await container_manager.stop_agent_for_room(room_name)
+                logger.info(f"Stopped agent container for room {room_name}")
         except Exception as e:
-            logger.error(f"Error stopping agent container: {e}")
+            logger.error(f"Error handling container: {e}")
     
     # Get agent to display correct voice settings
     from app.core.dependencies import get_agent_service
@@ -2528,7 +2660,41 @@ async def admin_update_client(
         logger.info(f"About to update client with API keys: cartesia={update_data.settings.api_keys.cartesia_api_key}, siliconflow={update_data.settings.api_keys.siliconflow_api_key}")
         logger.info(f"Embedding settings: provider={update_data.settings.embedding.provider}, dimension={update_data.settings.embedding.dimension}, form_value='{form.get('embedding_dimension')}'")
         
-        # Update client
+        # Validate API keys before updating
+        from app.services.api_key_validator import api_key_validator
+        
+        # Collect API keys that need validation
+        api_keys_to_validate = {}
+        if update_data.settings.api_keys:
+            keys_dict = update_data.settings.api_keys.dict()
+            for key_name, key_value in keys_dict.items():
+                if key_value and key_name in [
+                    'siliconflow_api_key', 'openai_api_key', 'groq_api_key', 
+                    'cartesia_api_key', 'deepgram_api_key', 'elevenlabs_api_key',
+                    'novita_api_key', 'jina_api_key'
+                ]:
+                    api_keys_to_validate[key_name] = key_value
+        
+        # Validate keys if any are provided
+        if api_keys_to_validate:
+            logger.info(f"Validating {len(api_keys_to_validate)} API keys before saving")
+            validation_results = await api_key_validator.validate_api_keys(api_keys_to_validate)
+            
+            # Check for invalid keys
+            invalid_keys = []
+            for key_name, result in validation_results.items():
+                if not result['valid']:
+                    invalid_keys.append(f"{key_name}: {result['message']}")
+            
+            if invalid_keys:
+                error_msg = "Invalid API keys detected:\\n" + "\\n".join(invalid_keys)
+                logger.warning(f"API key validation failed: {error_msg}")
+                return RedirectResponse(
+                    url=f"/admin/clients/{client_id}?error=" + error_msg.replace('\n', '+').replace(' ', '+'),
+                    status_code=303
+                )
+        
+        # Update client only if validation passes
         updated_client = await client_service.update_client(client_id, update_data)
         
         # Debug: Log the API keys after update

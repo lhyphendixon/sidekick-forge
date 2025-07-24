@@ -1,0 +1,81 @@
+{
+  "success": true,
+  "message": "Agent gpt triggered successfully in TriggerMode.VOICE mode",
+  "data": {
+    "mode": "voice",
+    "room_name": "test-room-final",
+    "platform": "livekit",
+    "agent_context": {
+      "agent_slug": "gpt",
+      "agent_name": "GPT Assistant",
+      "system_prompt": "You are a helpful AI assistant. Be friendly, professional, and concise in your responses.",
+      "voice_settings": {
+        "provider": "livekit",
+        "voice_id": "alloy",
+        "temperature": 0.7,
+        "llm_provider": null,
+        "llm_model": null,
+        "stt_provider": null,
+        "stt_language": "en",
+        "model": null,
+        "output_format": null,
+        "stability": null,
+        "similarity_boost": null,
+        "loudness_normalization": null,
+        "text_normalization": null,
+        "provider_config": {}
+      },
+      "webhooks": {
+        "voice_context_webhook_url": null,
+        "text_context_webhook_url": null
+      },
+      "user_id": "user-123",
+      "session_id": null,
+      "conversation_id": null,
+      "context": {}
+    },
+    "livekit_config": {
+      "server_url": "wss://litebridge-hw6srhvi.livekit.cloud",
+      "user_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJtZXRhZGF0YSI6InsndXNlcl9pZCc6ICd1c2VyLTEyMycsICdjbGllbnRfaWQnOiAnZGY5MWZkMDYtODE2Zi00MjczLWE5MDMtNWE0ODYxMjc3MDQwJ30iLCJ2aWRlbyI6eyJyb29tSm9pbiI6dHJ1ZSwicm9vbSI6InRlc3Qtcm9vbS1maW5hbCIsImNhblB1Ymxpc2giOnRydWUsImNhblN1YnNjcmliZSI6dHJ1ZSwiY2FuUHVibGlzaERhdGEiOnRydWV9LCJyb29tQ29uZmlnIjp7ImFnZW50cyI6W3siYWdlbnROYW1lIjoic2Vzc2lvbi1hZ2VudC1yYWcifV19LCJzdWIiOiJ1c2VyX3VzZXItMTIzIiwiaXNzIjoiQVBJVXR1aVE0N0JRQnNrIiwibmJmIjoxNzUzMzAxODY2LCJleHAiOjE3NTMzMDU0NjZ9.Fxsb6NEakSasom7XkWFhjpMiITH8SlgGSVqWMWYpxG8",
+      "configured": true
+    },
+    "room_info": {
+      "room_name": "test-room-final",
+      "status": "created",
+      "participants": 0,
+      "created_at": "2025-07-23T20:17:45.861402",
+      "max_participants": 10,
+      "metadata": {
+        "agent_name": "GPT Assistant",
+        "user_id": "user-123",
+        "created_by": "autonomite_backend",
+        "created_at": "2025-07-23T20:17:45.566872",
+        "agent_request": {
+          "agent": "session-agent-rag",
+          "namespace": "default"
+        }
+      },
+      "empty_timeout": 1800,
+      "message": "Room test-room-final created successfully and ready for participants"
+    },
+    "container_info": {
+      "status": "error",
+      "container_name": null,
+      "message": "No containers available in warm pool - pool may be at capacity",
+      "dispatch_status": "failed",
+      "dispatch_message": "Container allocation failed - no dispatch scheduled",
+      "error_id": "trigger_endpoint_allocate_container_1753301866",
+      "recovery_suggestions": []
+    },
+    "status": "voice_agent_triggered",
+    "message": "Room test-room-final created with parallel agent dispatch for minimal latency"
+  },
+  "agent_info": {
+    "slug": "gpt",
+    "name": "GPT Assistant",
+    "client_id": "df91fd06-816f-4273-a903-5a4861277040",
+    "client_name": "Autonomite",
+    "voice_provider": "livekit",
+    "voice_id": "alloy"
+  }
+}

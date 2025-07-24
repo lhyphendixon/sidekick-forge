@@ -205,6 +205,7 @@ class AgentDiagnostics:
             # Import required modules
             from app.api.v1.trigger import TriggerAgentRequest, TriggerMode, trigger_agent
             from app.core.dependencies import get_agent_service
+            from fastapi import Request
             
             # Create trigger request
             diag.add_event("prepare", "Creating trigger request")
@@ -220,10 +221,16 @@ class AgentDiagnostics:
             diag.checkpoint("getting_agent_service")
             agent_service = get_agent_service()
             
+            # Create a mock HTTP request for the diagnostic test
+            mock_request = Request(
+                {"type": "http", "method": "POST", "path": "/api/v1/trigger-agent"},
+                receive=lambda: {"type": "http.request", "body": b""}
+            )
+            
             # Trigger agent with timeout
             diag.add_event("trigger", "Triggering agent")
             trigger_task = asyncio.create_task(
-                trigger_agent(trigger_request, agent_service=agent_service)
+                trigger_agent(trigger_request, http_request=mock_request, agent_service=agent_service)
             )
             
             # Wait with timeout

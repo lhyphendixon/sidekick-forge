@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Microphone Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .level-bar { width: 300px; height: 30px; background: #ddd; margin: 20px 0; border-radius: 15px; }
+        .level-fill { height: 100%; background: #4CAF50; border-radius: 15px; transition: width 0.1s; }
+        button { padding: 15px 30px; font-size: 16px; margin: 10px; cursor: pointer; }
+        .status { background: #f9f9f9; padding: 20px; margin: 20px 0; border-radius: 8px; border-left: 4px solid #2196F3; }
+    </style>
+</head>
+<body>
+    <h1>🎤 Simple Microphone Test</h1>
+    <p>This tests your microphone without LiveKit to isolate the issue.</p>
+    
+    <button onclick="startTest()">🚀 Start Microphone Test</button>
+    <button onclick="stopTest()">🛑 Stop Test</button>
+    
+    <div class="status" id="status">Click "Start Microphone Test" to begin...</div>
+    
+    <div style="margin: 30px 0;">
+        <h3>Audio Level:</h3>
+        <div class="level-bar">
+            <div id="levelBar" class="level-fill" style="width: 0%"></div>
+        </div>
+        <p>Level: <span id="level">0</span>% | Peak: <span id="peak">0</span>%</p>
+        <p>Samples processed: <span id="samples">0</span></p>
+    </div>
+    
+    <div id="deviceInfo" style="margin-top: 30px;"></div>
+
+    <script>
+        let audioContext = null;
+        let analyser = null;
+        let microphone = null;
+        let monitoring = false;
+        let sampleCount = 0;
+        let peakLevel = 0;
+
+        async function startTest() {
+            const statusEl = document.getElementById('status');
+            
+            try {
+                statusEl.innerHTML = '🎤 Requesting microphone access...';
+                
+                // Get list of audio devices
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioInputs = devices.filter(d => d.kind === 'audioinput');
+                
+                let deviceInfo = '<h3>Available Microphones:</h3><ul>';
+                audioInputs.forEach((device, i) => {
+                    deviceInfo += `<li>${i + 1}. ${device.label || `Microphone ${i + 1}`}</li>`;
+                });
+                deviceInfo += '</ul>';
+                document.getElementById('deviceInfo').innerHTML = deviceInfo;
+                
+                // Get microphone with constraints
+                const constraints = {
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        sampleRate: 48000
+                    }
+                };
+                
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                statusEl.innerHTML = '✅ Microphone access granted';
+                
+                // Create audio context
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                await audioContext.resume();
+                
+                // Connect stream to analyser
+                microphone = audioContext.createMediaStreamSource(stream);
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                analyser.smoothingTimeConstant = 0.3;
+                microphone.connect(analyser);
+                
+                statusEl.innerHTML = '✅ Audio analysis setup complete<br><strong>🗣️ SPEAK NOW to test your microphone!</strong>';
+                
+                // Start monitoring
+                monitoring = true;
+                sampleCount = 0;
+                peakLevel = 0;
+                monitorAudio();
+                
+            } catch (error) {
+                statusEl.innerHTML = `❌ Error: ${error.message}<br>Make sure to allow microphone access when prompted.`;
+                console.error('Microphone test error:', error);
+            }
+        }
+        
+        function monitorAudio() {
+            if (!monitoring || !analyser) return;
+            
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            
+            // Get frequency data
+            analyser.getByteFrequencyData(dataArray);
+            
+            // Calculate average level
+            let sum = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                sum += dataArray[i];
+            }
+            const average = sum / bufferLength;
+            const percentage = Math.round((average / 255) * 100);
+            
+            // Update peak
+            if (percentage > peakLevel) {
+                peakLevel = percentage;
+            }
+            
+            // Update UI
+            document.getElementById('level').textContent = percentage;
+            document.getElementById('peak').textContent = peakLevel;
+            document.getElementById('levelBar').style.width = percentage + '%';
+            document.getElementById('samples').textContent = ++sampleCount;
+            
+            // Color code the bar based on level
+            const bar = document.getElementById('levelBar');
+            if (percentage > 50) {
+                bar.style.background = '#4CAF50'; // Green - good level
+            } else if (percentage > 20) {
+                bar.style.background = '#FF9800'; // Orange - medium level
+            } else if (percentage > 5) {
+                bar.style.background = '#2196F3'; // Blue - low level
+            } else {
+                bar.style.background = '#9E9E9E'; // Gray - very low/no signal
+            }
+            
+            requestAnimationFrame(monitorAudio);
+        }
+        
+        function stopTest() {
+            monitoring = false;
+            
+            if (microphone && microphone.mediaStream) {
+                microphone.mediaStream.getTracks().forEach(track => track.stop());
+            }
+            
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            
+            document.getElementById('status').innerHTML = '🛑 Test stopped';
+            document.getElementById('level').textContent = '0';
+            document.getElementById('levelBar').style.width = '0%';
+        }
+        
+        // Cleanup on page close
+        window.addEventListener('beforeunload', stopTest);
+    </script>
+</body>
+</html>

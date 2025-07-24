@@ -15,6 +15,7 @@ from app.utils.exceptions import APIException
 from app.integrations.supabase_client import supabase_manager
 from app.integrations.livekit_client import livekit_manager
 from app.services.container_manager import container_manager
+from app.services.background_tasks import background_task_manager
 import redis.asyncio as aioredis
 from prometheus_client import Counter, Histogram, make_asgi_app, generate_latest
 
@@ -44,6 +45,12 @@ async def lifespan(app: FastAPI):
     await supabase_manager.initialize()
     await livekit_manager.initialize()
     await container_manager.initialize()
+    
+    # Initialize container pool manager for warm pools
+    from app.services.container_pool_manager import get_container_pool_manager
+    pool_manager = get_container_pool_manager()
+    await pool_manager.start()
+    logger.info("✅ Container pool manager started with warm pools")
     
     # Initialize services for proxy endpoints
     from app.services.client_service_supabase_enhanced import ClientService
@@ -76,12 +83,23 @@ async def lifespan(app: FastAPI):
     
     wordpress_sites_api.wordpress_service = wordpress_site_service
     
+    # Start background tasks
+    await background_task_manager.start()
+    
     logger.info("All services initialized successfully")
     
     yield
     
     # Shutdown
     logger.info("Shutting down Autonomite SaaS Backend")
+    
+    # Stop background tasks
+    await background_task_manager.stop()
+    
+    # Stop container pool manager
+    await pool_manager.stop()
+    logger.info("✅ Container pool manager stopped")
+    
     await supabase_manager.close()
     await livekit_manager.close()
     if redis_client:
@@ -191,17 +209,32 @@ async def health_check():
 @app.get("/health/detailed", tags=["health"])
 async def detailed_health_check():
     """Detailed health check with service status"""
-    checks = {
-        "supabase": await supabase_manager.health_check(),
-        "livekit": await livekit_manager.health_check(),
-        "database": await supabase_manager.check_database_connection()
+    # Get health status for each service
+    supabase_healthy = await supabase_manager.health_check()
+    livekit_healthy = await livekit_manager.health_check()
+    database_healthy = await supabase_manager.check_database_connection()
+    
+    # Format in the expected structure
+    services = {
+        "supabase": {
+            "status": "healthy" if supabase_healthy else "unhealthy",
+            "available": supabase_healthy
+        },
+        "livekit": {
+            "status": "healthy" if livekit_healthy else "unhealthy",
+            "available": livekit_healthy
+        },
+        "database": {
+            "status": "healthy" if database_healthy else "unhealthy",
+            "available": database_healthy
+        }
     }
     
-    overall_status = "healthy" if all(checks.values()) else "degraded"
+    overall_status = "healthy" if all(s["available"] for s in services.values()) else "degraded"
     
     return {
         "status": overall_status,
-        "checks": checks,
+        "services": services,
         "timestamp": datetime.utcnow().isoformat()
     }
 

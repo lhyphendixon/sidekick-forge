@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LiveKit Audio Pipeline Diagnostic</title>
+    <script src="https://unpkg.com/livekit-client@2.15.3/dist/livekit-client.umd.js"></script>
+    <script>
+        // Wait for LiveKit SDK to load
+        window.addEventListener('load', function() {
+            if (typeof LiveKitSDK === 'undefined') {
+                document.getElementById('status').innerHTML = '❌ LiveKit SDK failed to load. Trying alternative...';
+                // Try loading from CDN alternative
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/livekit-client@2.15.3/dist/livekit-client.umd.js';
+                script.onload = () => {
+                    if (typeof LiveKitSDK !== 'undefined') {
+                        document.getElementById('status').innerHTML = '✅ LiveKit SDK loaded successfully from CDN alternative';
+                    } else {
+                        document.getElementById('status').innerHTML = '❌ LiveKit SDK still not available. Check console for errors.';
+                    }
+                };
+                script.onerror = () => {
+                    document.getElementById('status').innerHTML = '❌ Failed to load LiveKit SDK from both sources';
+                };
+                document.head.appendChild(script);
+            } else {
+                document.getElementById('status').innerHTML = '✅ LiveKit SDK loaded successfully';
+            }
+        });
+    </script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .status { background: #f0f0f0; padding: 20px; margin: 20px 0; border-radius: 5px; }
+        .metrics { display: flex; gap: 20px; margin: 20px 0; }
+        .metric { padding: 10px; background: #e8f4f8; border-radius: 5px; }
+        .buttons { margin: 20px 0; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        .level-bar { width: 200px; height: 20px; background: #ddd; margin: 10px 0; }
+        .level-fill { height: 100%; background: #4CAF50; transition: width 0.1s; }
+    </style>
+</head>
+<body>
+    <h2>🎤 LiveKit Audio Pipeline Diagnostic</h2>
+    <p>This tool tests the complete audio pipeline from microphone to LiveKit to help diagnose audio issues.</p>
+    
+    <div class="buttons">
+        <button onclick="startDiagnostic()">🚀 Start Audio Test</button>
+        <button onclick="stopDiagnostic()">🛑 Stop Test</button>
+    </div>
+    
+    <div class="status" id="status">Click "Start Audio Test" to begin diagnostic...</div>
+    
+    <div class="metrics">
+        <div class="metric">
+            <strong>Raw Audio Level:</strong><br>
+            <div class="level-bar"><div id="rawLevelBar" class="level-fill" style="width: 0%"></div></div>
+            <span id="rawLevel">0</span>%
+        </div>
+        <div class="metric">
+            <strong>LiveKit Audio Level:</strong><br>
+            <div class="level-bar"><div id="livekitLevelBar" class="level-fill" style="width: 0%"></div></div>
+            <span id="livekitLevel">0</span>%
+        </div>
+        <div class="metric">
+            <strong>Track State:</strong><br>
+            <span id="trackState">Not started</span>
+        </div>
+        <div class="metric">
+            <strong>Room State:</strong><br>
+            <span id="roomState">Disconnected</span>
+        </div>
+    </div>
+
+    <script>
+        let audioContext = null;
+        let analyser = null;
+        let micTrack = null;
+        let room = null;
+        let monitoring = false;
+
+        async function startDiagnostic() {
+            const statusEl = document.getElementById('status');
+            
+            // Check if LiveKit SDK is available
+            if (typeof LiveKitSDK === 'undefined') {
+                statusEl.innerHTML = "❌ LiveKit SDK not loaded. Please refresh the page and try again.";
+                return;
+            }
+            
+            try {
+                statusEl.innerHTML = "🎤 Step 1: Requesting microphone access...";
+                
+                // Step 1: Get microphone with explicit constraints
+                micTrack = await LiveKitSDK.createLocalAudioTrack({
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: 48000,
+                    channelCount: 1
+                });
+                
+                document.getElementById('trackState').textContent = '✅ Track Created';
+                statusEl.innerHTML += "<br>✅ Microphone track created successfully";
+                
+                // Step 2: Create AudioContext for raw level monitoring
+                statusEl.innerHTML += "<br>🔊 Step 2: Setting up audio analysis...";
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                await audioContext.resume(); // Ensure context is running
+                
+                const source = audioContext.createMediaStreamSource(micTrack.mediaStream);
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                analyser.smoothingTimeConstant = 0.8;
+                source.connect(analyser);
+                
+                statusEl.innerHTML += "<br>✅ Audio analysis setup complete";
+                
+                // Step 3: Start monitoring raw audio levels
+                monitoring = true;
+                monitorAudioLevels();
+                
+                statusEl.innerHTML += "<br>🎯 Step 3: Raw audio monitoring started - **SPEAK NOW** to test!";
+                
+                // Wait 3 seconds to test raw audio
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                // Step 4: Test LiveKit room connection
+                statusEl.innerHTML += "<br>🌐 Step 4: Connecting to LiveKit room...";
+                room = new LiveKitSDK.Room({
+                    adaptiveStream: true,
+                    dynacast: true,
+                    logLevel: 'debug'
+                });
+                
+                // Get token from backend
+                const response = await fetch('/api/v1/trigger-agent', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        agent_slug: 'clarence-coherence',
+                        mode: 'voice',
+                        room_name: 'audio_diagnostic_test',
+                        user_id: 'diagnostic_user',
+                        client_id: 'df91fd06-816f-4273-a903-5a4861277040'
+                    })
+                });
+                
+                const data = await response.json();
+                const serverUrl = data.data.livekit_config.server_url;
+                const token = data.data.livekit_config.user_token;
+                
+                await room.connect(serverUrl, token);
+                document.getElementById('roomState').textContent = '✅ Connected';
+                statusEl.innerHTML += "<br>✅ Connected to LiveKit room successfully";
+                
+                // Step 5: Publish track and monitor LiveKit levels  
+                statusEl.innerHTML += "<br>📡 Step 5: Publishing audio track to LiveKit...";
+                
+                await room.localParticipant.publishTrack(micTrack, {
+                    name: 'diagnostic-microphone',
+                    codec: 'opus'
+                });
+                
+                statusEl.innerHTML += "<br>✅ Audio track published to LiveKit";
+                document.getElementById('trackState').textContent = '✅ Published to LiveKit';
+                
+                // Monitor LiveKit audio levels
+                room.on('activeSpeakersChanged', (speakers) => {
+                    const localSpeaker = speakers.find(s => s.identity === room.localParticipant.identity);
+                    const level = localSpeaker ? Math.round(localSpeaker.audioLevel * 100) : 0;
+                    document.getElementById('livekitLevel').textContent = level;
+                    document.getElementById('livekitLevelBar').style.width = level + '%';
+                });
+                
+                // Additional LiveKit events for debugging
+                room.on('trackPublished', (pub, participant) => {
+                    console.log('Track published:', pub.trackSid, pub.kind);
+                });
+                
+                room.on('trackSubscribed', (track, pub, participant) => {
+                    console.log('Track subscribed:', pub.trackSid, participant.identity);
+                });
+                
+                statusEl.innerHTML += "<br><br>🎉 <strong>Diagnostic Complete!</strong>";
+                statusEl.innerHTML += "<br>📢 <strong>Now speak loudly and watch both audio level meters above!</strong>";
+                statusEl.innerHTML += "<br><br>📊 <strong>Expected Results:</strong>";
+                statusEl.innerHTML += "<br>• Raw Audio Level should move when you speak (tests microphone)";
+                statusEl.innerHTML += "<br>• LiveKit Audio Level should also move (tests pipeline)";
+                statusEl.innerHTML += "<br><br>🔍 If only Raw Audio moves but LiveKit doesn't, there's a pipeline issue.";
+                
+            } catch (error) {
+                statusEl.innerHTML += `<br><br>❌ <strong>Error:</strong> ${error.message}`;
+                console.error('Diagnostic error:', error);
+            }
+        }
+        
+        function monitorAudioLevels() {
+            if (!monitoring || !analyser) return;
+            
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
+            const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+            const percentage = Math.round((average / 255) * 100);
+            
+            document.getElementById('rawLevel').textContent = percentage;
+            document.getElementById('rawLevelBar').style.width = percentage + '%';
+            
+            requestAnimationFrame(monitorAudioLevels);
+        }
+        
+        function stopDiagnostic() {
+            monitoring = false;
+            
+            if (room) {
+                room.disconnect();
+                room = null;
+            }
+            
+            if (micTrack) {
+                micTrack.stop();
+                micTrack = null;
+            }
+            
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            
+            document.getElementById('status').innerHTML = "🛑 Diagnostic stopped";
+            document.getElementById('trackState').textContent = 'Stopped';
+            document.getElementById('roomState').textContent = 'Disconnected';
+            document.getElementById('rawLevel').textContent = '0';
+            document.getElementById('livekitLevel').textContent = '0';
+            document.getElementById('rawLevelBar').style.width = '0%';
+            document.getElementById('livekitLevelBar').style.width = '0%';
+        }
+        
+        // Auto-cleanup on page unload
+        window.addEventListener('beforeunload', stopDiagnostic);
+    </script>
+</body>
+</html>

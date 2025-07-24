@@ -311,3 +311,96 @@ async def scale_container(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+@router.post("/return-to-pool", response_model=APIResponse[SuccessResponse])
+async def return_container_to_pool(
+    session_id: str = Query(..., description="Session ID to return to pool"),
+    auth=Depends(require_site_auth)
+):
+    """
+    Return a container to the pool for reuse after a conversation ends
+    """
+    try:
+        # Return the container to the pool
+        success = await container_manager.return_container(auth.site_id, session_id)
+        
+        if success:
+            return APIResponse(
+                success=True,
+                data=SuccessResponse(
+                    message=f"Container for session {session_id} returned to pool successfully"
+                )
+            )
+        else:
+            return APIResponse(
+                success=False,
+                data=SuccessResponse(
+                    message=f"Failed to return container for session {session_id} to pool"
+                )
+            )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.post("/cleanup-pool", response_model=APIResponse[SuccessResponse])
+async def cleanup_client_pool(auth=Depends(require_site_auth)):
+    """
+    Clean up all pooled containers for the authenticated site
+    """
+    try:
+        cleaned_count = await container_manager.cleanup_client_pool(auth.site_id)
+        
+        return APIResponse(
+            success=True,
+            data=SuccessResponse(
+                message=f"Cleaned up {cleaned_count} pooled containers for site {auth.site_id}"
+            )
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.get("/pool-status", response_model=APIResponse)
+async def get_pool_status(auth=Depends(require_site_auth)):
+    """
+    Get the current status of the container pool for the authenticated site
+    """
+    try:
+        pool_size = len(container_manager.pools.get(auth.site_id, []))
+        active_sessions = len(container_manager.active_containers.get(auth.site_id, {}))
+        
+        # Get reuse stats for pooled containers
+        pool_containers = container_manager.pools.get(auth.site_id, [])
+        reuse_stats = []
+        for container_name in pool_containers:
+            reuse_count = container_manager.container_reuse_counts.get(container_name, 0)
+            reuse_stats.append({
+                "container_name": container_name,
+                "reuse_count": reuse_count,
+                "remaining_reuses": container_manager.max_reuse_count - reuse_count
+            })
+        
+        return APIResponse(
+            success=True,
+            data={
+                "site_id": auth.site_id,
+                "pool_size": pool_size,
+                "active_sessions": active_sessions,
+                "max_pool_size": container_manager.max_pool_size,
+                "max_reuse_count": container_manager.max_reuse_count,
+                "pooled_containers": reuse_stats,
+                "pool_utilization": f"{(active_sessions / (pool_size + active_sessions) * 100) if (pool_size + active_sessions) > 0 else 0:.1f}%"
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )

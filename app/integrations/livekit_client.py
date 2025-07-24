@@ -56,7 +56,7 @@ class LiveKitManager:
         permissions: Optional[api.VideoGrants] = None,
         ttl: int = 3600,  # 1 hour default
         enable_agent_dispatch: bool = True,
-        agent_name: str = "minimal-agent"
+        agent_name: str = "session-agent-rag"
     ) -> str:
         """Create a LiveKit access token with optional agent dispatch"""
         if not permissions:
@@ -173,12 +173,18 @@ class LiveKitManager:
                 api_secret=self.api_secret
             )
             
-            # Create agent dispatch
+            # Create agent dispatch with metadata
+            dispatch_metadata = json.dumps({
+                "agent_name": agent_name,
+                "room": room_name,
+                "timestamp": datetime.now().isoformat()
+            })
+            
             dispatch = await livekit_api.agent_dispatch.create_dispatch(
                 api.CreateAgentDispatchRequest(
                     agent_name=agent_name,
                     room=room_name,
-                    metadata=""
+                    metadata=dispatch_metadata
                 )
             )
             

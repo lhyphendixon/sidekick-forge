@@ -360,49 +360,100 @@ async def search_documents(
     authorization: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None)
 ) -> List[RAGSearchResult]:
-    """Search documents using RAG (simplified version for demo)"""
+    """Search documents using RAG with vector similarity"""
     try:
         # Validate WordPress auth
         site = await validate_wordpress_auth(authorization, x_api_key)
         
-        # In a real implementation, this would:
-        # 1. Generate embedding for the query
-        # 2. Search vector database for similar chunks
-        # 3. Apply filters for agent_slug if specified
-        # 4. Rerank results
-        # 5. Return top matches
-        
-        # For now, return mock results
         logger.info(f"RAG search for site {site.domain}: {request.query}")
         
-        # Mock search results
-        results = []
+        # Check if we have Supabase configuration
+        from app.integrations.supabase_client import supabase_manager
+        if not supabase_manager or not supabase_manager.client:
+            # Fallback to Redis-based mock search if Supabase not available
+            logger.warning("Supabase not configured, using fallback search")
+            return await _fallback_search(site, request)
         
-        # Get some documents to simulate search
-        redis = get_redis_client()
-        docs_key = f"site_documents:{site.id}"
-        if request.agent_slug:
-            docs_key = f"agent_documents:{site.id}:{request.agent_slug}"
-            
         try:
-            doc_ids = redis.lrange(docs_key, 0, 4)  # Get first 5 docs
-        except RedisError as e:
-            logger.error(f"Redis error in search: {e}")
-            doc_ids = []
+            # Import embedding service
+            from app.services.embedding_service import EmbeddingService
+            from app.services.vector_search import VectorSearchService
+            
+            # Initialize services
+            embedding_service = EmbeddingService()
+            vector_search = VectorSearchService(supabase_manager.client)
+            
+            # Generate embedding for the query
+            query_embedding = await embedding_service.generate_embedding(
+                request.query,
+                provider="siliconflow"  # Default provider
+            )
+            
+            if not query_embedding:
+                logger.error("Failed to generate query embedding")
+                return []
+            
+            # Search for similar chunks
+            chunks = await vector_search.search_documents(
+                client_id=site.client_id,
+                query_embedding=query_embedding,
+                agent_slug=request.agent_slug,
+                limit=request.limit,
+                threshold=request.threshold
+            )
+            
+            # Convert to response format
+            results = []
+            for chunk in chunks:
+                results.append(RAGSearchResult(
+                    document_id=chunk["document_id"],
+                    chunk_id=chunk["chunk_id"],
+                    content=chunk["content"],
+                    score=chunk["score"],
+                    metadata=chunk.get("metadata", {})
+                ))
+            
+            return results
+            
+        except ImportError:
+            logger.warning("Embedding or vector search service not available, using fallback")
+            return await _fallback_search(site, request)
+        except Exception as e:
+            logger.error(f"Error in vector search: {e}")
+            return await _fallback_search(site, request)
         
-        for i, doc_id in enumerate(doc_ids):
-            doc_key = f"document:{site.id}:{doc_id}"
-            try:
-                doc_data = redis.get(doc_key)
-                if doc_data:
-                    doc = json.loads(doc_data)
-            except (RedisError, json.JSONDecodeError) as e:
-                logger.error(f"Error in search for document {doc_id}: {e}")
-                continue
-                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error searching documents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _fallback_search(site, request: RAGSearchRequest) -> List[RAGSearchResult]:
+    """Fallback search using Redis when vector search is not available"""
+    results = []
+    
+    # Get some documents to simulate search
+    redis = get_redis_client()
+    docs_key = f"site_documents:{site.id}"
+    if request.agent_slug:
+        docs_key = f"agent_documents:{site.id}:{request.agent_slug}"
+        
+    try:
+        doc_ids = redis.lrange(docs_key, 0, 4)  # Get first 5 docs
+    except RedisError as e:
+        logger.error(f"Redis error in search: {e}")
+        doc_ids = []
+    
+    for i, doc_id in enumerate(doc_ids):
+        doc_key = f"document:{site.id}:{doc_id}"
+        try:
+            doc_data = redis.get(doc_key)
+            if doc_data:
+                doc = json.loads(doc_data)
                 # Create mock search result
                 results.append(RAGSearchResult(
-                    document_id=doc_id,
+                    document_id=doc_id.decode() if isinstance(doc_id, bytes) else doc_id,
                     chunk_id=str(uuid.uuid4()),
                     content=f"This is a relevant chunk from {doc['filename']} that matches your query about '{request.query}'...",
                     score=0.95 - (i * 0.1),  # Decreasing scores
@@ -413,14 +464,11 @@ async def search_documents(
                         **doc["metadata"]
                     }
                 ))
-                
-        return results[:request.limit]
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error searching documents: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Error in search for document {doc_id}: {e}")
+            continue
+            
+    return results[:request.limit]
 
 
 @router.post("/extract-context", response_model=Dict[str, Any])

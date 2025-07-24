@@ -69,14 +69,20 @@
 </div>
 
 <script>
-// LiveKit connection variables
-let room;
-let localParticipant;
-let audioTrack;
-let isMuted = false;
+// Wrap in a check to prevent redeclaration errors
+if (!window.voicePreviewInitialized) {
+    window.voicePreviewInitialized = true;
+    
+    // LiveKit connection variables - use window scope
+    window.livekitVoicePreview = {
+        room: null,
+        localParticipant: null,
+        audioTrack: null,
+        isMuted: false
+    };
 
-// Initialize LiveKit connection
-async function initializeLiveKit() {
+    // Initialize LiveKit connection - make it global
+    window.initializeLiveKit = async function() {
     try {
         // Check if LiveKit client is loaded - use the consistent global variable
         let LiveKitSDK;
@@ -134,7 +140,7 @@ async function initializeLiveKit() {
         }
         
         // Create room instance
-        room = new LiveKitSDK.Room({
+        window.livekitVoicePreview.room = new LiveKitSDK.Room({
             // Adaptive stream for better performance
             adaptiveStream: true,
             // Automatic quality adjustment
@@ -142,6 +148,7 @@ async function initializeLiveKit() {
             // Log level for debugging
             logLevel: 'warn'
         });
+        room = window.livekitVoicePreview.room;
         
         // Set up event handlers
         room.on('connected', handleConnected);
@@ -200,14 +207,98 @@ async function handleConnected() {
     // Enable mute button
     document.getElementById('muteBtn').disabled = false;
     
-    // Request microphone permission and publish audio
+    // New: Poll participant count every 5s for diagnostics
+    const participantPoll = setInterval(async () => {
+        if (!room) return;
+        console.log(`Current participants: ${room.participantCount}`);
+        if (room.participantCount > 1) {
+            console.log('Agent has joined!');
+            clearInterval(participantPoll);  // Stop polling once joined
+        }
+    }, 5000);
+    
+    // Request microphone permission and publish audio with enhanced error handling
+    try {
+        console.log('🎤 Requesting microphone permission...');
+        
+        // First check if we already have permission
+        const permissionStatus = await navigator.permissions.query({ name: 'microphone' }).catch(() => null);
+        if (permissionStatus) {
+            console.log('Microphone permission status:', permissionStatus.state);
+        }
+        
+        // Enable microphone with retry logic
+        let retries = 0;
+        const maxRetries = 3;
+        let micEnabled = false;
+        
+        while (!micEnabled && retries < maxRetries) {
+            try {
+                await room.localParticipant.setMicrophoneEnabled(true);
+                micEnabled = true;
+                console.log('✅ Microphone enabled successfully');
+            } catch (micError) {
+                retries++;
+                console.error(`Microphone attempt ${retries} failed:`, micError);
+                
+                if (micError.name === 'NotAllowedError' || micError.message.includes('Permission denied')) {
+                    updateMicStatus('Microphone: Permission denied');
+                    updateStatus('error', 'Please allow microphone access and refresh the page');
+                    throw new Error('Microphone permission denied. Please allow access in your browser settings.');
+                } else if (micError.name === 'NotFoundError' || micError.message.includes('no microphone')) {
+                    updateMicStatus('Microphone: Not found');
+                    updateStatus('error', 'No microphone detected');
+                    throw new Error('No microphone found. Please connect a microphone.');
+                } else if (retries < maxRetries) {
+                    console.log(`Retrying microphone enable in 1 second...`);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        }
+        
+        if (!micEnabled) {
+            throw new Error('Failed to enable microphone after ' + maxRetries + ' attempts');
+        }
+        
+        updateMicStatus('Microphone: Active');
+        document.getElementById('audioLevelContainer').classList.remove('hidden');
+        
+        // Verify track publication
+        setTimeout(() => {
+            const audioPublication = Array.from(room.localParticipant.trackPublications.values())
+                .find(pub => pub.kind === 'audio');
+            
+            if (audioPublication && audioPublication.track) {
+                console.log('✅ Audio track verified as published');
+                updateStatus('ready', 'Connected - Agent dispatched in parallel, should join shortly...');
+            } else {
+                console.warn('⚠️ Audio track not found in publications');
+                updateMicStatus('Microphone: Track not published');
+            }
+        }, 1000);
+        
+    } catch (error) {
+        console.error('Microphone error:', error);
+        updateMicStatus('Microphone: ' + error.message);
+        
+        // Show user-friendly error with retry button
+        const retryBtn = '<button onclick="retryMicrophone()" class="ml-2 text-brand-teal hover:underline">Retry</button>';
+        updateStatus('error', error.message + retryBtn);
+    }
+}
+
+// Add retry function
+window.retryMicrophone = async function() {
+    updateStatus('connecting', 'Retrying microphone...');
     try {
         await room.localParticipant.setMicrophoneEnabled(true);
         updateMicStatus('Microphone: Active');
         document.getElementById('audioLevelContainer').classList.remove('hidden');
+        updateStatus('connected', 'Microphone enabled successfully');
     } catch (error) {
-        console.error('Microphone error:', error);
+        console.error('Retry failed:', error);
         updateMicStatus('Microphone: ' + error.message);
+        updateStatus('error', 'Retry failed: ' + error.message);
     }
 }
 
@@ -248,11 +339,43 @@ function handleActiveSpeakers(speakers) {
     }
 }
 
-// Handle local track published
+// Handle local track published with verification
 function handleLocalTrackPublished(publication) {
     if (publication.kind === 'audio') {
-        audioTrack = publication.track;
-        console.log('Audio track published');
+        window.livekitVoicePreview.audioTrack = publication.track;
+        audioTrack = window.livekitVoicePreview.audioTrack;
+        console.log('🎙️ Audio track published successfully');
+        console.log('   - Track SID:', publication.trackSid);
+        console.log('   - Track name:', publication.trackName);
+        console.log('   - Is muted:', publication.isMuted);
+        console.log('   - Track source:', publication.source);
+        
+        // Verify track is active
+        if (publication.track) {
+            console.log('   - Track state:', publication.track.source);
+            console.log('   - Track enabled:', publication.track.isEnabled);
+            
+            // Update UI to confirm audio is flowing
+            updateMicStatus('Microphone: Publishing audio');
+            updateStatus('ready', 'Audio track active - Ready for conversation');
+            
+            // Monitor track for issues
+            publication.track.on('ended', () => {
+                console.error('❌ Audio track ended unexpectedly');
+                updateMicStatus('Microphone: Track ended');
+                updateStatus('error', 'Audio track stopped - please refresh');
+            });
+            
+            publication.track.on('muted', () => {
+                console.log('🔇 Audio track muted');
+                updateMicStatus('Microphone: Muted');
+            });
+            
+            publication.track.on('unmuted', () => {
+                console.log('🔊 Audio track unmuted');
+                updateMicStatus('Microphone: Active');
+            });
+        }
     }
 }
 
@@ -349,7 +472,8 @@ function handleError(error) {
 function toggleMute() {
     if (!room || !room.localParticipant) return;
     
-    isMuted = !isMuted;
+    window.livekitVoicePreview.isMuted = !window.livekitVoicePreview.isMuted;
+    isMuted = window.livekitVoicePreview.isMuted;
     room.localParticipant.setMicrophoneEnabled(!isMuted);
     
     const muteBtn = document.getElementById('muteBtn');
@@ -372,9 +496,18 @@ function toggleMute() {
 
 // Disconnect from voice
 async function disconnectVoice() {
-    if (room) {
-        await room.disconnect();
+    if (window.livekitVoicePreview.room) {
+        await window.livekitVoicePreview.room.disconnect();
+        // Clean up all references
+        window.livekitVoicePreview.room = null;
+        window.livekitVoicePreview.localParticipant = null;
+        window.livekitVoicePreview.audioTrack = null;
+        window.livekitVoicePreview.isMuted = false;
+        // Update local references
         room = null;
+        localParticipant = null;
+        audioTrack = null;
+        isMuted = false;
     }
 }
 

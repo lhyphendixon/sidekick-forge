@@ -244,7 +244,7 @@
     <script>
         // Configure HTMX
         htmx.config.globalViewTransitions = true;
-        htmx.config.timeout = 10000; // 10 second timeout
+        htmx.config.timeout = 30000; // 30 second timeout for long operations
         
         // Add loading states
         document.addEventListener('htmx:beforeRequest', function(event) {

@@ -47,6 +47,20 @@ class WebhookSettings(BaseModel):
     text_context_webhook_url: Optional[str] = None
 
 
+class RAGSettings(BaseModel):
+    """RAG (Retrieval-Augmented Generation) configuration"""
+    enabled: bool = Field(default=True, description="Enable RAG for this agent")
+    embedding_provider: str = Field(default="siliconflow", description="Embedding provider (siliconflow, novita, openai)")
+    document_embedding_model: str = Field(default="BAAI/bge-large-en-v1.5", description="Model for document embeddings")
+    conversation_embedding_model: str = Field(default="BAAI/bge-large-en-v1.5", description="Model for conversation embeddings")
+    embedding_dimension: Optional[int] = Field(default=1024, description="Embedding dimension")
+    rerank_enabled: bool = Field(default=True, description="Enable reranking")
+    rerank_provider: str = Field(default="siliconflow", description="Rerank provider")
+    rerank_model: str = Field(default="BAAI/bge-reranker-v2-m3", description="Rerank model")
+    search_limit: int = Field(default=5, description="Number of documents to retrieve")
+    conversation_window: int = Field(default=50, description="Number of recent messages to consider")
+
+
 class Agent(BaseModel):
     """Agent model for AI assistants"""
     id: Optional[str] = Field(None, description="Unique agent ID from Supabase")
@@ -66,6 +80,9 @@ class Agent(BaseModel):
     
     # Webhooks
     webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
+    
+    # RAG settings
+    rag_settings: RAGSettings = Field(default_factory=RAGSettings)
     
     # Status
     enabled: bool = Field(default=True, description="Whether agent is active")
