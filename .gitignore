@@ -1,2 +1,8 @@
 agent-runtime
 .env
+
+# Large files
+*.tar.gz
+*.zip
+app/static/*.tar.gz
+app/static/*.zip
