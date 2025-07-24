@@ -1,0 +1,31 @@
+/usr/local/lib/python3.12/dist-packages/pydantic/_internal/_config.py:373: UserWarning: Valid config keys have changed in V2:
+* 'schema_extra' has been renamed to 'json_schema_extra'
+  warnings.warn(message, UserWarning)
+/usr/local/lib/python3.12/dist-packages/pydantic/_internal/_config.py:373: UserWarning: Valid config keys have changed in V2:
+* 'schema_extra' has been renamed to 'json_schema_extra'
+  warnings.warn(message, UserWarning)
+/usr/local/lib/python3.12/dist-packages/pydantic/_internal/_config.py:373: UserWarning: Valid config keys have changed in V2:
+* 'schema_extra' has been renamed to 'json_schema_extra'
+  warnings.warn(message, UserWarning)
+INFO:     Started server process [2722063]
+INFO:     Waiting for application startup.
+{"timestamp": "2025-07-23T20:01:52.812417", "level": "INFO", "logger": "autonomite_saas", "message": "Starting Autonomite SaaS Backend", "module": "main", "function": "lifespan", "line": 39}
+{"timestamp": "2025-07-23T20:01:52.843364", "level": "INFO", "logger": "app.integrations.supabase_client", "message": "Supabase clients initialized successfully", "module": "supabase_client", "function": "initialize", "line": 40}
+{"timestamp": "2025-07-23T20:01:52.843598", "level": "INFO", "logger": "app.integrations.livekit_client", "message": "\u2705 Added agent dispatch config: agent_name=session-agent-rag", "module": "livekit_client", "function": "create_token", "line": 89}
+{"timestamp": "2025-07-23T20:01:52.844008", "level": "INFO", "logger": "app.integrations.livekit_client", "message": "LiveKit manager initialized successfully", "module": "livekit_client", "function": "initialize", "line": 32}
+{"timestamp": "2025-07-23T20:01:52.868655", "level": "INFO", "logger": "app.services.container_manager", "message": "\u2705 Connected to Redis for container state management", "module": "container_manager", "function": "initialize", "line": 61}
+{"timestamp": "2025-07-23T20:01:52.873761", "level": "INFO", "logger": "app.services.container_manager", "message": "Container manager initialized successfully with warm pool support", "module": "container_manager", "function": "initialize", "line": 80}
+{"timestamp": "2025-07-23T20:01:52.899340", "level": "INFO", "logger": "app.services.container_pool_manager", "message": "\ud83c\udfca Container Pool Manager initialized with pool size 2-10", "module": "container_pool_manager", "function": "__init__", "line": 87}
+{"timestamp": "2025-07-23T20:01:52.899486", "level": "INFO", "logger": "app.services.container_pool_manager", "message": "\u2705 Container Pool Manager started", "module": "container_pool_manager", "function": "start", "line": 96}
+{"timestamp": "2025-07-23T20:01:52.899523", "level": "INFO", "logger": "autonomite_saas", "message": "\u2705 Container pool manager started with warm pools", "module": "main", "function": "lifespan", "line": 53}
+{"timestamp": "2025-07-23T20:01:52.929626", "level": "INFO", "logger": "app.services.background_tasks", "message": "\ud83d\ude80 Starting background tasks...", "module": "background_tasks", "function": "start", "line": 25}
+{"timestamp": "2025-07-23T20:01:52.929832", "level": "INFO", "logger": "app.services.background_tasks", "message": "\u2705 Background tasks started", "module": "background_tasks", "function": "start", "line": 37}
+{"timestamp": "2025-07-23T20:01:52.929881", "level": "INFO", "logger": "autonomite_saas", "message": "All services initialized successfully", "module": "main", "function": "lifespan", "line": 89}
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 8001): [errno 98] address already in use
+INFO:     Waiting for application shutdown.
+{"timestamp": "2025-07-23T20:01:52.930975", "level": "INFO", "logger": "autonomite_saas", "message": "Shutting down Autonomite SaaS Backend", "module": "main", "function": "lifespan", "line": 94}
+{"timestamp": "2025-07-23T20:01:52.931106", "level": "INFO", "logger": "app.services.background_tasks", "message": "\ud83d\uded1 Background tasks stopped", "module": "background_tasks", "function": "stop", "line": 51}
+{"timestamp": "2025-07-23T20:01:52.931194", "level": "INFO", "logger": "app.services.container_pool_manager", "message": "\ud83d\uded1 Container Pool Manager stopped", "module": "container_pool_manager", "function": "stop", "line": 117}
+{"timestamp": "2025-07-23T20:01:52.931224", "level": "INFO", "logger": "autonomite_saas", "message": "\u2705 Container pool manager stopped", "module": "main", "function": "lifespan", "line": 101}
+INFO:     Application shutdown complete.
