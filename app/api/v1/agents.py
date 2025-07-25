@@ -44,9 +44,14 @@ async def create_agent(
     service: AgentService = Depends(get_agent_service)
 ) -> AgentInDB:
     """Create a new agent for a client"""
-    # Ensure client_id matches
-    agent_data.client_id = client_id
-    return await service.create_agent(client_id, agent_data)
+    # Create a new dict with the client_id from URL
+    agent_dict = agent_data.dict()
+    agent_dict["client_id"] = client_id
+    
+    # Create a new AgentCreate instance with the updated client_id
+    agent_data_with_client = AgentCreate(**agent_dict)
+    
+    return await service.create_agent(client_id, agent_data_with_client)
 
 
 @router.get("/client/{client_id}/{agent_slug}", response_model=AgentInDB)

@@ -88,7 +88,7 @@ class AgentCreate(BaseModel):
     slug: str = Field(..., pattern="^[a-z0-9\\-]+$")
     name: str
     description: Optional[str] = None
-    client_id: str
+    client_id: Optional[str] = None  # Made optional since it's set from URL
     agent_image: Optional[str] = None
     system_prompt: str
     voice_settings: Optional[VoiceSettings] = None

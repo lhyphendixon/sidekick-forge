@@ -216,11 +216,22 @@ class AgentService:
     
     async def create_agent(self, client_id: str, agent_data: AgentCreate) -> Optional[Agent]:
         """Create a new agent in a client's Supabase"""
-        # Get client's Supabase instance
-        client_supabase = await self.client_service.get_client_supabase_client(client_id)
-        if not client_supabase:
-            logger.error(f"No Supabase client found for {client_id}")
-            return None
+        # Check if this is the Autonomite client using the main Supabase instance
+        from app.config import settings
+        from supabase import create_client
+        
+        client_config = await self.client_service.get_client_supabase_config(client_id)
+        if client_config and client_config.get("url") == settings.supabase_url:
+            # This client uses the main Supabase instance, so use admin client
+            logger.info(f"Client {client_id} uses main Supabase instance, using admin client")
+            # Create admin client directly
+            client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        else:
+            # Get client's separate Supabase instance
+            client_supabase = await self.client_service.get_client_supabase_client(client_id)
+            if not client_supabase:
+                logger.error(f"No Supabase client found for {client_id}")
+                return None
         
         try:
             # Create agent
@@ -231,9 +242,10 @@ class AgentService:
             result = client_supabase.table("agents").insert(agent_dict).execute()
             
             if result.data:
-                agent_data = result.data[0]
-                agent_data["client_id"] = client_id
-                return Agent(**agent_data)
+                created_agent_data = result.data[0]
+                # Ensure client_id is set
+                created_agent_data["client_id"] = client_id
+                return self._parse_agent_data(created_agent_data, client_id)
             
             return None
             
