@@ -435,7 +435,8 @@ async def run_livekit_tests(client: httpx.AsyncClient) -> List[TestResult]:
                     
                     if livekit_url:
                         # Try to create an agent dispatch to verify the system works end-to-end
-                        dispatch_test_room = f"dispatch-test-{int(time.time())}"
+                        import time as time_module
+                        dispatch_test_room = f"dispatch-test-{int(time_module.time())}"
                         
                         dispatch_response = await client.post(f"{API_URL}/trigger-agent", json={
                             "agent_slug": "clarence-coherence",

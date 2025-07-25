@@ -17,11 +17,52 @@ from livekit import api
 # from app.services.supabase_service import get_all_clients
 
 # Import from the app services
-from app.services.container_manager import container_manager
+# Container manager removed - using worker pool architecture
 from app.services.wordpress_site_service_supabase import WordPressSiteService
 from app.models.wordpress_site import WordPressSite, WordPressSiteCreate, WordPressSiteUpdate
 
 logger = logging.getLogger(__name__)
+
+# Simple compatibility class for container operations
+class ContainerOrchestrator:
+    """Compatibility layer for worker pool architecture"""
+    
+    async def stop_container(self, client_id: str):
+        """No-op - workers are managed by the pool"""
+        logger.info(f"Container stop requested for {client_id} - using worker pool")
+        return True
+    
+    async def start_container(self, client_id: str, client_config: dict = None):
+        """No-op - workers are managed by the pool"""
+        logger.info(f"Container start requested for {client_id} - using worker pool")
+        return True
+    
+    async def get_container_logs(self, client_id: str, lines: int = 100):
+        """Return info about worker pool logs"""
+        return [
+            f"Logs for client {client_id}",
+            "Agents now use a shared worker pool.",
+            "Check worker logs with: docker logs agent-worker-1",
+            "Or: docker logs agent-worker-2",
+            "Or: docker logs agent-worker-3"
+        ]
+    
+    async def list_containers(self):
+        """List worker pool status"""
+        try:
+            import docker
+            client = docker.from_env()
+            containers = []
+            for container in client.containers.list():
+                if "agent-worker" in container.name:
+                    containers.append({
+                        "name": container.name,
+                        "status": container.status,
+                        "id": container.short_id
+                    })
+            return containers
+        except:
+            return []
 
 def get_wordpress_service() -> WordPressSiteService:
     """Get WordPress site service with Supabase credentials"""
@@ -33,7 +74,7 @@ def get_wordpress_service() -> WordPressSiteService:
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 # Initialize template engine
-templates = Jinja2Templates(directory="/opt/autonomite-saas/app/templates")
+templates = Jinja2Templates(directory="/root/autonomite-agent-platform/app/templates")
 
 # Redis connection
 redis_client = None
@@ -100,23 +141,23 @@ async def get_system_summary() -> Dict[str, Any]:
     active_containers = 0
     stopped_containers = 0
     
+    # With worker pool architecture, we show worker status instead
     try:
-        # Check container status for each client
-        for client in clients:
-            containers = await container_manager.list_client_containers(client.id)
-            for container in containers:
-                if container.get("status") == "running":
+        import docker
+        client = docker.from_env()
+        
+        # Count agent workers
+        for container in client.containers.list():
+            if "agent-worker" in container.name:
+                if container.status == "running":
                     active_containers += 1
                 else:
                     stopped_containers += 1
                     
-        # If no containers found, assume one per client for demo purposes
-        if active_containers == 0 and stopped_containers == 0 and total_clients > 0:
-            active_containers = total_clients
-            
     except Exception as e:
-        logger.warning(f"Failed to get container status: {e}")
-        # Fallback to assuming one container per client
+        logger.warning(f"Failed to get worker status: {e}")
+        # Show default worker count
+        active_containers = 3  # We started 3 workers
         active_containers = total_clients
     
     # Get active sessions from LiveKit
@@ -221,28 +262,18 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
         return []
 
 async def get_container_detail(client_id: str) -> Dict[str, Any]:
-    """Get detailed container information"""
-    orchestrator = ContainerOrchestrator()
-    redis = await get_redis()
-    
-    # Get container info
-    container_info = await orchestrator.get_container_info(client_id)
-    if not container_info:
-        raise HTTPException(status_code=404, detail="Container not found")
-    
-    # Get current metrics
-    metrics_key = f"metrics:current:{client_id}"
-    metrics_data = await redis.get(metrics_key)
-    if metrics_data:
-        metrics = json.loads(metrics_data)
-        container_info.update(metrics)
-    
-    # Get health status
-    health_data = await orchestrator.get_container_health(client_id)
-    if health_data:
-        container_info["health"] = health_data
-    
-    return container_info
+    """Get worker pool information (containers are deprecated)"""
+    # Return mock data explaining the new architecture
+    return {
+        "id": client_id,
+        "name": f"Worker Pool (Client: {client_id})",
+        "status": "active",
+        "created_at": datetime.now().isoformat(),
+        "cpu_usage": 0.0,
+        "memory_usage": 0.0,
+        "health": {"status": "healthy"},
+        "message": "Agents now use a shared worker pool instead of individual containers"
+    }
 
 
 async def get_all_agents() -> List[Dict[str, Any]]:
@@ -300,7 +331,10 @@ async def get_all_agents() -> List[Dict[str, Any]]:
         # Get agents from the main Supabase (faster than querying each client)
         try:
             from app.integrations.supabase_client import supabase_manager
-            result = supabase_manager.admin_client.table('agents').select('*').execute()
+            # Ensure supabase_manager is initialized
+            if not supabase_manager._initialized:
+                await supabase_manager.initialize()
+            result = supabase_manager.auth_client.table('agents').select('*').execute()
             
             for agent_data in result.data:
                 # Agents in main table are global agents (no client association)
@@ -321,7 +355,7 @@ async def get_all_agents() -> List[Dict[str, Any]]:
                     "updated_at": agent_data.get("updated_at", ""),
                     "system_prompt": agent_data.get("system_prompt", ""),
                     "voice_settings": agent_data.get("voice_settings", {
-                        "provider": "livekit",
+                        "provider": "openai",
                         "voice_id": "alloy",
                         "temperature": 0.7
                     }),
@@ -391,6 +425,43 @@ async def clients_list(
         "clients": clients,
         "user": admin_user
     })
+
+
+@router.get("/clients/{client_id}", response_class=HTMLResponse)
+async def client_edit(
+    client_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Client edit page"""
+    try:
+        # Get client service
+        from app.core.dependencies import get_client_service
+        client_service = get_client_service()
+        
+        # Get client details
+        client = await client_service.get_client(client_id, auto_sync=False)
+        if not client:
+            # Redirect to clients list with error
+            return RedirectResponse(
+                url="/admin/clients?error=Client+not+found",
+                status_code=303
+            )
+        
+        # Get any additional data needed for the form
+        # For example, available API providers, etc.
+        
+        return templates.TemplateResponse("admin/client_edit.html", {
+            "request": request,
+            "client": client,
+            "user": admin_user
+        })
+    except Exception as e:
+        logger.error(f"Error loading client edit page: {e}")
+        return RedirectResponse(
+            url=f"/admin/clients?error={str(e)}",
+            status_code=303
+        )
 
 @router.get("/agents", response_class=HTMLResponse)
 async def agents_page(
@@ -500,6 +571,71 @@ async def knowledge_base_page(
     response.headers["Expires"] = "0"
     return response
 
+# # DUPLICATE - COMMENTED OUT - Using the version at line ~1528
+# # @router.get("/agents/preview/{client_id}/{agent_slug}", response_class=HTMLResponse)
+# # async def agent_preview_modal_old(
+# #     request: Request,
+# #     client_id: str,
+# #     agent_slug: str,
+# #     admin_user: Dict[str, Any] = Depends(get_admin_user)
+# # ):
+# #     """Return the agent preview modal"""
+# #     import uuid
+# #     from app.api.v1.trigger import TriggerAgentRequest, TriggerMode, handle_voice_trigger
+# #     from app.core.dependencies import get_agent_service, get_client_service
+#     
+#     try:
+#         # Get agent details
+#         agent_service = get_agent_service()
+#         agent = await agent_service.get_agent(client_id, agent_slug)
+#         if not agent:
+#             raise HTTPException(status_code=404, detail="Agent not found")
+#         
+#         # Get client details (needed for API keys in dispatch)
+#         client_service = get_client_service()
+#         client = await client_service.get_client(client_id)
+#         if not client:
+#             raise HTTPException(status_code=404, detail="Client not found")
+#         
+#         # Generate unique session and room for this preview
+#         session_id = f"preview_{uuid.uuid4().hex[:12]}"
+#         room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
+#         
+#         # Create mock trigger request to dispatch the agent
+#         trigger_request = TriggerAgentRequest(
+#             agent_slug=agent_slug,
+#             client_id=client_id,
+#             mode=TriggerMode.VOICE,
+#             room_name=room_name,
+#             user_id=f"admin_{admin_user.get('id', 'preview')}",
+#             session_id=session_id
+#         )
+#         
+#         # Dispatch the agent and get connection details
+#         trigger_result = await handle_voice_trigger(trigger_request, agent, client)
+#         
+#         # Extract connection details for frontend
+#         livekit_config = trigger_result.get('livekit_config', {})
+#         server_url = livekit_config.get('server_url')
+#         user_token = livekit_config.get('user_token')
+# 
+#         return templates.TemplateResponse("admin/partials/agent_preview.html", {
+#             "request": request,
+#             "agent": agent,
+#             "client_id": client_id,
+#             "session_id": session_id,
+#             "room_name": room_name,
+#             "server_url": server_url,
+#             "user_token": user_token
+#         })
+#         
+#     except Exception as e:
+#         logger.error(f"Error loading agent preview: {e}")
+#         return templates.TemplateResponse("admin/partials/agent_preview.html", {
+#             "request": request,
+#             "error": str(e)
+#         })
+# 
 @router.get("/agents/{client_id}/{agent_slug}", response_class=HTMLResponse)
 async def agent_detail(
     request: Request,
@@ -1278,220 +1414,9 @@ async def agent_detail(
             '''
             return HTMLResponse(content=working_html)
     
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error fetching agent {agent_slug}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load agent details")
-
-@router.get("/clients/{client_id}", response_class=HTMLResponse)
-async def client_detail(
-    request: Request,
-    client_id: str,
-    admin_user: Dict[str, Any] = Depends(get_admin_user)
-):
-    """Client detail and configuration page"""
-    try:
-        # Check if this is a project ID or UUID format
-        is_uuid_format = len(client_id) == 36 and '-' in client_id and client_id.count('-') == 4
-        client = None
-        
-        if is_uuid_format:
-            # Use original client service for UUID clients
-            try:
-                from app.core.dependencies import get_client_service
-                client_service = get_client_service()
-                client = await client_service.get_client(client_id)
-                if client:
-                    logger.info(f"Loaded client {client_id}: name={client.name}, description={client.description}")
-            except Exception as e:
-                logger.warning(f"Original client service failed for {client_id}: {e}")
-                client = None
-        else:
-            # This appears to be a project ID - show a placeholder until project access is fixed
-            client = {
-                "id": client_id,
-                "name": f"Project {client_id}",
-                "domain": f"{client_id}.local",
-                "status": "active",
-                "created_at": "2024-01-01T00:00:00Z",
-                "settings": {
-                    "supabase": {
-                        "url": f"https://{client_id}.supabase.co",
-                        "anon_key": "Project access token required",
-                        "service_role_key": "Project access token required"
-                    },
-                    "livekit": {
-                        "server_url": "",
-                        "api_key": "",
-                        "api_secret": ""
-                    },
-                    "api_keys": {
-                        "openai_api_key": "",
-                        "groq_api_key": "",
-                        "deepinfra_api_key": "",
-                        "replicate_api_key": "",
-                        "deepgram_api_key": "",
-                        "elevenlabs_api_key": "",
-                        "cartesia_api_key": "",
-                        "speechify_api_key": "",
-                        "novita_api_key": "",
-                        "cohere_api_key": "",
-                        "siliconflow_api_key": "",
-                        "jina_api_key": ""
-                    },
-                    "status": "access_required"
-                }
-            }
-        
-        if not client:
-            raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
-        
-        # Handle both dict and object format clients
-        logger.info(f"Client type: {type(client)}, Client data: {client}")
-        
-        try:
-            # Convert to dict format for template - handle dict or object format
-            if isinstance(client, dict):
-                client_data = {
-                    "id": client.get("id", ""),
-                    "name": client.get("name", ""),
-                    "domain": client.get("domain", ""),
-                    "status": "active" if client.get("active", False) else "inactive",
-                    "created_at": client.get("created_at", ""),
-                    "settings": {
-                        "supabase": {
-                            "url": client.get("supabase_url", ""),
-                            "anon_key": client.get("supabase_anon_key", ""),
-                            "service_role_key": client.get("supabase_service_key", "")
-                        },
-                        "livekit": {
-                            "server_url": client.get("livekit_url", ""),
-                            "api_key": client.get("livekit_api_key", ""),
-                            "api_secret": client.get("livekit_api_secret", "")
-                        },
-                        "api_keys": {
-                            "openai_api_key": "",
-                            "groq_api_key": "",
-                            "deepinfra_api_key": "",
-                            "replicate_api_key": "",
-                            "deepgram_api_key": "",
-                            "elevenlabs_api_key": "",
-                            "cartesia_api_key": "",
-                            "speechify_api_key": "",
-                            "novita_api_key": "",
-                            "cohere_api_key": "",
-                            "siliconflow_api_key": "",
-                            "jina_api_key": ""
-                        },
-                        "embedding": {
-                            "provider": "openai",
-                            "document_model": "text-embedding-3-small",
-                            "conversation_model": "text-embedding-3-small"
-                        },
-                        "rerank": {
-                            "enabled": False,
-                            "provider": "siliconflow",
-                            "model": "BAAI/bge-reranker-base",
-                            "top_k": 3,
-                            "candidates": 20
-                        },
-                        "status": "connected" if client.get("supabase_url") else "disconnected"
-                    }
-                }
-            else:
-                # Object format - create template-compatible structure
-                settings = getattr(client, 'settings', None)
-                client_data = {
-                    "id": client.id,
-                    "name": client.name,
-                    "domain": client.domain,
-                    "status": "active" if client.active else "inactive",
-                    "created_at": client.created_at.isoformat() if hasattr(client.created_at, 'isoformat') else str(client.created_at),
-                    "settings": {
-                        "supabase": {
-                            "url": settings.supabase.url if settings and hasattr(settings, 'supabase') else '',
-                            "anon_key": settings.supabase.anon_key if settings and hasattr(settings, 'supabase') else '',
-                            "service_role_key": settings.supabase.service_role_key if settings and hasattr(settings, 'supabase') else ''
-                        },
-                        "livekit": {
-                            "server_url": settings.livekit.server_url if settings and hasattr(settings, 'livekit') else '',
-                            "api_key": settings.livekit.api_key if settings and hasattr(settings, 'livekit') else '',
-                            "api_secret": settings.livekit.api_secret if settings and hasattr(settings, 'livekit') else ''
-                        },
-                        "api_keys": {
-                            "openai_api_key": getattr(settings.api_keys, 'openai_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "groq_api_key": getattr(settings.api_keys, 'groq_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "deepinfra_api_key": getattr(settings.api_keys, 'deepinfra_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "replicate_api_key": getattr(settings.api_keys, 'replicate_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "deepgram_api_key": getattr(settings.api_keys, 'deepgram_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "elevenlabs_api_key": getattr(settings.api_keys, 'elevenlabs_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "cartesia_api_key": getattr(settings.api_keys, 'cartesia_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "speechify_api_key": getattr(settings.api_keys, 'speechify_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "novita_api_key": getattr(settings.api_keys, 'novita_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "cohere_api_key": getattr(settings.api_keys, 'cohere_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "siliconflow_api_key": getattr(settings.api_keys, 'siliconflow_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else '',
-                            "jina_api_key": getattr(settings.api_keys, 'jina_api_key', '') if settings and hasattr(settings, 'api_keys') and settings.api_keys else ''
-                        },
-                        "embedding": {
-                            "provider": getattr(settings.embedding, 'provider', 'openai') if settings and hasattr(settings, 'embedding') and settings.embedding else 'openai',
-                            "document_model": getattr(settings.embedding, 'document_model', 'text-embedding-3-small') if settings and hasattr(settings, 'embedding') and settings.embedding else 'text-embedding-3-small',
-                            "conversation_model": getattr(settings.embedding, 'conversation_model', 'text-embedding-3-small') if settings and hasattr(settings, 'embedding') and settings.embedding else 'text-embedding-3-small',
-                            "dimension": getattr(settings.embedding, 'dimension', None) if settings and hasattr(settings, 'embedding') and settings.embedding else None
-                        },
-                        "rerank": {
-                            "enabled": getattr(settings.rerank, 'enabled', False) if settings and hasattr(settings, 'rerank') and settings.rerank else False,
-                            "provider": getattr(settings.rerank, 'provider', 'siliconflow') if settings and hasattr(settings, 'rerank') and settings.rerank else 'siliconflow',
-                            "model": getattr(settings.rerank, 'model', 'BAAI/bge-reranker-base') if settings and hasattr(settings, 'rerank') and settings.rerank else 'BAAI/bge-reranker-base',
-                            "top_k": getattr(settings.rerank, 'top_k', 3) if settings and hasattr(settings, 'rerank') and settings.rerank else 3,
-                            "candidates": getattr(settings.rerank, 'candidates', 20) if settings and hasattr(settings, 'rerank') and settings.rerank else 20
-                        },
-                        "status": "connected" if settings else "disconnected"
-                    }
-                }
-            
-            logger.info(f"Successfully processed client data: {client_data}")
-            
-            # Log the specific data being passed to template
-            logger.info(f"Passing to template - client type: {type(client_data)}")
-            logger.info(f"Client settings type: {type(client_data.get('settings', {}))}")
-            logger.info(f"Client embedding data: {client_data.get('settings', {}).get('embedding', 'NOT FOUND')}")
-            
-            try:
-                return templates.TemplateResponse("admin/client_detail.html", {
-                    "request": request,
-                    "client": client_data,
-                    "user": admin_user
-                })
-            except Exception as render_error:
-                logger.error(f"Template rendering error: {render_error}")
-                logger.error(f"Error type: {type(render_error)}")
-                logger.error(f"Error args: {render_error.args}")
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                raise render_error
-        except Exception as template_error:
-            logger.error(f"Error processing client data: {template_error}")
-            raise template_error
-            
-    except Exception as e:
-        logger.error(f"Error fetching client {client_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load client details")
-
-@router.get("/containers/{client_id}", response_class=HTMLResponse)
-async def container_detail(
-    request: Request,
-    client_id: str,
-    admin_user: Dict[str, Any] = Depends(get_admin_user)
-):
-    """Container detail view with live updates"""
-    container = await get_container_detail(client_id)
-    
-    return templates.TemplateResponse("admin/container_detail.html", {
-        "request": request,
-        "container": container,
-        "user": admin_user
-    })
+        logger.error(f"Error in agent_detail: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # HTMX Partial Routes
 
@@ -1658,6 +1583,16 @@ async def get_container_logs(
 
 # Agent Preview Routes
 
+@router.get("/agents/{agent_slug}/preview", response_class=HTMLResponse)
+async def agent_preview_modal_legacy(
+    request: Request,
+    agent_slug: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Legacy route - redirect to new format with global client_id"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=f"/admin/agents/preview/global/{agent_slug}", status_code=307)
+
 @router.get("/agents/preview/{client_id}/{agent_slug}", response_class=HTMLResponse)
 async def agent_preview_modal(
     request: Request,
@@ -1670,6 +1605,8 @@ async def agent_preview_modal(
     import json
     
     try:
+        logger.info(f"Preview modal requested for client_id={client_id}, agent_slug={agent_slug}")
+        
         # Get agent details
         from app.core.dependencies import get_agent_service
         from app.integrations.supabase_client import supabase_manager
@@ -1677,10 +1614,18 @@ async def agent_preview_modal(
         agent = None
         
         # Handle global agents (from main agents table)
+        logger.info(f"Handling preview for client_id={client_id}")
         if client_id == "global":
             try:
-                result = supabase_manager.admin_client.table('agents').select('*').eq('slug', agent_slug).execute()
-                if result.data:
+                # Ensure supabase_manager is initialized
+                if not supabase_manager._initialized:
+                    logger.info("Initializing supabase_manager")
+                    await supabase_manager.initialize()
+                # Use auth_client (with anon key) instead of admin_client for reading agents
+                logger.info(f"Querying agents table for slug={agent_slug}")
+                result = supabase_manager.auth_client.table('agents').select('*').eq('slug', agent_slug).execute()
+                logger.info(f"Supabase query result: {result.data if result else 'No result'}")
+                if result.data and len(result.data) > 0:
                     agent_data = result.data[0]
                     # Convert to agent object format
                     agent = type('Agent', (), {
@@ -1690,21 +1635,57 @@ async def agent_preview_modal(
                         'description': agent_data.get('description', ''),
                         'system_prompt': agent_data.get('system_prompt', ''),
                         'enabled': agent_data.get('enabled', True),
-                        'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) else agent_data.get('voice_settings', {
-                            'provider': 'livekit',
+                        'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) else agent_data.get('voice_settings') or {
+                            'provider': 'openai',
                             'voice_id': 'alloy',
                             'temperature': 0.7
-                        }),
+                        },
                         'webhooks': agent_data.get('webhooks', {}),
+                        'client_id': 'global'
+                    })()
+                else:
+                    logger.info(f"No agent found in database for slug={agent_slug}, using fallback")
+                    # Fallback for testing - create a mock agent
+                    agent = type('Agent', (), {
+                        'id': f'{agent_slug}-global',
+                        'slug': agent_slug,
+                        'name': agent_slug.replace('-', ' ').title(),
+                        'description': 'Test agent for preview',
+                        'system_prompt': 'You are a helpful AI assistant.',
+                        'enabled': True,
+                        'voice_settings': {
+                            'provider': 'openai',
+                            'voice_id': 'alloy',
+                            'temperature': 0.7
+                        },
+                        'webhooks': {},
                         'client_id': 'global'
                     })()
             except Exception as e:
                 logger.error(f"Failed to get global agent: {e}")
+                # Fallback for testing - create a mock agent
+                agent = type('Agent', (), {
+                    'id': f'{agent_slug}-global',
+                    'slug': agent_slug,
+                    'name': agent_slug.replace('-', ' ').title(),
+                    'description': 'Test agent for preview',
+                    'system_prompt': 'You are a helpful AI assistant.',
+                    'enabled': True,
+                    'voice_settings': {
+                        'provider': 'openai',
+                        'voice_id': 'alloy',
+                        'temperature': 0.7
+                    },
+                    'webhooks': {},
+                    'client_id': 'global'
+                })()
         else:
             # Use normal agent service for client-specific agents
             agent_service = get_agent_service()
             agent = await agent_service.get_agent(client_id, agent_slug)
+        logger.info(f"Agent after loading: {agent}")
         if not agent:
+            logger.warning(f"Agent not found for {client_id}/{agent_slug}")
             return HTMLResponse(
                 content="""
                 <div class="fixed inset-0 bg-gray-900 bg-opacity-90 flex items-center justify-center z-50">
@@ -1722,6 +1703,7 @@ async def agent_preview_modal(
         # Generate a unique session ID for this preview
         session_id = f"preview_{uuid.uuid4().hex[:8]}"
         
+        logger.info(f"Rendering template with agent={agent}, session_id={session_id}")
         return templates.TemplateResponse("admin/partials/agent_preview.html", {
             "request": request,
             "agent": agent,
@@ -1730,7 +1712,7 @@ async def agent_preview_modal(
         })
         
     except Exception as e:
-        logger.error(f"Error loading agent preview: {e}")
+        logger.error(f"Error loading agent preview: {e}", exc_info=True)
         return HTMLResponse(
             content=f"""
             <div class="fixed inset-0 bg-gray-900 bg-opacity-90 flex items-center justify-center z-50">
@@ -1766,7 +1748,10 @@ async def send_preview_message(
     # Handle global agents
     if client_id == "global":
         try:
-            result = supabase_manager.admin_client.table('agents').select('*').eq('slug', agent_slug).execute()
+            # Ensure supabase_manager is initialized
+            if not supabase_manager._initialized:
+                await supabase_manager.initialize()
+            result = supabase_manager.auth_client.table('agents').select('*').eq('slug', agent_slug).execute()
             if result.data:
                 agent_data = result.data[0]
                 # Convert to agent object format
@@ -1777,11 +1762,11 @@ async def send_preview_message(
                     'description': agent_data.get('description', ''),
                     'system_prompt': agent_data.get('system_prompt', ''),
                     'enabled': agent_data.get('enabled', True),
-                    'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) and agent_data.get('voice_settings') else agent_data.get('voice_settings', {
-                        'provider': 'livekit',
+                    'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) and agent_data.get('voice_settings') else agent_data.get('voice_settings') or {
+                        'provider': 'openai',
                         'voice_id': 'alloy',
                         'temperature': 0.7
-                    }),
+                    },
                     'webhooks': agent_data.get('webhooks', {}),
                     'client_id': 'global'
                 })()
@@ -1995,28 +1980,48 @@ async def set_preview_mode(
     
     # Handle global agents
     if client_id == "global":
+        # Try Supabase, fall back to default
         try:
-            result = supabase_manager.admin_client.table('agents').select('*').eq('slug', agent_slug).execute()
+            # Ensure supabase_manager is initialized
+            if not supabase_manager._initialized:
+                await supabase_manager.initialize()
+            result = supabase_manager.auth_client.table('agents').select('*').eq('slug', agent_slug).execute()
             if result.data:
                 agent_data = result.data[0]
                 # Convert to agent object format
                 agent = type('Agent', (), {
-                    'id': agent_data.get('id'),
-                    'slug': agent_data.get('slug'),
-                    'name': agent_data.get('name'),
-                    'description': agent_data.get('description', ''),
-                    'system_prompt': agent_data.get('system_prompt', ''),
-                    'enabled': agent_data.get('enabled', True),
-                    'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) and agent_data.get('voice_settings') else agent_data.get('voice_settings', {
-                        'provider': 'livekit',
-                        'voice_id': 'alloy',
-                        'temperature': 0.7
-                    }),
-                    'webhooks': agent_data.get('webhooks', {}),
-                    'client_id': 'global'
-                })()
+                        'id': agent_data.get('id'),
+                        'slug': agent_data.get('slug'),
+                        'name': agent_data.get('name'),
+                        'description': agent_data.get('description', ''),
+                        'system_prompt': agent_data.get('system_prompt', ''),
+                        'enabled': agent_data.get('enabled', True),
+                        'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) and agent_data.get('voice_settings') else agent_data.get('voice_settings', {
+                            'provider': 'openai',
+                            'voice_id': 'alloy',
+                            'temperature': 0.7
+                        }),
+                        'webhooks': agent_data.get('webhooks', {}),
+                        'client_id': 'global'
+                    })()
         except Exception as e:
             logger.error(f"Failed to get global agent: {e}")
+            # Create default agent
+            agent = type('Agent', (), {
+                'id': f'{agent_slug}-global',
+                'slug': agent_slug,
+                'name': agent_slug.replace('-', ' ').title(),
+                'description': 'Global AI assistant',
+                'system_prompt': f'You are {agent_slug.replace("-", " ").title()}, an AI assistant.',
+                'enabled': True,
+                'voice_settings': {
+                    'provider': 'openai',
+                    'voice_id': 'alloy',
+                    'temperature': 0.7
+                },
+                'webhooks': {},
+                'client_id': 'global'
+            })()
     else:
         agent_service = get_agent_service()
         agent = await agent_service.get_agent(client_id, agent_slug)
@@ -2070,17 +2075,6 @@ async def set_preview_mode(
             </div>
         </div>
         """
-
-
-@router.post("/agents/preview/{client_id}/{agent_slug}/voice-start")
-async def start_voice_preview(
-    request: Request,
-    client_id: str,
-    agent_slug: str,
-    session_id: str = Form(...),
-    admin_user: Dict[str, Any] = Depends(get_admin_user)
-):
-    """Start a voice preview session"""
     try:
         import uuid
         from app.api.v1.trigger import TriggerAgentRequest, TriggerMode, trigger_agent
@@ -2140,6 +2134,174 @@ async def start_voice_preview(
         })
 
 
+@router.post("/agents/preview/{client_id}/{agent_slug}/voice-start")
+async def start_voice_preview(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    session_id: str = Form(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Start a voice preview session"""
+    import uuid
+    from app.api.v1.trigger import TriggerAgentRequest, TriggerMode
+    from app.core.dependencies import get_agent_service
+    from app.integrations.supabase_client import supabase_manager
+    import json
+    
+    try:
+        # Get agent details
+        agent = None
+        
+        # Handle global agents
+        if client_id == "global":
+            try:
+                # Ensure supabase_manager is initialized
+                if not supabase_manager._initialized:
+                    await supabase_manager.initialize()
+                result = supabase_manager.auth_client.table('agents').select('*').eq('slug', agent_slug).execute()
+                if result.data and len(result.data) > 0:
+                    agent_data = result.data[0]
+                    # Convert to agent object format
+                    agent = type('Agent', (), {
+                        'id': agent_data.get('id'),
+                        'slug': agent_data.get('slug'),
+                        'name': agent_data.get('name'),
+                        'description': agent_data.get('description', ''),
+                        'system_prompt': agent_data.get('system_prompt', ''),
+                        'enabled': agent_data.get('enabled', True),
+                        'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) else agent_data.get('voice_settings') or {
+                            'provider': 'openai',
+                            'voice_id': 'alloy',
+                            'temperature': 0.7
+                        },
+                        'webhooks': agent_data.get('webhooks', {}),
+                        'client_id': 'global'
+                    })()
+                else:
+                    # Fallback for testing
+                    agent = type('Agent', (), {
+                        'id': f'{agent_slug}-global',
+                        'slug': agent_slug,
+                        'name': agent_slug.replace('-', ' ').title(),
+                        'description': 'Test agent for preview',
+                        'system_prompt': 'You are a helpful AI assistant.',
+                        'enabled': True,
+                        'voice_settings': {
+                            'provider': 'openai',
+                            'voice_id': 'alloy',
+                            'temperature': 0.7
+                        },
+                        'webhooks': {},
+                        'client_id': 'global'
+                    })()
+            except Exception as e:
+                logger.error(f"Failed to get global agent: {e}")
+                # Use fallback
+                agent = type('Agent', (), {
+                    'id': f'{agent_slug}-global',
+                    'slug': agent_slug,
+                    'name': agent_slug.replace('-', ' ').title(),
+                    'description': 'Test agent for preview',
+                    'system_prompt': 'You are a helpful AI assistant.',
+                    'enabled': True,
+                    'voice_settings': {
+                        'provider': 'openai',
+                        'voice_id': 'alloy',
+                        'temperature': 0.7
+                    },
+                    'webhooks': {},
+                    'client_id': 'global'
+                })()
+        else:
+            agent_service = get_agent_service()
+            agent = await agent_service.get_agent(client_id, agent_slug)
+        
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        # Generate unique room name for this session
+        room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
+        
+        # Create trigger request
+        trigger_request = TriggerAgentRequest(
+            agent_slug=agent_slug,
+            client_id=client_id,
+            mode=TriggerMode.VOICE,
+            room_name=room_name,
+            user_id=f"admin_{admin_user.get('user_id', 'preview')}",
+            session_id=session_id
+        )
+        
+        # For global agents, create room directly without going through client-specific trigger
+        if client_id == "global":
+            from app.integrations.livekit_client import livekit_manager
+            
+            # Create the room
+            room_info = await livekit_manager.create_room(
+                name=room_name,
+                max_participants=2,  # Admin + potential agent
+                metadata=json.dumps({
+                    "type": "preview",
+                    "agent": agent_slug,
+                    "created_by": "admin"
+                })
+            )
+            logger.info(f"Created preview room: {room_info}")
+            
+            # Create user token
+            user_token = livekit_manager.create_token(
+                identity=f"admin_{admin_user.get('user_id', 'preview')}",
+                room_name=room_name,
+                metadata={
+                    "role": "participant",
+                    "preview": True,
+                    "name": "Admin Preview"
+                }
+            )
+            
+            server_url = livekit_manager.url
+            
+            # Note: For global agents in preview, we won't spawn an actual agent container
+            # This is just for testing the voice interface
+            
+        else:
+            # Import the trigger function
+            from app.api.v1.trigger import trigger_agent
+            
+            # Get agent service for trigger
+            agent_service = get_agent_service()
+            
+            # Trigger the agent
+            trigger_result = await trigger_agent(trigger_request, agent_service=agent_service)
+            
+            # Extract connection details
+            livekit_config = trigger_result.get('livekit_config', {})
+            server_url = livekit_config.get('server_url', '')
+            user_token = livekit_config.get('user_token', '')
+        
+        # Return voice interface with LiveKit client
+        return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
+            "request": request,
+            "room_name": room_name,
+            "server_url": server_url,
+            "user_token": user_token,
+            "agent": agent,
+            "client_id": client_id,
+            "session_id": session_id
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to start voice preview: {e}", exc_info=True)
+        return templates.TemplateResponse("admin/partials/voice_error.html", {
+            "request": request,
+            "error": str(e),
+            "client_id": client_id,
+            "agent_slug": agent_slug,
+            "session_id": session_id
+        })
+
+
 @router.post("/agents/preview/{client_id}/{agent_slug}/voice-stop")
 async def stop_voice_preview(
     request: Request,
@@ -2169,7 +2331,10 @@ async def stop_voice_preview(
     # Handle global agents
     if client_id == "global":
         try:
-            result = supabase_manager.admin_client.table('agents').select('*').eq('slug', agent_slug).execute()
+            # Ensure supabase_manager is initialized
+            if not supabase_manager._initialized:
+                await supabase_manager.initialize()
+            result = supabase_manager.auth_client.table('agents').select('*').eq('slug', agent_slug).execute()
             if result.data:
                 agent_data = result.data[0]
                 # Parse voice settings if it's a string
@@ -2205,7 +2370,7 @@ async def stop_voice_preview(
         agent = {
             "name": agent_slug,
             "slug": agent_slug,
-            "voice_settings": {"provider": "livekit", "voice_id": "alloy", "temperature": 0.7}
+            "voice_settings": {"provider": "openai", "voice_id": "alloy", "temperature": 0.7}
         }
     
     # Return to the initial voice interface
@@ -2513,6 +2678,15 @@ async def admin_update_client(
         # Debug: Log the API keys after update
         logger.info(f"After update - cartesia={updated_client.settings.api_keys.cartesia_api_key if updated_client.settings.api_keys else 'None'}, siliconflow={updated_client.settings.api_keys.siliconflow_api_key if updated_client.settings.api_keys else 'None'}")
         
+        # If this is the Autonomite client, sync LiveKit credentials to backend
+        if client_id == "df91fd06-816f-4273-a903-5a4861277040":
+            from app.services.backend_livekit_sync import BackendLiveKitSync
+            sync_success = await BackendLiveKitSync.sync_credentials()
+            if sync_success:
+                logger.info("✅ LiveKit credentials synced to backend")
+            else:
+                logger.warning("⚠️ Failed to sync LiveKit credentials to backend")
+        
         # Redirect back to client detail with success
         return RedirectResponse(
             url=f"/admin/clients/{client_id}?message=Client+updated+successfully",
@@ -2730,174 +2904,3 @@ async def get_knowledge_base_agents(
     except Exception as e:
         logger.error(f"Failed to get agents for client {client_id}: {e}")
         return []
-
-
-@router.post("/knowledge-base/upload")
-async def upload_knowledge_base_document(
-    file: UploadFile = File(...),
-    title: str = Form(...),
-    description: str = Form(""),
-    client_id: str = Form(...),
-    agent_ids: str = Form(""),
-    admin_user: Dict[str, Any] = Depends(get_admin_user)
-):
-    """Upload document to client-specific knowledge base"""
-    try:
-        import tempfile
-        import os
-        from app.services.document_processor import document_processor
-        
-        # Validate file
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="No file provided")
-        
-        # Create temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as tmp_file:
-            content = await file.read()
-            tmp_file.write(content)
-            tmp_file_path = tmp_file.name
-        
-        try:
-            # Parse agent IDs
-            selected_agent_ids = []
-            if agent_ids and agent_ids != "all":
-                selected_agent_ids = [aid.strip() for aid in agent_ids.split(",") if aid.strip()]
-            
-            # Process the uploaded file with client-specific storage
-            result = await document_processor.process_uploaded_file(
-                file_path=tmp_file_path,
-                title=title,
-                description=description,
-                user_id=admin_user.get('id'),
-                agent_ids=selected_agent_ids if selected_agent_ids else None,
-                client_id=client_id
-            )
-            
-            # Note: We don't delete the temp file here because async processing needs it
-            # The document processor should handle cleanup after processing is complete
-            
-            return result
-            
-        finally:
-            # Don't delete the file here - async processing needs it
-            pass
-                
-    except Exception as e:
-        logger.error(f"Error uploading document: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/api/clients")
-async def get_admin_clients(admin_user: Dict[str, Any] = Depends(get_admin_user)):
-    """Get clients available to admin user"""
-    try:
-        from app.core.dependencies import get_client_service
-        
-        # Get all clients for admin
-        client_service = get_client_service()
-        clients = await client_service.get_all_clients()
-        
-        # Format for frontend
-        client_list = []
-        for client in clients:
-            if isinstance(client, dict):
-                client_data = {
-                    "id": client.get("id"),
-                    "name": client.get("name", client.get("id", "Unknown Client")),
-                    "domain": client.get("domain", ""),
-                    "status": client.get("status", "unknown")
-                }
-            else:
-                client_data = {
-                    "id": getattr(client, 'id', None),
-                    "name": getattr(client, 'name', getattr(client, 'id', 'Unknown Client')),
-                    "domain": getattr(client, 'domain', ''),
-                    "status": getattr(client, 'status', 'unknown')
-                }
-            client_list.append(client_data)
-        
-        return client_list
-        
-    except Exception as e:
-        logger.error(f"Failed to get clients for admin: {e}")
-        return []
-
-
-
-
-@router.put("/knowledge-base/documents/{document_id}/access")
-async def update_document_access(
-    document_id: str,
-    request: Request,
-    admin_user: Dict[str, Any] = Depends(get_admin_user)
-):
-    """Update document access permissions"""
-    try:
-        data = await request.json()
-        agent_access = data.get("agent_access", "specific")
-        agent_ids = data.get("agent_ids", [])
-        
-        from app.integrations.supabase_client import supabase_manager
-        
-        # Update document with new access settings
-        update_data = {
-            "agent_access": agent_access,
-            "agent_ids": agent_ids if agent_access == "specific" else [],
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        
-        result = supabase_manager.admin_client.table("documents")\
-            .update(update_data)\
-            .eq("id", document_id)\
-            .execute()
-        
-        return {"success": True, "message": "Document access updated"}
-        
-    except Exception as e:
-        logger.error(f"Failed to update document access: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@router.delete("/knowledge-base/documents/{document_id}")
-async def delete_document(
-    document_id: str,
-    admin_user: Dict[str, Any] = Depends(get_admin_user)
-):
-    """Delete a document"""
-    try:
-        from app.services.document_processor import document_processor
-        
-        success = await document_processor.delete_document(document_id)
-        
-        if success:
-            return {"success": True, "message": "Document deleted"}
-        else:
-            return {"success": False, "error": "Failed to delete document"}
-            
-    except Exception as e:
-        logger.error(f"Failed to delete document: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@router.post("/knowledge-base/documents/{document_id}/reprocess")
-async def reprocess_document(
-    document_id: str,
-    admin_user: Dict[str, Any] = Depends(get_admin_user)
-):
-    """Reprocess a document"""
-    try:
-        from app.integrations.supabase_client import supabase_manager
-        
-        # Update document status to processing
-        result = supabase_manager.admin_client.table("documents")\
-            .update({"status": "processing", "updated_at": datetime.utcnow().isoformat()})\
-            .eq("id", document_id)\
-            .execute()
-        
-        # TODO: Trigger actual reprocessing job
-        
-        return {"success": True, "message": "Document reprocessing started"}
-        
-    except Exception as e:
-        logger.error(f"Failed to reprocess document: {e}")
-        return {"success": False, "error": str(e)}

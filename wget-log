@@ -1,0 +1,16 @@
+--2025-07-17 15:25:18--  https://www.dropbox.com/scl/fi/ftfpd6cduat6t50vtzwub/LiveKit-Agent-SDK-Python.txt?rlkey=whyd2r32t1m8x6m76yuevl0p6
+Resolving www.dropbox.com (www.dropbox.com)... 162.125.9.18, 2620:100:601f:18::a27d:912
+Connecting to www.dropbox.com (www.dropbox.com)|162.125.9.18|:443... connected.
+HTTP request sent, awaiting response... 302 Found
+Location: https://uc8adc232959c4dd09c5215641fd.dl.dropboxusercontent.com/cd/0/inline/CtpOhfADrtX7lfTo7qvokBLYdHq95rBQEvqBEZ-Q_iKSxj8Ug6eXFlYgYc1tZUAvjS9e3ZQNGcbjty5xkMh9yg4OI243jjyuIr13NbJz4rWZwfY2U7VMxOqKvCipQnH79Rgt7ajjimIi7hr7MiaZHAf8/file# [following]
+--2025-07-17 15:25:18--  https://uc8adc232959c4dd09c5215641fd.dl.dropboxusercontent.com/cd/0/inline/CtpOhfADrtX7lfTo7qvokBLYdHq95rBQEvqBEZ-Q_iKSxj8Ug6eXFlYgYc1tZUAvjS9e3ZQNGcbjty5xkMh9yg4OI243jjyuIr13NbJz4rWZwfY2U7VMxOqKvCipQnH79Rgt7ajjimIi7hr7MiaZHAf8/file
+Resolving uc8adc232959c4dd09c5215641fd.dl.dropboxusercontent.com (uc8adc232959c4dd09c5215641fd.dl.dropboxusercontent.com)... 162.125.9.15, 2620:100:601f:15::a27d:90f
+Connecting to uc8adc232959c4dd09c5215641fd.dl.dropboxusercontent.com (uc8adc232959c4dd09c5215641fd.dl.dropboxusercontent.com)|162.125.9.15|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 44230 (43K) [text/plain]
+Saving to: ‘LiveKit-Agent-SDK-Python.txt?rlkey=whyd2r32t1m8x6m76yuevl0p6’
+
+                      LiveKit-Agent-SDK-Pyt   0%[                                                                                          ]       0  --.-KB/s               LiveKit-Agent-SDK-Python.txt?rlkey=whyd2r32 100%[=========================================================================================>]  43.19K  --.-KB/s    in 0.01s   
+
+2025-07-17 15:25:19 (3.30 MB/s) - ‘LiveKit-Agent-SDK-Python.txt?rlkey=whyd2r32t1m8x6m76yuevl0p6’ saved [44230/44230]
+

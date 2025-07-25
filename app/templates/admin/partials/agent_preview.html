@@ -124,17 +124,21 @@
 <div id="triggerInfo"></div>
 
 <script>
-// Track current mode
-let currentMode = 'text';
-
-function switchMode(mode, button) {
-    // If already in this mode, do nothing
-    if (currentMode === mode) {
-        return false;
+// Wrap in IIFE to avoid conflicts when HTMX reloads content
+(function() {
+    // Use window scope to persist between HTMX loads
+    if (typeof window.previewCurrentMode === 'undefined') {
+        window.previewCurrentMode = 'text';
     }
     
-    // Update current mode
-    currentMode = mode;
+    window.switchMode = function(mode, button) {
+        // If already in this mode, do nothing
+        if (window.previewCurrentMode === mode) {
+            return false;
+        }
+        
+        // Update current mode
+        window.previewCurrentMode = mode;
     
     // Update button styles
     document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -150,18 +154,18 @@ function switchMode(mode, button) {
     if (indicator) {
         indicator.textContent = mode === 'text' ? 'Preview mode - Text chat interface' : 'Preview mode - Voice chat interface';
     }
+        
+        // Allow HTMX to proceed with the request
+        return true;
+    }
     
-    // Allow HTMX to proceed with the request
-    return true;
-}
-
-// Set up HTMX to respect our mode check
+    // Set up HTMX to respect our mode check
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.mode-btn').forEach(btn => {
         // Intercept HTMX before it sends
         btn.addEventListener('htmx:beforeRequest', function(evt) {
             const mode = this.dataset.mode;
-            if (currentMode === mode) {
+            if (window.previewCurrentMode === mode) {
                 // Cancel the request if already in this mode
                 evt.preventDefault();
                 return false;
@@ -169,4 +173,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+
+// Close IIFE
+})();
 </script>

@@ -1,0 +1,298 @@
+[
+  {
+    "documentation_pages": [
+      {
+        "title": "Introduction",
+        "content": "The Agents framework allows you to add a Python or Node.js program to any LiveKit room as a full realtime participant. The SDK includes a complete set of tools and abstractions that make it easy to feed realtime media and data through an AI pipeline that works with any provider, and to publish realtime results back to the room."
+      },
+      {
+        "title": "Use cases",
+        "content": "Some applications for agents include:\n\n- **Multimodal assistant**: Talk, text, or screen share with an AI assistant.\n- **Telehealth**: Bring AI into realtime telemedicine consultations, with or without humans in the loop.\n- **Call center**: Deploy AI to the front lines of customer service with inbound and outbound call support.\n- **Realtime translation**: Translate conversations in realtime.\n- **NPCs**: Add lifelike NPCs backed by language models instead of static scripts.\n- **Robotics**: Put your robot's brain in the cloud, giving it access to the most powerful models."
+      },
+      {
+        "title": "Framework overview",
+        "content": "Your agent code operates as a stateful, realtime bridge between powerful AI models and your users. While AI models typically run in data centers with reliable connectivity, users often connect from mobile networks with varying quality.\n\nWebRTC ensures smooth communication between agents and users, even over unstable connections. LiveKit WebRTC is used between the frontend and the agent, while the agent communicates with your backend using HTTP and WebSockets. This setup provides the benefits of WebRTC without its typical complexity."
+      },
+      {
+        "title": "How agents connect to LiveKit",
+        "content": "When your agent code starts, it first registers with a LiveKit server (either self hosted or LiveKit Cloud) to run as a \"worker\" process. The worker waits until it receives a dispatch request. To fulfill this request, the worker boots a \"job\" subprocess which joins the room."
+      },
+      {
+        "title": "Getting started",
+        "content": "Follow these guides to learn more and get started with LiveKit Agents."
+      },
+      {
+        "title": "Agent dispatch | LiveKit Docs",
+        "content": "Dispatch is the process of assigning an agent to a room. LiveKit server manages this process as part of the worker lifecycle. LiveKit optimizes dispatch for high concurrency and low latency, typically supporting hundred of thousands of new connections per second with a max dispatch time under 150 ms.\n\nBy default, an agent is automatically dispatched to each new room. Automatic dispatch is the best option if you want to assign the same agent to all new participants.\n\nExplicit dispatch is available for greater control over when and how agents join rooms. This approach leverages the same worker systems, allowing you to run agent workers in the same way.\n\nTo use explicit dispatch, set the agent_name field in the WorkerOptions:\n\nPythonNode.js\n\n```\n\nopts = WorkerOptions(\n    ...\n    agent_name=\"test-agent\",\n)\n```\n\n**Important**\n\nAutomatic dispatch is disabled if the agent_name property is set.\n\nAgent workers with the agent_name set can be explicitly dispatched to a room via AgentDispatchService.\n\nPythonNode.jsLiveKit CLIGo\n\n```\nimport asyncio\nfrom livekit import api\n\nroom_name = \"my-room\"\nagent_name = \"test-agent\"\n\nasync def create_explicit_dispatch():\n    lkapi = api.LiveKitAPI()\n    dispatch = await lkapi.agent_dispatch.create_dispatch(\n        api.CreateAgentDispatchRequest(\n            agent_name=agent_name, room=room_name, metadata='{\"user_id\": \"12345\"}'\n        )\n    )\n    print(\"created dispatch\", dispatch)\n\n    dispatches = await lkapi.agent_dispatch.list_dispatch(room_name=room_name)\n    print(f\"there are {len(dispatches)} dispatches in {room_name}\")\n    await lkapi.aclose()\n\nasyncio.run(create_explicit_dispatch())\n```\n\nThe room, my-room, is automatically created during dispatch if it doesn't already exist, and the worker assigns test-agent to it.\n\nExplicit dispatch allows you to pass metadata to the agent, available in the JobContext. This is useful for including details the like the user's ID, name, or phone number.\n\nThe metadata field is a string. LiveKit recommends using JSON to pass structured data.\n\nThe examples in the previous section demonstrate how to pass job metadata during dispatch.\n\nFor information on consuming job metadata in an agent, see the following guide:\n\n[**Job metadata** \\Learn how to consume job metadata in an agent.](https://docs.livekit.io/agents/worker/job/#metadata)\n\nAgents can be explicitly dispatched for inbound SIP calls. SIP dispatch rules can define one or more agents using the room_config.agents field.\n\nLiveKit recommends explicit agent dispatch for SIP inbound calls rather than automatic agent dispatch as it allows multiple agents within a single project.\n\nYou can configure a participant's token to dispatch one or more agents immediately upon connection.\n\nTo dispatch multiple agents, include multiple RoomAgentDispatch entries in RoomConfiguration.\n\nThe following example creates a token that dispatches the test-agent agent to the my-room room when the participant connects:\n\nPythonNode.jsGo\n\n```\nfrom livekit.api import (\n  AccessToken,\n  RoomAgentDispatch,\n  RoomConfiguration,\n  VideoGrants,\n)\n\nroom_name = \"my-room\"\nagent_name = \"test-agent\"\n\ndef create_token_with_agent_dispatch() -> str:\n    token = (\n        AccessToken()\n        .with_identity(\"my_participant\")\n        .with_grants(VideoGrants(room_join=True, room=room_name))\n        .with_room_config(\n            RoomConfiguration(\n                agents=[\\\n                    RoomAgentDispatch(agent_name=\"test-agent\", metadata='{\"user_id\": \"12345\"}')\\\n                ],\n            ),\n        )\n        .to_jwt()\n    )\n    return token\n```\n\nOn this page\n\n[Dispatching agents](https://docs.livekit.io/agents/worker/agent-dispatch/#dispatching-agents) [Automatic agent dispatch](https://docs.livekit.io/agents/worker/agent-dispatch/#automatic) [Explicit agent dispatch](https://docs.livekit.io/agents/worker/agent-dispatch/#explicit) [Dispatch via API](https://docs.livekit.io/agents/worker/agent-dispatch/#via-api) [Dispatch from inbound SIP calls](https://docs.livekit.io/agents/worker/agent-dispatch/#dispatch-from-inbound-sip-calls) [Dispatch on participant connection](https://docs.livekit.io/agents/worker/agent-dispatch/#dispatch-on-participant-connection)"
+      },
+      {
+        "title": "AI voice agents | LiveKit Docs",
+        "content": "This documentation is for v0.x of the LiveKit Agents framework.\n\nCompanies like OpenAI, Character.ai, Retell, and Speak have built their conversational AI products on the LiveKit platform. AI voice agents are one of the primary use cases for LiveKit's Agents framework."
+      },
+      {
+        "title": "Features",
+        "content": "- Programmable conversation flows\n- Integrated LLM function calls\n- Provide context to the conversation via RAG\n- Leverage connectors from an open-source plugin ecosystem\n- Send synchronized transcriptions to your frontend"
+      },
+      {
+        "title": "Multimodal or voice pipeline",
+        "content": "LiveKit offers two types of voice agents: MultimodalAgent and VoicePipelineAgent.\n\n- MultimodalAgent uses OpenAI’s multimodal model and realtime API to directly process user audio and generate audio responses, similar to OpenAI’s advanced voice mode, producing more natural-sounding speech.\n- VoicePipelineAgent uses a pipeline of STT, LLM, and TTS models, providing greater control over the conversation flow by allowing applications to modify the text returned by the LLM."
+      },
+      {
+        "title": "Handling background noise",
+        "content": "While humans can easily ignore background noise, AI models often struggle, leading to misinterpretations or unnecessary pauses when detecting non-speech sounds. Although WebRTC includes built-in noise suppression, it often falls short in real-world environments.\n\nTo address this, LiveKit has partnered with Krisp to bring best-in-class noise suppression technology to AI agents."
+      },
+      {
+        "title": "Turn detection",
+        "content": "Endpointing is the process of detecting the start and end of speech in an audio stream. This is crucial for conversational AI agents to understand when a user has finished speaking and when to start responding to user input."
+      },
+      {
+        "title": "Voice activity detection (VAD)",
+        "content": "LiveKit Agents uses VAD to detect when the user has finished speaking. The agent waits for a minimum duration of silence before considering the turn complete."
+      },
+      {
+        "title": "Turn detection model",
+        "content": "While VAD provides a simple approximation of turn completion, it lacks contextual awareness. In natural conversations, pauses often occur as people think or formulate responses."
+      },
+      {
+        "title": "Agent state",
+        "content": "Voice agents automatically publish their current state to your frontend, making it easy to build UI that reflects the agent’s status."
+      },
+      {
+        "title": "Transcriptions",
+        "content": "LiveKit provides realtime transcriptions for both the agent and the user, which are sent to your frontend via the transcription protocol."
+      },
+      {
+        "title": "Overview",
+        "content": "VoicePipelineAgent is a high-level abstraction that orchestrates conversation flow using a pipeline of three main models: STT → LLM → TTS. Additional models, like VAD, are used to enhance the conversation flow."
+      },
+      {
+        "title": "Example agent",
+        "content": "The following is an example of an AI agent created with the `VoicePipelineAgent` class: PythonNode.js\n\n```\nfrom livekit.agents import llm\nfrom livekit.agents.pipeline import VoicePipelineAgent\nfrom livekit.plugins import cartesia, deepgram, openai, silero\n\ninitial_ctx = llm.ChatContext().append(\n    role=\"system\",\n    text=\"<your prompt>\",\n)\n\nagent = VoicePipelineAgent(\n    vad=silero.VAD.load(),\n    # flexibility to use any models\n    stt=deepgram.STT(model=\"nova-2-general\"),\n    llm=openai.LLM(),\n    tts=cartesia.TTS(),\n    # intial ChatContext with system prompt\n    chat_ctx=initial_ctx,\n    # whether the agent can be interrupted\n    allow_interruptions=True,\n    # sensitivity of when to interrupt\n    interrupt_speech_duration=0.5,\n    interrupt_min_words=0,\n    # minimal silence duration to consider end of turn\n    min_endpointing_delay=0.5,\n    # callback to run before LLM is called, can be used to modify chat context\n    before_llm_cb=None,\n    # callback to run before TTS is called, can be used to customize pronounciation\n    before_tts_cb=None,\n)\n\n# start the participant for a particular room, taking audio input from a single participant\nagent.start(room, participant)\n```"
+      },
+      {
+        "title": "Model options",
+        "content": "Options on the models can be customized when creating the plugin objects. For example, you can adjust the model and temperature of the LLM like this:\n\n```\nllm = openai.LLM(\n    model=\"gpt-4o-mini\",\n    temperature=0.5,\n)\n```"
+      },
+      {
+        "title": "Modify context before LLM",
+        "content": "The `before_llm_cb` callback allows you to modify the `ChatContext` before it is sent to the LLM model. This is useful for adding extra context or adjusting the context based on the conversation. For example, when the context becomes too long, you can truncate it to optimize the amount of tokens used in inference.\n\n```\nasync def truncate_context(assistant: VoicePipelineAgent, chat_ctx: llm.ChatContext):\n    if len(chat_ctx.messages) > 15:\n        chat_ctx.messages = chat_ctx.messages[-15:]\n\nagent = VoicePipelineAgent(\n    ...\n    before_llm_cb=truncate_context,\n)\n```"
+      },
+      {
+        "title": "Altering text before TTS",
+        "content": "The `before_tts_cb` callback allows you to modify the text before it is sent to the TTS model. This is useful for customizing pronunciation or adding extra context to the text.\n\n```\nfrom livekit.agents import tokenize\nfrom livekit.agents.pipeline import VoicePipelineAgent\n\ndef replace_words(assistant: VoicePipelineAgent, text: str | AsyncIterable[str]):\n    return tokenize.utils.replace_words(\n        text=text, replacements={\"livekit\": r\"<<l|aɪ|v|k|ɪ|t|>>\"}\n    )\n\nagent = VoicePipelineAgent(\n    ...\n    before_tts_cb=replace_words,\n)\n```"
+      },
+      {
+        "title": "Turn detection thresholds",
+        "content": "The following setting is available for voice activity detection. In addition to VAD, you can enableLiveKit's turn detection model to work in conjunction with VAD for a more natural conversational flow.To learn more, see [Turn detection](https://docs.livekit.io/agents/v0/voice-agent/#turn-detection)."
+      },
+      {
+        "title": "VAD settings",
+        "content": "`min_endpointing_delay` defines the minimum silence duration to detect the end of a turn. The defaultvalue is `0.5` (500 ms). Increasing this value allows for longer pauses before the agent assumes theuser has finished speaking."
+      },
+      {
+        "title": "Interruption handling",
+        "content": "When the user interrupts, the agent stops speaking and switches to listening mode, storing the position of the speech played so far in its ChatContext.\n\nThere are three flags that control the interruption behavior:\n\n- `allow_interruptions`: set to `False` to disable user interruptions.\n- `interrupt_speech_duration`: the minimum speech duration (detected by VAD) required to consider the interruption intentional.\n- `interrupt_min_words`: the minimum number of transcribed words needed for the interruption to be considered intentional."
+      },
+      {
+        "title": "Manual Interruptions",
+        "content": "You can manually interrupt an agent using the `agent.interrupt()` method. Calling this method immediately ends any agent speech.\n\nTo stop the agent from speaking any pending speech that's currently in the pipeline, you can use the `interrupt_all` parameterto interrupt all pending speech.\n\n**Note**\n\nThis method is currently only available in Python."
+      },
+      {
+        "title": "Emitted events",
+        "content": "An agent emits the following events:\n\n| Event | Description |\n| --- | --- |\n| `user_started_speaking` | User started speaking. |\n| `user_stopped_speaking` | User stopped speaking. |\n| `agent_started_speaking` | Agent started speaking. |\n| `agent_stopped_speaking` | Agent stopped speaking. |\n| `user_speech_committed` | User's speech was committed to the chat context. |\n| `agent_speech_committed` | Agent's speech was committed to the chat context. |\n| `agent_speech_interrupted` | Agent was interrupted while speaking. |\n| `function_calls_collected` | The complete set of functions to be executed was received. |\n| `function_calls_finished` | All function calls have been executed. |\n| `metrics_collected` | Metric was collected. Metrics can include time to first token for STT, LLM, TTS, duration, and usagemetrics."
+      },
+      {
+        "title": "Events example",
+        "content": "For example, when a user's speech is committed to the chat context, save it to a queue for transcription:\n\n```\n@agent.on(\"user_speech_committed\")\ndef on_user_speech_committed(msg: llm.ChatMessage):\n    # convert string lists to strings, drop images\n    if isinstance(msg.content, list):\n        msg.content = \"\\n\".join(\n            \"[image]\" if isinstance(x, llm.ChatImage) else x for x in msg\n        )\n    log_queue.put_nowait(f\"[{datetime.now()}] USER:\\n{msg.content}\\n\\n\")\n```"
+      },
+      {
+        "title": "Amazon Bedrock LLM integration guide | LiveKit Docs",
+        "content": "Amazon Bedrock is a fully managed service that provides a wide range of pre-trained models. With LiveKit's open source Bedrock integration and the Agents framework, you can build sophisticated voice AI applications using models from a wide variety of providers."
+      },
+      {
+        "title": "Quick reference",
+        "content": "This section includes a basic usage example and some reference material. For links to more detailed documentation, see Additional resources."
+      },
+      {
+        "title": "Installation",
+        "content": "Install the plugin from PyPI:\n\n```\n\npip install \"livekit-agents[aws]~=1.0\"\n```"
+      },
+      {
+        "title": "Authentication",
+        "content": "The AWS plugin requires AWS credentials. Set the following environment variables in your `.env` file:\n\n```\nAWS_ACCESS_KEY_ID=<your-aws-access-key-id>\nAWS_SECRET_ACCESS_KEY=<your-aws-secret-access-key>\n```"
+      },
+      {
+        "title": "Usage",
+        "content": "Use Bedrock within an `AgentSession` or as a standalone LLM service. For example,you can use this LLM in the Voice AI quickstart.\n\n```\nfrom livekit.plugins import aws\n\nsession = AgentSession(\n    llm=aws.LLM(\n        model=\"anthropic.claude-3-5-sonnet-20240620-v1:0\",\n        temperature=0.8,\n    ),\n    # ... tts, stt, vad, turn_detection, etc.\n)\n```"
+      },
+      {
+        "title": "Parameters",
+        "content": "This section describes some of the available parameters. For a complete reference of all available parameters, see the plugin reference.\n\n**model** `string | TEXT_MODEL` `Optional` Default: `anthropic.claude-3-5-sonnet-20240620-v1:0`\n\nThe model to use for the LLM. For more information, see the documentation for the `modelId` parameter in the Amazon Bedrock API reference.\n\n**region** `string` `Optional` Default: `us-east-1`\n\nThe region to use for AWS API requests.\n\n**temperature** `float` `Optional`\n\nA measure of randomness in output. A lower value results in more predictable output, while a higher value results in more creative output.\n\nDefault values vary depending on the model you select. To learn more, see Inference request parameters and response fields for foundation models.\n\n**tool_choice** `[ToolChoice | Literal['auto', 'required', 'none']]` `Optional` Default: `auto`\n\nSpecifies whether to use tools during response generation."
+      },
+      {
+        "title": "Additional resources",
+        "content": "The following links provide more information about the Amazon Bedrock LLM plugin.\n\n**Python package** \n\nThe `livekit-plugins-aws` package on PyPI.\n\n**Plugin reference** \n\nReference for the Amazon Bedrock LLM plugin.\n\n**GitHub repo** \n\nView the source or contribute to the LiveKit Amazon Bedrock LLM plugin.\n\n**Bedrock docs** \n\nAmazon Bedrock docs.\n\n**Voice AI quickstart** \n\nGet started with LiveKit Agents and Amazon Bedrock.\n\n**AWS ecosystem guide** \n\nOverview of the entire AWS and LiveKit Agents integration."
+      },
+      {
+        "title": "Job lifecycle | LiveKit Docs",
+        "content": "When a worker accepts a job request from LiveKit server, it starts a new process and runs your agent code inside. Each job runs in a separate process to isolate agents from each other. If a session instance crashes, it doesn't affect other agents running on the same worker. The job runs until all standard and SIP participants leave the room, or you explicitly shut it down.\n\nThe entrypoint is executed as the main function of the process for each new job run by the worker, effectively handing control over to your code. You should load any necessary app-specific data, call ctx.connect() to join the room, and then execute your agent's logic.\n\nYou can customize a job with user or job-specific data using either job metadata, room metadata, or participant attributes.\n\nYou can disconnect an agent after it completes its task and is no longer needed in the room. This allows the other participants in the LiveKit session to continue. Your shutdown hooks run after the shutdown function."
+      },
+      {
+        "title": "Making calls using SIP | LiveKit Docs",
+        "content": "This documentation is for v0.x of the LiveKit Agents framework. This guide walks you through the steps to create an AI voice agent that makes outgoing calls. You can use an agent in the following scenarios: Call center callbacks, Product check-ins, Sales calls, Appointment reminders, Surveys."
+      },
+      {
+        "title": "Prerequisites",
+        "content": "The following are required to complete the steps in this guide: Phone number purchased from a SIP trunk provider like Twilio or Telnyx, SIP provider trunk configured as an outbound trunk for use with LiveKit SIP, LiveKit Cloud project or a self-hosted instance of LiveKit server, SIP server (only required if you're self hosting the LiveKit server), LiveKit CLI installed (requires version 2.3.0 or later)."
+      },
+      {
+        "title": "Outbound call flow",
+        "content": "The suggested flow for outbound calls is as follows: 1. Create a dispatch for your agent. 2. Once your agent is connected, dial the user via CreateSIPParticipant. 3. The user answers the call, and starts speaking to the agent."
+      },
+      {
+        "title": "Step 1: Set up environment variables",
+        "content": "Set up the following environment variables to configure the LiveKit CLI to use your LiveKit Cloud or self-hosted LiveKit server instance: export LIVEKIT_URL=<your LiveKit server URL> export LIVEKIT_API_KEY=<your API Key> export LIVEKIT_API_SECRET=<your API Secret> export OPENAI_API_KEY=your-openai-api-key."
+      },
+      {
+        "title": "Step 2: Create an outbound trunk",
+        "content": "To make outgoing calls, the provider's outbound trunk needs to be registered with LiveKit. This setup only needs to be performed once. If you already have an outbound trunk for the SIP provider phone number, you can skip to Step 3: Create an agent."
+      },
+      {
+        "title": "Step 3: Create an agent",
+        "content": "Create an agent that makes outbound calls. In this example, create a speech-to-speech agent using OpenAI's realtime API. The same example can also be used with VoicePipelineAgent."
+      },
+      {
+        "title": "Understanding the code",
+        "content": "There are a few key points of note in this example detailed in the following sections."
+      },
+      {
+        "title": "Step 4: Creating a dispatch",
+        "content": "Once your agent is up and running, you can test it by having it make a phone call. Use LiveKit CLI to create a dispatch. Replace +15105550100 with the phone number you want to call."
+      },
+      {
+        "title": "Next steps",
+        "content": "Create an agent that accepts inbound calls. Learn more about outbound trunks. This guide uses Python. For more information and Node examples, see the following topics: Dispatching agents, VoicePipelineAgent, Creating a SIP participant."
+      },
+      {
+        "title": "Integrating with your frontend | LiveKit Docs",
+        "content": "This documentation is for v0.x of the LiveKit Agents framework.\n\nSee updated documentation here: [Web and mobile frontends](https://docs.livekit.io/agents/start/frontend/).\n\n_v1.0 for Node.js is coming soon._\n\nWhen building voice agents with the Agents framework, your frontend can leverage LiveKit‘s SDKs to manage media devices and transport audio and video streams.\n\nThe following UI components are specifically for voice agents, including speech visualizers and control bars."
+      },
+      {
+        "title": "Voice agent components",
+        "content": "The [useVoiceAssistant](https://docs.livekit.io/reference/components/react/hook/usevoiceassistant/) hook returns the voice assistant’s [state](https://docs.livekit.io/agents/v0/voice-agent/#agent-state) and audio track. You pass them to a visualizer component to give users visual feedback about the agent's current status.\n\nThere are two additional components available:\n\n- [BarVisualizer](https://docs.livekit.io/reference/components/react/component/barvisualizer/): Visualizes audio output with vertical bars. You can optionally set the number of bars and the minimum and maximum height. The visualizer can be customized via CSS styles to fit your application's design.\n\n**Tip**\n\nWhen `state` is passed into the `BarVisualizer` component, it visualizes both the agent’s state (like `listening` or `thinking`) and the audio spectrum.\n\n- [VoiceAssistantControlBar](https://docs.livekit.io/reference/components/react/component/voiceassistantcontrolbar/): A control bar that includes audio settings and a disconnect button."
+      },
+      {
+        "title": "Example",
+        "content": "Here's a basic example showing how these components work together:\n\n```javascript\n// in next.js, \"use client\" is needed to indicate it shouldn't be\n// server side rendered\n\"use client\";\n\nimport \"@livekit/components-styles\";\n\nimport {\n  RoomContext,\n  useVoiceAssistant,\n  BarVisualizer,\n  RoomAudioRenderer,\n  VoiceAssistantControlBar,\n} from \"@livekit/components-react\";\n\nexport default function MyVoiceAgent() {\n  const [room] = useState(new Room());\n\n  return (\n    <RoomContext.Provider value={room}>\n      <button onClick={() => room.connect(serverUrl, token)}>Connect</button>\n      <SimpleVoiceAssistant />\n      <VoiceAssistantControlBar />\n      <RoomAudioRenderer />\n    </RoomContext.Provider>\n  );\n}\n\nfunction SimpleVoiceAssistant() {\n  const { state, audioTrack } = useVoiceAssistant();\n  return (\n    <div className=\"h-80\">\n      <BarVisualizer state={state} barCount={5} trackRef={audioTrack} style={{}} />\n      <p className=\"text-center\">{state}</p>\n    </div>\n  );\n}\n```\n\n## Testing agent UI\n\nYou can try out both of these components in the [realtime playground](https://playground.livekit.io/). These components are also included in the frontend when you create an app using [LiveKit Sandbox](https://cloud.livekit.io/projects/p_/sandbox)."
+      },
+      {
+        "title": "Working with the MultimodalAgent class | LiveKit Docs",
+        "content": "This documentation is for v0.x of the LiveKit Agents framework.\n\nThe `MultimodalAgent` class is an abstraction for building AI agents using OpenAI’s Realtime API with multimodal models. These models accept audio directly, enabling them to 'hear' your voice and capture nuances like emotion, often lost in speech-to-text conversion.\n\nUnlike `VoicePipelineAgent`, the `MultimodalAgent` class uses a single primary model for the conversation flow. The model is capable of processing both audio and text inputs, generating audio responses.\n\n`MultimodalAgent` is responsible for managing the conversation state, including buffering responses from the model and sending them to the user in realtime. It also handles interruptions, indicating to OpenAI's realtime API the point at which the model had been interrupted.\n\nSpeech-to-speech agents offer several advantages over pipeline-based agents:\n- **Natural Interactions**: Callers can speak and hear responses with extremely low latency, mimicking human-to-human conversations.\n- **Voice and Tone**: Speech-to-speech agents are able to dynamically change the intonation and tone of their responses based on the emotions of the caller, making interactions more engaging.\n\nAn agent emits the following events:\n| Event | Description |\n| --- | --- |\n| `user_started_speaking` | User started speaking. |\n| `user_stopped_speaking` | User stopped speaking. |\n| `agent_started_speaking` | Agent started speaking. |\n| `agent_stopped_speaking` | Agent stopped speaking. |\n| `user_speech_committed` | User's speech was committed to the chat context. |\n| `agent_speech_committed` | Agent's speech was committed to the chat context. |\n| `agent_speech_interrupted` | Agent was interrupted while speaking."
+      },
+      {
+        "title": "Transcriptions | LiveKit Docs",
+        "content": "The Agents framework includes the ability to capture and deliver realtime transcriptions of a user's speech and LLM-generated speech or text.\n\nBoth `VoicePipelineAgent` and `MultimodalAgent` can forward transcriptions to clients automatically if you implement support for receiving them in your frontend. If you're not using either of these agent classes, you can [add transcription forwarding](https://docs.livekit.io/agents/v0/voice-agent/transcriptions/#agent-integration) to your agent code.\n\nTo learn more about creating transcriptions in the agent process, see [Recording agent sessions](https://docs.livekit.io/agents/v0/build/record/)."
+      },
+      {
+        "title": "AssemblyAI integration guide | LiveKit Docs",
+        "content": "AssemblyAI provides a streaming STT service with high accuracy, realtime transcription. You can use the open source AssemblyAI plugin for LiveKit Agents to build voice AI with fast, accurate transcription."
+      },
+      {
+        "title": "Overview",
+        "content": "AssemblyAI provides a streaming STT service with high accuracy, realtime transcription. You can use the open source AssemblyAI plugin for LiveKit Agents to build voice AI with fast, accurate transcription."
+      },
+      {
+        "title": "Quick reference",
+        "content": "This section provides a brief overview of the AssemblyAI STT plugin. For more information, see Additional resources."
+      },
+      {
+        "title": "Installation",
+        "content": "Install the plugin from PyPI:\n\npip install \"livekit-agents[assemblyai]~=1.0\""
+      },
+      {
+        "title": "Authentication",
+        "content": "The AssemblyAI plugin requires an AssemblyAI API key. Set ASSEMBLYAI_API_KEY in your .env file."
+      },
+      {
+        "title": "Usage",
+        "content": "Use AssemblyAI STT in an AgentSession or as a standalone transcription service. For example, you can use this STT in the Voice AI quickstart."
+      },
+      {
+        "title": "Parameters",
+        "content": "This section describes some of the available parameters. See the plugin reference for a complete list of all available parameters."
+      },
+      {
+        "title": "Turn detection",
+        "content": "AssemblyAI includes a custom phrase endpointing model that uses both audio and linguistic information to detect turn boundaries."
+      },
+      {
+        "title": "Additional resources",
+        "content": "The following resources provide more information about using AssemblyAI with LiveKit Agents."
+      },
+      {
+        "title": "OpenAI LLM integration guide | LiveKit Docs",
+        "content": "OpenAI provides powerful language models like `gpt-4o` and `o1`. With LiveKit's OpenAI integration and the Agents framework, you can build sophisticated voice AI applications using their industry-leading models.\n\n**Using Azure OpenAI?**\n\nSee our Azure OpenAI LLM guide.\n\nThis section includes a basic usage example and some reference material. For links to more detailed documentation, see Additional resources.\n\n### Installation\n\nInstall the plugin from PyPI:\n\n```\n\npip install \"livekit-agents[openai]~=1.0\"\n```\n\n### Authentication\n\nThe OpenAI plugin requires an OpenAI API key.\n\nSet `OPENAI_API_KEY` in your `.env` file.\n\n### Usage\n\nUse OpenAI within an `AgentSession` or as a standalone LLM service. For example, you can use this LLM in the Voice AI quickstart.\n\n```\n\nfrom livekit.plugins import openai\n\nsession = AgentSession(\n    llm=openai.LLM(\n        model=\"gpt-4o-mini\"\n    ),\n    # ... tts, stt, vad, turn_detection, etc.\n)\n```\n\n### Parameters\n\nThis section describes some of the available parameters. See the plugin reference for a complete list of all available parameters.\n\n**model** `string` `Optional` Default: `gpt-4o-mini`\n\nThe model to use for the LLM. For more information, see the OpenAI documentation.\n\n**temperature** `float` `Optional` Default: `0.8`\n\nA measure of randomness in output. A lower value results in more predictable output, while a higher value results in more creative output.\n\n**tool_choice** `ToolChoice | Literal['auto', 'required', 'none']` `Optional` Default: `auto`\n\nSpecifies whether to use tools during response generation.\n\nThe following resources provide more information about using OpenAI with LiveKit Agents."
+      },
+      {
+        "title": "Agents framework",
+        "content": "This documentation is for v0.x of the LiveKit Agents framework. See updated documentation here: [Integration guides](https://docs.livekit.io/agents/integrations/). _v1.0 for Node.js is coming soon._ The Agents framework supports integrations for providers using plugins. This topic describes LLM, STT, and TTS provider plugins. Additional plugins include support for Retrieval-Augmented Generation (RAG), Natural Language Toolkit (NLTK), LlamaIndex, Silero VAD, turn detection, and more. To see the list of additional plugins and learn more about how LiveKit plugins work, see [Working with plugins](https://docs.livekit.io/agents/v0/integrations/plugins/). If you want to use a provider not listed in the following sections, contributions for plugins are always welcome. To learn more, see the the guidelines for contributions to the [Python repository](https://github.com/livekit/agents/blob/0.x/CONTRIBUTING.md) or the [Node.js repository](https://github.com/livekit/agents-js/blob/main/CONTRIBUTING.md)."
+      },
+      {
+        "title": "Overview",
+        "content": "LiveKit's Google integration provides support for Google Gemini LLM, Google Cloud STT and TTS, and Gemini Live API:\n\n- Google plugin support for Gemini LLM, and Google Cloud STT and TTS.\n- Support for Google's Gemini Live API using the `RealtimeModel` class.\n\nThe following sections provide a quick reference for integrating Google AI services with LiveKit. For the complete reference, see the links provided in each section."
+      },
+      {
+        "title": "Gemini LLM",
+        "content": "LiveKit's Google plugin provides support for Gemini models across both Google AI and Vertex AI platforms. Use LiveKit's Google integration with the LiveKit Agents framework and create AI agents with advanced reasoning and contextual understanding."
+      },
+      {
+        "title": "google.LLM usage",
+        "content": "Create a new instance of Gemini LLM to use in a `VoicePipelineAgent`:\n\n```\nfrom livekit.plugins import google\n\ngoogle_llm = google.LLM(\n  model=\"gemini-2.0-flash-exp\",\n  temperature=\"0.8\",\n)\n```"
+      },
+      {
+        "title": "google.LLM parameters",
+        "content": "This section describes some of the available parameters. For a complete reference of all available parameters, see the plugin reference.\n\n**Note**\n\nGoogle application credentials must be provided using one of the following options:\n\n- For Vertex AI, the `GOOGLE_APPLICATION_CREDENTIALS` environment variable must be set to the path of the service account key file.\n\nThe Google Cloud project and location can be set via `project` and `location` arguments or the environment variables `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file and the location defaults to \"us-central1\".\n\n- For Google AI, set the `api_key` argument or the `GOOGLE_API_KEY` environment variable."
+      },
+      {
+        "title": "Google Cloud STT and TTS",
+        "content": "LiveKit's Google integration includes a Google plugin with STT and TTS support. Google Cloud STT supports over 125 languages and can use `chirp`, a foundational model with improved recognition and transcription for spoken languages and accents. Google Cloud TTS provides a wide voice selection and generates speech with humanlike intonation. Instances of Google STT and TTS can be used as part of the pipeline for an agent created using the `VoicePipelineAgent` class or as part of a standalone transcription service."
+      },
+      {
+        "title": "google.STT usage",
+        "content": "Use the `google.STT` method to create an instance of an STT:\n\n```\nfrom livekit.plugins import google\n\ngoogle_stt = google.STT(\n  model=\"chirp\",\n  spoken_punctuation=True,\n)\n```"
+      },
+      {
+        "title": "google.STT parameters",
+        "content": "This section describes some of the available parameters. For a complete reference of all available parameters, see the plugin reference.\n\n**Note**\n\nGoogle Cloud credentials must be provided by one of the following methods:\n\n- Passed in the `credentials_info` dictionary.\n- Saved in the `credentials_file` JSON file ( `GOOGLE_APPLICATION_CREDENTIALS` environment variable).\n- Application Default Credentials."
+      },
+      {
+        "title": "google.TTS usage",
+        "content": "Use the `google.TTS` method to create an instance of a TTS:\n\n```\nfrom livekit.plugins import google\n\ngoogle_stt = google.TTS(\n  gender=\"female\",\n  voice_name=\"en-US-Standard-H\",\n)\n```"
+      },
+      {
+        "title": "google.TTS parameters",
+        "content": "This section describes some of the available parameters. For a complete reference of all available parameters, see the plugin reference."
+      },
+      {
+        "title": "Gemini Live API",
+        "content": "LiveKit's Google plugin includes a `RealtimeModel` class that allows you to use Google's Gemini Live API. The Gemini Live API enables low-latency, two-way interactions that use text, audio, and video input, with audio and text output. Use LiveKit's Google integration with the Agents framework to create agents with natural, human-like voice conversations."
+      },
+      {
+        "title": "RealtimeModel usage",
+        "content": "Create a model using the Gemini Live API for use in a `MultimodalAgent`:\n\n```\nfrom livekit.plugins import google\n\nmodel=google.beta.realtime.RealtimeModel(\n    voice=\"Puck\",\n    temperature=0.8,\n    instructions=\"You are a helpful assistant\",\n),\n```"
+      },
+      {
+        "title": "RealtimeModel parameters",
+        "content": "This section describes some of the available parameters. For a complete reference of all available parameters, see the plugin reference."
+      },
+      {
+        "title": "Azure Speech STT integration guide | LiveKit Docs",
+        "content": "How to use the Azure Speech STT plugin for LiveKit Agents."
+      },
+      {
+        "title": "Speech-to-text (STT) integrations | LiveKit Docs",
+        "content": "Speech-to-text (STT) models process incoming audio and convert it to text in realtime. In voice AI, this text is then processed by an LLM to generate a response which is turn turned backed to speech using a TTS model.\n\nThe agents framework includes plugins for the following STT providers out-of-the-box. Choose a provider from the list for a step-by-step guide. You can also implement the STT node to provide custom behavior or an alternative provider.\n\nAll STT providers support low-latency multilingual transcription. Support for other features is noted in the following table.\n\n| Provider | Prompt | Keywords | Diarization | Translation |\n| --- | --- | --- | --- | --- |\n| Amazon Transcribe | — | ✓ | ✓ | — |\n| AssemblyAI | — | — | — | — |\n| Azure AI Speech | — | — | — | — |\n| Azure OpenAI | ✓ | — | — | — |\n| Baseten | — | — | — | — |\n| Cartesia | — | — | — | — |\n| Clova | — | ✓ | — | — |\n| Deepgram | — | ✓ | — | — |\n| fal | — | — | — | — |\n| Gladia | — | — | — | ✓ |\n| Google Cloud | — | ✓ | — | — |\n| Groq | ✓ | — | — | — |\n| OpenAI | ✓ | — | — | — |\n| Sarvam | — | — | — | — |\n| Speechmatics | — | — | ✓ | — |\n\nHave another provider in mind? LiveKit is open source and welcomes new plugin contributions.\n\nThe following sections describe high-level usage only.\n\nFor more detailed information about installing and using plugins, see the plugins overview.\n\nConstruct an AgentSession or Agent with an STT instance created by your desired plugin:\n\n```python\nfrom livekit.agents import AgentSession\nfrom livekit.plugins import deepgram\n\nsession = AgentSession(\n    stt=deepgram.STT(model=\"nova-2\")\n)\n```\n\nAgentSession automatically integrates with VAD to detect user turns and know when to start and stop STT.\n\nYou can also use an STT instance in a standalone fashion by creating a stream. You can use push_frame to add realtime audio frames to the stream, and then consume a stream of SpeechEvent as output.\n\nHere is an example of a standalone STT app:\n\n```python\nimport asyncio\n\nfrom dotenv import load_dotenv\n\nfrom livekit import agents, rtc\nfrom livekit.agents.stt import SpeechEventType, SpeechEvent\nfrom typing import AsyncIterable\nfrom livekit.plugins import (\n    deepgram,\n)\n\nload_dotenv()\n\nasync def entrypoint(ctx: agents.JobContext):\n    await ctx.connect()\n\n    @ctx.room.on(\"track_subscribed\")\n    def on_track_subscribed(track: rtc.RemoteTrack):\n        print(f\"Subscribed to track: {track.name}\")\n\n        asyncio.create_task(process_track(track))\n\n    async def process_track(track: rtc.RemoteTrack):\n        stt = deepgram.STT(model=\"nova-2\")\n        stt_stream = stt.stream()\n        audio_stream = rtc.AudioStream(track)\n\n        async with asyncio.TaskGroup() as tg:\n            # Create task for processing STT stream\n            stt_task = tg.create_task(process_stt_stream(stt_stream))\n\n            # Process audio stream\n            async for audio_event in audio_stream:\n                stt_stream.push_frame(audio_event.frame)\n\n            # Indicates the end of the audio stream\n            stt_stream.end_input()\n\n            # Wait for STT processing to complete\n            await stt_task\n\n    async def process_stt_stream(stream: AsyncIterable[SpeechEvent]):\n        try:\n            async for event in stream:\n                if event.type == SpeechEventType.FINAL_TRANSCRIPT:\n                    print(f\"Final transcript: {event.alternatives[0].text}\")\n                elif event.type == SpeechEventType.INTERIM_TRANSCRIPT:\n                    print(f\"Interim transcript: {event.alternatives[0].text}\")\n                elif event.type == SpeechEventType.START_OF_SPEECH:\n                    print(\"Start of speech\")\n                elif event.type == SpeechEventType.END_OF_SPEECH:\n                    print(\"End of speech\")\n        finally:\n            await stream.aclose()\n\nif __name__ == \"__main__\":\n    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))\n```\n\nSome STT providers or models, such as Whisper don't support streaming input. In these cases, your app must determine when a chunk of audio represents a complete segment of speech. You can do this using VAD together with the StreamAdapter class.\n\nThe following example modifies the previous example to use VAD and StreamAdapter to buffer user speech until VAD detects the end of speech:\n\n```python\nfrom livekit import agents, rtc\nfrom livekit.plugins import openai, silero\n\nasync def process_track(ctx: agents.JobContext, track: rtc.Track):\n  whisper_stt = openai.STT()\n  vad = silero.VAD.load(\n    min_speech_duration=0.1,\n    min_silence_duration=0.5,\n  )\n  vad_stream = vad.stream()\n  # StreamAdapter will buffer audio until VAD emits END_SPEAKING event\n  stt = agents.stt.StreamAdapter(whisper_stt, vad_stream)\n  stt_stream = stt.stream()\n  ...\n```\n\n[**Text and transcriptions** \\ Integrate realtime text features into your agent.](https://docs.livekit.io/agents/build/text/) [**Pipeline nodes** \\ Learn how to customize the behavior of your agent by overriding nodes in the voice pipeline.]"
+      }
+    ]
+  }
+]

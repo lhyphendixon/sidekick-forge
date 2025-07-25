@@ -1,0 +1,14 @@
+# Core LiveKit Requirements
+livekit-agents>=1.0.0
+livekit-plugins-deepgram>=1.0.0
+livekit-plugins-elevenlabs>=1.0.0
+livekit-plugins-openai>=1.0.0
+livekit-plugins-groq>=1.0.0
+livekit-plugins-silero>=1.0.0
+livekit-plugins-cartesia>=1.0.0
+
+# Essential Libraries
+aiohttp>=3.8.0
+python-dotenv>=1.0.0
+numpy<2.0.0
+supabase>=2.0.0

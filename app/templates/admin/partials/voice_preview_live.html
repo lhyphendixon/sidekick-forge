@@ -33,7 +33,7 @@
             <!-- Agent Status -->
             <div id="agentStatus" class="hidden">
                 <p class="text-sm text-brand-teal mb-2">Agent Connected</p>
-                <p class="text-xs text-dark-text-secondary">Listening for "{{ agent_slug }}"</p>
+                <p class="text-xs text-dark-text-secondary">Listening for "{{ agent_slug or (agent.slug if agent else 'agent') }}"</p>
             </div>
         </div>
     </div>
@@ -69,22 +69,82 @@
 </div>
 
 <script>
-// LiveKit connection variables
-let room;
-let localParticipant;
-let audioTrack;
-let isMuted = false;
+// Wrap entire script in IIFE to avoid global conflicts
+(function() {
+    // Ensure LiveKit SDK is loaded
+    if (!window.LivekitClient && !document.querySelector('script[src*="livekit-client"]')) {
+        const script = document.createElement('script');
+        script.src = '/static/livekit-client.min.js';
+        script.onload = () => {
+            console.log('LiveKit SDK loaded dynamically');
+            window.LiveKitSDK = window.LivekitClient;
+        };
+        script.onerror = () => {
+            console.error('Failed to load LiveKit SDK');
+        };
+        document.head.appendChild(script);
+    }
+
+    // LiveKit connection variables - use local scope within IIFE
+    let room = null;
+    let localParticipant = null;
+    let audioTrack = null;
+    let isMuted = false;
+
+// Wait for LiveKit SDK to be available
+async function waitForLiveKitSDK() {
+    let attempts = 0;
+    const maxAttempts = 20; // 10 seconds max wait
+    
+    while (attempts < maxAttempts) {
+        // Check various possible SDK locations
+        if (window.LiveKitSDK || window.LivekitClient || window.LiveKit || window.livekit || 
+            typeof LivekitClient !== 'undefined' || typeof LiveKit !== 'undefined' || typeof livekit !== 'undefined') {
+            console.log('LiveKit SDK found after', attempts * 500, 'ms');
+            return true;
+        }
+        
+        attempts++;
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    console.error('LiveKit SDK not found after', maxAttempts * 500, 'ms');
+    return false;
+}
 
 // Initialize LiveKit connection
 async function initializeLiveKit() {
     try {
-        // Check if LiveKit client is loaded
-        if (typeof LivekitClient === 'undefined') {
-            console.error('LiveKit client SDK not loaded');
+        // Wait for SDK to be available
+        const sdkAvailable = await waitForLiveKitSDK();
+        if (!sdkAvailable) {
+            console.error('LiveKit client SDK not loaded after waiting');
             updateStatus('error', 'LiveKit client SDK not loaded');
             return;
         }
-        console.log('LiveKit client SDK loaded successfully');
+        
+        // Check if LiveKit client is loaded - use the consistent global variable
+        let LiveKitSDK;
+        if (window.LiveKitSDK) {
+            LiveKitSDK = window.LiveKitSDK;
+        } else if (typeof LivekitClient !== 'undefined') {
+            LiveKitSDK = LivekitClient;
+        } else if (typeof LiveKit !== 'undefined') {
+            LiveKitSDK = LiveKit;
+        } else if (typeof livekit !== 'undefined') {
+            LiveKitSDK = livekit;
+        } else if (window.LivekitClient) {
+            LiveKitSDK = window.LivekitClient;
+        } else if (window.LiveKit) {
+            LiveKitSDK = window.LiveKit;
+        } else if (window.livekit) {
+            LiveKitSDK = window.livekit;
+        } else {
+            console.error('LiveKit client SDK not loaded - tried LiveKitSDK, LivekitClient, LiveKit, livekit');
+            updateStatus('error', 'LiveKit client SDK not loaded');
+            return;
+        }
+        console.log('LiveKit client SDK loaded successfully as:', LiveKitSDK);
         
         // Debug: Log connection details
         console.log('LiveKit Connection Details:');
@@ -119,7 +179,7 @@ async function initializeLiveKit() {
         }
         
         // Create room instance
-        room = new LivekitClient.Room({
+        room = new LiveKitSDK.Room({
             // Adaptive stream for better performance
             adaptiveStream: true,
             // Automatic quality adjustment
@@ -127,6 +187,9 @@ async function initializeLiveKit() {
             // Log level for debugging
             logLevel: 'warn'
         });
+        
+        // Store room reference globally for cleanup
+        window.livekitRoom = room;
         
         // Set up event handlers
         room.on('connected', handleConnected);
@@ -140,7 +203,7 @@ async function initializeLiveKit() {
         
         // Connect to room with timeout
         console.log('Attempting to connect to room...');
-        console.log('Using LiveKit client version:', LivekitClient.version || 'unknown');
+        console.log('Using LiveKit client version:', LiveKitSDK.version || 'unknown');
         const connectStart = Date.now();
         
         // Try connection with detailed error handling
@@ -303,8 +366,8 @@ function handleError(error) {
     updateStatus('error', 'Error: ' + error.message);
 }
 
-// Toggle mute
-function toggleMute() {
+// Toggle mute - expose to window for button onclick
+window.toggleMute = function() {
     if (!room || !room.localParticipant) return;
     
     isMuted = !isMuted;
@@ -328,11 +391,12 @@ function toggleMute() {
     }
 }
 
-// Disconnect from voice
-async function disconnectVoice() {
+// Disconnect from voice - expose to window for button onclick
+window.disconnectVoice = async function() {
     if (room) {
         await room.disconnect();
         room = null;
+        window.livekitRoom = null;
     }
 }
 
@@ -375,43 +439,61 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('🚀 Voice preview template loaded');
     console.log('🔍 Checking LiveKit client availability...');
     
-    // Check immediately if SDK is loaded
-    if (typeof LivekitClient === 'undefined') {
-        console.error('❌ LiveKit client not available immediately');
-        updateStatus('error', 'LiveKit SDK not loaded');
+    // Function to check if LiveKit SDK is available
+    function checkLiveKitSDK() {
+        // Debug: Check what's actually available in window
+        console.log('🔍 Available global variables:', {
+            LiveKitSDK: typeof window.LiveKitSDK,
+            LivekitClient: typeof LivekitClient,
+            LiveKit: typeof LiveKit,
+            livekit: typeof livekit,
+            windowLivekitClient: typeof window.LivekitClient,
+            windowLiveKit: typeof window.LiveKit,
+            windowLivekit: typeof window.livekit,
+            livekitSDKLoaded: window.livekitSDKLoaded
+        });
         
-        // Try waiting longer
-        setTimeout(() => {
-            console.log('🔄 Retrying LiveKit client check after 2 seconds...');
-            if (typeof LivekitClient === 'undefined') {
-                console.error('❌ LiveKit client still not available after 2 seconds');
-                updateStatus('error', 'LiveKit SDK failed to load');
-            } else {
-                console.log('✅ LiveKit client found after delay');
-                initializeLiveKit();
-            }
-        }, 2000);
-    } else {
-        console.log('✅ LiveKit client available immediately');
-        // Wait a bit for SDK to load, then start LiveKit connection
-        setTimeout(() => {
-            initializeLiveKit();
-        }, 500);
+        return typeof window.LiveKitSDK !== 'undefined' ||
+               typeof LivekitClient !== 'undefined' || 
+               typeof LiveKit !== 'undefined' || 
+               typeof livekit !== 'undefined' ||
+               typeof window.LivekitClient !== 'undefined' || 
+               typeof window.LiveKit !== 'undefined' || 
+               typeof window.livekit !== 'undefined';
     }
+    
+    // Function to wait for SDK to be available
+    function waitForSDK() {
+        if (checkLiveKitSDK()) {
+            console.log('✅ LiveKit client found');
+            initializeLiveKit();
+        } else if (window.livekitSDKLoaded === false) {
+            console.error('❌ LiveKit SDK failed to load');
+            updateStatus('error', 'LiveKit SDK failed to load');
+        } else {
+            console.log('🔄 Waiting for LiveKit SDK to load...');
+            setTimeout(waitForSDK, 100); // Check every 100ms
+        }
+    }
+    
+    // Debug: Check if script tag is present
+    const scriptTags = document.querySelectorAll('script[src*="livekit"]');
+    console.log('🔍 LiveKit script tags found:', scriptTags.length);
+    scriptTags.forEach((tag, index) => {
+        console.log(`Script ${index}:`, tag.src);
+    });
+    
+    // Start checking for SDK availability
+    waitForSDK();
 });
 
-// Also try initializing when the template is injected via HTMX
-if (document.readyState === 'complete') {
-    console.log('🔄 Document already ready, initializing immediately');
-    setTimeout(() => {
-        initializeLiveKit();
-    }, 1000);
-}
+// Close the IIFE
+})();
 
-// Cleanup on page unload
+// Cleanup on page unload - needs to be outside IIFE to access window.livekitRoom
 window.addEventListener('beforeunload', function() {
-    if (room) {
-        room.disconnect();
+    if (window.livekitRoom) {
+        window.livekitRoom.disconnect();
     }
 });
 </script>

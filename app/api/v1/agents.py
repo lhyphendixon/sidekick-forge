@@ -176,7 +176,7 @@ async def create_default_agents(
             client_id=client_id,
             system_prompt="You are a helpful customer support agent. Be professional, empathetic, and solution-oriented.",
             voice_settings={
-                "provider": "livekit",
+                "provider": "openai",
                 "voice_id": "alloy",
                 "temperature": 0.7
             },
@@ -189,7 +189,7 @@ async def create_default_agents(
             client_id=client_id,
             system_prompt="You are a knowledgeable sales assistant. Help customers find the right products and answer their questions.",
             voice_settings={
-                "provider": "livekit",
+                "provider": "openai",
                 "voice_id": "echo",
                 "temperature": 0.8
             },
@@ -202,7 +202,7 @@ async def create_default_agents(
             client_id=client_id,
             system_prompt="You are a technical support specialist. Help users solve technical problems step by step.",
             voice_settings={
-                "provider": "livekit",
+                "provider": "openai",
                 "voice_id": "fable",
                 "temperature": 0.5
             },

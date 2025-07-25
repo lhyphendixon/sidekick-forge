@@ -7,6 +7,7 @@ Runs in an isolated container per WordPress site
 import os
 import asyncio
 import logging
+import json
 from livekit import agents, rtc
 from livekit.agents import JobContext, WorkerOptions, cli
 from typing import Optional
@@ -22,32 +23,63 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load configuration from environment
+# Load global configuration from environment for worker setup
 config = AgentConfig()
 
 async def entrypoint(ctx: JobContext):
     """Main entry point for LiveKit agent jobs"""
-    
-    # Log job start
-    logger.info(f"Starting job for room: {ctx.room.name}")
-    logger.info(f"Site ID: {config.site_id}, Agent: {config.agent_slug}")
-    
-    # Extract metadata
-    metadata = ctx.room.metadata or {}
-    
-    # Check if this room is for our site/agent
-    room_site_id = metadata.get("site_id")
-    room_agent_slug = metadata.get("agent_slug")
-    
-    if room_site_id != config.site_id or room_agent_slug != config.agent_slug:
-        logger.info(f"Room not for this agent. Expected {config.site_id}/{config.agent_slug}, got {room_site_id}/{room_agent_slug}")
+    logger.info(f"Received job for room: {ctx.room.name}, job id: {ctx.job.id}")
+
+    metadata = {}
+    if ctx.job.metadata:
+        try:
+            metadata = json.loads(ctx.job.metadata)
+        except json.JSONDecodeError:
+            logger.error("Failed to parse job metadata", exc_info=True)
+            return
+
+    try:
+        # Create a job-specific configuration from the dispatched metadata,
+        # falling back to the worker's environment config for base settings.
+        job_config = AgentConfig(
+            agent_slug=metadata.get("agent_slug"),
+            agent_name=metadata.get("agent_name"),
+            system_prompt=metadata.get("system_prompt"),
+            model=metadata.get("model"),
+            temperature=float(metadata.get("temperature", config.temperature)),
+            max_tokens=int(metadata.get("max_tokens", config.max_tokens)),
+            
+            # Voice and STT/TTS settings from nested dicts
+            voice_id=metadata.get("voice_settings", {}).get("voice_id"),
+            stt_provider=metadata.get("voice_settings", {}).get("stt_provider"),
+            stt_model=metadata.get("voice_settings", {}).get("stt_model"),
+            tts_provider=metadata.get("voice_settings", {}).get("tts_provider"),
+            tts_model=metadata.get("voice_settings", {}).get("tts_model"),
+            
+            # API keys from nested dict
+            openai_api_key=metadata.get("api_keys", {}).get("openai_api_key"),
+            groq_api_key=metadata.get("api_keys", {}).get("groq_api_key"),
+            elevenlabs_api_key=metadata.get("api_keys", {}).get("elevenlabs_api_key"),
+            deepgram_api_key=metadata.get("api_keys", {}).get("deepgram_api_key"),
+            
+            # Base worker settings are inherited from the environment
+            site_id=config.site_id,
+            container_name=config.container_name,
+            livekit_url=config.livekit_url,
+            livekit_api_key=config.livekit_api_key,
+            livekit_api_secret=config.livekit_api_secret,
+        )
+        logger.info(f"Created job-specific config for agent: {job_config.agent_slug}")
+    except Exception as e:
+        logger.error(f"Failed to create job-specific config from metadata: {e}", exc_info=True)
         return
-    
-    # Create and run voice assistant
-    assistant = VoiceAssistant(config, ctx)
+
+    # Create and run voice assistant with the job-specific config
+    assistant = VoiceAssistant(job_config, ctx)
     await assistant.run()
-    
+
     logger.info(f"Job completed for room: {ctx.room.name}")
+
 
 async def main():
     """Main function to run the agent worker"""
@@ -55,21 +87,19 @@ async def main():
     logger.info(f"Starting LiveKit Agent Worker")
     logger.info(f"Container: {config.container_name}")
     logger.info(f"Site ID: {config.site_id}")
-    logger.info(f"Agent: {config.agent_slug}")
     
     # Start health check server
     health_server = HealthServer(config)
     health_task = asyncio.create_task(health_server.start())
     
-    # Configure worker options
+    # Configure worker options for a general worker pool.
+    # This worker will accept any job dispatched by the backend.
     worker_options = WorkerOptions(
         entrypoint_fnc=entrypoint,
         api_key=config.livekit_api_key,
         api_secret=config.livekit_api_secret,
         ws_url=config.livekit_url,
-        worker_type=agents.WorkerType.ROOM,
-        max_idle_time=30.0,  # Disconnect after 30s of no activity
-        num_idle_processes=0,  # Don't keep idle processes
+        worker_type=agents.WorkerType.ROOM, # Listen for room-based jobs
     )
     
     # Run the worker

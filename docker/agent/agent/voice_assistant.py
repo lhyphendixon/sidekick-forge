@@ -23,6 +23,11 @@ class VoiceAssistant:
     async def run(self):
         """Run the voice assistant"""
         try:
+            # Connect to the room
+            logger.info("Connecting to the room...")
+            await self.ctx.connect()
+            logger.info("Successfully connected to the room.")
+
             # Validate configuration
             self.config.validate()
             
@@ -43,9 +48,27 @@ class VoiceAssistant:
                 interrupt_speech_duration=0.5,
                 interrupt_min_words=2,
             )
+
+            # --- Add Event Handlers BEFORE starting the assistant ---
+            @self.assistant.on("user_speech_committed")
+            async def on_user_speech(transcript: str):
+                logger.info(f"✅ User speech committed: '{transcript}'")
+
+            @self.assistant.on("agent_speech_started")
+            async def on_agent_speech_started(text: str):
+                logger.info(f"✅ Agent speech started for text: '{text[:50]}...'")
+
+            @self.assistant.on("agent_speech_finished")
+            async def on_agent_speech_finished(text: str, error: Optional[Exception]):
+                if error:
+                    logger.error(f"❌ Agent speech finished with error: {error}")
+                else:
+                    logger.info(f"✅ Agent speech finished for text: '{text[:50]}...'")
             
             # Start the assistant
+            logger.info("Starting VoiceAssistant for room...")
             self.assistant.start(self.ctx.room)
+            logger.info("VoiceAssistant started successfully.")
             
             # Set up event handlers
             @self.ctx.room.on("track_subscribed")

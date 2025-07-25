@@ -3,10 +3,12 @@ from typing import Optional, Dict, Any, List
 import logging
 import time
 import jwt
+import json
 from datetime import datetime, timedelta
 
 from app.config import settings
 from app.utils.exceptions import ServiceUnavailableError
+from app.utils.livekit_credentials import LiveKitCredentialManager
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +16,10 @@ class LiveKitManager:
     """Manages LiveKit connections and operations"""
     
     def __init__(self):
-        self.api_key = settings.livekit_api_key
-        self.api_secret = settings.livekit_api_secret
-        self.url = settings.livekit_url
+        # Don't load credentials in __init__ - wait for async initialize
+        self.api_key = None
+        self.api_secret = None
+        self.url = None
         self._initialized = False
     
     async def initialize(self):
@@ -25,13 +28,20 @@ class LiveKitManager:
             return
         
         try:
+            # Load credentials with proper fallbacks
+            self.url, self.api_key, self.api_secret = await LiveKitCredentialManager.get_backend_credentials()
+            
+            # Validate credentials
+            if not await LiveKitCredentialManager.validate_credentials(self.url, self.api_key, self.api_secret):
+                raise ValueError("LiveKit credentials validation failed")
+            
             # Test connection by creating a test token
             self.create_token("test", "test-room")
             self._initialized = True
-            logger.info("LiveKit manager initialized successfully")
+            logger.info(f"LiveKit manager initialized successfully with URL: {self.url}")
         except Exception as e:
             logger.error(f"Failed to initialize LiveKit: {e}")
-            raise ServiceUnavailableError("Failed to connect to LiveKit")
+            raise ServiceUnavailableError(f"Failed to connect to LiveKit: {str(e)}")
     
     async def close(self):
         """Close LiveKit connections"""
@@ -134,7 +144,7 @@ class LiveKitManager:
                     name=name,
                     empty_timeout=empty_timeout,
                     max_participants=max_participants,
-                    metadata=str(metadata) if metadata else None
+                    metadata=json.dumps(metadata) if metadata else None
                 )
             )
             
@@ -230,6 +240,30 @@ class LiveKitManager:
             
         except Exception as e:
             logger.error(f"Failed to remove participant: {e}")
+            return False
+    
+    async def update_room_metadata(self, room_name: str, metadata: Dict[str, Any]) -> bool:
+        """Update room metadata"""
+        try:
+            livekit_api = api.LiveKitAPI(
+                url=self.url,
+                api_key=self.api_key,
+                api_secret=self.api_secret
+            )
+            
+            # Update room with new metadata
+            await livekit_api.room.update_room(
+                api.UpdateRoomRequest(
+                    room=room_name,
+                    metadata=json.dumps(metadata) if metadata else None
+                )
+            )
+            
+            logger.info(f"Updated room {room_name} metadata")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update room metadata: {e}")
             return False
     
     async def delete_room(self, room_name: str) -> bool:

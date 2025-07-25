@@ -7,12 +7,11 @@ from pydantic import BaseModel, Field
 from enum import Enum
 import logging
 import asyncio
-import subprocess
 import json
 import uuid
-import tempfile
 import time
 from datetime import datetime
+import traceback  # For detailed errors
 
 from app.services.agent_service_supabase import AgentService
 from app.services.client_service_supabase import ClientService
@@ -96,6 +95,7 @@ async def trigger_agent(
     - Text mode: Processes text messages through the agent
     """
     try:
+        logger.debug(f"Received trigger request", extra={'agent_slug': request.agent_slug, 'mode': request.mode, 'user_id': request.user_id})
         logger.info(f"Triggering agent {request.agent_slug} in {request.mode} mode for user {request.user_id}")
         
         # Validate mode-specific requirements
@@ -168,7 +168,7 @@ async def trigger_agent(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error triggering agent {request.agent_slug}: {str(e)}")
+        logger.error(f"Error triggering agent {request.agent_slug}: {str(e)}", exc_info=True, extra={'traceback': traceback.format_exc()})
         raise HTTPException(
             status_code=500, 
             detail=f"Internal error triggering agent: {str(e)}"
@@ -254,6 +254,7 @@ async def handle_voice_trigger(
     
     This creates a LiveKit room (if needed) and triggers a Python LiveKit agent to join it
     """
+    logger.debug(f"Starting voice trigger handling", extra={'agent_slug': agent.slug, 'room_name': request.room_name})
     logger.info(f"Handling voice trigger for agent {agent.slug} in room {request.room_name}")
     
     # Use backend's LiveKit credentials for ALL operations (true thin client)
@@ -263,13 +264,48 @@ async def handle_voice_trigger(
     
     logger.info(f"🏢 Using backend LiveKit infrastructure for thin client architecture")
     
+    # Prepare agent context first so we can pass it to room creation
+    agent_context = {
+        "client_id": client.id,  # Add client_id for API key lookup
+        "agent_slug": agent.slug,
+        "agent_name": agent.name,
+        "system_prompt": agent.system_prompt,
+        "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
+        "webhooks": agent.webhooks.dict() if agent.webhooks else {},
+        "user_id": request.user_id,
+        "session_id": request.session_id,
+        "conversation_id": request.conversation_id,
+        "context": request.context or {},
+        "api_keys": {
+            # LLM Providers
+            "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
+            "groq_api_key": client.settings.api_keys.groq_api_key if client.settings and client.settings.api_keys else None,
+            "deepinfra_api_key": client.settings.api_keys.deepinfra_api_key if client.settings and client.settings.api_keys else None,
+            "replicate_api_key": client.settings.api_keys.replicate_api_key if client.settings and client.settings.api_keys else None,
+            # Voice/Speech Providers
+            "deepgram_api_key": client.settings.api_keys.deepgram_api_key if client.settings and client.settings.api_keys else None,
+            "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key if client.settings and client.settings.api_keys else None,
+            "cartesia_api_key": client.settings.api_keys.cartesia_api_key if client.settings and client.settings.api_keys else None,
+            "speechify_api_key": client.settings.api_keys.speechify_api_key if client.settings and client.settings.api_keys else None,
+            # Embedding/Reranking Providers
+            "novita_api_key": client.settings.api_keys.novita_api_key if client.settings and client.settings.api_keys else None,
+            "cohere_api_key": client.settings.api_keys.cohere_api_key if client.settings and client.settings.api_keys else None,
+            "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key if client.settings and client.settings.api_keys else None,
+            "jina_api_key": client.settings.api_keys.jina_api_key if client.settings and client.settings.api_keys else None,
+            # Additional providers
+            "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None) if client.settings and client.settings.api_keys else None,
+        } if client.settings and client.settings.api_keys else {}
+    }
+    
     # Ensure the room exists (create if it doesn't)
     room_info = await ensure_livekit_room_exists(
         backend_livekit, 
         request.room_name,
         agent_name=agent.name,
-        user_id=request.user_id
+        user_id=request.user_id,
+        agent_config=agent_context
     )
+    logger.info(f"Room ensured: {room_info['status']} for room {room_info.get('room_name', request.room_name)}")
     
     # Generate user token for frontend to join the room (thin client)
     user_token = backend_livekit.create_token(
@@ -277,36 +313,23 @@ async def handle_voice_trigger(
         room_name=request.room_name,
         metadata={"user_id": request.user_id, "client_id": client.id}
     )
+    logger.debug(f"Generated user token", extra={'token_length': len(user_token)})
     
-    # Prepare agent context for LiveKit
-    agent_context = {
-        "agent_slug": agent.slug,
-        "agent_name": agent.name,
-        "system_prompt": agent.system_prompt,
-        "voice_settings": agent.voice_settings,
-        "webhooks": agent.webhooks,
-        "user_id": request.user_id,
-        "session_id": request.session_id,
-        "conversation_id": request.conversation_id,
-        "context": request.context or {}
-    }
     
     # Add a small delay to ensure room is fully ready
     if room_info["status"] == "created":
-        logger.info(f"Waiting 2 seconds for room {request.room_name} to be fully ready...")
-        await asyncio.sleep(2)
+        logger.info(f"Waiting for room {request.room_name} to be fully ready...")
+        await asyncio.sleep(0.5)  # Small delay for room initialization
     
-    # Trigger actual LiveKit agent container (using backend credentials)
-    container_result = await spawn_agent_container(
-        agent=agent,
-        client=client,
+    # Dispatch job to worker pool
+    dispatch_result = await dispatch_agent_job(
+        livekit_manager=backend_livekit,
         room_name=request.room_name,
-        user_id=request.user_id,
-        session_id=request.session_id,
-        conversation_id=request.conversation_id,
-        context=request.context,
-        use_backend_livekit=True  # Force use of backend credentials
+        agent=agent,
+        client=client
     )
+    
+    logger.info(f"Agent job dispatched: {dispatch_result.get('message', 'Success')}")
     
     return {
         "mode": "voice",
@@ -319,9 +342,9 @@ async def handle_voice_trigger(
             "configured": True
         },
         "room_info": room_info,
-        "container_info": container_result,
+        "dispatch_info": dispatch_result,
         "status": "voice_agent_triggered",
-        "message": f"Room {request.room_name} created with backend credentials, agent {agent.slug} spawned, user token provided"
+        "message": f"Room {request.room_name} ready, agent job dispatched to worker pool, user token provided."
     }
 
 
@@ -335,6 +358,7 @@ async def handle_text_trigger(
     
     This should process text messages through the agent
     """
+    logger.debug(f"Starting text trigger handling", extra={'agent_slug': agent.slug, 'message_length': len(request.message) if request.message else 0})
     logger.info(f"Handling text trigger for agent {agent.slug} with message: {request.message[:50]}...")
     
     # Prepare context for text processing
@@ -348,6 +372,7 @@ async def handle_text_trigger(
         "conversation_id": request.conversation_id,
         "context": request.context or {}
     }
+    logger.info(f"Text context prepared", extra=text_context)
     
     # Check if agent has text webhook configured
     text_webhook = agent.webhooks.text_context_webhook_url if agent.webhooks else None
@@ -355,11 +380,103 @@ async def handle_text_trigger(
     # API keys from client configuration
     api_keys = client.settings.api_keys if client.settings and client.settings.api_keys else {}
     
-    # TODO: Here you would integrate with your text processing system
-    # This could involve:
-    # 1. Calling the agent's text webhook if configured
-    # 2. Using AI APIs (OpenAI, etc.) with the client's API keys
-    # 3. Processing through LiveKit data channels
+    # Process text message through appropriate LLM
+    response_text = None
+    llm_provider = agent.voice_settings.llm_provider if agent.voice_settings else "openai"
+    llm_model = agent.voice_settings.llm_model if agent.voice_settings else "gpt-4"
+    
+    # Get appropriate API key
+    api_key = None
+    if llm_provider == "groq" and api_keys.groq_api_key:
+        api_key = api_keys.groq_api_key
+    elif llm_provider == "openai" and api_keys.openai_api_key:
+        api_key = api_keys.openai_api_key
+    elif llm_provider == "anthropic" and hasattr(api_keys, 'anthropic_api_key') and api_keys.anthropic_api_key:
+        api_key = api_keys.anthropic_api_key
+    
+    if api_key and api_key not in ["test_key", "test", "dummy"]:
+        try:
+            if llm_provider == "groq":
+                # Use Groq API
+                import httpx
+                async with httpx.AsyncClient() as http_client:
+                    response = await http_client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": llm_model or "llama3-70b-8192",
+                            "messages": [
+                                {"role": "system", "content": agent.system_prompt},
+                                {"role": "user", "content": request.message}
+                            ],
+                            "temperature": 0.7,
+                            "max_tokens": 1000
+                        },
+                        timeout=30.0
+                    )
+                    if response.status_code == 200:
+                        result = response.json()
+                        response_text = result["choices"][0]["message"]["content"]
+                    else:
+                        logger.error(f"Groq API error: {response.status_code} - {response.text}")
+                        
+            elif llm_provider == "openai":
+                # Use OpenAI API
+                import httpx
+                async with httpx.AsyncClient() as http_client:
+                    response = await http_client.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": llm_model or "gpt-4",
+                            "messages": [
+                                {"role": "system", "content": agent.system_prompt},
+                                {"role": "user", "content": request.message}
+                            ],
+                            "temperature": 0.7,
+                            "max_tokens": 1000
+                        },
+                        timeout=30.0
+                    )
+                    if response.status_code == 200:
+                        result = response.json()
+                        response_text = result["choices"][0]["message"]["content"]
+                    else:
+                        logger.error(f"OpenAI API error: {response.status_code} - {response.text}")
+                        
+        except Exception as e:
+            logger.error(f"Error processing text with {llm_provider}: {str(e)}")
+    else:
+        logger.warning(f"No valid API key available for {llm_provider}")
+    
+    # If we have a text webhook and no response yet, try calling it
+    if not response_text and text_webhook:
+        try:
+            import httpx
+            async with httpx.AsyncClient() as http_client:
+                webhook_response = await http_client.post(
+                    text_webhook,
+                    json={
+                        "message": request.message,
+                        "agent": agent.slug,
+                        "user_id": request.user_id,
+                        "session_id": request.session_id,
+                        "conversation_id": request.conversation_id,
+                        "context": text_context
+                    },
+                    timeout=30.0
+                )
+                if webhook_response.status_code == 200:
+                    webhook_data = webhook_response.json()
+                    response_text = webhook_data.get("response", webhook_data.get("message", ""))
+        except Exception as e:
+            logger.error(f"Error calling text webhook: {str(e)}")
     
     return {
         "mode": "text",
@@ -367,131 +484,119 @@ async def handle_text_trigger(
         "text_context": text_context,
         "webhook_configured": bool(text_webhook),
         "webhook_url": text_webhook,
-        "api_keys_available": list(api_keys.__dict__.keys()) if hasattr(api_keys, '__dict__') else [],
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
+        "api_key_available": bool(api_key and api_key not in ["test_key", "test", "dummy"]),
         "status": "text_message_processed",
-        "response": f"Text message processed by agent {agent.slug}. Integration with AI processing pipeline needed."
+        "response": response_text or f"I'm sorry, I couldn't process your message. Please ensure the {llm_provider} API key is configured.",
+        "agent_response": response_text
     }
 
 
-async def spawn_agent_container(
-    agent,
-    client, 
+async def dispatch_agent_job(
+    livekit_manager: LiveKitManager,
     room_name: str,
-    user_id: str,
-    session_id: Optional[str] = None,
-    conversation_id: Optional[str] = None,
-    context: Optional[Dict[str, Any]] = None,
-    use_backend_livekit: bool = False
+    agent,
+    client
 ) -> Dict[str, Any]:
     """
-    Trust that the main sophisticated agent is running and will handle job dispatch
+    Explicit dispatch mode - Directly dispatch agent to room with full configuration.
     
-    The main agent (autonomite_agent_v1_1_19_text_support.py) has a request_filter 
-    that automatically accepts all room jobs. No need to start separate workers.
+    This ensures the agent receives all necessary configuration and API keys
+    through job metadata, following LiveKit's recommended pattern.
     """
-    logger.info(f"🎯 Trusting main agent to handle job for {agent.slug} in room {room_name}")
+    logger.info(f"Dispatching agent {agent.slug} to room {room_name}")
     
     try:
-        # Check if main sophisticated agent is running
-        result = subprocess.run(
-            ["ps", "aux"],
-            capture_output=True,
-            text=True
+        # Prepare full agent configuration for job metadata
+        job_metadata = {
+            "client_id": client.id,
+            "agent_slug": agent.slug,
+            "agent_name": agent.name,
+            "system_prompt": agent.system_prompt,
+            "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
+            "webhooks": agent.webhooks.dict() if agent.webhooks else {},
+            "api_keys": {
+                # LLM Providers
+                "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
+                "groq_api_key": client.settings.api_keys.groq_api_key if client.settings and client.settings.api_keys else None,
+                "deepinfra_api_key": client.settings.api_keys.deepinfra_api_key if client.settings and client.settings.api_keys else None,
+                "replicate_api_key": client.settings.api_keys.replicate_api_key if client.settings and client.settings.api_keys else None,
+                # Voice/Speech Providers
+                "deepgram_api_key": client.settings.api_keys.deepgram_api_key if client.settings and client.settings.api_keys else None,
+                "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key if client.settings and client.settings.api_keys else None,
+                "cartesia_api_key": client.settings.api_keys.cartesia_api_key if client.settings and client.settings.api_keys else None,
+                "speechify_api_key": client.settings.api_keys.speechify_api_key if client.settings and client.settings.api_keys else None,
+                # Embedding/Reranking Providers
+                "novita_api_key": client.settings.api_keys.novita_api_key if client.settings and client.settings.api_keys else None,
+                "cohere_api_key": client.settings.api_keys.cohere_api_key if client.settings and client.settings.api_keys else None,
+                "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key if client.settings and client.settings.api_keys else None,
+                "jina_api_key": client.settings.api_keys.jina_api_key if client.settings and client.settings.api_keys else None,
+                # Additional providers
+                "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None) if client.settings and client.settings.api_keys else None,
+            } if client.settings and client.settings.api_keys else {}
+        }
+        
+        # Create LiveKit API client for explicit dispatch
+        livekit_api = api.LiveKitAPI(
+            url=livekit_manager.url,
+            api_key=livekit_manager.api_key,
+            api_secret=livekit_manager.api_secret
         )
         
-        main_agent_running = False
-        main_agent_pid = None
-        for line in result.stdout.split('\n'):
-            if 'autonomite_agent_v1_1_19_text_support.py' in line and 'dev' in line:
-                main_agent_running = True
-                # Extract PID
-                parts = line.split()
-                if len(parts) > 1:
-                    main_agent_pid = parts[1]
-                break
+        # Dispatch the agent with job metadata using the correct API method
+        dispatch_request = api.CreateAgentDispatchRequest(
+            room=room_name,
+            metadata=json.dumps(job_metadata),  # Pass full config as job metadata
+            agent_name="autonomite-agent"  # Match the agent name the worker accepts
+        )
         
-        if not main_agent_running:
-            logger.error("❌ Main sophisticated agent is not running!")
-            return {
-                "container_id": None,
-                "status": "error",
-                "error": "Main agent not running",
-                "message": "The main sophisticated agent (autonomite_agent_v1_1_19_text_support.py) is not running. Please start it."
-            }
+        logger.info(f"Sending dispatch request with {len(job_metadata)} metadata fields")
+        dispatch_response = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
         
-        # Create job metadata for the main agent to access
-        job_metadata = {
-            "user_id": user_id,
-            "session_id": session_id,
-            "conversation_id": conversation_id,
-            "agent_slug": agent.slug,
-            "client_id": client.id,
-            "context": context or {},
-            "room_name": room_name,
-            "timestamp": time.time()
-        }
+        # Log the actual response to understand structure
+        logger.info(f"Dispatch response type: {type(dispatch_response)}")
+        logger.info(f"Dispatch response dir: {dir(dispatch_response)}")
         
-        # Store metadata for main agent access
-        container_id = f"agent-{agent.slug}-{uuid.uuid4().hex[:8]}"
-        metadata_file = f"/tmp/job_metadata_{container_id}.json"
-        with open(metadata_file, 'w') as f:
-            json.dump(job_metadata, f)
+        # Try different attribute names
+        dispatch_id = None
+        if hasattr(dispatch_response, 'dispatch_id'):
+            dispatch_id = dispatch_response.dispatch_id
+        elif hasattr(dispatch_response, 'agent_dispatch_id'):
+            dispatch_id = dispatch_response.agent_dispatch_id
+        elif hasattr(dispatch_response, 'id'):
+            dispatch_id = dispatch_response.id
         
-        logger.info(f"✅ Main agent (PID {main_agent_pid}) is running and will automatically handle room {room_name}")
-        logger.info(f"📋 Job metadata stored at {metadata_file}")
-        logger.info(f"🎯 The main agent has request_filter that accepts all jobs - no manual dispatch needed")
-        
-        # The main agent will automatically:
-        # 1. Detect when a user joins the room
-        # 2. Accept the job via request_filter 
-        # 3. Run the entrypoint function
-        # 4. Provide full voice processing with RAG, user profiles, etc.
+        logger.info(f"Agent dispatched successfully with dispatch_id: {dispatch_id}")
         
         return {
-            "container_id": container_id,
-            "metadata_file": metadata_file,
-            "status": "main_agent_ready",
-            "room_name": room_name,
-            "agent_slug": agent.slug,
-            "main_agent_pid": main_agent_pid,
-            "method": "main_agent_auto_dispatch",
-            "capabilities": [
-                "voice_processing", 
-                "rag_context", 
-                "user_profiles", 
-                "conversation_storage",
-                "intelligent_responses"
-            ],
-            "message": f"Main sophisticated agent ready for {room_name} - will auto-accept job"
+            "status": "dispatched",
+            "dispatch_id": dispatch_id,
+            "message": "Agent job dispatched to worker pool.",
+            "mode": "explicit_dispatch",
+            "agent": agent.slug,
+            "metadata_size": len(json.dumps(job_metadata))
         }
-            
+        
     except Exception as e:
-        logger.error(f"❌ Failed to verify main agent status: {str(e)}")
+        logger.error(f"Failed to dispatch agent: {str(e)}")
+        # Fallback to automatic mode if explicit dispatch fails
         return {
-            "container_id": None,
-            "status": "error", 
-            "error": str(e),
-            "message": f"Failed to verify main agent: {str(e)}"
+            "status": "automatic",
+            "message": f"Explicit dispatch failed ({str(e)}), falling back to automatic mode",
+            "mode": "automatic_dispatch",
+            "agent": agent.slug
         }
 
 
-async def create_client_livekit_manager(client) -> LiveKitManager:
-    """Create a LiveKit manager using client-specific credentials"""
-    # Create a new LiveKit manager instance with client credentials
-    client_livekit = LiveKitManager()
-    client_livekit.api_key = client.settings.livekit.api_key
-    client_livekit.api_secret = client.settings.livekit.api_secret
-    client_livekit.url = client.settings.livekit.server_url
-    client_livekit._initialized = True
-    
-    return client_livekit
 
 
 async def ensure_livekit_room_exists(
     livekit_manager: LiveKitManager,
     room_name: str,
     agent_name: str = None,
-    user_id: str = None
+    user_id: str = None,
+    agent_config: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Ensure a LiveKit room exists, creating it if necessary
@@ -501,6 +606,7 @@ async def ensure_livekit_room_exists(
     2. Create room with appropriate settings if it doesn't exist
     3. Return room information for the frontend
     """
+    logger.debug(f"Checking if room exists", extra={'room_name': room_name})
     try:
         # First, check if the room already exists
         existing_room = await livekit_manager.get_room(room_name)
@@ -518,12 +624,17 @@ async def ensure_livekit_room_exists(
         # Room doesn't exist, create it
         logger.info(f"🏗️ Creating new LiveKit room: {room_name}")
         
+        # Include full agent configuration in room metadata
         room_metadata = {
             "agent_name": agent_name,
             "user_id": user_id,
             "created_by": "autonomite_backend",
             "created_at": datetime.now().isoformat()
         }
+        
+        # Add full agent configuration if provided
+        if agent_config:
+            room_metadata.update(agent_config)
         
         room_info = await livekit_manager.create_room(
             name=room_name,
@@ -534,8 +645,8 @@ async def ensure_livekit_room_exists(
         
         logger.info(f"✅ Created room {room_name} successfully")
         
-        # Wait a moment to ensure room is fully created
-        await asyncio.sleep(1)
+        # Quick wait to ensure room is fully created
+        await asyncio.sleep(0.2)  # Reduced from 1s to 0.2s
         
         # Create a placeholder token to keep the room alive
         placeholder_token = livekit_manager.create_token(
@@ -551,6 +662,7 @@ async def ensure_livekit_room_exists(
         if not verification:
             raise Exception(f"Room {room_name} was created but cannot be verified")
         
+        logger.debug(f"Room verified", extra={'status': 'success'})
         return {
             "room_name": room_name,
             "status": "created",

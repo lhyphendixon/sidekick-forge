@@ -2,11 +2,14 @@
 Enhanced Client management service using Supabase only (no Redis)
 """
 import json
+import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from fastapi import HTTPException
 from supabase import create_client, Client as SupabaseClient
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from app.models.client import Client, ClientCreate, ClientUpdate, ClientInDB, APIKeys, ClientSettings
 
@@ -105,17 +108,26 @@ class ClientService:
             existing_settings = client.settings.dict() if client.settings else {}
             new_settings = update_data.settings.dict()
             merged_settings = {**existing_settings, **new_settings}
-            update_dict["settings"] = merged_settings
+            
+            # Serialize nested settings to JSON for Supabase JSONB column
+            import json
+            update_dict["settings"] = json.dumps(merged_settings)
         
         if update_dict:
             update_dict["updated_at"] = datetime.utcnow().isoformat()
             
-            result = self.supabase.table(self.table_name).update(update_dict).eq("id", client_id).execute()
-            
-            if result.data:
-                return self._db_to_model(result.data[0])
-            else:
-                raise HTTPException(status_code=500, detail="Failed to update client")
+            try:
+                result = self.supabase.table(self.table_name).update(update_dict).eq("id", client_id).execute()
+                
+                if result.data and len(result.data) > 0:
+                    logger.info(f"Successfully updated client {client_id} in Supabase")
+                    return self._db_to_model(result.data[0])
+                else:
+                    logger.error(f"No data returned from Supabase update for client {client_id}")
+                    raise HTTPException(status_code=500, detail="Failed to update client - no data returned")
+            except Exception as e:
+                logger.error(f"Supabase update failed for client {client_id}: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Database update failed: {str(e)}")
         
         return client
     
@@ -367,7 +379,17 @@ class ClientService:
     def _db_to_model(self, db_row: Dict[str, Any]) -> ClientInDB:
         """Convert database row to ClientInDB model"""
         # Reconstruct settings from flat structure
-        settings_dict = db_row.get("settings", {})
+        settings_raw = db_row.get("settings", {})
+        
+        # Deserialize JSON string if needed
+        if isinstance(settings_raw, str):
+            try:
+                settings_dict = json.loads(settings_raw)
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to decode settings JSON for client {db_row.get('id')}")
+                settings_dict = {}
+        else:
+            settings_dict = settings_raw or {}
         
         # Override with individual columns if they exist
         if "supabase_url" in db_row:

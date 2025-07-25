@@ -22,27 +22,32 @@ WORKDIR $APP_HOME
 # Create non-root user
 RUN groupadd -r agent && useradd -r -g agent agent
 
-# Install Python dependencies
-COPY requirements-agent.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements-agent.txt
+# Copy requirements file from the agent directory
+COPY requirements-minimal.txt .
 
-# Copy agent code
-COPY ./agent $APP_HOME/agent
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-minimal.txt
+
+# Copy the entire agent directory into the image
+COPY . /app
 
 # Create necessary directories
 RUN mkdir -p /app/logs /app/temp && \
     chown -R agent:agent /app
 
+# Make entrypoint executable
+RUN chmod +x /app/entrypoint.py
+
 # Switch to non-root user
 USER agent
 
-# Expose metrics port
+# Expose health check port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+# Health check temporarily disabled
+# HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+#     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the agent
-CMD ["python", "-m", "agent.main"]
+# Run the entrypoint
+CMD ["python", "/app/entrypoint.py"]

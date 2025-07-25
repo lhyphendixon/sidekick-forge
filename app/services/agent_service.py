@@ -106,7 +106,7 @@ class AgentService:
             "description": agent_data.description,
             "agent_image": agent_data.agent_image,
             "system_prompt": agent_data.system_prompt,
-            "voice_settings": json.dumps(agent_data.voice_settings.dict()) if agent_data.voice_settings else json.dumps({"provider": "livekit", "voice_id": "alloy", "temperature": 0.7}),
+            "voice_settings": json.dumps(agent_data.voice_settings.dict()) if agent_data.voice_settings else json.dumps({"provider": "openai", "voice_id": "alloy", "temperature": 0.7}),
             "n8n_text_webhook_url": agent_data.webhooks.voice_context_webhook_url if agent_data.webhooks else None,
             "n8n_rag_webhook_url": agent_data.webhooks.text_context_webhook_url if agent_data.webhooks else None,
             "enabled": agent_data.enabled,

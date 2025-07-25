@@ -1,56 +1,54 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 @dataclass
 class AgentConfig:
-    """Configuration for client-specific agent container"""
+    """Configuration for the client agent, loaded from environment variables."""
+    # Site and container identification
+    site_id: Optional[str] = field(default_factory=lambda: os.getenv("SITE_ID"))
+    container_name: Optional[str] = field(default_factory=lambda: os.getenv("CONTAINER_NAME"))
+
+    # LiveKit connection details
+    livekit_url: Optional[str] = field(default_factory=lambda: os.getenv("LIVEKIT_URL"))
+    livekit_api_key: Optional[str] = field(default_factory=lambda: os.getenv("LIVEKIT_API_KEY"))
+    livekit_api_secret: Optional[str] = field(default_factory=lambda: os.getenv("LIVEKIT_API_SECRET"))
+
+    # Agent personality and behavior
+    agent_slug: Optional[str] = field(default_factory=lambda: os.getenv("AGENT_SLUG"))
+    agent_name: Optional[str] = field(default_factory=lambda: os.getenv("AGENT_NAME"))
+    system_prompt: Optional[str] = field(default_factory=lambda: os.getenv("SYSTEM_PROMPT", "You are a friendly voice assistant."))
     
-    # Client identification
-    site_id: str = os.getenv("SITE_ID", "")
-    site_domain: str = os.getenv("SITE_DOMAIN", "")
-    agent_slug: str = os.getenv("AGENT_SLUG", "")
-    container_name: str = os.getenv("CONTAINER_NAME", "")
-    
-    # LiveKit configuration
-    livekit_url: str = os.getenv("LIVEKIT_URL", "")
-    livekit_api_key: str = os.getenv("LIVEKIT_API_KEY", "")
-    livekit_api_secret: str = os.getenv("LIVEKIT_API_SECRET", "")
-    
-    # Agent configuration
-    agent_name: str = os.getenv("AGENT_NAME", "Assistant")
-    system_prompt: str = os.getenv("SYSTEM_PROMPT", "You are a helpful assistant.")
-    model: str = os.getenv("MODEL", "gpt-4-turbo-preview")
-    temperature: float = float(os.getenv("TEMPERATURE", "0.7"))
-    max_tokens: int = int(os.getenv("MAX_TOKENS", "4096"))
-    
+    # Language model configuration
+    model: Optional[str] = field(default_factory=lambda: os.getenv("MODEL", "gpt-4-turbo-preview"))
+    temperature: float = field(default_factory=lambda: float(os.getenv("TEMPERATURE", 0.7)))
+    max_tokens: int = field(default_factory=lambda: int(os.getenv("MAX_TOKENS", 4096)))
+
     # Voice configuration
-    voice_id: str = os.getenv("VOICE_ID", "alloy")
-    stt_provider: str = os.getenv("STT_PROVIDER", "groq")
-    stt_model: str = os.getenv("STT_MODEL", "whisper-large-v3-turbo")
-    tts_provider: str = os.getenv("TTS_PROVIDER", "openai")
-    tts_model: str = os.getenv("TTS_MODEL", "tts-1")
-    
-    # API Keys
-    openai_api_key: Optional[str] = os.getenv("OPENAI_API_KEY")
-    anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
-    groq_api_key: Optional[str] = os.getenv("GROQ_API_KEY")
-    elevenlabs_api_key: Optional[str] = os.getenv("ELEVENLABS_API_KEY")
-    cartesia_api_key: Optional[str] = os.getenv("CARTESIA_API_KEY")
-    deepgram_api_key: Optional[str] = os.getenv("DEEPGRAM_API_KEY")
-    
-    # Webhooks
-    voice_context_webhook_url: Optional[str] = os.getenv("VOICE_CONTEXT_WEBHOOK_URL")
-    text_context_webhook_url: Optional[str] = os.getenv("TEXT_CONTEXT_WEBHOOK_URL")
-    
+    voice_id: Optional[str] = field(default_factory=lambda: os.getenv("VOICE_ID", "alloy"))
+    stt_provider: Optional[str] = field(default_factory=lambda: os.getenv("STT_PROVIDER", "deepgram"))
+    stt_model: Optional[str] = field(default_factory=lambda: os.getenv("STT_MODEL"))
+    tts_provider: Optional[str] = field(default_factory=lambda: os.getenv("TTS_PROVIDER", "openai"))
+    tts_model: Optional[str] = field(default_factory=lambda: os.getenv("TTS_MODEL"))
+
+    # API Keys for various services
+    openai_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
+    groq_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GROQ_API_KEY"))
+    elevenlabs_api_key: Optional[str] = field(default_factory=lambda: os.getenv("ELEVENLABS_API_KEY"))
+    deepgram_api_key: Optional[str] = field(default_factory=lambda: os.getenv("DEEPGRAM_API_KEY"))
+
+    # Webhooks for context
+    voice_context_webhook_url: Optional[str] = field(default_factory=lambda: os.getenv("VOICE_CONTEXT_WEBHOOK_URL"))
+    text_context_webhook_url: Optional[str] = field(default_factory=lambda: os.getenv("TEXT_CONTEXT_WEBHOOK_URL"))
+
     # Backend communication
-    backend_url: str = os.getenv("BACKEND_URL", "http://fastapi:8000")
-    backend_api_key: str = os.getenv("BACKEND_API_KEY", "")
-    
-    # Monitoring
-    log_level: str = os.getenv("LOG_LEVEL", "INFO")
-    enable_metrics: bool = os.getenv("ENABLE_METRICS", "true").lower() == "true"
-    
+    backend_url: Optional[str] = field(default_factory=lambda: os.getenv("BACKEND_URL"))
+    backend_api_key: Optional[str] = field(default_factory=lambda: os.getenv("BACKEND_API_KEY"))
+
+    # Monitoring and logging
+    log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
+    enable_metrics: bool = field(default_factory=lambda: os.getenv("ENABLE_METRICS", "true").lower() == "true")
+
     def validate(self):
         """Validate required configuration"""
         required_fields = [

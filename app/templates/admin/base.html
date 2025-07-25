@@ -355,7 +355,7 @@
     </script>
 
     <!-- Load LiveKit Client SDK globally for HTMX modal use -->
-    <script src="/static/livekit-client.min.js"></script>
+    <script src="/static/livekit-client.min.js" onload="console.log('✅ LiveKit SDK loaded successfully'); window.livekitSDKLoaded = true; window.LiveKitSDK = window.LivekitClient || window.LiveKit || window.livekit;" onerror="console.error('❌ LiveKit SDK failed to load'); window.livekitSDKLoaded = false;"></script>
 
     {% block extra_scripts %}{% endblock %}
 </body>

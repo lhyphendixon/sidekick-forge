@@ -10,7 +10,8 @@ from app.models.common import APIResponse, SuccessResponse
 from app.middleware.auth import get_current_auth, require_site_auth
 from app.integrations.supabase_client import supabase_manager
 from app.integrations.livekit_client import livekit_manager
-from app.services.container_manager import container_manager
+# Container manager removed - using worker pool architecture
+# from app.services.container_manager import container_manager
 from app.utils.exceptions import NotFoundError, ServiceUnavailableError
 
 router = APIRouter()
@@ -53,16 +54,8 @@ async def create_call_session(
                 "owner_user_id": auth.user_id
             }
         
-        # Ensure agent container is running
-        container_info = await container_manager.deploy_agent_container(
-            site_id=site_id,
-            agent_slug=request.agent_slug,
-            agent_config=agent_config,
-            site_config=site_config
-        )
-        
-        if not container_info or container_info["status"] != "running":
-            raise ServiceUnavailableError("Failed to start agent container")
+        # Worker pool architecture - agents are dispatched on demand
+        # No need to start containers, workers are already running
         
         # Create or get conversation
         conversation = await supabase_manager.get_conversation(request.conversation_id)
@@ -76,8 +69,7 @@ async def create_call_session(
                 "channel": "voice",
                 "status": "active",
                 "metadata": {
-                    "site_id": site_id,
-                    "container_name": container_info["name"]
+                    "site_id": site_id
                 }
             }
             conversation = await supabase_manager.create_conversation(conversation_data)
@@ -94,8 +86,7 @@ async def create_call_session(
                 "agent_slug": request.agent_slug,
                 "conversation_id": request.conversation_id,
                 "user_id": request.user_id,
-                "site_id": site_id,
-                "container_name": container_info["name"]
+                "site_id": site_id
             }
         )
         
@@ -119,7 +110,6 @@ async def create_call_session(
             "room_name": room_name,
             "agent_slug": request.agent_slug,
             "site_id": site_id,
-            "container_name": container_info["name"],
             "created_at": datetime.utcnow().isoformat()
         }
         

@@ -14,7 +14,7 @@ from app.middleware.logging import LoggingMiddleware
 from app.utils.exceptions import APIException
 from app.integrations.supabase_client import supabase_manager
 from app.integrations.livekit_client import livekit_manager
-from app.services.container_manager import container_manager
+# Container manager removed - using worker pool architecture
 import redis.asyncio as aioredis
 
 # Configure logging
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     # Initialize connections
     await supabase_manager.initialize()
     await livekit_manager.initialize()
-    await container_manager.initialize()
+    # Container manager removed - workers are managed separately
     
     # Initialize services for proxy endpoints
     from app.services.client_service_supabase_enhanced import ClientService
@@ -73,6 +73,18 @@ async def lifespan(app: FastAPI):
     
     logger.info("All services initialized successfully")
     
+    # Sync LiveKit credentials from Autonomite client on startup
+    try:
+        from app.services.backend_livekit_sync import BackendLiveKitSync
+        logger.info("Syncing LiveKit credentials from Autonomite client...")
+        sync_result = await BackendLiveKitSync.sync_credentials()
+        if sync_result:
+            logger.info("✅ LiveKit credentials synced successfully on startup")
+        else:
+            logger.warning("⚠️ LiveKit credential sync failed - using existing credentials")
+    except Exception as e:
+        logger.error(f"Error syncing LiveKit credentials on startup: {e}")
+    
     yield
     
     # Shutdown
@@ -81,7 +93,7 @@ async def lifespan(app: FastAPI):
     await livekit_manager.close()
     if redis_client:
         await redis_client.close()
-    # Note: container_manager doesn't need explicit closing
+    # Workers are managed separately and don't need closing here
 
 # Create FastAPI app
 app = FastAPI(
@@ -125,7 +137,7 @@ app.add_middleware(AuthenticationMiddleware)
 app.include_router(api_router, prefix="/api")
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="/opt/autonomite-saas/app/static"), name="static")
+app.mount("/static", StaticFiles(directory="/root/autonomite-agent-platform/app/static"), name="static")
 
 # Include admin dashboard (full version with all features)
 from app.admin.routes import router as admin_router

@@ -111,11 +111,22 @@ class AgentService:
     
     async def get_agent(self, client_id: str, agent_slug: str) -> Optional[Agent]:
         """Get a specific agent from a client's Supabase"""
-        # Get client's Supabase instance
-        client_supabase = await self.client_service.get_client_supabase_client(client_id)
-        if not client_supabase:
-            logger.warning(f"No Supabase client found for {client_id}")
-            return None
+        # Check if this is the Autonomite client using the main Supabase instance
+        from app.config import settings
+        from supabase import create_client
+        
+        client_config = await self.client_service.get_client_supabase_config(client_id)
+        if client_config and client_config.get("url") == settings.supabase_url:
+            # This client uses the main Supabase instance, so use admin client
+            logger.info(f"Client {client_id} uses main Supabase instance, using admin client")
+            # Create admin client directly
+            client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        else:
+            # Get client's separate Supabase instance
+            client_supabase = await self.client_service.get_client_supabase_client(client_id)
+            if not client_supabase:
+                logger.warning(f"No Supabase client found for {client_id}")
+                return None
         
         try:
             # Query the agents table
@@ -133,11 +144,22 @@ class AgentService:
     
     async def get_client_agents(self, client_id: str) -> List[Agent]:
         """Get all agents for a specific client"""
-        # Get client's Supabase instance
-        client_supabase = await self.client_service.get_client_supabase_client(client_id)
-        if not client_supabase:
-            logger.warning(f"No Supabase client found for {client_id}")
-            return []
+        # Check if this is the Autonomite client using the main Supabase instance
+        from app.config import settings
+        from supabase import create_client
+        
+        client_config = await self.client_service.get_client_supabase_config(client_id)
+        if client_config and client_config.get("url") == settings.supabase_url:
+            # This client uses the main Supabase instance, so use admin client
+            logger.info(f"Client {client_id} uses main Supabase instance, using admin client")
+            # Create admin client directly
+            client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        else:
+            # Get client's separate Supabase instance
+            client_supabase = await self.client_service.get_client_supabase_client(client_id)
+            if not client_supabase:
+                logger.warning(f"No Supabase client found for {client_id}")
+                return []
         
         try:
             # Query the agents table

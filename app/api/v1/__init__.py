@@ -18,9 +18,10 @@ from .sessions import router as sessions_router
 from .text_chat_proxy import router as text_chat_proxy_router
 from .tools import router as tools_router
 from .trigger import router as trigger_router
-from .workers import router as workers_router
+# from .workers import router as workers_router  # Removed - using containerized worker pool
 from .wordpress import router as wordpress_router
 from .wordpress_sites import router as wordpress_sites_router
+from .diagnostics import router as diagnostics_router
 
 # Create main API router
 api_router = APIRouter(prefix="/v1")
@@ -40,8 +41,9 @@ api_router.include_router(sessions_router)
 api_router.include_router(text_chat_proxy_router)
 api_router.include_router(tools_router)
 api_router.include_router(trigger_router)
-api_router.include_router(workers_router, prefix="/workers")
+# api_router.include_router(workers_router, prefix="/workers")  # Removed - using containerized worker pool
 api_router.include_router(wordpress_router)
 api_router.include_router(wordpress_sites_router)
+api_router.include_router(diagnostics_router)
 
 __all__ = ["api_router"]

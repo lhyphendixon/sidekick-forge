@@ -43,6 +43,7 @@ class HealthServer:
     async def health_check(self, request):
         """Basic health check endpoint"""
         health_checks.inc()
+        logger.info("Health check requested", extra={'status': 'healthy', 'uptime_seconds': (datetime.utcnow() - self.start_time).total_seconds()})
         
         return web.json_response({
             "status": "healthy",
@@ -53,9 +54,11 @@ class HealthServer:
     async def metrics(self, request):
         """Prometheus metrics endpoint"""
         if not self.config.enable_metrics:
+            logger.warning("Metrics requested but disabled")
             return web.Response(status=404)
         
         metrics_data = generate_latest()
+        logger.debug("Generating metrics", extra={'metrics_length': len(metrics_data)})
         return web.Response(
             body=metrics_data,
             content_type='text/plain; version=0.0.4'
@@ -63,6 +66,7 @@ class HealthServer:
     
     async def info(self, request):
         """Agent information endpoint"""
+        logger.info("Agent info requested", extra={'container_name': self.config.container_name, 'site_id': self.config.site_id})
         return web.json_response({
             "container_name": self.config.container_name,
             "site_id": self.config.site_id,

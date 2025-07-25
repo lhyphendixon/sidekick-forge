@@ -11,88 +11,110 @@ jobs:
     runs-on: ubuntu-latest
     
     services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: autonomite_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-      
       redis:
         image: redis:7-alpine
+        ports:
+          - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        ports:
-          - 6379:6379
     
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
-    
-    - name: Cache pip packages
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    
-    - name: Run linters
-      run: |
-        black --check app/
-        isort --check-only app/
-        # pylint app/
-    
-    - name: Run tests
-      env:
-        DATABASE_URL: postgresql://test:test@localhost/autonomite_test
-        REDIS_HOST: localhost
-        REDIS_PORT: 6379
-        SECRET_KEY: test-secret-key
-      run: |
-        pytest --cov=app --cov-report=xml
-    
-    - name: Upload coverage
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+          
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+          
+      - name: Run unit tests
+        run: |
+          pytest tests/ --cov=app --cov-report=xml --cov-report=term
+          
+      - name: Run mission critical tests
+        run: |
+          python scripts/test_mission_critical.py --quick
+          
+      - name: Run multi-tenant tests
+        run: |
+          python scripts/test_multi_tenant.py
+          
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: true
 
   build:
     runs-on: ubuntu-latest
     needs: test
     
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        
+      - name: Build FastAPI image
+        run: |
+          docker build -t autonomite/saas-backend:test .
+          
+      - name: Build agent runtime image
+        run: |
+          cd agent-runtime
+          ./build.sh test-ci
+          
+      - name: Test container health
+        run: |
+          # Start a test container
+          docker run -d --name test-agent \
+            -e LIVEKIT_URL=${{ secrets.LIVEKIT_URL }} \
+            -e LIVEKIT_API_KEY=${{ secrets.LIVEKIT_API_KEY }} \
+            -e LIVEKIT_API_SECRET=${{ secrets.LIVEKIT_API_SECRET }} \
+            autonomite/agent-runtime:test-ci
+          
+          # Wait for health
+          sleep 10
+          
+          # Check if healthy
+          docker inspect test-agent --format='{{.State.Health.Status}}'
+          
+          # Cleanup
+          docker stop test-agent
+          docker rm test-agent
+
+  security:
+    runs-on: ubuntu-latest
+    needs: test
     
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    
-    - name: Build Docker image
-      run: |
-        docker build -t autonomite-agent-platform:${{ github.sha }} .
-    
-    - name: Build production compose
-      run: |
-        docker-compose -f docker-compose.production.yml build
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
