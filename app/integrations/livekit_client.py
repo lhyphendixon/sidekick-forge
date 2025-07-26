@@ -1,5 +1,5 @@
 from livekit import api, rtc
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 import logging
 import time
 import jwt
@@ -124,9 +124,21 @@ class LiveKitManager:
         name: Optional[str] = None,
         empty_timeout: int = 300,
         max_participants: int = 2,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Union[Dict[str, Any], str]] = None,
+        enable_agent_dispatch: bool = True,
+        agent_name: str = "autonomite-agent"
     ) -> Dict[str, Any]:
-        """Create a LiveKit room"""
+        """Create a LiveKit room
+        
+        Args:
+            name: Room name
+            empty_timeout: Seconds before empty room is deleted
+            max_participants: Maximum participants allowed
+            metadata: Room metadata (can be dict or JSON string)
+        """
+        logger.info(f"Creating room: name={name}, empty_timeout={empty_timeout}, max_participants={max_participants}")
+        logger.debug(f"Metadata type: {type(metadata)}, length: {len(str(metadata)) if metadata else 0}")
+        
         try:
             # Use LiveKitAPI instead of RoomServiceClient
             livekit_api = api.LiveKitAPI(
@@ -139,21 +151,50 @@ class LiveKitManager:
             if not name:
                 name = f"room_{int(time.time() * 1000)}"
             
-            room = await livekit_api.room.create_room(
-                api.CreateRoomRequest(
-                    name=name,
-                    empty_timeout=empty_timeout,
-                    max_participants=max_participants,
-                    metadata=json.dumps(metadata) if metadata else None
-                )
+            # Handle metadata - it might already be a JSON string
+            room_metadata = None
+            if metadata:
+                if isinstance(metadata, str):
+                    # Already JSON encoded
+                    room_metadata = metadata
+                else:
+                    # Need to encode to JSON
+                    room_metadata = json.dumps(metadata)
+            
+            logger.info(f"Sending room creation request to LiveKit")
+            
+            # Create room request
+            room_request = api.CreateRoomRequest(
+                name=name,
+                empty_timeout=empty_timeout,
+                max_participants=max_participants,
+                metadata=room_metadata
             )
+            
+            # Configure agent dispatch if enabled
+            if enable_agent_dispatch:
+                # CRITICAL: Configure agent dispatch AT ROOM CREATION TIME
+                # This is the correct pattern for automatic agent dispatch
+                agent_dispatch_options = api.RoomAgentDispatch(
+                    agent_name=agent_name,  # Must match the worker's agent name
+                    metadata=room_metadata if room_metadata else ""
+                )
+                # Use list assignment instead of append to ensure proper initialization
+                room_request.agents = [agent_dispatch_options]
+                logger.info(f"🤖 Creating room with agent dispatch enabled: agent_name={agent_name}")
+            else:
+                logger.info(f"📹 Creating standard room without agent dispatch")
+            
+            room = await livekit_api.room.create_room(room_request)
+            
+            logger.info(f"✅ Room created successfully with agent dispatch: name={room.name}, sid={room.sid}")
             
             return {
                 "name": room.name,
                 "sid": room.sid,
                 "created_at": datetime.utcnow(),
                 "max_participants": room.max_participants,
-                "metadata": metadata
+                "metadata": metadata  # Return original metadata (not the JSON string)
             }
             
         except Exception as e:

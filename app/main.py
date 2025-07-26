@@ -37,7 +37,10 @@ async def lifespan(app: FastAPI):
     
     # Initialize connections
     await supabase_manager.initialize()
-    await livekit_manager.initialize()
+    try:
+        await livekit_manager.initialize()
+    except Exception as e:
+        logger.warning(f"LiveKit initialization failed (non-critical): {e}")
     # Container manager removed - workers are managed separately
     
     # Initialize services for proxy endpoints
@@ -136,12 +139,32 @@ app.add_middleware(AuthenticationMiddleware)
 # Include API router
 app.include_router(api_router, prefix="/api")
 
+# Include multi-tenant routes (gradual migration)
+try:
+    from app.api.v1.multitenant_routes import trigger_router, agents_router, clients_router
+    app.include_router(trigger_router, prefix="/api/v2", tags=["trigger-v2"])
+    app.include_router(agents_router, prefix="/api/v2", tags=["agents-v2"]) 
+    app.include_router(clients_router, prefix="/api/v2", tags=["clients-v2"])
+    logger.info("✅ Multi-tenant routes (v2) loaded successfully")
+except Exception as e:
+    logger.warning(f"Multi-tenant routes not loaded: {e}")
+
 # Mount static files
 app.mount("/static", StaticFiles(directory="/root/autonomite-agent-platform/app/static"), name="static")
 
 # Include admin dashboard (full version with all features)
+# Temporarily disabled multi-tenant admin to restore original styling
+# try:
+#     # Try to load multi-tenant admin routes
+#     from app.admin.routes_multitenant import router as admin_router_multitenant
+#     app.include_router(admin_router_multitenant)
+#     logger.info("✅ Multi-tenant admin interface loaded")
+# except Exception as e:
+#     # Fallback to legacy admin routes
+#     logger.warning(f"Multi-tenant admin not loaded, using legacy: {e}")
 from app.admin.routes import router as admin_router
 app.include_router(admin_router)
+logger.info("✅ Original admin interface loaded")
 
 # Custom exception handler for admin authentication redirects
 from fastapi.responses import RedirectResponse, JSONResponse

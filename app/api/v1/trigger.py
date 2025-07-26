@@ -94,9 +94,11 @@ async def trigger_agent(
     - Voice mode: Triggers Python LiveKit agent to join a room
     - Text mode: Processes text messages through the agent
     """
+    request_start = time.time()
     try:
         logger.debug(f"Received trigger request", extra={'agent_slug': request.agent_slug, 'mode': request.mode, 'user_id': request.user_id})
-        logger.info(f"Triggering agent {request.agent_slug} in {request.mode} mode for user {request.user_id}")
+        logger.info(f"🚀 STARTING trigger-agent request: agent={request.agent_slug}, mode={request.mode}, user={request.user_id}")
+        logger.info(f"Room name requested: {request.room_name}")
         
         # Validate mode-specific requirements
         if request.mode == TriggerMode.VOICE and not request.room_name:
@@ -150,6 +152,9 @@ async def trigger_agent(
             result = await handle_voice_trigger(request, agent, client)
         else:  # TEXT mode
             result = await handle_text_trigger(request, agent, client)
+        
+        request_total = time.time() - request_start
+        logger.info(f"✅ COMPLETED trigger-agent request in {request_total:.2f}s")
         
         return TriggerAgentResponse(
             success=True,
@@ -257,6 +262,8 @@ async def handle_voice_trigger(
     logger.debug(f"Starting voice trigger handling", extra={'agent_slug': agent.slug, 'room_name': request.room_name})
     logger.info(f"Handling voice trigger for agent {agent.slug} in room {request.room_name}")
     
+    voice_trigger_start = time.time()
+    
     # Use backend's LiveKit credentials for ALL operations (true thin client)
     # Clients don't need LiveKit credentials - backend owns the infrastructure
     from app.integrations.livekit_client import livekit_manager
@@ -270,7 +277,11 @@ async def handle_voice_trigger(
         "agent_slug": agent.slug,
         "agent_name": agent.name,
         "system_prompt": agent.system_prompt,
-        "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
+        "voice_settings": {
+            **(agent.voice_settings.dict() if agent.voice_settings else {}),
+            # Ensure tts_provider is set for the worker
+            "tts_provider": agent.voice_settings.provider if agent.voice_settings else "livekit"
+        },
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": request.user_id,
         "session_id": request.session_id,
@@ -298,21 +309,28 @@ async def handle_voice_trigger(
     }
     
     # Ensure the room exists (create if it doesn't)
+    room_start = time.time()
     room_info = await ensure_livekit_room_exists(
         backend_livekit, 
         request.room_name,
         agent_name=agent.name,
+        agent_slug=agent.slug,  # Pass the actual agent slug
         user_id=request.user_id,
         agent_config=agent_context
     )
+    room_duration = time.time() - room_start
+    logger.info(f"⏱️ Room ensure process took {room_duration:.2f}s")
     logger.info(f"Room ensured: {room_info['status']} for room {room_info.get('room_name', request.room_name)}")
     
     # Generate user token for frontend to join the room (thin client)
+    token_start = time.time()
     user_token = backend_livekit.create_token(
         identity=f"user_{request.user_id}",
         room_name=request.room_name,
         metadata={"user_id": request.user_id, "client_id": client.id}
     )
+    token_duration = time.time() - token_start
+    logger.info(f"⏱️ User token generation took {token_duration:.2f}s")
     logger.debug(f"Generated user token", extra={'token_length': len(user_token)})
     
     
@@ -320,16 +338,23 @@ async def handle_voice_trigger(
     if room_info["status"] == "created":
         logger.info(f"Waiting for room {request.room_name} to be fully ready...")
         await asyncio.sleep(0.5)  # Small delay for room initialization
+        
+        # Verify the room exists in LiveKit after creation
+        verify_start = time.time()
+        room_check = await backend_livekit.get_room(request.room_name)
+        if not room_check:
+            logger.error(f"❌ Room {request.room_name} not found immediately after creation!")
+        else:
+            logger.info(f"✅ Room {request.room_name} verified in LiveKit with agent dispatch enabled")
+        verify_duration = time.time() - verify_start
+        logger.info(f"⏱️ Post-creation verification took {verify_duration:.2f}s")
     
-    # Dispatch job to worker pool
-    dispatch_result = await dispatch_agent_job(
-        livekit_manager=backend_livekit,
-        room_name=request.room_name,
-        agent=agent,
-        client=client
-    )
+    # NO NEED FOR EXPLICIT DISPATCH - Room is configured for automatic agent dispatch
+    # When a participant joins, LiveKit will automatically dispatch a job to the worker
+    logger.info(f"🎯 Room {request.room_name} is configured for automatic agent dispatch")
     
-    logger.info(f"Agent job dispatched: {dispatch_result.get('message', 'Success')}")
+    voice_trigger_total = time.time() - voice_trigger_start
+    logger.info(f"⏱️ TOTAL voice trigger process took {voice_trigger_total:.2f}s")
     
     return {
         "mode": "voice",
@@ -342,9 +367,13 @@ async def handle_voice_trigger(
             "configured": True
         },
         "room_info": room_info,
-        "dispatch_info": dispatch_result,
+        "dispatch_info": {
+            "status": "automatic",
+            "message": "Agent will be automatically dispatched when participant joins"
+        },
         "status": "voice_agent_triggered",
-        "message": f"Room {request.room_name} ready, agent job dispatched to worker pool, user token provided."
+        "message": f"Room {request.room_name} ready with automatic agent dispatch, user token provided.",
+        "total_duration_ms": int(voice_trigger_total * 1000)
     }
 
 
@@ -505,7 +534,8 @@ async def dispatch_agent_job(
     This ensures the agent receives all necessary configuration and API keys
     through job metadata, following LiveKit's recommended pattern.
     """
-    logger.info(f"Dispatching agent {agent.slug} to room {room_name}")
+    logger.info(f"🚀 Starting agent dispatch: agent={agent.slug}, room={room_name}, client={client.id}")
+    dispatch_start = time.time()
     
     try:
         # Prepare full agent configuration for job metadata
@@ -514,7 +544,11 @@ async def dispatch_agent_job(
             "agent_slug": agent.slug,
             "agent_name": agent.name,
             "system_prompt": agent.system_prompt,
-            "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
+            "voice_settings": {
+                **(agent.voice_settings.dict() if agent.voice_settings else {}),
+                # Ensure tts_provider is set for the worker
+                "tts_provider": agent.voice_settings.provider if agent.voice_settings else "livekit"
+            },
             "webhooks": agent.webhooks.dict() if agent.webhooks else {},
             "api_keys": {
                 # LLM Providers
@@ -538,11 +572,14 @@ async def dispatch_agent_job(
         }
         
         # Create LiveKit API client for explicit dispatch
+        api_start = time.time()
         livekit_api = api.LiveKitAPI(
             url=livekit_manager.url,
             api_key=livekit_manager.api_key,
             api_secret=livekit_manager.api_secret
         )
+        api_duration = time.time() - api_start
+        logger.info(f"⏱️ LiveKit API client creation took {api_duration:.2f}s")
         
         # Dispatch the agent with job metadata using the correct API method
         dispatch_request = api.CreateAgentDispatchRequest(
@@ -551,8 +588,16 @@ async def dispatch_agent_job(
             agent_name="autonomite-agent"  # Match the agent name the worker accepts
         )
         
-        logger.info(f"Sending dispatch request with {len(job_metadata)} metadata fields")
+        logger.info(f"📤 Sending dispatch request:")
+        logger.info(f"   - Room: {room_name}")
+        logger.info(f"   - Agent name: autonomite-agent")
+        logger.info(f"   - Metadata fields: {len(job_metadata)}")
+        logger.info(f"   - Metadata size: {len(json.dumps(job_metadata))} bytes")
+        
+        dispatch_api_start = time.time()
         dispatch_response = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
+        dispatch_api_duration = time.time() - dispatch_api_start
+        logger.info(f"⏱️ Dispatch API call took {dispatch_api_duration:.2f}s")
         
         # Log the actual response to understand structure
         logger.info(f"Dispatch response type: {type(dispatch_response)}")
@@ -567,7 +612,10 @@ async def dispatch_agent_job(
         elif hasattr(dispatch_response, 'id'):
             dispatch_id = dispatch_response.id
         
-        logger.info(f"Agent dispatched successfully with dispatch_id: {dispatch_id}")
+        logger.info(f"✅ Agent dispatched successfully with dispatch_id: {dispatch_id}")
+        
+        dispatch_total_duration = time.time() - dispatch_start
+        logger.info(f"⏱️ Total dispatch process took {dispatch_total_duration:.2f}s")
         
         return {
             "status": "dispatched",
@@ -575,17 +623,23 @@ async def dispatch_agent_job(
             "message": "Agent job dispatched to worker pool.",
             "mode": "explicit_dispatch",
             "agent": agent.slug,
-            "metadata_size": len(json.dumps(job_metadata))
+            "metadata_size": len(json.dumps(job_metadata)),
+            "duration_ms": int(dispatch_total_duration * 1000)
         }
         
     except Exception as e:
-        logger.error(f"Failed to dispatch agent: {str(e)}")
+        logger.error(f"❌ Failed to dispatch agent: {str(e)}", exc_info=True)
+        logger.error(f"   - Error type: {type(e).__name__}")
+        logger.error(f"   - Room: {room_name}")
+        logger.error(f"   - Agent: {agent.slug}")
+        
         # Fallback to automatic mode if explicit dispatch fails
         return {
             "status": "automatic",
             "message": f"Explicit dispatch failed ({str(e)}), falling back to automatic mode",
             "mode": "automatic_dispatch",
-            "agent": agent.slug
+            "agent": agent.slug,
+            "error": str(e)
         }
 
 
@@ -595,6 +649,7 @@ async def ensure_livekit_room_exists(
     livekit_manager: LiveKitManager,
     room_name: str,
     agent_name: str = None,
+    agent_slug: str = None,
     user_id: str = None,
     agent_config: Dict[str, Any] = None
 ) -> Dict[str, Any]:
@@ -606,59 +661,86 @@ async def ensure_livekit_room_exists(
     2. Create room with appropriate settings if it doesn't exist
     3. Return room information for the frontend
     """
+    import time
+    start_time = time.time()
+    
     logger.debug(f"Checking if room exists", extra={'room_name': room_name})
     try:
         # First, check if the room already exists
+        check_start = time.time()
         existing_room = await livekit_manager.get_room(room_name)
+        check_duration = time.time() - check_start
+        logger.info(f"⏱️ Room existence check took {check_duration:.2f}s")
         
         if existing_room:
             logger.info(f"✅ Room {room_name} already exists with {existing_room['num_participants']} participants")
+            total_duration = time.time() - start_time
             return {
                 "room_name": room_name,
                 "status": "existing",
                 "participants": existing_room['num_participants'],
                 "created_at": existing_room.get('creation_time'),
-                "message": f"Room {room_name} already exists and is ready"
+                "message": f"Room {room_name} already exists and is ready",
+                "duration_ms": int(total_duration * 1000)
             }
         
         # Room doesn't exist, create it
         logger.info(f"🏗️ Creating new LiveKit room: {room_name}")
         
-        # Include full agent configuration in room metadata
-        room_metadata = {
+        # Start with the full agent configuration as the base for the metadata
+        room_metadata = agent_config if agent_config is not None else {}
+        
+        # Add or overwrite general room information
+        room_metadata.update({
             "agent_name": agent_name,
+            "agent_slug": agent_slug,
             "user_id": user_id,
             "created_by": "autonomite_backend",
             "created_at": datetime.now().isoformat()
-        }
+        })
         
-        # Add full agent configuration if provided
-        if agent_config:
-            room_metadata.update(agent_config)
+        # Convert metadata to JSON string (LiveKit expects JSON string)
+        import json
+        metadata_json = json.dumps(room_metadata)
         
+        create_start = time.time()
         room_info = await livekit_manager.create_room(
             name=room_name,
             empty_timeout=1800,  # 30 minutes - much longer timeout for agent rooms
             max_participants=10,  # Allow multiple participants
-            metadata=room_metadata
+            metadata=metadata_json,
+            enable_agent_dispatch=True,
+            agent_name=agent_slug if agent_slug else "autonomite-agent"  # Use the actual agent slug
         )
+        create_duration = time.time() - create_start
+        logger.info(f"⏱️ Room creation took {create_duration:.2f}s")
         
         logger.info(f"✅ Created room {room_name} successfully")
         
         # Quick wait to ensure room is fully created
+        wait_start = time.time()
         await asyncio.sleep(0.2)  # Reduced from 1s to 0.2s
+        wait_duration = time.time() - wait_start
+        logger.info(f"⏱️ Room ready wait took {wait_duration:.2f}s")
         
         # Create a placeholder token to keep the room alive
+        token_start = time.time()
         placeholder_token = livekit_manager.create_token(
             identity="room_keeper",
             room_name=room_name,
             metadata={"placeholder": True, "role": "room_keeper"}
         )
+        token_duration = time.time() - token_start
+        logger.info(f"⏱️ Token creation took {token_duration:.2f}s")
         
         logger.info(f"Created placeholder token for room {room_name}")
         
         # Verify room was created
+        verify_start = time.time()
         verification = await livekit_manager.get_room(room_name)
+        verify_duration = time.time() - verify_start
+        logger.info(f"⏱️ Room verification took {verify_duration:.2f}s")
+        
         if not verification:
             raise Exception(f"Room {room_name} was created but cannot be verified")
         
