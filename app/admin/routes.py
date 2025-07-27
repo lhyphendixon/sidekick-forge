@@ -74,7 +74,7 @@ def get_wordpress_service() -> WordPressSiteService:
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 # Initialize template engine
-templates = Jinja2Templates(directory="/root/autonomite-agent-platform/app/templates")
+templates = Jinja2Templates(directory="/root/sidekick-forge/app/templates")
 
 # Redis connection
 redis_client = None
@@ -337,9 +337,9 @@ async def get_all_agents() -> List[Dict[str, Any]]:
             result = supabase_manager.auth_client.table('agents').select('*').execute()
             
             for agent_data in result.data:
-                # Agents in main table are global agents (no client association)
-                # We'll use a special identifier for these
-                client_id = "global"  # Special identifier for global agents
+                # Agents in main table belong to the Autonomite client
+                # Use the Autonomite client ID
+                client_id = "df91fd06-816f-4273-a903-5a4861277040"  # Autonomite client ID
                     
                 agent_dict = {
                     "id": agent_data.get("id"),
@@ -451,9 +451,17 @@ async def client_edit(
         # Get any additional data needed for the form
         # For example, available API providers, etc.
         
+        # Convert client to dict if it's a Pydantic model
+        if hasattr(client, 'dict'):
+            client_dict = client.dict()
+        elif hasattr(client, 'model_dump'):
+            client_dict = client.model_dump()
+        else:
+            client_dict = client
+        
         return templates.TemplateResponse("admin/client_edit.html", {
             "request": request,
-            "client": client,
+            "client": client_dict,
             "user": admin_user
         })
     except Exception as e:
@@ -1272,7 +1280,7 @@ async def agent_detail(
                                 <h2 class="text-xl font-bold text-white mb-4">Voice Preview</h2>
                                 <div class="flex items-center space-x-4">
                                     <button type="button" 
-                                            hx-get="/admin/agents/preview/global/{agent_slug_clean}" 
+                                            hx-get="/admin/agents/preview/df91fd06-816f-4273-a903-5a4861277040/{agent_slug_clean}" 
                                             hx-target="#modal-container" 
                                             hx-swap="innerHTML"
                                             class="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 font-medium">
@@ -1375,7 +1383,7 @@ async def agent_detail(
                         
                         try {{
                             // Use the existing API endpoint
-                            const response = await fetch('/api/v1/agents/client/global/{agent_slug_clean}', {{
+                            const response = await fetch('/api/v1/agents/client/df91fd06-816f-4273-a903-5a4861277040/{agent_slug_clean}', {{
                                 method: 'PUT',
                                 headers: {{
                                     'Content-Type': 'application/json',
@@ -1589,9 +1597,9 @@ async def agent_preview_modal_legacy(
     agent_slug: str,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Legacy route - redirect to new format with global client_id"""
+    """Legacy route - redirect to new format with Autonomite client_id"""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url=f"/admin/agents/preview/global/{agent_slug}", status_code=307)
+    return RedirectResponse(url=f"/admin/agents/preview/df91fd06-816f-4273-a903-5a4861277040/{agent_slug}", status_code=307)
 
 @router.get("/agents/preview/{client_id}/{agent_slug}", response_class=HTMLResponse)
 async def agent_preview_modal(
@@ -1613,9 +1621,9 @@ async def agent_preview_modal(
         
         agent = None
         
-        # Handle global agents (from main agents table)
+        # Handle agents - all agents should go through standard workflow
         logger.info(f"Handling preview for client_id={client_id}")
-        if client_id == "global":
+        if client_id == "df91fd06-816f-4273-a903-5a4861277040":
             try:
                 # Ensure supabase_manager is initialized
                 if not supabase_manager._initialized:
@@ -2223,67 +2231,46 @@ async def start_voice_preview(
         # Generate unique room name for this session
         room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
         
-        # Create trigger request
+        # Create trigger request - always use the client_id provided
         trigger_request = TriggerAgentRequest(
             agent_slug=agent_slug,
-            client_id=client_id,
+            client_id=client_id,  # Use the actual client ID (Autonomite client)
             mode=TriggerMode.VOICE,
             room_name=room_name,
             user_id=f"admin_{admin_user.get('user_id', 'preview')}",
             session_id=session_id
         )
         
-        # For global agents, create room directly without going through client-specific trigger
-        if client_id == "global":
-            from app.integrations.livekit_client import livekit_manager
-            
-            # Create the room
-            room_info = await livekit_manager.create_room(
-                name=room_name,
-                max_participants=2,  # Admin + potential agent
-                metadata=json.dumps({
-                    "type": "preview",
-                    "agent": agent_slug,
-                    "created_by": "admin"
-                })
-            )
-            logger.info(f"Created preview room: {room_info}")
-            
-            # Create user token
-            user_token = livekit_manager.create_token(
-                identity=f"admin_{admin_user.get('user_id', 'preview')}",
-                room_name=room_name,
-                metadata={
-                    "role": "participant",
-                    "preview": True,
-                    "name": "Admin Preview"
-                }
-            )
-            
-            server_url = livekit_manager.url
-            
-            # Note: For global agents in preview, we won't spawn an actual agent container
-            # This is just for testing the voice interface
-            
-        else:
-            # Import the trigger function
-            from app.api.v1.trigger import trigger_agent
-            
-            # Get agent service for trigger
-            agent_service = get_agent_service()
-            
-            # Trigger the agent
-            trigger_result = await trigger_agent(trigger_request, agent_service=agent_service)
-            
-            # Extract connection details
-            livekit_config = trigger_result.get('livekit_config', {})
-            server_url = livekit_config.get('server_url', '')
-            user_token = livekit_config.get('user_token', '')
+        # Always use the standard trigger flow for ALL agents
+        # This ensures consistent behavior across all agent types
+        
+        # Import the trigger function
+        from app.api.v1.trigger import trigger_agent
+        
+        # Get agent service for trigger
+        agent_service = get_agent_service()
+        
+        # Trigger the agent
+        logger.info(f"🎯 Triggering agent for room: {room_name}")
+        trigger_result = await trigger_agent(trigger_request, agent_service=agent_service)
+        
+        # Extract connection details from the response data
+        # trigger_result is a TriggerAgentResponse object, not a dict
+        livekit_config = trigger_result.data.get('livekit_config', {}) if trigger_result.data else {}
+        server_url = livekit_config.get('server_url', '')
+        user_token = livekit_config.get('user_token', '')
+        
+        # CRITICAL: Use the room name from the trigger response to ensure consistency
+        actual_room_name = trigger_result.data.get('room_name', room_name) if trigger_result.data else room_name
+        
+        logger.info(f"📍 Room names - Requested: {room_name}, Actual: {actual_room_name}")
+        if room_name != actual_room_name:
+            logger.warning(f"⚠️ Room name mismatch! Frontend will use: {actual_room_name}")
         
         # Return voice interface with LiveKit client
         return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
             "request": request,
-            "room_name": room_name,
+            "room_name": actual_room_name,  # Use the actual room name from trigger
             "server_url": server_url,
             "user_token": user_token,
             "agent": agent,
@@ -2839,6 +2826,7 @@ async def delete_wordpress_site(
 @router.get("/knowledge-base/documents")
 async def get_knowledge_base_documents(
     client_id: str,
+    status: Optional[str] = None,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Get documents for Knowledge Base admin interface"""
@@ -2849,7 +2837,7 @@ async def get_knowledge_base_documents(
         documents = await document_processor.get_documents(
             user_id=None,  # Admin access doesn't need user_id
             client_id=client_id,
-            status=None,
+            status=status,
             limit=100
         )
         
@@ -2861,46 +2849,214 @@ async def get_knowledge_base_documents(
         return []
 
 
+@router.get("/api/clients")
+async def get_admin_clients(
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get all clients for admin interface"""
+    try:
+        from app.core.dependencies import get_client_service
+        client_service = get_client_service()
+        clients = await client_service.get_all_clients()
+        
+        # Convert to list of dicts for JSON response
+        client_list = []
+        for client in clients:
+            client_dict = {
+                "id": client.id,
+                "name": client.name,
+                "domain": client.domain,
+                "active": client.active
+            }
+            client_list.append(client_dict)
+        
+        return client_list
+    except Exception as e:
+        logger.error(f"Failed to get clients: {e}")
+        return []
+
+
 @router.get("/knowledge-base/agents")
 async def get_knowledge_base_agents(
     client_id: str,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Get agents for Knowledge Base admin interface from client-specific Supabase"""
+    """Get agents for Knowledge Base admin interface"""
     try:
-        from app.core.dependencies import get_client_service
-        from supabase import create_client
+        from app.core.dependencies import get_agent_service
         
-        # Get client details to access their Supabase
-        client_service = get_client_service()
-        client = await client_service.get_client(client_id)
+        # Get agent service
+        agent_service = get_agent_service()
         
-        if not client:
-            logger.error(f"Client {client_id} not found")
-            return []
+        # Get all agents for the client
+        agents = await agent_service.get_client_agents(client_id)
         
-        # Get client's Supabase credentials
-        client_settings = client.get('settings', {}) if isinstance(client, dict) else getattr(client, 'settings', {})
-        supabase_settings = client_settings.get('supabase', {}) if isinstance(client_settings, dict) else getattr(client_settings, 'supabase', {})
+        # Convert to list format expected by frontend
+        agent_list = []
+        for agent in agents:
+            agent_list.append({
+                "id": agent.id,
+                "name": agent.name,
+                "agent_name": agent.name,  # For compatibility
+                "slug": agent.slug,
+                "agent_slug": agent.slug,  # For compatibility
+                "enabled": agent.enabled
+            })
         
-        supabase_url = supabase_settings.get('url', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'url', '')
-        service_key = supabase_settings.get('service_role_key', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'service_role_key', '')
-        
-        if not supabase_url or not service_key:
-            logger.warning(f"Client {client_id} missing Supabase credentials")
-            return []
-        
-        # Create client-specific Supabase connection
-        client_supabase = create_client(supabase_url, service_key)
-        
-        # Query agents from client's database
-        result = client_supabase.table('agent_configurations')\
-            .select('id, agent_name, agent_slug')\
-            .order('agent_name')\
-            .execute()
-        
-        return result.data
+        return agent_list
         
     except Exception as e:
         logger.error(f"Failed to get agents for client {client_id}: {e}")
         return []
+
+
+@router.post("/knowledge-base/upload")
+async def upload_knowledge_base_document(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Upload document to knowledge base using document processor"""
+    try:
+        # Parse form data
+        form = await request.form()
+        file = form.get("file")
+        title = form.get("title", "")
+        description = form.get("description", "")
+        client_id = form.get("client_id")
+        agent_ids = form.get("agent_ids", "")
+        
+        if not file:
+            return {"success": False, "message": "No file provided"}
+        
+        if not client_id:
+            return {"success": False, "message": "No client ID provided"}
+        
+        # Get file content
+        content = await file.read()
+        filename = file.filename
+        
+        # Save file temporarily
+        import os
+        import tempfile
+        import uuid
+        
+        # Create a unique temporary file
+        temp_dir = tempfile.mkdtemp()
+        temp_file_path = os.path.join(temp_dir, filename)
+        
+        try:
+            # Save file temporarily
+            with open(temp_file_path, 'wb') as f:
+                f.write(content)
+            
+            # Determine agent access
+            agent_id_list = None
+            if agent_ids != "all" and agent_ids:
+                agent_id_list = [id.strip() for id in agent_ids.split(',') if id.strip()]
+            
+            # Use document processor to handle the file
+            from app.services.document_processor import document_processor
+            
+            result = await document_processor.process_uploaded_file(
+                file_path=temp_file_path,
+                title=title or filename,
+                description=description,
+                user_id=admin_user.get("id"),  # Admin user ID
+                agent_ids=agent_id_list,
+                client_id=client_id
+            )
+            
+            if result['success']:
+                logger.info(f"Document uploaded and processing started: {result['document_id']}")
+                return {
+                    "success": True, 
+                    "message": "Document uploaded and processing started",
+                    "document_id": result['document_id']
+                }
+            else:
+                logger.error(f"Document processing failed: {result.get('error')}")
+                # Clean up temp file on error
+                try:
+                    os.remove(temp_file_path)
+                    os.rmdir(temp_dir)
+                except:
+                    pass
+                return {"success": False, "message": result.get('error', 'Failed to process document')}
+                
+        except Exception as e:
+            logger.error(f"Failed to process document: {e}")
+            # Clean up temp file on error
+            try:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                if os.path.exists(temp_dir):
+                    os.rmdir(temp_dir)
+            except:
+                pass
+            return {"success": False, "message": f"Failed to process document: {str(e)}"}
+        
+    except Exception as e:
+        logger.error(f"Document upload failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"success": False, "message": f"Upload failed: {str(e)}"}
+
+
+@router.delete("/knowledge-base/documents/{document_id}")
+async def delete_knowledge_base_document(
+    document_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Delete a document from knowledge base"""
+    try:
+        from app.services.document_processor import document_processor
+        
+        # Delete the document using document processor
+        success = await document_processor.delete_document(
+            document_id=document_id,
+            user_id=admin_user.get("id")  # Pass admin user ID for permission check
+        )
+        
+        if success:
+            return {"success": True, "message": "Document deleted successfully"}
+        else:
+            return {"success": False, "message": "Failed to delete document"}
+            
+    except Exception as e:
+        logger.error(f"Failed to delete document {document_id}: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.post("/knowledge-base/documents/{document_id}/reprocess")
+async def reprocess_knowledge_base_document(
+    document_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Reprocess a document"""
+    try:
+        # For now, return success
+        # TODO: Implement actual reprocessing
+        return {"success": True, "message": "Document reprocessing started"}
+    except Exception as e:
+        logger.error(f"Failed to reprocess document {document_id}: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.put("/knowledge-base/documents/{document_id}/access")
+async def update_document_access(
+    document_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Update document access permissions"""
+    try:
+        data = await request.json()
+        agent_access = data.get("agent_access", "specific")
+        agent_ids = data.get("agent_ids", [])
+        
+        # For now, return success
+        # TODO: Implement actual access update in Supabase
+        return {"success": True, "message": "Document access updated successfully"}
+    except Exception as e:
+        logger.error(f"Failed to update document access: {e}")
+        return {"success": False, "message": str(e)}

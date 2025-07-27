@@ -13,7 +13,7 @@ class BackendLiveKitSync:
     """Manages automatic synchronization of LiveKit credentials from Supabase to backend"""
     
     AUTONOMITE_CLIENT_ID = "df91fd06-816f-4273-a903-5a4861277040"
-    ENV_FILE_PATH = "/root/autonomite-agent-platform/.env"
+    ENV_FILE_PATH = "/root/sidekick-forge/.env"
     
     @classmethod
     async def sync_credentials(cls) -> bool:
@@ -126,7 +126,7 @@ class BackendLiveKitSync:
             # Use docker-compose to restart the worker
             result = subprocess.run(
                 ["docker-compose", "restart", "agent-worker"],
-                cwd="/root/autonomite-agent-platform",
+                cwd="/root/sidekick-forge",
                 capture_output=True,
                 text=True
             )

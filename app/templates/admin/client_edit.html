@@ -227,6 +227,73 @@
             </div>
         </div>
 
+        <!-- Embedding Configuration -->
+        <div class="bg-white shadow rounded-lg mt-6">
+            <div class="px-6 py-4 border-b">
+                <h2 class="text-lg font-medium text-gray-900">Embedding Configuration</h2>
+                <p class="text-sm text-gray-600 mt-1">Configure how documents and conversations are embedded for search</p>
+            </div>
+            <div class="px-6 py-4 space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Embedding Provider</label>
+                        <select id="embeddingProvider" name="embedding_provider" 
+                                onchange="updateEmbeddingModels()"
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            <option value="openai" {% if client.settings.get('embedding', {}).get('provider') == 'openai' %}selected{% endif %}>OpenAI</option>
+                            <option value="deepinfra" {% if client.settings.get('embedding', {}).get('provider') == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
+                            <option value="novita" {% if client.settings.get('embedding', {}).get('provider') == 'novita' %}selected{% endif %}>Novita AI</option>
+                            <option value="siliconflow" {% if client.settings.get('embedding', {}).get('provider') == 'siliconflow' %}selected{% endif %}>SiliconFlow</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Document Embedding Model</label>
+                        <select id="documentEmbeddingModel" name="document_embedding_model"
+                                onchange="updateDimensionVisibility()"
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            <!-- Options populated by JavaScript -->
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Conversation Embedding Model</label>
+                        <select id="conversationEmbeddingModel" name="conversation_embedding_model"
+                                onchange="updateDimensionVisibility()"
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            <!-- Options populated by JavaScript -->
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- Embedding Dimension for Qwen Models -->
+                <div id="embeddingDimensionSection" style="display: none;">
+                    <label class="block text-sm font-medium text-gray-700">Embedding Dimension</label>
+                    <select id="embeddingDimension" name="embedding_dimension" 
+                            class="mt-1 block w-full md:w-1/3 border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">Auto (Model Default)</option>
+                        <option value="1024" {% if client.settings.get('embedding', {}).get('dimension') == 1024 %}selected{% endif %}>1024 dimensions</option>
+                        <option value="2048" {% if client.settings.get('embedding', {}).get('dimension') == 2048 %}selected{% endif %}>2048 dimensions</option>
+                        <option value="4096" {% if client.settings.get('embedding', {}).get('dimension') == 4096 %}selected{% endif %}>4096 dimensions</option>
+                    </select>
+                    <div class="mt-2 text-xs text-gray-600">
+                        <p><strong>Model Dimension Support:</strong></p>
+                        <p>• Qwen3-Embedding-0.6B: Up to 1024 dimensions (recommended: 1024)</p>
+                        <p>• Qwen3-Embedding-4B: Up to 2048 dimensions (recommended: 1024 or 2048)</p>
+                        <p>• Qwen3-Embedding-8B: Up to 4096 dimensions (recommended: 1024, 2048, or 4096)</p>
+                        <p class="mt-1">Lower dimensions = faster processing, smaller storage. Higher dimensions = better accuracy.</p>
+                    </div>
+                </div>
+                
+                <div>
+                    <p class="text-sm text-gray-600">
+                        <svg class="inline h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Make sure you have the appropriate API key configured for your selected embedding provider above.
+                    </p>
+                </div>
+            </div>
+        </div>
+
         <div class="mt-6 flex justify-end space-x-3">
             <a href="/admin/clients" class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
                 Cancel
@@ -244,7 +311,95 @@ const clientId = '{{ client.id }}';
 // Auto-sync disabled - backend handles credential sync automatically
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Client edit page loaded - backend auto-sync is handling credential synchronization');
+    // Initialize embedding configuration
+    updateEmbeddingModels();
+    updateDimensionVisibility();
 });
+
+// Store current selections to restore after model list update
+let currentDocModel = '{{ client.settings.get("embedding", {}).get("document_model", "") }}';
+let currentConvModel = '{{ client.settings.get("embedding", {}).get("conversation_model", "") }}';
+
+function updateEmbeddingModels() {
+    const provider = document.getElementById('embeddingProvider').value;
+    const docModelSelect = document.getElementById('documentEmbeddingModel');
+    const convModelSelect = document.getElementById('conversationEmbeddingModel');
+    
+    // Clear existing options
+    docModelSelect.innerHTML = '';
+    convModelSelect.innerHTML = '';
+    
+    let options = [];
+    
+    if (provider === 'openai') {
+        options = [
+            { value: 'text-embedding-3-small', text: 'text-embedding-3-small' },
+            { value: 'text-embedding-3-large', text: 'text-embedding-3-large' },
+            { value: 'text-embedding-ada-002', text: 'text-embedding-ada-002' }
+        ];
+    } else if (provider === 'deepinfra') {
+        options = [
+            { value: 'Qwen/Qwen2.5-72B-Instruct', text: 'Qwen/Qwen2.5-72B-Instruct' },
+            { value: 'Qwen/Qwen3-Embedding-0.6B', text: 'Qwen3-Embedding-0.6B (Fastest)' },
+            { value: 'Qwen/Qwen3-Embedding-4B', text: 'Qwen3-Embedding-4B (Balanced)' },
+            { value: 'Qwen/Qwen3-Embedding-8B', text: 'Qwen3-Embedding-8B (Highest Quality)' }
+        ];
+    } else if (provider === 'novita') {
+        options = [
+            { value: 'Qwen/Qwen3-Embedding-0.6B', text: 'Qwen3-Embedding-0.6B (Fastest)' },
+            { value: 'Qwen/Qwen3-Embedding-4B', text: 'Qwen3-Embedding-4B (Balanced)' },
+            { value: 'Qwen/Qwen3-Embedding-8B', text: 'Qwen3-Embedding-8B (Highest Quality)' }
+        ];
+    } else if (provider === 'siliconflow') {
+        options = [
+            { value: 'Qwen/Qwen3-Embedding-0.6B', text: 'Qwen3-Embedding-0.6B (Fastest)' },
+            { value: 'Qwen/Qwen3-Embedding-4B', text: 'Qwen3-Embedding-4B (Balanced)' },
+            { value: 'Qwen/Qwen3-Embedding-8B', text: 'Qwen3-Embedding-8B (Highest Quality)' }
+        ];
+    }
+    
+    // Add options to both selects
+    options.forEach(opt => {
+        const docOption = new Option(opt.text, opt.value);
+        const convOption = new Option(opt.text, opt.value);
+        
+        // Restore selection if possible
+        if (opt.value === currentDocModel) docOption.selected = true;
+        if (opt.value === currentConvModel) convOption.selected = true;
+        
+        docModelSelect.appendChild(docOption);
+        convModelSelect.appendChild(convOption);
+    });
+    
+    // If no selection was restored, select the first option
+    if (!docModelSelect.value && options.length > 0) {
+        docModelSelect.value = options[0].value;
+    }
+    if (!convModelSelect.value && options.length > 0) {
+        convModelSelect.value = options[0].value;
+    }
+    
+    // Update dimension visibility
+    updateDimensionVisibility();
+}
+
+function updateDimensionVisibility() {
+    const provider = document.getElementById('embeddingProvider').value;
+    const docModel = document.getElementById('documentEmbeddingModel').value;
+    const convModel = document.getElementById('conversationEmbeddingModel').value;
+    const dimensionSection = document.getElementById('embeddingDimensionSection');
+    
+    // Show dimension selector if provider is deepinfra or siliconflow and either model is a Qwen embedding model
+    const isEligibleProvider = provider === 'deepinfra' || provider === 'siliconflow';
+    const hasQwenEmbedding = (docModel && docModel.includes('Qwen') && docModel.includes('Embedding')) || 
+                            (convModel && convModel.includes('Qwen') && convModel.includes('Embedding'));
+    
+    if (isEligibleProvider && hasQwenEmbedding) {
+        dimensionSection.style.display = 'block';
+    } else {
+        dimensionSection.style.display = 'none';
+    }
+}
 
 async function autoSyncFromSupabase() {
     const url = document.getElementById('supabaseUrl').value;

@@ -5,7 +5,8 @@ import os
 
 class Settings(BaseSettings):
     # Application Settings
-    app_name: str = "autonomite-saas"
+    app_name: str = Field(default="sidekick-forge", env="APP_NAME")
+    platform_name: str = Field(default="Sidekick Forge", env="PLATFORM_NAME")
     app_env: str = Field(default="production", env="APP_ENV")
     debug: bool = Field(default=False, env="DEBUG")
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
@@ -75,8 +76,8 @@ class Settings(BaseSettings):
     performance_monitoring: bool = Field(default=False, env="PERFORMANCE_MONITORING")
     
     # SSL/Domain Configuration
-    domain_name: str = Field(default="agents.autonomite.net", env="DOMAIN_NAME")
-    ssl_email: str = Field(default="admin@autonomite.net", env="SSL_EMAIL")
+    domain_name: str = Field(env="DOMAIN_NAME")  # Required - no default
+    ssl_email: str = Field(default="admin@sidekickforge.com", env="SSL_EMAIL")
     
     # Monitoring
     sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN")

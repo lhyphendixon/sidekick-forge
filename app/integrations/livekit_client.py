@@ -126,7 +126,7 @@ class LiveKitManager:
         max_participants: int = 2,
         metadata: Optional[Union[Dict[str, Any], str]] = None,
         enable_agent_dispatch: bool = True,
-        agent_name: str = "autonomite-agent"
+        agent_name: str = "sidekick-agent"
     ) -> Dict[str, Any]:
         """Create a LiveKit room
         

@@ -443,20 +443,44 @@ class KnowledgeBaseManager {
                 } else if (this.clients.length === 1) {
                     console.log('Single client detected:', this.clients[0]);
                     this.currentClient = this.clients[0].id;
+                    // Show client selection even for single client to make it clear which client is being used
+                    this.showClientSelection();
                 } else {
-                    console.log('No clients found, using fallback');
-                    // Fallback for development mode
-                    this.currentClient = 'autonomite';
+                    console.log('No clients found, using default test client');
+                    // Use the test client ID from the platform
+                    this.currentClient = 'df91fd06-816f-4273-a903-5a4861277040';
+                    // Create a fake client for display
+                    this.clients = [{
+                        id: 'df91fd06-816f-4273-a903-5a4861277040',
+                        name: 'Autonomite',
+                        domain: 'autonomite.ai'
+                    }];
+                    this.showClientSelection();
                 }
                 console.log('Current client set to:', this.currentClient);
             } else {
-                console.log('Clients API failed, using fallback');
-                // Fallback for development mode
-                this.currentClient = 'autonomite';
+                console.log('Clients API failed, using default test client');
+                // Use the test client ID from the platform
+                this.currentClient = 'df91fd06-816f-4273-a903-5a4861277040';
+                // Create a fake client for display
+                this.clients = [{
+                    id: 'df91fd06-816f-4273-a903-5a4861277040',
+                    name: 'Autonomite',
+                    domain: 'autonomite.ai'
+                }];
+                this.showClientSelection();
             }
         } catch (error) {
             console.error('Failed to load user info:', error);
-            this.currentClient = 'autonomite';
+            // Use the test client ID from the platform
+            this.currentClient = 'df91fd06-816f-4273-a903-5a4861277040';
+            // Create a fake client for display
+            this.clients = [{
+                id: 'df91fd06-816f-4273-a903-5a4861277040',
+                name: 'Autonomite',
+                domain: 'autonomite.ai'
+            }];
+            this.showClientSelection();
         }
     }
 
@@ -653,9 +677,13 @@ class KnowledgeBaseManager {
         document.getElementById('file-list').style.display = hasFiles ? 'block' : 'none';
         document.getElementById('upload-controls').style.display = hasFiles ? 'flex' : 'none';
         
-        // Only show agent selection if we have files AND agents loaded
-        if (hasFiles && this.agents.length > 0) {
+        // Show agent selection if we have files
+        if (hasFiles) {
             this.showAgentSelection();
+            // Load agents if not already loaded
+            if (this.agents.length === 0) {
+                this.loadAgents();
+            }
         } else {
             this.hideAgentSelection();
         }

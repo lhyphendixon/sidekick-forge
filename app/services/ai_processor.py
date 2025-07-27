@@ -282,11 +282,18 @@ class AIProcessor:
     async def _generate_siliconflow_embeddings(self, text: str, model: str, api_keys: Dict) -> Optional[List[float]]:
         """Generate embeddings using SiliconFlow"""
         try:
+            logger.info(f"[DEBUG] _generate_siliconflow_embeddings called with model={model}")
+            logger.info(f"[DEBUG] API keys passed: {list(api_keys.keys())}")
+            logger.info(f"[DEBUG] siliconflow_api_key in api_keys: {'siliconflow_api_key' in api_keys}")
+            
             api_key = api_keys.get('siliconflow_api_key') or os.getenv('SILICONFLOW_API_KEY')
+            logger.info(f"[DEBUG] Initial api_key from dict/env: {api_key[:10] if api_key else 'None'}...")
+            
             if not api_key:
                 # Try to get from settings
                 client_settings = {'api_keys': api_keys} if api_keys else None
                 api_key = await self._get_api_key_from_settings('siliconflow_api_key', client_settings)
+                logger.info(f"[DEBUG] api_key after _get_api_key_from_settings: {api_key[:10] if api_key else 'None'}...")
             
             if not api_key:
                 logger.error(f"No SiliconFlow API key available. API keys provided: {list(api_keys.keys())}")
@@ -312,7 +319,7 @@ class AIProcessor:
             }
             
             response = await self.http_client.post(
-                "https://api.siliconflow.cn/v1/embeddings",
+                "https://api.siliconflow.com/v1/embeddings",
                 headers=headers,
                 json=data
             )

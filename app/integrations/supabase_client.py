@@ -24,20 +24,18 @@ class SupabaseManager:
             return
         
         try:
+            # Get credentials dynamically
+            from app.utils.supabase_credentials import SupabaseCredentialManager
+            url, anon_key, service_role_key = await SupabaseCredentialManager.get_service_credentials()
+            
             # Service role client for admin operations
-            self.admin_client = create_client(
-                settings.supabase_url,
-                settings.supabase_service_role_key
-            )
+            self.admin_client = create_client(url, service_role_key)
             
             # Anon client for Supabase Auth operations
-            self.auth_client = create_client(
-                settings.supabase_url,
-                settings.supabase_anon_key
-            )
+            self.auth_client = create_client(url, anon_key)
             
             self._initialized = True
-            logger.info("Supabase clients initialized successfully")
+            logger.info("Supabase clients initialized successfully with dynamic credentials")
             
         except Exception as e:
             logger.error(f"Failed to initialize Supabase clients: {e}")
@@ -224,7 +222,7 @@ class SupabaseManager:
         # Get agent-tool configurations
         agent_tools = await self.execute_query(
             self.admin_client.table("autonomite_agent_tools")
-            .select("*, autonomite_tools(*)")
+            .select("*, sidekick_tools(*)")
             .eq("agent_id", agent_id)
             .eq("enabled", True)
         )

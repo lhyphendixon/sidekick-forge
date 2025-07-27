@@ -128,7 +128,7 @@ class ClientService:
         """Initialize default clients if they don't exist"""
         default_clients = [
             {
-                "id": "autonomite-agent",
+                "id": "sidekick-agent",
                 "name": "Autonomite Agent",
                 "description": "First-party agents by Autonomite",
                 "domain": "autonomite.net",

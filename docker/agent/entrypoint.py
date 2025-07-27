@@ -15,6 +15,7 @@ from livekit import agents, rtc
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
 from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
 from api_key_loader import APIKeyLoader
+from config_validator import ConfigValidator, ConfigurationError
 
 # Configure logging
 logging.basicConfig(
@@ -88,6 +89,14 @@ async def agent_job_handler(ctx: JobContext):
                             metadata = json.loads(room_info.metadata)
                             logger.info(f"Successfully parsed room metadata with {len(metadata)} keys")
                             logger.info(f"Metadata keys: {list(metadata.keys())}")
+                            
+                            # Log more details about the metadata content
+                            if 'voice_settings' in metadata:
+                                logger.info(f"Voice settings found: {metadata['voice_settings']}")
+                            if 'system_prompt' in metadata:
+                                logger.info(f"System prompt length: {len(metadata['system_prompt'])} chars")
+                            if 'client_id' in metadata:
+                                logger.info(f"Client ID: {metadata['client_id']}")
                             
                             # Log if API keys are present
                             if 'api_keys' in metadata:
@@ -167,9 +176,17 @@ async def agent_job_handler(ctx: JobContext):
                 }
             }
             
-        # Load API keys using the loader (handles fallbacks)
+        # Load API keys using the loader (follows dynamic loading policy)
         api_keys = APIKeyLoader.load_api_keys(metadata)
         metadata['api_keys'] = api_keys
+        
+        # CRITICAL: Validate configuration before proceeding
+        try:
+            ConfigValidator.validate_configuration(metadata, api_keys)
+        except ConfigurationError as e:
+            logger.error(f"❌ Configuration validation failed: {e}")
+            # Fail fast - don't try to start with invalid configuration
+            raise
 
         # --- Migrated Agent Logic ---
         try:
@@ -178,55 +195,95 @@ async def agent_job_handler(ctx: JobContext):
             voice_settings = metadata.get("voice_settings", {})
             llm_provider = voice_settings.get("llm_provider", metadata.get("llm_provider", "openai"))
             
-            # Configure LLM based on provider
+            # Configure LLM based on provider - NO FALLBACK to environment variables
             if llm_provider == "groq":
+                groq_key = api_keys.get("groq_api_key")
+                if not groq_key:
+                    raise ConfigurationError("Groq API key required but not found")
                 llm_plugin = groq.LLM(
                     model=metadata.get("model", "llama-3.1-70b-versatile"),
-                    api_key=metadata.get("api_keys", {}).get("groq_api_key", os.getenv("GROQ_API_KEY"))
+                    api_key=groq_key
                 )
             else:
+                openai_key = api_keys.get("openai_api_key")
+                if not openai_key:
+                    raise ConfigurationError("OpenAI API key required but not found")
                 llm_plugin = openai.LLM(
                     model=metadata.get("model", "gpt-4"),
-                    api_key=metadata.get("api_keys", {}).get("openai_api_key", os.getenv("OPENAI_API_KEY"))
+                    api_key=openai_key
                 )
             
-            # Configure STT
+            # Validate LLM initialization
+            ConfigValidator.validate_provider_initialization(f"{llm_provider} LLM", llm_plugin)
+            
+            # Configure STT - NO FALLBACK to environment variables
             stt_provider = voice_settings.get("stt_provider", "deepgram")
             if stt_provider == "cartesia":
+                cartesia_key = api_keys.get("cartesia_api_key")
+                if not cartesia_key:
+                    raise ConfigurationError("Cartesia API key required for STT but not found")
                 stt_plugin = cartesia.STT(
-                    api_key=metadata.get("api_keys", {}).get("cartesia_api_key", os.getenv("CARTESIA_API_KEY"))
+                    api_key=cartesia_key
                 )
             else:
+                deepgram_key = api_keys.get("deepgram_api_key")
+                if not deepgram_key:
+                    raise ConfigurationError("Deepgram API key required for STT but not found")
                 stt_plugin = deepgram.STT(
-                    api_key=metadata.get("api_keys", {}).get("deepgram_api_key", os.getenv("DEEPGRAM_API_KEY"))
+                    api_key=deepgram_key
                 )
             
-            # Configure TTS
+            # Validate STT initialization
+            ConfigValidator.validate_provider_initialization(f"{stt_provider} STT", stt_plugin)
+            
+            # Configure TTS - NO FALLBACK to environment variables
             tts_provider = voice_settings.get("tts_provider", "cartesia")
             if tts_provider == "elevenlabs":
+                elevenlabs_key = api_keys.get("elevenlabs_api_key")
+                if not elevenlabs_key:
+                    raise ConfigurationError("ElevenLabs API key required for TTS but not found")
                 tts_plugin = elevenlabs.TTS(
                     voice_id=voice_settings.get("voice_id", "Xb7hH8MSUJpSbSDYk0k2"),
-                    api_key=metadata.get("api_keys", {}).get("elevenlabs_api_key", os.getenv("ELEVENLABS_API_KEY"))
+                    api_key=elevenlabs_key
                 )
             else:
+                cartesia_key = api_keys.get("cartesia_api_key")
+                if not cartesia_key:
+                    raise ConfigurationError("Cartesia API key required for TTS but not found")
+                
+                # Check for test keys and fail fast - NO FALLBACK
+                if cartesia_key.startswith("fixed_"):
+                    raise ConfigurationError(
+                        f"Test key 'fixed_cartesia_key' cannot be used with Cartesia API. "
+                        f"Please update the client's Cartesia API key in the admin dashboard to a valid key. "
+                        f"Current TTS provider is set to '{tts_provider}' but the API key is a test key."
+                    )
+                
                 tts_plugin = cartesia.TTS(
                     voice=voice_settings.get("voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d"),
-                    api_key=metadata.get("api_keys", {}).get("cartesia_api_key", os.getenv("CARTESIA_API_KEY"))
+                    api_key=cartesia_key
                 )
+            
+            # Validate TTS initialization
+            ConfigValidator.validate_provider_initialization(f"{tts_provider} TTS", tts_plugin)
             
             # Configure VAD (Voice Activity Detection)
             vad = silero.VAD.load()
             
             # Connect to the room first
+            logger.info("Connecting to room...")
             await ctx.connect()
+            logger.info("✅ Connected to room successfully")
             
             # Create and configure the voice agent session
+            logger.info("Creating voice agent session...")
             session = voice.AgentSession(
                 vad=vad,
                 stt=stt_plugin,
                 llm=llm_plugin,
                 tts=tts_plugin
             )
+            logger.info("✅ Voice agent session created")
             
             # Add event handlers for logging and monitoring
             @session.on("user_speech_committed")
@@ -246,6 +303,7 @@ async def agent_job_handler(ctx: JobContext):
             
             # Start the session - this connects it to the room
             # According to LiveKit docs, session.start() must be awaited
+            logger.info("Starting agent session...")
             await session.start(room=ctx.room, agent=agent)
             
             # Log successful start
@@ -257,48 +315,69 @@ async def agent_job_handler(ctx: JobContext):
             # Store session reference for the job lifecycle
             ctx.session = session
             
-            # Send initial greeting to user
-            logger.info("🎤 Sending initial greeting to user...")
+            # Wait a moment for the audio pipeline to be ready
+            logger.info("Waiting for audio pipeline to be ready...")
+            await asyncio.sleep(0.5)
+            
+            # Check if there are participants in the room before greeting
+            # Note: ctx.room might not have participants attribute immediately
             try:
-                await session.generate_reply(
-                    instructions="Greet the user warmly and introduce yourself. Ask how you can help them today."
-                )
-                logger.info("✅ Greeting sent successfully")
+                # Try to get participants - different SDK versions have different attributes
+                participants = []
+                if hasattr(ctx.room, 'remote_participants'):
+                    participants = list(ctx.room.remote_participants.values())
+                    logger.info(f"Found {len(participants)} remote participant(s) in room")
+                elif hasattr(ctx.room, 'participants'):
+                    participants = list(ctx.room.participants.values())
+                    logger.info(f"Found {len(participants)} participant(s) in room")
+                else:
+                    logger.info("Room object doesn't have participants attribute yet")
+                
+                # Always send greeting - agent should be ready when user joins
+                logger.info("🎤 Preparing agent to greet user...")
+                # The session will handle greeting when participant joins
+                
             except Exception as e:
-                logger.warning(f"Failed to send initial greeting: {e}")
-                # Continue anyway - agent is still functional
+                logger.warning(f"Could not check participants: {e}")
+                # Continue - the session will handle participant events
             
             # The session manages the lifecycle - we don't need explicit wait
             # The job will stay alive until the room closes or agent disconnects
             
+        except ConfigurationError as e:
+            # Configuration errors are fatal - don't try to recover
+            logger.error(f"❌ Configuration error: {e}")
+            raise
         except Exception as e:
-            logger.error(f"Agent session failed: {e}", exc_info=True)
+            logger.error(f"❌ Agent session failed: {e}", exc_info=True)
+            # Log the type of error for better debugging
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Error details: {str(e)}")
             raise  # Re-raise to let LiveKit handle the error
         # --- End Migrated Logic ---
 
+    except ConfigurationError as e:
+        # Configuration errors should fail fast and clearly
+        logger.critical(f"❌ FATAL: {e}")
+        raise
     except Exception as e:
-        logger.error(f"Error in agent job: {e}", exc_info=True)
+        logger.error(f"❌ Error in agent job: {e}", exc_info=True)
         raise  # Re-raise to let LiveKit handle the error
 
 
 async def request_filter(job_request: JobRequest) -> None:
     """
-    Filter function to accept/reject jobs based on agent name
+    Filter function to accept/reject jobs
+    
+    We accept all jobs and use metadata to determine agent configuration.
+    This allows one worker to handle multiple agent types.
     """
     logger.info(f"Received job request: {job_request.job.id}")
+    logger.info(f"Job agent name: {job_request.agent_name}")
     
-    # Accept all jobs for "autonomite-agent"
-    if job_request.agent_name == "autonomite-agent":
-        logger.info(f"Accepting job for autonomite-agent")
-        await job_request.accept()
-    else:
-        # Also accept if no specific agent name is requested (default behavior)
-        if not job_request.agent_name:
-            logger.info(f"Accepting job with no specific agent name")
-            await job_request.accept()
-        else:
-            logger.info(f"Rejecting job for agent: {job_request.agent_name}")
-            await job_request.reject()
+    # Accept all jobs - we'll handle different agent configurations via metadata
+    logger.info(f"Accepting job for agent: {job_request.agent_name}")
+    await job_request.accept()
 
 
 if __name__ == "__main__":
@@ -311,7 +390,7 @@ if __name__ == "__main__":
             logger.critical("🚨 INVALID LIVEKIT CREDENTIALS DETECTED 🚨")
             logger.critical("The LiveKit API key 'APIUtuiQ47BQBsk' is expired and no longer valid.")
             logger.critical("Please update the credentials using:")
-            logger.critical("  python /root/autonomite-agent-platform/scripts/update_livekit_credentials.py <url> <api_key> <api_secret>")
+            logger.critical("  python /root/sidekick-forge/scripts/update_livekit_credentials.py <url> <api_key> <api_secret>")
             sys.exit(1)
         
         # Default to 'start' command if none provided
@@ -329,13 +408,13 @@ if __name__ == "__main__":
 
         logger.info(f"Starting agent worker...")
         logger.info(f"LiveKit URL: {url}")
-        logger.info(f"Agent name: autonomite-agent")
+        logger.info(f"Agent name: sidekick-agent")
 
         # Configure worker options with agent_name for explicit dispatch
         worker_options = WorkerOptions(
             entrypoint_fnc=agent_job_handler,
             request_fnc=request_filter,
-            agent_name="autonomite-agent",  # Enable explicit dispatch
+            agent_name="sidekick-agent",  # Enable explicit dispatch
         )
 
         # Let the CLI handle the event loop

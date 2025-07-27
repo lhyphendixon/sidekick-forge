@@ -51,7 +51,13 @@ async def create_agent(
     # Create a new AgentCreate instance with the updated client_id
     agent_data_with_client = AgentCreate(**agent_dict)
     
-    return await service.create_agent(client_id, agent_data_with_client)
+    result = await service.create_agent(client_id, agent_data_with_client)
+    if not result:
+        raise HTTPException(
+            status_code=500, 
+            detail="Failed to create agent. Please check Supabase configuration and connectivity."
+        )
+    return result
 
 
 @router.get("/client/{client_id}/{agent_slug}", response_model=AgentInDB)

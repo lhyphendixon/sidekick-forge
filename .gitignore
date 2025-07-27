@@ -2,6 +2,50 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Environments
+.env
+.env.*
+!.env.example
+!.env.template
+.venv
+env/
+venv/
+
+# Logs
+logs/
+*.log
+
+# Uploads
+uploads/
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Prevent duplicate directories
+/autonomite-agent-platform/
+/autonomite-agent-platform.backup/
+/*-backup/
+/*-old/
+/*.backup
+
+# Prevent symlinks  
+*.lnk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
 *.so
 .Python
 venv/

@@ -215,7 +215,7 @@ async def admin_test(request: Request):
                     <h2>✅ System Status: ONLINE</h2>
                     <p>The FastAPI backend is running successfully!</p>
                     <p><strong>Current Time:</strong> """ + datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC") + """</p>
-                    <p><strong>URL:</strong> http://agents.autonomite.net/admin/test</p>
+                    <p><strong>URL:</strong> http://{settings.domain_name}/admin/test</p>
                 </div>
                 
                 <div class="info">
@@ -247,7 +247,7 @@ async def admin_test(request: Request):
                     <p>To complete the setup, run these commands on your server:</p>
                     <pre style="background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto;">
 # Set up SSL certificates
-sudo certbot --nginx -d agents.autonomite.net
+sudo certbot --nginx -d {domain_name}
 
 # Configure environment variables
 sudo nano /opt/autonomite-saas/.env

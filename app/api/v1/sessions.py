@@ -77,7 +77,7 @@ async def create_call_session(
         # Generate room name
         room_name = f"room_{request.session_id}"
         
-        # Create LiveKit room
+        # Create LiveKit room with agent dispatch
         room = await livekit_manager.create_room(
             name=room_name,
             empty_timeout=300,  # 5 minutes
@@ -87,7 +87,9 @@ async def create_call_session(
                 "conversation_id": request.conversation_id,
                 "user_id": request.user_id,
                 "site_id": site_id
-            }
+            },
+            enable_agent_dispatch=True,
+            agent_name=request.agent_slug  # Use the agent slug for dispatch
         )
         
         # Create user token
@@ -153,12 +155,15 @@ async def create_room(
     Create a LiveKit room without starting a session
     """
     try:
-        # Create LiveKit room
+        # Create LiveKit room - check if metadata has agent_slug for dispatch
+        agent_slug = request.metadata.get("agent_slug") if request.metadata else None
         room = await livekit_manager.create_room(
             name=request.room_name,
             empty_timeout=request.empty_timeout,
             max_participants=request.max_participants,
-            metadata=request.metadata
+            metadata=request.metadata,
+            enable_agent_dispatch=bool(agent_slug),  # Only enable if agent_slug provided
+            agent_name=agent_slug if agent_slug else "sidekick-agent"
         )
         
         return APIResponse(

@@ -327,7 +327,7 @@ async def ensure_livekit_room_exists(
             max_participants=10,
             metadata=json.dumps(room_metadata),
             enable_agent_dispatch=True,
-            agent_name=agent_slug if agent_slug else "autonomite-agent"
+            agent_name=agent_slug if agent_slug else "sidekick-agent"
         )
         
         logger.info(f"✅ Created room {room_name} successfully")

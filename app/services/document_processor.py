@@ -91,8 +91,16 @@ class DocumentProcessor:
                 logger.warning(f"Client {client_id} missing Supabase credentials")
                 return None
             
-            # Create and cache client-specific connection
-            client_supabase = create_client(supabase_url, service_key)
+            # Check if this client is using the main Supabase instance
+            from app.config import settings
+            if supabase_url == settings.supabase_url:
+                logger.info(f"Client {client_id} uses main Supabase instance, using admin client")
+                # Use the admin client for the main instance
+                client_supabase = self._ensure_supabase()
+            else:
+                # Create and cache client-specific connection
+                client_supabase = create_client(supabase_url, service_key)
+            
             self.client_supabase_connections[client_id] = client_supabase
             
             return client_supabase
@@ -230,13 +238,10 @@ class DocumentProcessor:
                     'file_path': file_path,
                     'mime_type': file_info.get('mime_type'),
                     'upload_date': datetime.now(timezone.utc).isoformat(),
-                    'processing_started': datetime.now(timezone.utc).isoformat()
+                    'processing_started': datetime.now(timezone.utc).isoformat(),
+                    'description': description if description else ''  # Store description in metadata
                 }
             }
-            
-            # Only include description if it's provided and not empty (some client schemas may not have this column)
-            if description and description.strip():
-                document_data['description'] = description
             
             # Use client-specific Supabase if client_id provided
             if client_id:
@@ -298,6 +303,11 @@ class DocumentProcessor:
                         # Convert to dict if it's a model object
                         if hasattr(client_settings, 'dict'):
                             client_settings = client_settings.dict()
+                        
+                        logger.info(f"[DEBUG] Got client settings for {client_id}")
+                        logger.info(f"[DEBUG] Embedding provider: {client_settings.get('embedding', {}).get('provider')}")
+                        logger.info(f"[DEBUG] API keys available: {list(client_settings.get('api_keys', {}).keys())}")
+                        logger.info(f"[DEBUG] SiliconFlow key present: {'siliconflow_api_key' in client_settings.get('api_keys', {})}")
                 except Exception as e:
                     logger.warning(f"Could not get client settings for embeddings: {e}")
             

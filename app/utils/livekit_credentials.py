@@ -45,7 +45,7 @@ class LiveKitCredentialManager:
         try:
             # Import here to avoid circular dependency
             from app.integrations.supabase_client import SupabaseManager
-            from app.core.config import settings
+            from app.config import settings
             
             # Initialize Supabase client
             supabase = SupabaseManager()

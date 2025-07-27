@@ -5,13 +5,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: autonomite-fastapi
+    container_name: ${APP_NAME:-sidekick-forge}-fastapi
     ports:
       - "8000:8000"
     environment:
       - APP_ENV=development
       - REDIS_HOST=redis
       - DATABASE_URL=${DATABASE_URL}
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - APP_NAME=${APP_NAME}
+      - PLATFORM_NAME=${PLATFORM_NAME}
     volumes:
       - ./app:/app/app
       - ./logs:/app/logs
@@ -19,22 +22,22 @@ services:
       - redis
     restart: unless-stopped
     networks:
-      - autonomite-network
+      - platform-network
 
   redis:
     image: redis:7-alpine
-    container_name: autonomite-redis
+    container_name: ${APP_NAME:-sidekick-forge}-redis
     ports:
       - "6379:6379"
     volumes:
       - redis-data:/data
     restart: unless-stopped
     networks:
-      - autonomite-network
+      - platform-network
 
   nginx:
     image: nginx:alpine
-    container_name: autonomite-nginx
+    container_name: ${APP_NAME:-sidekick-forge}-nginx
     ports:
       - "80:80"
       - "443:443"
@@ -46,10 +49,10 @@ services:
       - fastapi
     restart: unless-stopped
     networks:
-      - autonomite-network
+      - platform-network
 
   agent-worker:
-    image: autonomite/agent-runtime:latest
+    image: ${APP_NAME:-sidekick-forge}/agent-runtime:latest
     restart: always
     command: python /app/entrypoint.py  # Use the existing entrypoint
     environment:
@@ -77,11 +80,12 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - COHERE_API_KEY=${COHERE_API_KEY:-}
     networks:
-      - autonomite-network
+      - platform-network
 
 volumes:
   redis-data:
 
 networks:
-  autonomite-network:
+  platform-network:
+    name: ${APP_NAME:-sidekick-forge}-network
     driver: bridge

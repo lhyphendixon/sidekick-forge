@@ -212,7 +212,7 @@ async def create_livekit_room(
         room_metadata = {
             "client_id": request.client_id,
             "client_name": client.name,
-            "created_by": "autonomite_backend_api",
+            "created_by": "sidekick_backend_api",
             "created_at": datetime.now().isoformat(),
             **(request.metadata or {})
         }
@@ -585,12 +585,12 @@ async def dispatch_agent_job(
         dispatch_request = api.CreateAgentDispatchRequest(
             room=room_name,
             metadata=json.dumps(job_metadata),  # Pass full config as job metadata
-            agent_name="autonomite-agent"  # Match the agent name the worker accepts
+            agent_name="sidekick-agent"  # Match the agent name the worker accepts
         )
         
         logger.info(f"📤 Sending dispatch request:")
         logger.info(f"   - Room: {room_name}")
-        logger.info(f"   - Agent name: autonomite-agent")
+        logger.info(f"   - Agent name: sidekick-agent")
         logger.info(f"   - Metadata fields: {len(job_metadata)}")
         logger.info(f"   - Metadata size: {len(json.dumps(job_metadata))} bytes")
         
@@ -695,7 +695,7 @@ async def ensure_livekit_room_exists(
             "agent_name": agent_name,
             "agent_slug": agent_slug,
             "user_id": user_id,
-            "created_by": "autonomite_backend",
+            "created_by": "sidekick_backend",
             "created_at": datetime.now().isoformat()
         })
         
@@ -710,7 +710,7 @@ async def ensure_livekit_room_exists(
             max_participants=10,  # Allow multiple participants
             metadata=metadata_json,
             enable_agent_dispatch=True,
-            agent_name=agent_slug if agent_slug else "autonomite-agent"  # Use the actual agent slug
+            agent_name=agent_slug if agent_slug else "sidekick-agent"  # Use the actual agent slug
         )
         create_duration = time.time() - create_start
         logger.info(f"⏱️ Room creation took {create_duration:.2f}s")

@@ -119,8 +119,16 @@ class AgentService:
         if client_config and client_config.get("url") == settings.supabase_url:
             # This client uses the main Supabase instance, so use admin client
             logger.info(f"Client {client_id} uses main Supabase instance, using admin client")
-            # Create admin client directly
-            client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+            # Create admin client directly - try service role key first, fall back to anon key
+            try:
+                client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+                # Test the connection
+                test_result = client_supabase.table("agents").select("id").limit(1).execute()
+            except Exception as e:
+                logger.warning(f"Service role key failed, falling back to anon key: {e}")
+                # Fall back to anon key from client config
+                anon_key = client_config.get("anon_key", settings.supabase_anon_key)
+                client_supabase = create_client(settings.supabase_url, anon_key)
         else:
             # Get client's separate Supabase instance
             client_supabase = await self.client_service.get_client_supabase_client(client_id)
@@ -152,8 +160,16 @@ class AgentService:
         if client_config and client_config.get("url") == settings.supabase_url:
             # This client uses the main Supabase instance, so use admin client
             logger.info(f"Client {client_id} uses main Supabase instance, using admin client")
-            # Create admin client directly
-            client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+            # Create admin client directly - try service role key first, fall back to anon key
+            try:
+                client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+                # Test the connection
+                test_result = client_supabase.table("agents").select("id").limit(1).execute()
+            except Exception as e:
+                logger.warning(f"Service role key failed, falling back to anon key: {e}")
+                # Fall back to anon key from client config
+                anon_key = client_config.get("anon_key", settings.supabase_anon_key)
+                client_supabase = create_client(settings.supabase_url, anon_key)
         else:
             # Get client's separate Supabase instance
             client_supabase = await self.client_service.get_client_supabase_client(client_id)
@@ -224,8 +240,16 @@ class AgentService:
         if client_config and client_config.get("url") == settings.supabase_url:
             # This client uses the main Supabase instance, so use admin client
             logger.info(f"Client {client_id} uses main Supabase instance, using admin client")
-            # Create admin client directly
-            client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+            # Create admin client directly - try service role key first, fall back to anon key
+            try:
+                client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+                # Test the connection
+                test_result = client_supabase.table("agents").select("id").limit(1).execute()
+            except Exception as e:
+                logger.warning(f"Service role key failed, falling back to anon key: {e}")
+                # Fall back to anon key from client config
+                anon_key = client_config.get("anon_key", settings.supabase_anon_key)
+                client_supabase = create_client(settings.supabase_url, anon_key)
         else:
             # Get client's separate Supabase instance
             client_supabase = await self.client_service.get_client_supabase_client(client_id)
@@ -239,18 +263,36 @@ class AgentService:
             agent_dict["created_at"] = datetime.utcnow().isoformat()
             agent_dict["updated_at"] = datetime.utcnow().isoformat()
             
+            # Convert nested objects to JSON strings for Supabase
+            if "voice_settings" in agent_dict and agent_dict["voice_settings"]:
+                agent_dict["voice_settings"] = json.dumps(agent_dict["voice_settings"])
+            if "webhooks" in agent_dict and agent_dict["webhooks"]:
+                agent_dict["webhooks"] = json.dumps(agent_dict["webhooks"])
+            if "tools_config" in agent_dict and agent_dict["tools_config"]:
+                agent_dict["tools_config"] = json.dumps(agent_dict["tools_config"])
+            
+            # Remove fields that are not in the database schema
+            agent_dict.pop("client_id", None)
+            agent_dict.pop("tools_config", None)  # Remove if not in table schema
+            agent_dict.pop("webhooks", None)  # Remove if not in table schema
+            
+            logger.info(f"Creating agent with data: {agent_dict}")
             result = client_supabase.table("agents").insert(agent_dict).execute()
             
-            if result.data:
+            if result.data and len(result.data) > 0:
                 created_agent_data = result.data[0]
-                # Ensure client_id is set
+                # Ensure client_id is set for parsing
                 created_agent_data["client_id"] = client_id
                 return self._parse_agent_data(created_agent_data, client_id)
             
+            logger.error(f"Agent creation returned no data for client {client_id}")
             return None
             
         except Exception as e:
             logger.error(f"Error creating agent for client {client_id}: {e}")
+            logger.error(f"Agent data attempted: {agent_dict}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
     
     async def update_agent(self, client_id: str, agent_slug: str, update_data: AgentUpdate) -> Optional[Agent]:

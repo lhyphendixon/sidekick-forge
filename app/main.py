@@ -150,7 +150,7 @@ except Exception as e:
     logger.warning(f"Multi-tenant routes not loaded: {e}")
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="/root/autonomite-agent-platform/app/static"), name="static")
+app.mount("/static", StaticFiles(directory="/root/sidekick-forge/app/static"), name="static")
 
 # Include admin dashboard (full version with all features)
 # Temporarily disabled multi-tenant admin to restore original styling
