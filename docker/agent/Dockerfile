@@ -23,11 +23,11 @@ WORKDIR $APP_HOME
 RUN groupadd -r agent && useradd -r -g agent agent
 
 # Copy requirements file from the agent directory
-COPY requirements-minimal.txt .
+COPY requirements-agent.txt .
 
-# Install Python dependencies
+# Install Python dependencies (using full requirements for RAG support)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements-minimal.txt
+    pip install --no-cache-dir -r requirements-agent.txt
 
 # Copy the entire agent directory into the image
 COPY . /app

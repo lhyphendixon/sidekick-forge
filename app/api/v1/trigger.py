@@ -302,6 +302,9 @@ async def handle_voice_trigger(
         "session_id": request.session_id,
         "conversation_id": request.conversation_id,
         "context": request.context or {},
+        # Include client's Supabase credentials for context system
+        "supabase_url": client.supabase_url if hasattr(client, 'supabase_url') else None,
+        "supabase_anon_key": client.supabase_anon_key if hasattr(client, 'supabase_anon_key') else None,
         "api_keys": {
             # LLM Providers
             "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
@@ -604,6 +607,11 @@ async def dispatch_agent_job(
             "system_prompt": agent.system_prompt,
             "voice_settings": voice_settings,
             "webhooks": agent.webhooks.dict() if agent.webhooks else {},
+            # Include client's Supabase credentials for context system
+            "supabase_url": client.supabase_url if hasattr(client, 'supabase_url') else None,
+            "supabase_anon_key": client.supabase_anon_key if hasattr(client, 'supabase_anon_key') else None,
+            # Include user_id from the request
+            "user_id": request.user_id,
             "api_keys": {
                 # LLM Providers
                 "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,

@@ -17,6 +17,7 @@ from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voic
 from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
 from api_key_loader import APIKeyLoader
 from config_validator import ConfigValidator, ConfigurationError
+from context import AgentContextManager
 
 # Configure logging
 logging.basicConfig(
@@ -277,6 +278,32 @@ async def agent_job_handler(ctx: JobContext):
             # Configure VAD (Voice Activity Detection)
             vad = silero.VAD.load()
             
+            # Initialize context manager if we have Supabase credentials
+            context_manager = None
+            try:
+                # Check if we can connect to client's Supabase
+                client_supabase_url = metadata.get("supabase_url")
+                client_supabase_key = metadata.get("supabase_service_key") or metadata.get("supabase_anon_key")
+                
+                if client_supabase_url and client_supabase_key:
+                    from supabase import create_client
+                    client_supabase = create_client(client_supabase_url, client_supabase_key)
+                    
+                    # Create context manager
+                    context_manager = AgentContextManager(
+                        supabase_client=client_supabase,
+                        agent_config=metadata,
+                        user_id=metadata.get("user_id", "unknown"),
+                        client_id=metadata.get("client_id", "unknown"),
+                        api_keys=api_keys
+                    )
+                    logger.info("✅ Context manager initialized successfully")
+                else:
+                    logger.warning("No client Supabase credentials found - context features disabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize context manager: {e}")
+                context_manager = None
+            
             # Connect to the room first
             logger.info("Connecting to room...")
             await ctx.connect()
@@ -293,10 +320,18 @@ async def agent_job_handler(ctx: JobContext):
             )
             logger.info("✅ Voice agent session created")
             
+            # Store references for event handlers
+            ctx.context_manager = context_manager
+            ctx.original_system_prompt = system_prompt
+            
             # Add event handlers for logging and monitoring
             @session.on("user_speech_committed")
             def on_user_speech(msg: llm.ChatMessage):
                 logger.info(f"💬 User said: {msg.content}")
+                
+                # Store the user message for context building
+                if hasattr(ctx, 'last_user_message'):
+                    ctx.last_user_message = msg.content
             
             @session.on("agent_speech_committed")
             def on_agent_speech(msg: llm.ChatMessage):
@@ -334,10 +369,30 @@ async def agent_job_handler(ctx: JobContext):
                 logger.info("🔈 Agent stopped speaking")
             
             # Create the agent with instructions
-            # Add greeting instruction to the system prompt
+            # First, try to build initial context if context manager is available
             enhanced_prompt = system_prompt
-            if not any(greeting_word in system_prompt.lower() for greeting_word in ['greet', 'hello', 'welcome', 'introduce']):
-                enhanced_prompt = system_prompt + "\n\nWhen you first meet someone, start the conversation with a friendly greeting and ask how you can help them."
+            
+            if context_manager:
+                try:
+                    # Build initial context (without a specific user message)
+                    logger.info("Building initial context for agent...")
+                    initial_context = await context_manager.build_complete_context("")
+                    enhanced_prompt = initial_context["enhanced_system_prompt"]
+                    
+                    # Log context metadata for debugging
+                    logger.info(f"Context built: {initial_context['context_metadata']}")
+                    
+                    # If development mode, log the full enhanced prompt
+                    if os.getenv("DEVELOPMENT_MODE", "false").lower() == "true":
+                        logger.info(f"Enhanced System Prompt:\n{enhanced_prompt}")
+                except Exception as e:
+                    logger.error(f"Failed to build initial context: {e}")
+                    # Fall back to original prompt
+                    enhanced_prompt = system_prompt
+            
+            # Add greeting instruction if not present
+            if not any(greeting_word in enhanced_prompt.lower() for greeting_word in ['greet', 'hello', 'welcome', 'introduce']):
+                enhanced_prompt = enhanced_prompt + "\n\nWhen you first meet someone, start the conversation with a friendly greeting and ask how you can help them."
             
             agent = voice.Agent(instructions=enhanced_prompt)
             
