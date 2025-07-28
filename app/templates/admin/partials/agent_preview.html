@@ -47,9 +47,9 @@
                                 hx-vals='{"session_id": "{{ session_id }}", "mode": "voice"}'
                                 hx-target="#previewContent"
                                 hx-swap="innerHTML"
-                                hx-on:htmx:beforeRequest="console.log('Voice mode request starting...'); window.updateModeButtons('voice')"
-                                hx-on:htmx:afterRequest="console.log('Voice mode request completed'); window.previewCurrentMode = 'voice'; window.updateModeButtons('voice')"
-                                hx-on:htmx:responseError="console.error('Voice mode request failed:', event.detail)"
+                                hx-on:htmx:beforeRequest="console.log('Voice mode request starting...'); window.updateModeButtons('voice'); this.disabled = true;"
+                                hx-on:htmx:afterRequest="console.log('Voice mode request completed'); window.previewCurrentMode = 'voice'; window.updateModeButtons('voice'); this.disabled = false;"
+                                hx-on:htmx:responseError="console.error('Voice mode request failed:', event.detail); this.disabled = false;"
                                 class="mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border hover:bg-dark-border transition-all">
                             <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>

@@ -349,16 +349,41 @@ async def handle_voice_trigger(
     logger.debug(f"Generated user token", extra={'token_length': len(user_token)})
     
     # EXPLICITLY DISPATCH THE AGENT
-    dispatch_start = time.time()
-    dispatch_info = await dispatch_agent_job(
-        livekit_manager=backend_livekit,
-        room_name=request.room_name,
-        agent=agent,
-        client=client
-    )
-    dispatch_duration = time.time() - dispatch_start
-    logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
-    logger.info(f"Agent dispatch completed with status: {dispatch_info.get('status')}")
+    # Check if there are already participants in the room (which might indicate an agent)
+    try:
+        participants = await backend_livekit.list_participants(request.room_name)
+        agent_count = sum(1 for p in participants if 'agent' in p.get('identity', '').lower())
+        if agent_count > 0:
+            logger.warning(f"⚠️ Room {request.room_name} already has {agent_count} agent(s). Skipping dispatch.")
+            dispatch_info = {
+                "status": "skipped",
+                "message": f"Agent already present in room (found {agent_count} agents)",
+                "mode": "skipped_dispatch"
+            }
+        else:
+            dispatch_start = time.time()
+            dispatch_info = await dispatch_agent_job(
+                livekit_manager=backend_livekit,
+                room_name=request.room_name,
+                agent=agent,
+                client=client
+            )
+            dispatch_duration = time.time() - dispatch_start
+            logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
+            logger.info(f"Agent dispatch completed with status: {dispatch_info.get('status')}")
+    except Exception as e:
+        logger.error(f"Error checking participants: {e}")
+        # If we can't check, proceed with dispatch
+        dispatch_start = time.time()
+        dispatch_info = await dispatch_agent_job(
+            livekit_manager=backend_livekit,
+            room_name=request.room_name,
+            agent=agent,
+            client=client
+        )
+        dispatch_duration = time.time() - dispatch_start
+        logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
+        logger.info(f"Agent dispatch completed with status: {dispatch_info.get('status')}")
     
     # Add a small delay to ensure room is fully ready
     if room_info["status"] == "created":

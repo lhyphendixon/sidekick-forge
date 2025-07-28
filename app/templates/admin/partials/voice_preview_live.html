@@ -523,8 +523,17 @@ function updateMicStatus(text) {
     document.getElementById('micStatus').textContent = text;
 }
 
+// Track if we've already initialized to prevent double initialization
+let voicePreviewInitialized = false;
+
 // Initialize function that can be called immediately
 function initializeVoicePreview() {
+    if (voicePreviewInitialized) {
+        console.log('⚠️ Voice preview already initialized, skipping...');
+        return;
+    }
+    voicePreviewInitialized = true;
+    
     console.log('🚀 Voice preview template loaded');
     console.log('🔍 Checking LiveKit client availability...');
     
