@@ -1,6 +1,9 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from datetime import datetime, timedelta
 import json
+from pydantic import BaseModel
+from livekit import api
+from app.config import settings
 
 from app.models.session import (
     SessionRequest, SessionResponse, RoomCreateRequest,
@@ -15,6 +18,10 @@ from app.integrations.livekit_client import livekit_manager
 from app.utils.exceptions import NotFoundError, ServiceUnavailableError
 
 router = APIRouter()
+
+# Add this Pydantic model for the request body
+class EndSessionRequest(BaseModel):
+    room_name: str
 
 @router.post("/create-call", response_model=APIResponse[SessionResponse])
 async def create_call_session(
@@ -337,3 +344,35 @@ async def remove_participant(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+@router.post("/end", status_code=200, summary="End a session and delete the LiveKit room")
+async def end_session(request: EndSessionRequest):
+    """
+    Explicitly ends a user session by deleting the corresponding LiveKit room.
+    This should be called by the frontend when a user leaves the call.
+    """
+    if not request.room_name:
+        raise HTTPException(status_code=400, detail="Room name is required.")
+
+    try:
+        # Initialize the LiveKit API client
+        livekit_api = api.LiveKitAPI(
+            url=settings.livekit_url,
+            api_key=settings.livekit_api_key,
+            api_secret=settings.livekit_api_secret,
+        )
+
+        # Delete the room using the room service
+        await livekit_api.room.delete_room(
+            api.DeleteRoomRequest(room=request.room_name)
+        )
+
+        # No need to close LiveKitAPI - it doesn't have a close method
+        # The connection is handled internally
+
+        return {"status": "success", "message": f"Room '{request.room_name}' deleted successfully."}
+
+    except Exception as e:
+        # Log the error for debugging
+        # logger.error(f"Failed to delete room '{request.room_name}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete room: {str(e)}")

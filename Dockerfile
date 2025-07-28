@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     git \
+    libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
@@ -28,6 +29,9 @@ RUN useradd -m -u 1000 appuser && \
 
 # Switch to non-root user
 USER appuser
+
+# Set library path for libmagic
+ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 
 # Expose port
 EXPOSE 8000

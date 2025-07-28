@@ -11,7 +11,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 # Initialize template engine
-templates = Jinja2Templates(directory="/opt/autonomite-saas/app/templates")
+import os
+template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+templates = Jinja2Templates(directory=template_dir)
 
 async def get_admin_user(request: Request) -> Dict[str, Any]:
     """Simple admin authentication for development"""

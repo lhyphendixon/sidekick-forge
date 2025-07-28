@@ -78,11 +78,17 @@
         script.onload = () => {
             console.log('LiveKit SDK loaded dynamically');
             window.LiveKitSDK = window.LivekitClient;
+            window.livekitSDKLoaded = true;
         };
         script.onerror = () => {
             console.error('Failed to load LiveKit SDK');
+            window.livekitSDKLoaded = false;
+            updateStatus('error', 'Failed to load LiveKit SDK');
         };
         document.head.appendChild(script);
+    } else if (window.LivekitClient) {
+        window.LiveKitSDK = window.LivekitClient;
+        window.livekitSDKLoaded = true;
     }
 
     // LiveKit connection variables - use local scope within IIFE
@@ -157,9 +163,25 @@ async function initializeLiveKit() {
         console.log('- user_token empty?', '{{ user_token }}' === '');
         console.log('- room_name empty?', '{{ room_name }}' === '');
         
+        // Extra debugging - log actual values
+        const debugInfo = {
+            server_url: '{{ server_url }}',
+            user_token: '{{ user_token }}',
+            room_name: '{{ room_name }}',
+            hasServerUrl: Boolean('{{ server_url }}'),
+            hasUserToken: Boolean('{{ user_token }}'),
+            hasRoomName: Boolean('{{ room_name }}')
+        };
+        console.log('Debug info:', debugInfo);
+        
         // Validate required variables
-        if (!('{{ server_url }}') || !('{{ user_token }}') || !('{{ room_name }}')) {
+        if (!debugInfo.server_url || !debugInfo.user_token || !debugInfo.room_name) {
             console.error('Missing required template variables');
+            console.error('Received values:', {
+                server_url: debugInfo.server_url || 'MISSING',
+                user_token: debugInfo.user_token ? 'Present' : 'MISSING',
+                room_name: debugInfo.room_name || 'MISSING'
+            });
             updateStatus('error', 'Missing connection configuration');
             return;
         }
@@ -198,6 +220,7 @@ async function initializeLiveKit() {
         room.on('participantDisconnected', handleParticipantDisconnected);
         room.on('activeSpeakersChanged', handleActiveSpeakers);
         room.on('localTrackPublished', handleLocalTrackPublished);
+        room.on('trackSubscribed', handleTrackSubscribed);
         room.on('dataReceived', handleDataReceived);
         room.on('error', handleError);
         
@@ -206,9 +229,19 @@ async function initializeLiveKit() {
         console.log('Using LiveKit client version:', LiveKitSDK.version || 'unknown');
         const connectStart = Date.now();
         
+        // Get actual values (in case template rendering fails)
+        const serverUrl = '{{ server_url }}' || window.livekitServerUrl;
+        const userToken = '{{ user_token }}' || window.livekitUserToken;
+        
+        console.log('Final connection params:', {
+            serverUrl: serverUrl,
+            userTokenLength: userToken ? userToken.length : 0,
+            roomName: '{{ room_name }}'
+        });
+        
         // Try connection with detailed error handling
         try {
-            await room.connect('{{ server_url }}', '{{ user_token }}');
+            await room.connect(serverUrl, userToken);
             const connectTime = Date.now() - connectStart;
             console.log(`✅ Connection successful in ${connectTime}ms`);
         } catch (connectError) {
@@ -270,7 +303,7 @@ function handleParticipantConnected(participant) {
     console.log('Participant connected:', participant.identity);
     if (participant.identity.includes('agent')) {
         document.getElementById('agentStatus').classList.remove('hidden');
-        updateStatus('agent-connected', 'Agent connected - Ready to chat');
+        updateStatus('agent-listening', 'Listening...');
     }
 }
 
@@ -287,11 +320,32 @@ function handleParticipantDisconnected(participant) {
 function handleActiveSpeakers(speakers) {
     // Update audio level for local participant
     const localSpeaker = speakers.find(s => s.identity === room.localParticipant.identity);
+    const userSpeaking = localSpeaker && localSpeaker.audioLevel > 0.01;
+    
     if (localSpeaker) {
         const level = Math.min(100, localSpeaker.audioLevel * 100);
         document.getElementById('audioLevel').style.width = level + '%';
     } else {
         document.getElementById('audioLevel').style.width = '0%';
+    }
+    
+    // Check if agent is speaking
+    const agentSpeaker = speakers.find(s => s.identity.includes('agent'));
+    const agentSpeaking = agentSpeaker && agentSpeaker.audioLevel > 0.01;
+    
+    // Determine status based on who's speaking
+    if (agentSpeaking) {
+        // Agent is actively speaking
+        updateStatus('agent-responding', 'Agent is speaking...');
+    } else if (userSpeaking) {
+        // User is speaking
+        updateStatus('user-speaking', 'Listening to you...');
+    } else {
+        // No one is speaking - check if agent is still connected
+        const hasAgent = Array.from(room.participants.values()).some(p => p.identity.includes('agent'));
+        if (hasAgent) {
+            updateStatus('agent-listening', 'Listening...');
+        }
     }
 }
 
@@ -300,6 +354,35 @@ function handleLocalTrackPublished(publication) {
     if (publication.kind === 'audio') {
         audioTrack = publication.track;
         console.log('Audio track published');
+    }
+}
+
+// Handle track subscribed (receive audio from agent)
+function handleTrackSubscribed(track, publication, participant) {
+    console.log(`🔊 Track subscribed from ${participant.identity}: ${track.kind}`);
+    
+    if (track.kind === 'audio') {
+        console.log('✅ Agent audio track received! Playing audio...');
+        
+        // Create audio element for playback
+        const audioElement = document.createElement('audio');
+        audioElement.id = `audio-${participant.identity}`;
+        audioElement.autoplay = true;
+        audioElement.style.display = 'none'; // Hidden audio element
+        
+        // Attach the track to the audio element
+        track.attach(audioElement);
+        
+        // Add to page body
+        document.body.appendChild(audioElement);
+        
+        console.log('🔊 Agent audio playback started');
+        
+        // Don't immediately show "Agent is speaking" - wait for actual audio
+        if (participant.identity.includes('agent')) {
+            // Show that agent is listening
+            updateStatus('agent-listening', 'Listening...');
+        }
     }
 }
 
@@ -417,7 +500,13 @@ function updateStatus(state, text) {
             indicator.className += 'bg-green-500';
             break;
         case 'agent-connected':
+            indicator.className += 'bg-brand-teal';
+            break;
+        case 'agent-listening':
             indicator.className += 'bg-brand-teal animate-pulse';
+            break;
+        case 'user-speaking':
+            indicator.className += 'bg-blue-500 animate-pulse';
             break;
         case 'agent-responding':
             indicator.className += 'bg-brand-orange animate-pulse';
@@ -434,8 +523,8 @@ function updateMicStatus(text) {
     document.getElementById('micStatus').textContent = text;
 }
 
-// Initialize on load
-document.addEventListener('DOMContentLoaded', function() {
+// Initialize function that can be called immediately
+function initializeVoicePreview() {
     console.log('🚀 Voice preview template loaded');
     console.log('🔍 Checking LiveKit client availability...');
     
@@ -485,7 +574,16 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Start checking for SDK availability
     waitForSDK();
-});
+}
+
+// Initialize on DOMContentLoaded for regular page loads
+document.addEventListener('DOMContentLoaded', initializeVoicePreview);
+
+// Also initialize immediately for HTMX loads
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    // DOM is already ready, initialize immediately (HTMX case)
+    initializeVoicePreview();
+}
 
 // Close the IIFE
 })();

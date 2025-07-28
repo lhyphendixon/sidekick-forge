@@ -206,6 +206,10 @@ async def create_livekit_room(
         from app.integrations.livekit_client import livekit_manager
         backend_livekit = livekit_manager
         
+        # Ensure LiveKit manager is initialized
+        if not backend_livekit._initialized:
+            await backend_livekit.initialize()
+        
         logger.info(f"🏢 Creating room with backend LiveKit infrastructure")
         
         # Create the room
@@ -269,19 +273,30 @@ async def handle_voice_trigger(
     from app.integrations.livekit_client import livekit_manager
     backend_livekit = livekit_manager
     
+    # Ensure LiveKit manager is initialized
+    if not backend_livekit._initialized:
+        await backend_livekit.initialize()
+    
     logger.info(f"🏢 Using backend LiveKit infrastructure for thin client architecture")
     
     # Prepare agent context first so we can pass it to room creation
+    # Build voice settings with proper defaults
+    voice_settings = agent.voice_settings.dict() if agent.voice_settings else {}
+    
+    # Apply defaults for null values
+    if not voice_settings.get('llm_provider'):
+        voice_settings['llm_provider'] = 'groq'  # Use Groq as default since we have the API key
+    if not voice_settings.get('stt_provider'):
+        voice_settings['stt_provider'] = 'deepgram'
+    if not voice_settings.get('tts_provider'):
+        voice_settings['tts_provider'] = 'elevenlabs'  # Use ElevenLabs since we have the API key
+        
     agent_context = {
         "client_id": client.id,  # Add client_id for API key lookup
         "agent_slug": agent.slug,
         "agent_name": agent.name,
         "system_prompt": agent.system_prompt,
-        "voice_settings": {
-            **(agent.voice_settings.dict() if agent.voice_settings else {}),
-            # Ensure tts_provider is set for the worker
-            "tts_provider": agent.voice_settings.provider if agent.voice_settings else "livekit"
-        },
+        "voice_settings": voice_settings,
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": request.user_id,
         "session_id": request.session_id,
@@ -333,6 +348,17 @@ async def handle_voice_trigger(
     logger.info(f"⏱️ User token generation took {token_duration:.2f}s")
     logger.debug(f"Generated user token", extra={'token_length': len(user_token)})
     
+    # EXPLICITLY DISPATCH THE AGENT
+    dispatch_start = time.time()
+    dispatch_info = await dispatch_agent_job(
+        livekit_manager=backend_livekit,
+        room_name=request.room_name,
+        agent=agent,
+        client=client
+    )
+    dispatch_duration = time.time() - dispatch_start
+    logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
+    logger.info(f"Agent dispatch completed with status: {dispatch_info.get('status')}")
     
     # Add a small delay to ensure room is fully ready
     if room_info["status"] == "created":
@@ -349,9 +375,8 @@ async def handle_voice_trigger(
         verify_duration = time.time() - verify_start
         logger.info(f"⏱️ Post-creation verification took {verify_duration:.2f}s")
     
-    # NO NEED FOR EXPLICIT DISPATCH - Room is configured for automatic agent dispatch
-    # When a participant joins, LiveKit will automatically dispatch a job to the worker
-    logger.info(f"🎯 Room {request.room_name} is configured for automatic agent dispatch")
+    # Room has been created and agent has been explicitly dispatched
+    logger.info(f"🎯 Room {request.room_name} created and agent explicitly dispatched")
     
     voice_trigger_total = time.time() - voice_trigger_start
     logger.info(f"⏱️ TOTAL voice trigger process took {voice_trigger_total:.2f}s")
@@ -367,12 +392,9 @@ async def handle_voice_trigger(
             "configured": True
         },
         "room_info": room_info,
-        "dispatch_info": {
-            "status": "automatic",
-            "message": "Agent will be automatically dispatched when participant joins"
-        },
+        "dispatch_info": dispatch_info,  # Use the actual dispatch_info from explicit dispatch
         "status": "voice_agent_triggered",
-        "message": f"Room {request.room_name} ready with automatic agent dispatch, user token provided.",
+        "message": f"Room {request.room_name} ready with explicit agent dispatch to 'sidekick-agent', user token provided.",
         "total_duration_ms": int(voice_trigger_total * 1000)
     }
 
@@ -539,16 +561,23 @@ async def dispatch_agent_job(
     
     try:
         # Prepare full agent configuration for job metadata
+        # Build voice settings with proper defaults
+        voice_settings = agent.voice_settings.dict() if agent.voice_settings else {}
+        
+        # Apply defaults for null values
+        if not voice_settings.get('llm_provider'):
+            voice_settings['llm_provider'] = 'groq'  # Use Groq as default since we have the API key
+        if not voice_settings.get('stt_provider'):
+            voice_settings['stt_provider'] = 'deepgram'
+        if not voice_settings.get('tts_provider'):
+            voice_settings['tts_provider'] = 'elevenlabs'  # Use ElevenLabs since we have the API key
+            
         job_metadata = {
             "client_id": client.id,
             "agent_slug": agent.slug,
             "agent_name": agent.name,
             "system_prompt": agent.system_prompt,
-            "voice_settings": {
-                **(agent.voice_settings.dict() if agent.voice_settings else {}),
-                # Ensure tts_provider is set for the worker
-                "tts_provider": agent.voice_settings.provider if agent.voice_settings else "livekit"
-            },
+            "voice_settings": voice_settings,
             "webhooks": agent.webhooks.dict() if agent.webhooks else {},
             "api_keys": {
                 # LLM Providers
@@ -708,9 +737,8 @@ async def ensure_livekit_room_exists(
             name=room_name,
             empty_timeout=1800,  # 30 minutes - much longer timeout for agent rooms
             max_participants=10,  # Allow multiple participants
-            metadata=metadata_json,
-            enable_agent_dispatch=True,
-            agent_name=agent_slug if agent_slug else "sidekick-agent"  # Use the actual agent slug
+            metadata=metadata_json
+            # Agent dispatch flags are removed. This function ONLY creates a room.
         )
         create_duration = time.time() - create_start
         logger.info(f"⏱️ Room creation took {create_duration:.2f}s")

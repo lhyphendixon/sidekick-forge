@@ -65,16 +65,18 @@ class ContainerOrchestrator:
             return []
 
 def get_wordpress_service() -> WordPressSiteService:
-    """Get WordPress site service with Supabase credentials"""
-    supabase_url = os.getenv("SUPABASE_URL", "https://yuowazxcxwhczywurmmw.supabase.co")
-    supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY")
-    return WordPressSiteService(supabase_url, supabase_key)
+    """Get WordPress site service with platform Supabase credentials"""
+    # Use platform credentials from config (no defaults)
+    from app.config import settings
+    return WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key)
 
 # Initialize router
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 # Initialize template engine
-templates = Jinja2Templates(directory="/root/sidekick-forge/app/templates")
+import os
+template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+templates = Jinja2Templates(directory=template_dir)
 
 # Redis connection
 redis_client = None
@@ -134,6 +136,10 @@ async def get_system_summary() -> Dict[str, Any]:
         total_clients = len(clients)
     except Exception as e:
         logger.warning(f"Failed to get clients: {e}")
+        # Check if it's an auth error
+        if "401" in str(e) or "Invalid API key" in str(e):
+            logger.error("❌ CRITICAL: Cannot access platform database - Invalid Supabase credentials")
+            logger.error("   Please update SUPABASE_SERVICE_ROLE_KEY in .env with the actual service role key")
         clients = []
         total_clients = 0
     
@@ -206,8 +212,10 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
     client_service = get_client_service()
     
     try:
-        # Get all clients
+        # Get all clients from platform database
+        logger.info("Fetching all clients from platform database...")
         clients = await client_service.get_all_clients()
+        logger.info(f"✅ Successfully fetched {len(clients)} clients from platform database")
         
         # Get LiveKit room data for session counting
         room_sessions = {}
@@ -237,23 +245,46 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
         # Convert to dict format for templates
         clients_data = []
         for client in clients:
-            client_dict = {
-                "id": client.id,
-                "name": client.name,
-                "domain": client.domain,
-                "status": "running" if client.active else "stopped",  # Assume active = running container
-                "active": client.active,
-                "created_at": client.created_at.isoformat() if client.created_at else None,
-                "client_id": client.id,  # For compatibility with templates
-                "client_name": client.name,
-                "cpu_usage": 15.5,  # Mock CPU usage
-                "memory_usage": 512,  # Mock memory usage in MB
-                "active_sessions": room_sessions.get(client.id, 0),  # Real session count from LiveKit
-                "settings": {
-                    "supabase": client.settings.supabase if client.settings else None,
-                    "livekit": client.settings.livekit if client.settings else None
+            try:
+                client_dict = {
+                    "id": client.id,
+                    "name": client.name,
+                    "domain": getattr(client, 'domain', ''),
+                    "status": "running" if getattr(client, 'active', True) else "stopped",
+                    "active": getattr(client, 'active', True),
+                    "created_at": client.created_at.isoformat() if hasattr(client, 'created_at') and client.created_at else None,
+                    "client_id": client.id,  # For compatibility with templates
+                    "client_name": client.name,
+                    "cpu_usage": 15.5,  # Mock CPU usage
+                    "memory_usage": 512,  # Mock memory usage in MB
+                    "active_sessions": room_sessions.get(client.id, 0),  # Real session count from LiveKit
+                    "settings": {
+                        "supabase": client.settings.supabase if hasattr(client, 'settings') and client.settings else None,
+                        "livekit": client.settings.livekit if hasattr(client, 'settings') and client.settings else None
+                    }
                 }
-            }
+                logger.debug(f"Processed client: {client.name} (ID: {client.id})")
+            except Exception as e:
+                logger.error(f"Failed to process client {getattr(client, 'name', 'Unknown')}: {e}", exc_info=True)
+                # Create minimal client dict to avoid complete failure
+                client_dict = {
+                    "id": getattr(client, 'id', 'unknown'),
+                    "name": getattr(client, 'name', 'Unknown Client'),
+                    "domain": '',
+                    "status": "error",
+                    "active": False,
+                    "created_at": None,
+                    "client_id": getattr(client, 'id', 'unknown'),
+                    "client_name": getattr(client, 'name', 'Unknown Client'),
+                    "cpu_usage": 0,
+                    "memory_usage": 0,
+                    "active_sessions": 0,
+                    "settings": {
+                        "supabase": getattr(client, 'settings', {}).get('supabase', None) if hasattr(client, 'settings') else None,
+                        "livekit": getattr(client, 'settings', {}).get('livekit', None) if hasattr(client, 'settings') else None
+                    }
+                }
+            
             clients_data.append(client_dict)
         
         return clients_data
@@ -299,7 +330,7 @@ async def get_all_agents() -> List[Dict[str, Any]]:
                             "slug": agent.get("slug"),
                             "name": agent.get("name"),
                             "description": agent.get("description", ""),
-                            "client_id": "global" if agent.get("client_id") == "yuowazxcxwhczywurmmw" else agent.get("client_id"),
+                            "client_id": agent.get("client_id", "global"),
                             "client_name": agent.get("client_name", "Unknown"),
                             "status": "active" if agent.get("active", agent.get("enabled", True)) else "inactive",
                             "active": agent.get("active", agent.get("enabled", True)),
@@ -418,13 +449,24 @@ async def clients_list(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Client management page"""
-    clients = await get_all_clients_with_containers()
-    
-    return templates.TemplateResponse("admin/clients.html", {
-        "request": request,
-        "clients": clients,
-        "user": admin_user
-    })
+    try:
+        clients = await get_all_clients_with_containers()
+        logger.info(f"Admin Dashboard: Successfully prepared {len(clients)} clients for display")
+        return templates.TemplateResponse("admin/clients.html", {
+            "request": request,
+            "clients": clients,
+            "user": admin_user
+        })
+    except Exception as e:
+        # CRITICAL: Log the actual error instead of failing silently
+        logger.error(f"❌ Admin Dashboard: Failed to fetch clients: {e}", exc_info=True)
+        # Return error to template
+        return templates.TemplateResponse("admin/clients.html", {
+            "request": request,
+            "clients": [],
+            "error": f"Failed to load clients: {e}",
+            "user": admin_user
+        })
 
 
 @router.get("/clients/{client_id}", response_class=HTMLResponse)
@@ -478,12 +520,21 @@ async def agents_page(
 ):
     """Agent management page"""
     # Get agents from all clients
-    agents = await get_all_agents()
+    try:
+        agents = await get_all_agents()
+    except Exception as e:
+        logger.error(f"Failed to load agents: {e}")
+        agents = []
     
     # Get all clients for the filter dropdown
-    from app.core.dependencies import get_client_service
-    client_service = get_client_service()
-    clients = await client_service.get_all_clients()
+    try:
+        from app.core.dependencies import get_client_service
+        client_service = get_client_service()
+        clients = await client_service.get_all_clients()
+    except Exception as e:
+        logger.error(f"Failed to load clients: {e}")
+        # Return minimal client data if database is inaccessible
+        clients = []
     
     return templates.TemplateResponse("admin/agents.html", {
         "request": request,
@@ -862,7 +913,32 @@ async def agent_detail(
             import json
             
             # Parse voice settings if it's a string
-            voice_settings = agent.get('voice_settings', {})
+            # Handle both dict and object formats
+            if isinstance(agent, dict):
+                voice_settings = agent.get('voice_settings', {})
+            else:
+                voice_settings = getattr(agent, 'voice_settings', {})
+                # Convert VoiceSettings object to dict if needed
+                if voice_settings and hasattr(voice_settings, 'dict'):
+                    voice_settings = voice_settings.dict()
+                elif voice_settings and not isinstance(voice_settings, dict):
+                    # Manual conversion for VoiceSettings object
+                    voice_settings = {
+                        'provider': getattr(voice_settings, 'provider', 'openai'),
+                        'voice_id': getattr(voice_settings, 'voice_id', 'alloy'),
+                        'temperature': getattr(voice_settings, 'temperature', 0.7),
+                        'llm_provider': getattr(voice_settings, 'llm_provider', 'groq'),
+                        'llm_model': getattr(voice_settings, 'llm_model', 'llama3-70b-8192'),
+                        'stt_provider': getattr(voice_settings, 'stt_provider', 'deepgram'),
+                        'stt_language': getattr(voice_settings, 'stt_language', 'en'),
+                        'model': getattr(voice_settings, 'model', 'sonic-english'),
+                        'output_format': getattr(voice_settings, 'output_format', 'pcm_44100'),
+                        'stability': getattr(voice_settings, 'stability', None),
+                        'similarity_boost': getattr(voice_settings, 'similarity_boost', None),
+                        'loudness_normalization': getattr(voice_settings, 'loudness_normalization', None),
+                        'text_normalization': getattr(voice_settings, 'text_normalization', None),
+                        'provider_config': getattr(voice_settings, 'provider_config', {})
+                    }
             if isinstance(voice_settings, str):
                 try:
                     voice_settings = json.loads(voice_settings)
@@ -871,28 +947,48 @@ async def agent_detail(
             
             # Extract specific settings with defaults
             tts_provider = voice_settings.get('provider', 'openai')
+            # Handle enum types
+            if hasattr(tts_provider, 'value'):
+                tts_provider = tts_provider.value
             llm_provider = voice_settings.get('llm_provider', 'groq')
             llm_model = voice_settings.get('llm_model', 'llama3-70b-8192')
             stt_provider = voice_settings.get('stt_provider', 'deepgram')
             temperature = voice_settings.get('temperature', 0.7)
             
             # Agent status
-            is_enabled = agent.get('enabled', True)
+            if isinstance(agent, dict):
+                is_enabled = agent.get('enabled', True)
+                agent_name_raw = agent.get('name', agent_slug)
+                agent_slug_raw = agent.get('slug', 'N/A')
+                system_prompt_raw = agent.get('system_prompt', 'N/A')
+                agent_description_raw = agent.get('description', '')
+                agent_image_url_raw = agent.get('agent_image', '')
+            else:
+                is_enabled = getattr(agent, 'enabled', True)
+                agent_name_raw = getattr(agent, 'name', agent_slug)
+                agent_slug_raw = getattr(agent, 'slug', 'N/A')
+                system_prompt_raw = getattr(agent, 'system_prompt', 'N/A')
+                agent_description_raw = getattr(agent, 'description', '')
+                agent_image_url_raw = getattr(agent, 'agent_image', '')
+            
             enabled_checked = 'checked' if is_enabled else ''
             
             # Provider-specific voice settings
-            openai_voice = voice_settings.get('voice_id', 'alloy') if tts_provider == 'openai' else 'alloy'
-            cartesia_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'cartesia' else ''
+            # Get the current voice_id if the provider matches, otherwise use provider_config for stored values
+            provider_config = voice_settings.get('provider_config', {})
+            
+            openai_voice = voice_settings.get('voice_id', 'alloy') if tts_provider == 'openai' else provider_config.get('openai_voice_id', 'alloy')
+            cartesia_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'cartesia' else provider_config.get('cartesia_voice_id', '')
             cartesia_model = voice_settings.get('model', 'sonic-english') if tts_provider == 'cartesia' else 'sonic-english'
-            elevenlabs_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'elevenlabs' else ''
-            speechify_voice_id = voice_settings.get('voice_id', 'jack') if tts_provider == 'speechify' else 'jack'
+            elevenlabs_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'elevenlabs' else provider_config.get('elevenlabs_voice_id', '')
+            speechify_voice_id = voice_settings.get('voice_id', 'jack') if tts_provider == 'speechify' else provider_config.get('speechify_voice_id', 'jack')
             
             # Escape any problematic characters
-            agent_name = str(agent.get('name', agent_slug)).replace('"', '&quot;')
-            agent_slug_clean = str(agent.get('slug', 'N/A')).replace('"', '&quot;')
-            system_prompt = str(agent.get('system_prompt', 'N/A')).replace('<', '&lt;').replace('>', '&gt;')
-            agent_description = str(agent.get('description', '')).replace('"', '&quot;')
-            agent_image_url = str(agent.get('agent_image', '')).replace('"', '&quot;')
+            agent_name = str(agent_name_raw).replace('"', '&quot;')
+            agent_slug_clean = str(agent_slug_raw).replace('"', '&quot;')
+            system_prompt = str(system_prompt_raw).replace('<', '&lt;').replace('>', '&gt;')
+            agent_description = str(agent_description_raw).replace('"', '&quot;')
+            agent_image_url = str(agent_image_url_raw).replace('"', '&quot;')
             
             working_html = f'''
             <!DOCTYPE html>
@@ -1064,7 +1160,7 @@ async def agent_detail(
                                     </div>
                                     <div class="md:col-span-2">
                                         <label class="block text-sm font-medium text-gray-300 mb-2">Agent Background Image URL</label>
-                                        <input type="url" name="agent_image" value="{agent_image_url}" placeholder="https://example.com/image.jpg" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                        <input type="text" name="agent_image" value="{agent_image_url}" placeholder="https://example.com/image.jpg (optional)" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
                                         <p class="text-sm text-gray-400 mt-1">URL for the agent's background image (used in chat interfaces)</p>
                                     </div>
                                 </div>
@@ -1134,7 +1230,7 @@ async def agent_detail(
                                     <div>
                                         <label class="block text-sm font-medium text-gray-300 mb-2">TTS Provider</label>
                                         <select name="tts_provider" id="tts-provider" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500" onchange="toggleTTSProviderSettings()">
-                                            <option value="openai" selected>OpenAI</option>
+                                            <option value="openai">OpenAI</option>
                                             <option value="elevenlabs">ElevenLabs</option>
                                             <option value="cartesia">Cartesia</option>
                                             <option value="replicate">Replicate</option>
@@ -1174,7 +1270,7 @@ async def agent_detail(
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div>
                                             <label class="block text-sm font-medium text-gray-300 mb-2">Voice ID</label>
-                                            <input type="text" name="elevenlabs_voice_id" placeholder="pNInz6obpgDQGcFmaJgB" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <input type="text" name="elevenlabs_voice_id" value="{elevenlabs_voice_id}" placeholder="pNInz6obpgDQGcFmaJgB" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
                                             <p class="text-xs text-gray-400 mt-1">Default is Adam voice</p>
                                         </div>
                                         <div>
@@ -1351,6 +1447,14 @@ async def agent_detail(
                             stt_language: configData.stt_language || 'en'
                         }};
                         
+                        // Store all voice IDs in provider_config to preserve them when switching providers
+                        voiceSettings.provider_config = {{
+                            openai_voice_id: configData.openai_voice,
+                            elevenlabs_voice_id: configData.elevenlabs_voice_id,
+                            cartesia_voice_id: configData.cartesia_voice_id,
+                            speechify_voice_id: configData.speechify_voice_id
+                        }};
+                        
                         // Add provider-specific settings
                         if (ttsProvider === 'openai') {{
                             voiceSettings.voice_id = configData.openai_voice;
@@ -1375,7 +1479,7 @@ async def agent_detail(
                         const updatePayload = {{
                             name: configData.name,
                             description: configData.description,
-                            agent_image: configData.agent_image || null,
+                            agent_image: configData.agent_image && configData.agent_image.trim() !== '' ? configData.agent_image : null,
                             system_prompt: configData.system_prompt,
                             enabled: configData.enabled === 'on',
                             voice_settings: voiceSettings
@@ -1383,7 +1487,7 @@ async def agent_detail(
                         
                         try {{
                             // Use the existing API endpoint
-                            const response = await fetch('/api/v1/agents/client/df91fd06-816f-4273-a903-5a4861277040/{agent_slug_clean}', {{
+                            const response = await fetch('/api/v1/agents/client/{client_id}/{agent_slug_clean}', {{
                                 method: 'PUT',
                                 headers: {{
                                     'Content-Type': 'application/json',
@@ -1980,9 +2084,14 @@ async def set_preview_mode(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Switch between text and voice preview modes"""
+    import time
+    request_start = time.time()
+    
     from app.core.dependencies import get_agent_service
     from app.integrations.supabase_client import supabase_manager
     import json
+    
+    logger.info(f"Set preview mode started: mode={mode}, client_id={client_id}, agent_slug={agent_slug}")
     
     agent = None
     
@@ -2031,20 +2140,86 @@ async def set_preview_mode(
                 'client_id': 'global'
             })()
     else:
+        agent_fetch_start = time.time()
         agent_service = get_agent_service()
         agent = await agent_service.get_agent(client_id, agent_slug)
+        logger.info(f"Agent fetch took {time.time() - agent_fetch_start:.2f}s")
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
     if mode == "voice":
-        # Return voice chat interface
-        return templates.TemplateResponse("admin/partials/voice_chat.html", {
-            "request": request,
-            "agent": agent,
-            "client_id": client_id,
-            "session_id": session_id
-        })
+        # Handle voice mode - FAST VERSION for testing
+        logger.info("Handling voice mode request - FAST")
+        
+        # # Skip everything and just return a simple response
+        # return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
+        #     "request": request,
+        #     "room_name": f"preview_{agent_slug}_fast",
+        #     "server_url": "wss://litebridge-hw6srhvi.livekit.cloud",
+        #     "user_token": "dummy-token-for-testing",
+        #     "agent_slug": agent_slug,
+        #     "client_id": client_id,
+        #     "session_id": session_id
+        # })
+        
+        try:
+            import uuid
+            from app.api.v1.trigger import TriggerAgentRequest, TriggerMode, trigger_agent
+            from app.core.dependencies import get_agent_service
+            
+            # Generate a unique room name for this preview
+            room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
+            
+            # Create trigger request for voice mode
+            trigger_request = TriggerAgentRequest(
+                agent_slug=agent_slug,
+                client_id=client_id if client_id != "global" else None,  # Let trigger endpoint handle global agents
+                mode=TriggerMode.VOICE,
+                room_name=room_name,
+                user_id=f"admin_preview_{admin_user.get('id', 'user')}",
+                session_id=session_id,
+                conversation_id=session_id
+            )
+            
+            # Call the actual trigger endpoint to ensure proper setup
+            agent_service_inst = get_agent_service()
+            
+            logger.info(f"Calling trigger endpoint for preview room: {room_name}")
+            trigger_result = await trigger_agent(trigger_request, agent_service_inst)
+            
+            # Extract the response data from trigger result
+            if trigger_result.success and trigger_result.data:
+                livekit_config = trigger_result.data.get("livekit_config", {})
+                user_token = livekit_config.get("user_token", "")
+                server_url = livekit_config.get("server_url", "")
+                
+                # Log what we're sending to the template
+                logger.info(f"Voice preview from trigger - Room: {room_name}, Server: {server_url}, Token: {user_token[:50] if user_token else 'None'}...")
+                
+                # Return voice interface with LiveKit client
+                return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
+                    "request": request,
+                    "room_name": room_name,
+                    "server_url": server_url,
+                    "user_token": user_token,
+                    "agent_slug": agent_slug,
+                    "client_id": client_id,
+                    "session_id": session_id
+                })
+            else:
+                error_msg = trigger_result.message if hasattr(trigger_result, 'message') else "Failed to start voice session"
+                raise Exception(error_msg)
+                
+        except Exception as e:
+            logger.error(f"Failed to start voice preview: {e}")
+            return templates.TemplateResponse("admin/partials/voice_error.html", {
+                "request": request,
+                "error": str(e),
+                "client_id": client_id,
+                "agent_slug": agent_slug,
+                "session_id": session_id
+            })
     else:
         # Return text chat interface (reuse the messages partial with container)
         preview_sessions = getattr(request.app.state, 'preview_sessions', {})
@@ -2083,63 +2258,46 @@ async def set_preview_mode(
             </div>
         </div>
         """
+
+
+@router.get("/test-htmx")
+async def test_htmx(request: Request):
+    """Test HTMX functionality"""
+    return templates.TemplateResponse("admin/test_htmx.html", {"request": request})
+
+
+@router.get("/agents/preview/voice-debug")
+async def voice_preview_debug(request: Request):
+    """Debug endpoint to test voice preview"""
+    # Generate test values
+    import uuid
+    from app.integrations.livekit_client import livekit_manager
+    
     try:
-        import uuid
-        from app.api.v1.trigger import TriggerAgentRequest, TriggerMode, trigger_agent
-        from app.core.dependencies import get_agent_service
+        # Ensure livekit_manager is initialized
+        if not livekit_manager._initialized:
+            await livekit_manager.initialize()
+            
+        room_name = f"debug_room_{uuid.uuid4().hex[:8]}"
         
-        # Generate a unique room name for this preview
-        room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
-        
-        # Create trigger request for voice mode
-        trigger_request = TriggerAgentRequest(
-            agent_slug=agent_slug,
-            client_id=client_id if client_id != "global" else None,  # Let trigger endpoint handle global agents
-            mode=TriggerMode.VOICE,
-            room_name=room_name,
-            user_id=f"admin_preview_{admin_user.get('id', 'user')}",
-            session_id=session_id,
-            conversation_id=session_id
+        # Create a test token
+        user_token = livekit_manager.create_token(
+            identity="debug_user",
+            room_name=room_name
         )
         
-        # Get agent service to trigger the agent
-        agent_service = get_agent_service()
-        
-        # Trigger the agent in voice mode
-        result = await trigger_agent(trigger_request, agent_service=agent_service)
-        
-        # Extract the response data
-        if result.success and result.data:
-            livekit_config = result.data.get("livekit_config", {})
-            user_token = livekit_config.get("user_token", "")
-            server_url = livekit_config.get("server_url", "")
-            
-            # Log what we're sending to the template
-            logger.info(f"Voice preview starting - Room: {room_name}, Server: {server_url}, Token: {user_token[:50]}...")
-            
-            # Return voice interface with LiveKit client
-            return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
-                "request": request,
-                "room_name": room_name,
-                "server_url": server_url,
-                "user_token": user_token,
-                "agent_slug": agent_slug,
-                "client_id": client_id,
-                "session_id": session_id
-            })
-        else:
-            error_msg = result.message if hasattr(result, 'message') else "Failed to start voice session"
-            raise Exception(error_msg)
-            
-    except Exception as e:
-        logger.error(f"Failed to start voice preview: {e}")
-        return templates.TemplateResponse("admin/partials/voice_error.html", {
+        return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
             "request": request,
-            "error": str(e),
-            "client_id": client_id,
-            "agent_slug": agent_slug,
-            "session_id": session_id
+            "room_name": room_name,
+            "server_url": livekit_manager.url,
+            "user_token": user_token,
+            "agent_slug": "debug-agent",
+            "client_id": "debug-client",
+            "session_id": "debug-session"
         })
+    except Exception as e:
+        logger.error(f"Voice debug error: {e}")
+        return {"error": str(e)}
 
 
 @router.post("/agents/preview/{client_id}/{agent_slug}/voice-start")
@@ -2664,6 +2822,14 @@ async def admin_update_client(
         
         # Debug: Log the API keys after update
         logger.info(f"After update - cartesia={updated_client.settings.api_keys.cartesia_api_key if updated_client.settings.api_keys else 'None'}, siliconflow={updated_client.settings.api_keys.siliconflow_api_key if updated_client.settings.api_keys else 'None'}")
+        
+        # Sync API keys from platform to client database
+        from app.services.platform_to_client_sync import PlatformToClientSync
+        sync_success = await PlatformToClientSync.sync_after_update(client_id, client_service)
+        if sync_success:
+            logger.info(f"✅ Synced API keys from platform to client database")
+        else:
+            logger.warning(f"⚠️ Failed to sync API keys to client database")
         
         # If this is the Autonomite client, sync LiveKit credentials to backend
         if client_id == "df91fd06-816f-4273-a903-5a4861277040":

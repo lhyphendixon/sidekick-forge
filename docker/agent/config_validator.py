@@ -79,12 +79,18 @@ class ConfigValidator:
         if not voice_settings:
             raise ConfigurationError("No voice_settings in metadata")
             
-        # Required providers
-        required_providers = ['llm_provider', 'stt_provider', 'tts_provider']
-        missing = [p for p in required_providers if not voice_settings.get(p)]
-        
-        if missing:
-            raise ConfigurationError(f"Missing required voice settings: {', '.join(missing)}")
+        # Apply defaults for null/missing providers
+        if not voice_settings.get('llm_provider'):
+            voice_settings['llm_provider'] = 'openai'
+            logger.info("No llm_provider specified, defaulting to 'openai'")
+            
+        if not voice_settings.get('stt_provider'):
+            voice_settings['stt_provider'] = 'deepgram'
+            logger.info("No stt_provider specified, defaulting to 'deepgram'")
+            
+        if not voice_settings.get('tts_provider'):
+            voice_settings['tts_provider'] = 'cartesia'
+            logger.info("No tts_provider specified, defaulting to 'cartesia'")
             
         # Validate provider values
         valid_llm_providers = ['openai', 'groq']
@@ -120,7 +126,8 @@ class ConfigValidator:
                 raise ConfigurationError(f"Missing API key for {provider_name}: {key_name}")
                 
             # Check for dummy/test keys
-            if ConfigValidator._is_dummy_key(api_key):
+            # Allow specific test keys for development (sk-test_ prefix)
+            if ConfigValidator._is_dummy_key(api_key) and not api_key.startswith("sk-test_"):
                 raise ConfigurationError(f"Invalid {key_name}: '{api_key}' appears to be a test/dummy key")
                 
             # Check key format/prefix

@@ -94,22 +94,32 @@ class APIKeyLoader:
             # Create Supabase client
             supabase: Client = create_client(supabase_url, supabase_key)
             
-            # Get client settings from the 'clients' table
-            result = supabase.table('clients').select('settings').eq('id', client_id).single().execute()
+            # Get client API keys from the 'clients' table
+            # Platform database stores API keys as individual columns
+            api_key_columns = [
+                'openai_api_key', 'groq_api_key', 'deepgram_api_key', 
+                'elevenlabs_api_key', 'cartesia_api_key', 'speechify_api_key',
+                'deepinfra_api_key', 'replicate_api_key', 'novita_api_key',
+                'cohere_api_key', 'siliconflow_api_key', 'jina_api_key',
+                'anthropic_api_key'
+            ]
+            
+            columns_str = ', '.join(api_key_columns)
+            result = supabase.table('clients').select(columns_str).eq('id', client_id).single().execute()
             
             if result.data:
-                settings = result.data.get('settings', {})
-                if isinstance(settings, str):
-                    import json
-                    settings = json.loads(settings)
+                # Convert database columns to api_keys dict
+                api_keys = {}
+                for key in api_key_columns:
+                    value = result.data.get(key)
+                    if value and value != '<needs-actual-key>':
+                        api_keys[key] = value
                 
-                api_keys = settings.get('api_keys', {})
                 if api_keys:
-                    logger.info(f"Successfully loaded {len(api_keys)} API keys from Supabase for client {client_id}")
-                    # Filter out empty values
-                    return {k: v for k, v in api_keys.items() if v}
+                    logger.info(f"Successfully loaded {len(api_keys)} API keys from platform database for client {client_id}")
+                    return api_keys
                 else:
-                    logger.warning(f"No API keys found in client settings for {client_id}")
+                    logger.warning(f"No API keys found for client {client_id} in platform database")
                     return {}
             else:
                 logger.error(f"Client {client_id} not found in Supabase")

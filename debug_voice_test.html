@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Voice Test Debug</title>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.5.7/dist/livekit-client.umd.min.js"></script>
+</head>
+<body>
+    <h1>LiveKit Voice Test</h1>
+    <div id="status">Initializing...</div>
+    <button onclick="testConnection()">Test Connection</button>
+    <pre id="log"></pre>
+    
+    <script>
+    const log = (msg) => {
+        const logEl = document.getElementById('log');
+        logEl.textContent += new Date().toISOString() + ' - ' + msg + '\n';
+        console.log(msg);
+    };
+    
+    async function testConnection() {
+        log('Starting connection test...');
+        
+        // Test values - you'll need to get fresh ones from the trigger endpoint
+        const serverUrl = 'wss://litebridge-hw6srhvi.livekit.cloud';
+        const token = 'GET_FROM_TRIGGER_ENDPOINT'; // Replace with actual token
+        
+        try {
+            log('Creating room instance...');
+            const room = new LivekitClient.Room();
+            
+            room.on('connected', () => {
+                log('✅ Connected to room!');
+                document.getElementById('status').textContent = 'Connected!';
+            });
+            
+            room.on('disconnected', () => {
+                log('❌ Disconnected from room');
+                document.getElementById('status').textContent = 'Disconnected';
+            });
+            
+            room.on('error', (error) => {
+                log('❌ Error: ' + error.message);
+            });
+            
+            log('Attempting to connect...');
+            await room.connect(serverUrl, token);
+            
+        } catch (error) {
+            log('❌ Connection failed: ' + error.message);
+            document.getElementById('status').textContent = 'Failed: ' + error.message;
+        }
+    }
+    
+    // Check if SDK loaded
+    window.addEventListener('load', () => {
+        if (typeof LivekitClient !== 'undefined') {
+            log('✅ LiveKit SDK loaded successfully');
+            log('SDK version: ' + (LivekitClient.version || 'unknown'));
+        } else {
+            log('❌ LiveKit SDK not found');
+        }
+    });
+    </script>
+</body>
+</html>

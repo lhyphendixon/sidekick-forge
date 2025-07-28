@@ -8,6 +8,7 @@ import asyncio
 import os
 import json
 import logging
+import time
 from typing import Optional, Dict, Any
 from datetime import datetime
 
@@ -200,8 +201,13 @@ async def agent_job_handler(ctx: JobContext):
                 groq_key = api_keys.get("groq_api_key")
                 if not groq_key:
                     raise ConfigurationError("Groq API key required but not found")
+                # Get model from voice_settings or metadata, with updated default
+                model = voice_settings.get("llm_model", metadata.get("model", "llama-3.3-70b-versatile"))
+                # Map old model names to new ones
+                if model == "llama3-70b-8192" or model == "llama-3.1-70b-versatile":
+                    model = "llama-3.3-70b-versatile"
                 llm_plugin = groq.LLM(
-                    model=metadata.get("model", "llama-3.1-70b-versatile"),
+                    model=model,
                     api_key=groq_key
                 )
             else:
@@ -252,7 +258,8 @@ async def agent_job_handler(ctx: JobContext):
                     raise ConfigurationError("Cartesia API key required for TTS but not found")
                 
                 # Check for test keys and fail fast - NO FALLBACK
-                if cartesia_key.startswith("fixed_"):
+                # Allow sk-test_ prefix for development
+                if cartesia_key.startswith("fixed_") and not cartesia_key.startswith("sk-test_"):
                     raise ConfigurationError(
                         f"Test key 'fixed_cartesia_key' cannot be used with Cartesia API. "
                         f"Please update the client's Cartesia API key in the admin dashboard to a valid key. "
@@ -277,6 +284,7 @@ async def agent_job_handler(ctx: JobContext):
             
             # Create and configure the voice agent session
             logger.info("Creating voice agent session...")
+            # AgentSession should automatically handle participant audio
             session = voice.AgentSession(
                 vad=vad,
                 stt=stt_plugin,
@@ -294,16 +302,72 @@ async def agent_job_handler(ctx: JobContext):
             def on_agent_speech(msg: llm.ChatMessage):
                 logger.info(f"🤖 Agent responded: {msg.content}")
             
+            # Add handler to debug VAD and audio input
+            @session.on("vad_updated") 
+            def on_vad_updated(speaking: bool):
+                logger.info(f"🎙️ VAD updated: {'Speaking' if speaking else 'Not speaking'}")
+                
+            # Handler for user transcription in progress
+            @session.on("user_speech_transcribed")
+            def on_user_transcribed(text: str):
+                logger.info(f"📝 Transcribing: {text}")
+            
             @session.on("agent_thinking")
             def on_thinking_started():
                 logger.info("🤔 Agent is thinking...")
             
+            # Add more detailed event handlers for debugging
+            @session.on("user_started_speaking")
+            def on_user_started_speaking():
+                logger.info("🎤 User started speaking")
+            
+            @session.on("user_stopped_speaking")
+            def on_user_stopped_speaking():
+                logger.info("🔇 User stopped speaking")
+            
+            @session.on("agent_started_speaking")
+            def on_agent_started_speaking():
+                logger.info("🔊 Agent started speaking")
+            
+            @session.on("agent_stopped_speaking")
+            def on_agent_stopped_speaking():
+                logger.info("🔈 Agent stopped speaking")
+            
             # Create the agent with instructions
-            agent = voice.Agent(instructions=system_prompt)
+            # Add greeting instruction to the system prompt
+            enhanced_prompt = system_prompt
+            if not any(greeting_word in system_prompt.lower() for greeting_word in ['greet', 'hello', 'welcome', 'introduce']):
+                enhanced_prompt = system_prompt + "\n\nWhen you first meet someone, start the conversation with a friendly greeting and ask how you can help them."
+            
+            agent = voice.Agent(instructions=enhanced_prompt)
+            
+            # Add participant event handlers to the room
+            @ctx.room.on("participant_connected")
+            def on_participant_connected(participant):
+                logger.info(f"👤 Participant joined: {participant.identity} (SID: {participant.sid})")
+                # Check for tracks if available
+                if hasattr(participant, 'tracks'):
+                    logger.info(f"   - Tracks published: {len(participant.tracks)}")
+            
+            @ctx.room.on("participant_disconnected")
+            def on_participant_disconnected(participant):
+                logger.info(f"👤 Participant left: {participant.identity}")
+            
+            @ctx.room.on("track_published")
+            def on_track_published(publication, participant):
+                track_info = f"{publication.kind if hasattr(publication, 'kind') else 'unknown'}"
+                logger.info(f"📡 Track published by {participant.identity}: {track_info}")
+            
+            @ctx.room.on("track_subscribed")
+            def on_track_subscribed(track, publication, participant):
+                logger.info(f"📡 Subscribed to track from {participant.identity}: {track.name} ({track.kind})")
             
             # Start the session - this connects it to the room
             # According to LiveKit docs, session.start() must be awaited
             logger.info("Starting agent session...")
+            
+            # The AgentSession automatically subscribes to participant audio tracks by default
+            # Just start the session with the room and agent
             await session.start(room=ctx.room, agent=agent)
             
             # Log successful start
@@ -315,34 +379,67 @@ async def agent_job_handler(ctx: JobContext):
             # Store session reference for the job lifecycle
             ctx.session = session
             
-            # Wait a moment for the audio pipeline to be ready
-            logger.info("Waiting for audio pipeline to be ready...")
-            await asyncio.sleep(0.5)
+            # The agent will naturally greet based on its system prompt
+            logger.info("Agent ready to converse")
             
-            # Check if there are participants in the room before greeting
-            # Note: ctx.room might not have participants attribute immediately
+            # Check current participants in the room
             try:
                 # Try to get participants - different SDK versions have different attributes
                 participants = []
                 if hasattr(ctx.room, 'remote_participants'):
                     participants = list(ctx.room.remote_participants.values())
-                    logger.info(f"Found {len(participants)} remote participant(s) in room")
+                    logger.info(f"Current remote participants: {len(participants)}")
+                    for p in participants:
+                        is_publisher = p.is_publisher if hasattr(p, 'is_publisher') else 'N/A'
+                        logger.info(f"  - {p.identity} (SID: {p.sid}, Publisher: {is_publisher})")
                 elif hasattr(ctx.room, 'participants'):
                     participants = list(ctx.room.participants.values())
-                    logger.info(f"Found {len(participants)} participant(s) in room")
+                    logger.info(f"Current participants: {len(participants)}")
+                    for p in participants:
+                        logger.info(f"  - {p.identity} (SID: {p.sid})")
                 else:
-                    logger.info("Room object doesn't have participants attribute yet")
+                    logger.info("Room object doesn't have participants attribute")
                 
-                # Always send greeting - agent should be ready when user joins
-                logger.info("🎤 Preparing agent to greet user...")
-                # The session will handle greeting when participant joins
+                # Log room state
+                logger.info(f"Room state - Connected: {ctx.room.isconnected() if hasattr(ctx.room, 'isconnected') else 'N/A'}")
+                
+                # If participants are already in the room, log their tracks
+                for participant in participants:
+                    if hasattr(participant, 'tracks'):
+                        logger.info(f"Tracks for {participant.identity}: {len(participant.tracks)} tracks")
+                        for track_id, track_pub in participant.tracks.items():
+                            logger.info(f"  - Track {track_id}: {track_pub.kind if hasattr(track_pub, 'kind') else 'unknown'}")
                 
             except Exception as e:
                 logger.warning(f"Could not check participants: {e}")
                 # Continue - the session will handle participant events
             
-            # The session manages the lifecycle - we don't need explicit wait
-            # The job will stay alive until the room closes or agent disconnects
+            # Keep the agent alive by waiting for the session to complete
+            # The session will handle room events and manage its own lifecycle
+            logger.info("Agent session is running. Waiting for completion...")
+            
+            # The session runs until the room closes or all participants disconnect
+            # We need to keep this coroutine alive while the session is active
+            try:
+                # Wait for the room to disconnect or session to end
+                while ctx.room.isconnected() if hasattr(ctx.room, 'isconnected') else True:
+                    await asyncio.sleep(1)  # Check every second
+                    
+                    # Log periodic heartbeat to show agent is still active
+                    if int(time.time()) % 30 == 0:  # Every 30 seconds
+                        participants_count = len(ctx.room.remote_participants) if hasattr(ctx.room, 'remote_participants') else 0
+                        logger.info(f"💓 Agent heartbeat - Room: {ctx.room.name}, Participants: {participants_count}")
+                
+                logger.info("Room disconnected or session ended. Agent shutting down.")
+                
+            except Exception as e:
+                logger.error(f"Error in session wait loop: {e}")
+                # Continue to cleanup
+            
+            # Clean shutdown
+            if hasattr(ctx, 'session') and ctx.session:
+                logger.info("Cleaning up agent session...")
+                # Session cleanup happens automatically
             
         except ConfigurationError as e:
             # Configuration errors are fatal - don't try to recover
@@ -369,15 +466,22 @@ async def request_filter(job_request: JobRequest) -> None:
     """
     Filter function to accept/reject jobs
     
-    We accept all jobs and use metadata to determine agent configuration.
-    This allows one worker to handle multiple agent types.
+    EXPLICIT DISPATCH MODE: Only accept jobs that match our agent name.
+    This ensures proper agent-to-room assignment in multi-tenant environments.
     """
     logger.info(f"Received job request: {job_request.job.id}")
     logger.info(f"Job agent name: {job_request.agent_name}")
     
-    # Accept all jobs - we'll handle different agent configurations via metadata
-    logger.info(f"Accepting job for agent: {job_request.agent_name}")
-    await job_request.accept()
+    # Get our configured agent name from environment or use default
+    our_agent_name = os.getenv("AGENT_NAME", "sidekick-agent")
+    
+    # EXPLICIT DISPATCH: Only accept jobs for our specific agent
+    if job_request.agent_name == our_agent_name:
+        logger.info(f"✅ Accepting job for our agent: {job_request.agent_name}")
+        await job_request.accept()
+    else:
+        logger.info(f"❌ Rejecting job - agent mismatch. Expected: {our_agent_name}, Got: {job_request.agent_name}")
+        await job_request.reject()
 
 
 if __name__ == "__main__":
@@ -406,15 +510,19 @@ if __name__ == "__main__":
             logger.critical("LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set.")
             sys.exit(1)
 
+        # Get agent name from environment or use default
+        agent_name = os.getenv("AGENT_NAME", "sidekick-agent")
+        
         logger.info(f"Starting agent worker...")
         logger.info(f"LiveKit URL: {url}")
-        logger.info(f"Agent name: sidekick-agent")
+        logger.info(f"Agent mode: EXPLICIT DISPATCH")
+        logger.info(f"Agent name: {agent_name}")
 
-        # Configure worker options with agent_name for explicit dispatch
+        # Configure worker options with agent_name for EXPLICIT DISPATCH
         worker_options = WorkerOptions(
             entrypoint_fnc=agent_job_handler,
             request_fnc=request_filter,
-            agent_name="sidekick-agent",  # Enable explicit dispatch
+            agent_name=agent_name,  # EXPLICIT: Only receive jobs for this agent name
         )
 
         # Let the CLI handle the event loop

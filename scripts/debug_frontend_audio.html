@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Frontend Audio Debug</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .debug-panel { background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { color: green; }
+        .error { color: red; }
+        .warning { color: orange; }
+        #audioLevel { width: 300px; height: 20px; background: #ddd; }
+        #audioBar { height: 100%; background: green; width: 0%; transition: width 0.1s; }
+    </style>
+</head>
+<body>
+    <h1>Frontend Audio Debugging</h1>
+    
+    <div class="debug-panel">
+        <h3>1. Microphone Access Test</h3>
+        <button onclick="testMicrophoneAccess()">Test Microphone Access</button>
+        <div id="micStatus"></div>
+    </div>
+    
+    <div class="debug-panel">
+        <h3>2. Audio Level Monitor</h3>
+        <div id="audioLevel"><div id="audioBar"></div></div>
+        <div id="levelStatus">Not started</div>
+    </div>
+    
+    <div class="debug-panel">
+        <h3>3. LiveKit Connection Test</h3>
+        <input type="text" id="token" placeholder="Paste LiveKit token here" style="width: 500px;">
+        <button onclick="testLiveKitConnection()">Test LiveKit Connection</button>
+        <div id="livekitStatus"></div>
+    </div>
+    
+    <div class="debug-panel">
+        <h3>4. Debug Log</h3>
+        <div id="debugLog" style="height: 300px; overflow-y: scroll; background: white; padding: 10px; font-family: monospace; font-size: 12px;"></div>
+    </div>
+    
+    <script>
+        let audioContext;
+        let analyser;
+        let microphone;
+        let room;
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toISOString().substr(11, 12);
+            const logDiv = document.getElementById('debugLog');
+            const color = type === 'error' ? 'red' : type === 'success' ? 'green' : type === 'warning' ? 'orange' : 'black';
+            logDiv.innerHTML += `<div style="color: ${color}">[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        async function testMicrophoneAccess() {
+            const statusDiv = document.getElementById('micStatus');
+            
+            try {
+                log('Requesting microphone access...');
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                // Check if we got a stream
+                if (!stream) {
+                    throw new Error('No stream returned');
+                }
+                
+                // Check tracks
+                const tracks = stream.getAudioTracks();
+                log(`Got ${tracks.length} audio track(s)`, 'success');
+                
+                tracks.forEach((track, i) => {
+                    log(`Track ${i}: ${track.label} (${track.kind}), enabled: ${track.enabled}, muted: ${track.muted}`);
+                });
+                
+                statusDiv.innerHTML = '<span class="success">✓ Microphone access granted</span>';
+                
+                // Set up audio level monitoring
+                setupAudioLevelMonitor(stream);
+                
+                // Store for later use
+                window.audioStream = stream;
+                
+            } catch (error) {
+                log(`Microphone access error: ${error.message}`, 'error');
+                statusDiv.innerHTML = `<span class="error">✗ ${error.message}</span>`;
+                
+                // Common error explanations
+                if (error.name === 'NotAllowedError') {
+                    log('User denied microphone access or it was blocked by browser settings', 'error');
+                } else if (error.name === 'NotFoundError') {
+                    log('No microphone device found', 'error');
+                } else if (error.name === 'NotReadableError') {
+                    log('Microphone is already in use by another application', 'error');
+                }
+            }
+        }
+        
+        function setupAudioLevelMonitor(stream) {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                analyser.fftSize = 256;
+                
+                const bufferLength = analyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
+                
+                function checkAudioLevel() {
+                    analyser.getByteFrequencyData(dataArray);
+                    
+                    let sum = 0;
+                    for (let i = 0; i < bufferLength; i++) {
+                        sum += dataArray[i];
+                    }
+                    const average = sum / bufferLength;
+                    const percentage = (average / 255) * 100;
+                    
+                    document.getElementById('audioBar').style.width = percentage + '%';
+                    
+                    if (percentage > 5) {
+                        document.getElementById('levelStatus').innerHTML = 
+                            `<span class="success">Audio detected! Level: ${percentage.toFixed(1)}%</span>`;
+                    } else {
+                        document.getElementById('levelStatus').innerHTML = 
+                            `Level: ${percentage.toFixed(1)}% (speak louder or check mic)`;
+                    }
+                    
+                    requestAnimationFrame(checkAudioLevel);
+                }
+                
+                checkAudioLevel();
+                log('Audio level monitor started', 'success');
+                
+            } catch (error) {
+                log(`Audio level monitor error: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testLiveKitConnection() {
+            const token = document.getElementById('token').value;
+            const statusDiv = document.getElementById('livekitStatus');
+            
+            if (!token) {
+                statusDiv.innerHTML = '<span class="error">Please enter a LiveKit token</span>';
+                return;
+            }
+            
+            if (!window.audioStream) {
+                log('No audio stream - test microphone access first', 'warning');
+                statusDiv.innerHTML = '<span class="warning">Test microphone access first</span>';
+                return;
+            }
+            
+            try {
+                log('Loading LiveKit SDK...');
+                
+                // Check if LiveKit SDK is available
+                if (typeof LivekitClient === 'undefined') {
+                    // Try to load it
+                    const script = document.createElement('script');
+                    script.src = 'https://unpkg.com/livekit-client/dist/livekit-client.umd.min.js';
+                    await new Promise((resolve, reject) => {
+                        script.onload = resolve;
+                        script.onerror = reject;
+                        document.head.appendChild(script);
+                    });
+                    log('LiveKit SDK loaded', 'success');
+                }
+                
+                const Room = LivekitClient.Room;
+                const RoomEvent = LivekitClient.RoomEvent;
+                
+                room = new Room();
+                
+                // Set up event handlers
+                room.on(RoomEvent.Connected, () => {
+                    log('Connected to LiveKit room!', 'success');
+                    statusDiv.innerHTML = '<span class="success">✓ Connected to LiveKit</span>';
+                });
+                
+                room.on(RoomEvent.Disconnected, () => {
+                    log('Disconnected from room', 'warning');
+                });
+                
+                room.on(RoomEvent.ParticipantConnected, (participant) => {
+                    log(`Participant connected: ${participant.identity}`, 'success');
+                });
+                
+                room.on(RoomEvent.TrackPublished, (publication, participant) => {
+                    log(`Track published by ${participant.identity}: ${publication.kind}`);
+                });
+                
+                room.on(RoomEvent.LocalTrackPublished, (publication, participant) => {
+                    log(`Local track published: ${publication.kind}`, 'success');
+                });
+                
+                room.on(RoomEvent.Error, (error) => {
+                    log(`Room error: ${error.message}`, 'error');
+                });
+                
+                // Parse token to get server URL
+                const tokenParts = token.split('.');
+                const payload = JSON.parse(atob(tokenParts[1]));
+                log(`Token video grants: ${JSON.stringify(payload.video)}`);
+                
+                // Default LiveKit Cloud URL from the logs
+                const serverUrl = 'wss://litebridge-hw6srhvi.livekit.cloud';
+                
+                log(`Connecting to ${serverUrl}...`);
+                await room.connect(serverUrl, token);
+                
+                // Publish audio track
+                log('Publishing audio track...');
+                const audioTrack = window.audioStream.getAudioTracks()[0];
+                await room.localParticipant.publishTrack(audioTrack, {
+                    name: 'microphone',
+                    stream: window.audioStream
+                });
+                
+                log('Audio track published successfully!', 'success');
+                
+                // Check what participants are in the room
+                log(`Participants in room: ${room.participants.size}`);
+                room.participants.forEach((p) => {
+                    log(`- ${p.identity} (${p.sid})`);
+                });
+                
+            } catch (error) {
+                log(`LiveKit connection error: ${error.message}`, 'error');
+                statusDiv.innerHTML = `<span class="error">✗ ${error.message}</span>`;
+            }
+        }
+        
+        // Initial log
+        log('Frontend audio debugger ready');
+        log(`User Agent: ${navigator.userAgent}`);
+        
+        // Check for HTTPS
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+            log('WARNING: Microphone access requires HTTPS (except on localhost)', 'warning');
+        }
+    </script>
+</body>
+</html>

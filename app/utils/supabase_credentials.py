@@ -26,31 +26,9 @@ class SupabaseCredentialManager:
         anon_key = settings.supabase_anon_key
         service_role_key = settings.supabase_service_role_key
         
-        # Try to get updated service role key from Autonomite client
-        try:
-            # We can use the anon key to query the client settings
-            from supabase import create_client
-            temp_client = create_client(url, anon_key)
-            
-            # Query Autonomite client settings
-            response = temp_client.table('clients').select('settings').eq('id', 'df91fd06-816f-4273-a903-5a4861277040').single().execute()
-            
-            if response.data:
-                client_settings = response.data.get('settings', {})
-                supabase_config = client_settings.get('supabase', {})
-                
-                # If this client uses the same Supabase instance
-                if supabase_config.get('url') == url:
-                    new_service_key = supabase_config.get('service_role_key')
-                    if new_service_key and new_service_key != service_role_key:
-                        logger.info("Using updated service role key from Autonomite client settings")
-                        service_role_key = new_service_key
-                        # Update environment for consistency
-                        os.environ['SUPABASE_SERVICE_ROLE_KEY'] = service_role_key
-                        
-        except Exception as e:
-            logger.warning(f"Could not load updated service role key from client settings: {e}")
-            # Continue with bootstrap values
+        # Platform credentials are configured in .env and should not be dynamically loaded from clients
+        # Each client has their own separate Supabase instance in multi-tenant architecture
+        # The platform should use its own credentials, not client credentials
         
         return url, anon_key, service_role_key
     

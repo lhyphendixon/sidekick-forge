@@ -178,7 +178,7 @@ async def handle_voice_trigger(
         "system_prompt": agent.system_prompt,
         "voice_settings": {
             **(agent.voice_settings.dict() if agent.voice_settings else {}),
-            "tts_provider": agent.voice_settings.provider if agent.voice_settings else "livekit"
+            "tts_provider": agent.voice_settings.provider if agent.voice_settings else "cartesia"
         },
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": request.user_id,

@@ -1,0 +1,140 @@
+name: Voice Pipeline Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run every 6 hours to catch external API changes
+    - cron: '0 */6 * * *'
+
+jobs:
+  pre-deployment-checks:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run Pre-Deployment Checklist
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+        LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+        LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+      run: |
+        python scripts/test_pre_deployment_checklist.py
+    
+  api-compatibility-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Test External API Compatibility
+      run: |
+        # Test that all external APIs are still working
+        python scripts/test_voice_pipeline_comprehensive.py --only-external-apis
+    
+    - name: Notify on API Changes
+      if: failure()
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issue = await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: '🚨 External API Compatibility Issue Detected',
+            body: `The automated tests have detected an issue with external API compatibility.
+            
+            This could be due to:
+            - Deprecated models (like Groq llama-3.1-70b-versatile)
+            - Expired API keys
+            - Changed API endpoints
+            - Service outages
+            
+            Please check the test logs and update the configuration accordingly.
+            
+            [View Failed Run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+            labels: ['bug', 'critical', 'external-api']
+          });
+  
+  frontend-audio-tests:
+    runs-on: ubuntu-latest
+    
+    services:
+      chrome:
+        image: selenium/standalone-chrome:latest
+        options: --shm-size=2gb
+        ports:
+          - 4444:4444
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install test dependencies
+      run: |
+        pip install selenium pytest
+    
+    - name: Run Frontend Audio Tests
+      run: |
+        python scripts/test_frontend_audio.py
+    
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-checks]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Start services
+      run: |
+        docker-compose up -d
+        sleep 30  # Wait for services to be ready
+    
+    - name: Run Voice Pipeline Tests
+      run: |
+        python scripts/test_voice_pipeline_comprehensive.py
+    
+    - name: Check Agent Logs for Errors
+      if: always()
+      run: |
+        docker-compose logs agent-worker | grep -E "(ERROR|CRITICAL|model_decommissioned)" || true
+    
+    - name: Stop services
+      if: always()
+      run: |
+        docker-compose down
+
+  notify-success:
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-checks, api-compatibility-tests, frontend-audio-tests, integration-tests]
+    if: success()
+    
+    steps:
+    - name: Notify Success
+      uses: actions/github-script@v6
+      with:
+        script: |
+          console.log('✅ All voice pipeline tests passed!')

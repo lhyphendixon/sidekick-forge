@@ -15,9 +15,18 @@ services:
       - DOMAIN_NAME=${DOMAIN_NAME}
       - APP_NAME=${APP_NAME}
       - PLATFORM_NAME=${PLATFORM_NAME}
+      # Platform Supabase credentials
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      # LiveKit credentials  
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
     volumes:
       - ./app:/app/app
       - ./logs:/app/logs
+      - ./app/static:/app/static
     depends_on:
       - redis
     restart: unless-stopped
@@ -45,6 +54,9 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./ssl:/etc/nginx/ssl:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+      - ./app/static:/app/static:ro
     depends_on:
       - fastapi
     restart: unless-stopped
@@ -52,6 +64,9 @@ services:
       - platform-network
 
   agent-worker:
+    build:
+      context: ./docker/agent
+      dockerfile: Dockerfile
     image: ${APP_NAME:-sidekick-forge}/agent-runtime:latest
     restart: always
     command: python /app/entrypoint.py  # Use the existing entrypoint

@@ -49,9 +49,9 @@ class SupabaseManager:
     async def health_check(self) -> bool:
         """Check Supabase connection health"""
         try:
-            # Try a simple query
+            # Try a simple query on the clients table (platform database)
             result = await self.execute_query(
-                self.admin_client.table("profiles").select("id").limit(1)
+                self.admin_client.table("clients").select("id").limit(1)
             )
             return True
         except Exception as e:
@@ -61,11 +61,11 @@ class SupabaseManager:
     async def check_database_connection(self) -> bool:
         """Check if database is accessible"""
         try:
-            # Test database connection with a simple query
+            # Test database connection with a simple query on the clients table
             result = await self.execute_query(
-                self.admin_client.rpc("version")
+                self.admin_client.table("clients").select("id").limit(1)
             )
-            return bool(result)
+            return True
         except Exception:
             return False
     

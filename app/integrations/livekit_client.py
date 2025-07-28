@@ -125,8 +125,8 @@ class LiveKitManager:
         empty_timeout: int = 300,
         max_participants: int = 2,
         metadata: Optional[Union[Dict[str, Any], str]] = None,
-        enable_agent_dispatch: bool = True,
-        agent_name: str = "sidekick-agent"
+        enable_agent_dispatch: bool = False,
+        agent_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """Create a LiveKit room
         
@@ -163,27 +163,36 @@ class LiveKitManager:
             
             logger.info(f"Sending room creation request to LiveKit")
             
-            # Create room request
+            # Configure agent dispatch if enabled
+            agents_list = []
+            if enable_agent_dispatch:
+                # CRITICAL: Configure agent dispatch AT ROOM CREATION TIME
+                if agent_name:
+                    # Explicit dispatch - only workers with this name will receive the job
+                    agent_dispatch_options = api.RoomAgentDispatch(
+                        agent_name=agent_name,
+                        metadata=room_metadata if room_metadata else ""
+                    )
+                    agents_list.append(agent_dispatch_options)
+                    logger.info(f"🤖 Creating room with explicit agent dispatch: agent_name={agent_name}")
+                else:
+                    # General dispatch - any available worker can take the job
+                    agent_dispatch_options = api.RoomAgentDispatch(
+                        metadata=room_metadata if room_metadata else ""
+                    )
+                    agents_list.append(agent_dispatch_options)
+                    logger.info(f"🤖 Creating room with general agent dispatch (any worker)")
+            else:
+                logger.info(f"📹 Creating standard room without agent dispatch")
+            
+            # Create room request with agents if configured
             room_request = api.CreateRoomRequest(
                 name=name,
                 empty_timeout=empty_timeout,
                 max_participants=max_participants,
-                metadata=room_metadata
+                metadata=room_metadata,
+                agents=agents_list  # Pass agents during initialization
             )
-            
-            # Configure agent dispatch if enabled
-            if enable_agent_dispatch:
-                # CRITICAL: Configure agent dispatch AT ROOM CREATION TIME
-                # This is the correct pattern for automatic agent dispatch
-                agent_dispatch_options = api.RoomAgentDispatch(
-                    agent_name=agent_name,  # Must match the worker's agent name
-                    metadata=room_metadata if room_metadata else ""
-                )
-                # Use list assignment instead of append to ensure proper initialization
-                room_request.agents = [agent_dispatch_options]
-                logger.info(f"🤖 Creating room with agent dispatch enabled: agent_name={agent_name}")
-            else:
-                logger.info(f"📹 Creating standard room without agent dispatch")
             
             room = await livekit_api.room.create_room(room_request)
             
