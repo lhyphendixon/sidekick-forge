@@ -371,10 +371,11 @@ class AgentContextManager:
             
             # Query the profiles table in client's Supabase
             # NO WORKAROUNDS: Let the database query run naturally
-            result = self.supabase.table("profiles").select("*").eq("user_id", user_id).single().execute()
+            # Use regular select without .single() to handle missing profiles gracefully
+            result = self.supabase.table("profiles").select("*").eq("user_id", user_id).execute()
             
-            if result.data:
-                profile = result.data
+            if result.data and len(result.data) > 0:
+                profile = result.data[0]  # Take first result
                 # Check for various name fields
                 name = profile.get('name') or profile.get('full_name') or profile.get('display_name') or profile.get('username') or 'Unknown'
                 logger.info(f"Found user profile: {name}")
@@ -410,8 +411,8 @@ class AgentContextManager:
 
             # NO FALLBACKS: Only use the correct RPC function
             result = self.supabase.rpc("match_documents", {
-                "p_query_embedding": query_embedding,  # Use corrected parameter name
-                "p_agent_slug": agent_slug,            # Use corrected parameter name
+                "p_query_embedding": query_embedding,  # Database function expects p_ prefix
+                "p_agent_slug": agent_slug,            # Database function expects p_ prefix
                 "p_match_threshold": 0.5,
                 "p_match_count": 5
             }).execute()
@@ -465,11 +466,19 @@ class AgentContextManager:
             query_embedding = await self.embedder.create_embedding(user_message)
 
             # NO FALLBACKS: Only use the correct RPC function
+            # Cast user_id to UUID to disambiguate the overloaded function
+            import uuid
+            try:
+                user_id_uuid = str(uuid.UUID(user_id))  # Ensure it's a valid UUID string
+            except ValueError:
+                logger.error(f"Invalid UUID format for user_id: {user_id}")
+                raise ValueError(f"user_id must be a valid UUID, got: {user_id}")
+                
             result = self.supabase.rpc("match_conversation_transcripts_secure", {
                 "query_embeddings": query_embedding,
+                "match_count": 5,  # Put match_count before other params to match function signature
                 "agent_slug_param": self.agent_config.get("slug"),
-                "user_id_param": user_id,  # Use the passed user_id, not self.user_id
-                "match_count": 5
+                "user_id_param": user_id_uuid  # Pass as UUID string
             }).execute()
 
             if result.data:

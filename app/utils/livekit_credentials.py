@@ -50,8 +50,9 @@ class LiveKitCredentialManager:
             # Initialize Supabase client
             supabase = SupabaseManager()
             
-            # Get Autonomite client directly from database
-            response = supabase.admin_client.table('autonomite_clients').select('*').eq('id', 'df91fd06-816f-4273-a903-5a4861277040').single().execute()
+            # Get default client directly from database
+            from app.utils.default_ids import get_default_client_id
+            response = supabase.admin_client.table('clients').select('*').eq('id', get_default_client_id()).single().execute()
             
             if response.data:
                 client_data = response.data

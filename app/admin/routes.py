@@ -8,6 +8,7 @@ import redis
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta
 from livekit import api
 
@@ -20,6 +21,7 @@ from livekit import api
 # Container manager removed - using worker pool architecture
 from app.services.wordpress_site_service_supabase import WordPressSiteService
 from app.models.wordpress_site import WordPressSite, WordPressSiteCreate, WordPressSiteUpdate
+from app.utils.default_ids import get_default_client_id, get_user_id_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -368,9 +370,10 @@ async def get_all_agents() -> List[Dict[str, Any]]:
             result = supabase_manager.auth_client.table('agents').select('*').execute()
             
             for agent_data in result.data:
-                # Agents in main table belong to the Autonomite client
-                # Use the Autonomite client ID
-                client_id = "df91fd06-816f-4273-a903-5a4861277040"  # Autonomite client ID
+                # Agents in main table belong to the default client
+                # Use the default client ID from utility
+                from app.utils.default_ids import get_default_client_id
+                client_id = get_default_client_id()
                     
                 agent_dict = {
                     "id": agent_data.get("id"),
@@ -666,7 +669,8 @@ async def knowledge_base_page(
 #             client_id=client_id,
 #             mode=TriggerMode.VOICE,
 #             room_name=room_name,
-#             user_id=f"admin_{admin_user.get('id', 'preview')}",
+#             # Use the actual user's UUID for proper context loading
+#             user_id='351bb07b-03fc-4fb4-b09b-748ef8a72084',  # Your UUID as default
 #             session_id=session_id
 #         )
 #         
@@ -1376,7 +1380,7 @@ async def agent_detail(
                                 <h2 class="text-xl font-bold text-white mb-4">Voice Preview</h2>
                                 <div class="flex items-center space-x-4">
                                     <button type="button" 
-                                            hx-get="/admin/agents/preview/df91fd06-816f-4273-a903-5a4861277040/{agent_slug_clean}" 
+                                            hx-get="/admin/agents/preview/{get_default_client_id()}/{agent_slug_clean}" 
                                             hx-target="#modal-container" 
                                             hx-swap="innerHTML"
                                             class="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 font-medium">
@@ -1701,9 +1705,9 @@ async def agent_preview_modal_legacy(
     agent_slug: str,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Legacy route - redirect to new format with Autonomite client_id"""
+    """Legacy route - redirect to new format with default client_id"""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url=f"/admin/agents/preview/df91fd06-816f-4273-a903-5a4861277040/{agent_slug}", status_code=307)
+    return RedirectResponse(url=f"/admin/agents/preview/{get_default_client_id()}/{agent_slug}", status_code=307)
 
 @router.get("/agents/preview/{client_id}/{agent_slug}", response_class=HTMLResponse)
 async def agent_preview_modal(
@@ -1727,7 +1731,7 @@ async def agent_preview_modal(
         
         # Handle agents - all agents should go through standard workflow
         logger.info(f"Handling preview for client_id={client_id}")
-        if client_id == "df91fd06-816f-4273-a903-5a4861277040":
+        if client_id == get_default_client_id():
             try:
                 # Ensure supabase_manager is initialized
                 if not supabase_manager._initialized:
@@ -1894,7 +1898,20 @@ async def send_preview_message(
     
     # Get messages from session (stored in memory for preview)
     preview_sessions = getattr(request.app.state, 'preview_sessions', {})
-    messages = preview_sessions.get(session_id, [])
+    session_data = preview_sessions.get(session_id, {"messages": [], "conversation_id": None})
+    
+    # Ensure backward compatibility
+    if isinstance(session_data, list):
+        # Old format - convert to new format
+        session_data = {"messages": session_data, "conversation_id": str(uuid.uuid4())}
+    
+    messages = session_data["messages"]
+    
+    # Get or create conversation_id for this session
+    conversation_id = session_data.get("conversation_id")
+    if not conversation_id:
+        conversation_id = str(uuid.uuid4())
+        session_data["conversation_id"] = conversation_id
     
     # Add user message
     messages.append({"content": message, "is_user": True})
@@ -1910,9 +1927,10 @@ async def send_preview_message(
             client_id=client_id,
             mode=TriggerMode.TEXT,
             message=message,
-            user_id=f"admin_{admin_user.get('id', 'preview')}",
+            # Use the actual user's UUID for proper context loading
+            user_id=get_user_id_from_request(None, admin_user),
             session_id=session_id,
-            conversation_id=session_id
+            conversation_id=conversation_id  # Use the session's conversation_id
         )
         
         # For global agents, we'll use backend API keys
@@ -2042,10 +2060,10 @@ async def send_preview_message(
     # Add AI response
     messages.append({"content": ai_response, "is_user": False})
     
-    # Store messages in session
+    # Store messages and conversation_id in session
     if not hasattr(request.app.state, 'preview_sessions'):
         request.app.state.preview_sessions = {}
-    request.app.state.preview_sessions[session_id] = messages
+    request.app.state.preview_sessions[session_id] = session_data
     
     # Return updated messages
     return templates.TemplateResponse("admin/partials/chat_messages.html", {
@@ -2065,7 +2083,13 @@ async def get_preview_messages(
 ):
     """Get messages for a preview session"""
     preview_sessions = getattr(request.app.state, 'preview_sessions', {})
-    messages = preview_sessions.get(session_id, [])
+    session_data = preview_sessions.get(session_id, {"messages": [], "conversation_id": None})
+    
+    # Handle backward compatibility
+    if isinstance(session_data, list):
+        messages = session_data
+    else:
+        messages = session_data.get("messages", [])
     
     return templates.TemplateResponse("admin/partials/chat_messages.html", {
         "request": request,
@@ -2177,9 +2201,11 @@ async def set_preview_mode(
                 client_id=client_id if client_id != "global" else None,  # Let trigger endpoint handle global agents
                 mode=TriggerMode.VOICE,
                 room_name=room_name,
-                user_id=f"admin_preview_{admin_user.get('id', 'user')}",
+                # Use the actual user's UUID from the query parameter or a default admin user
+                # This ensures the context system can find the user's profile
+                user_id=get_user_id_from_request(request.query_params.get('user_id'), admin_user),
                 session_id=session_id,
-                conversation_id=session_id
+                conversation_id=str(uuid.uuid4())  # Generate proper UUID for database storage
             )
             
             # Call the actual trigger endpoint to ensure proper setup
@@ -2223,7 +2249,13 @@ async def set_preview_mode(
     else:
         # Return text chat interface (reuse the messages partial with container)
         preview_sessions = getattr(request.app.state, 'preview_sessions', {})
-        messages = preview_sessions.get(session_id, [])
+        session_data = preview_sessions.get(session_id, {"messages": [], "conversation_id": None})
+        
+        # Handle backward compatibility
+        if isinstance(session_data, list):
+            messages = session_data
+        else:
+            messages = session_data.get("messages", [])
         
         # Return the full text chat container
         return f"""
@@ -2395,7 +2427,8 @@ async def start_voice_preview(
             client_id=client_id,  # Use the actual client ID (Autonomite client)
             mode=TriggerMode.VOICE,
             room_name=room_name,
-            user_id=f"admin_{admin_user.get('user_id', 'preview')}",
+            # Use the actual user's UUID for proper context loading
+            user_id=get_user_id_from_request(None, admin_user),
             session_id=session_id
         )
         
@@ -2537,7 +2570,11 @@ async def clear_preview_messages(
 ):
     """Clear messages for a preview session"""
     if hasattr(request.app.state, 'preview_sessions') and session_id in request.app.state.preview_sessions:
-        request.app.state.preview_sessions[session_id] = []
+        # Reset with new conversation_id
+        request.app.state.preview_sessions[session_id] = {
+            "messages": [],
+            "conversation_id": str(uuid.uuid4())
+        }
     
     return templates.TemplateResponse("admin/partials/chat_messages.html", {
         "request": request,
@@ -2832,7 +2869,7 @@ async def admin_update_client(
             logger.warning(f"⚠️ Failed to sync API keys to client database")
         
         # If this is the Autonomite client, sync LiveKit credentials to backend
-        if client_id == "df91fd06-816f-4273-a903-5a4861277040":
+        if client_id == get_default_client_id():
             from app.services.backend_livekit_sync import BackendLiveKitSync
             sync_success = await BackendLiveKitSync.sync_credentials()
             if sync_success:

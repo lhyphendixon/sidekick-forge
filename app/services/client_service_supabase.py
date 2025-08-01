@@ -2,6 +2,7 @@
 Enhanced Client management service using Supabase only (no Redis)
 """
 import json
+import os
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from fastapi import HTTPException
@@ -261,7 +262,7 @@ class ClientService:
         """Initialize default clients if they don't exist"""
         default_clients = [
             {
-                "id": "df91fd06-816f-4273-a903-5a4861277040",
+                "id": os.getenv("DEFAULT_CLIENT_ID", "11389177-e4d8-49a9-9a00-f77bb4de6592"),  # From environment
                 "name": "Autonomite",
                 "description": "Autonomite AI Platform",
                 "domain": "autonomite.ai",
@@ -607,7 +608,8 @@ class ClientService:
             active=additional.get("active", db_row.get("active", True)),
             settings=ClientSettings(**settings_dict) if settings_dict else ClientSettings(),
             created_at=db_row.get("created_at"),
-            updated_at=db_row.get("updated_at")
+            updated_at=db_row.get("updated_at"),
+            additional_settings=additional  # Include the full additional_settings
         )
     
     def get_cache_stats(self) -> Dict[str, Any]:

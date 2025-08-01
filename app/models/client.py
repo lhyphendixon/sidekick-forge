@@ -94,6 +94,7 @@ class Client(BaseModel):
     active: bool = Field(default=True, description="Whether client is active")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    additional_settings: Dict[str, Any] = Field(default_factory=dict, description="Additional client-specific settings")
     
     class Config:
         json_encoders = {

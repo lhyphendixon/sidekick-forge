@@ -15,9 +15,11 @@ from datetime import datetime
 from livekit import agents, rtc
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
 from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
+from livekit.plugins.turn_detector.english import EnglishModel
 from api_key_loader import APIKeyLoader
 from config_validator import ConfigValidator, ConfigurationError
 from context import AgentContextManager
+from llm_wrapper import ContextAwareLLM
 
 # Configure logging
 logging.basicConfig(
@@ -30,6 +32,55 @@ logger = logging.getLogger(__name__)
 # Agent class removed - using VoiceAssistant directly
 
 
+# --- Performance Logging Helper ---
+def log_perf(event: str, room_name: str, details: Dict[str, Any]):
+    log_entry = {
+        "event": event,
+        "room_name": room_name,
+        "details": details
+    }
+    logger.info(f"PERF: {json.dumps(log_entry)}")
+
+
+async def _store_voice_turn(
+    supabase_client,
+    user_id: str,
+    agent_id: str,
+    conversation_id: str,
+    user_message: str,
+    agent_response: str
+):
+    """
+    Store a voice conversation turn immediately in the client's Supabase.
+    This implements transactional turn-based storage for voice conversations.
+    """
+    try:
+        # Create the conversation turn record
+        turn_data = {
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "conversation_id": conversation_id,
+            "user_message": user_message,
+            "assistant_message": agent_response,
+            "turn_timestamp": datetime.utcnow().isoformat(),
+            "source": "voice",  # Mark as voice source
+            "metadata": {
+                "stored_immediately": True,
+                "storage_version": "v2_transactional"
+            }
+        }
+        
+        # Store in conversation_transcripts table
+        result = await supabase_client.table("conversation_transcripts").insert(turn_data).execute()
+        
+        logger.info(f"✅ Stored voice turn: conversation_id={conversation_id}, turn_id={result.data[0]['id'] if result.data else 'unknown'}")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to store voice turn: {e}")
+        # Don't fail the conversation if storage fails
+        logger.error(f"Turn data that failed to store: user='{user_message[:50]}...', agent='{agent_response[:50]}...'")
+
+
 async def agent_job_handler(ctx: JobContext):
     """
     This function is called for each new agent job.
@@ -39,6 +90,9 @@ async def agent_job_handler(ctx: JobContext):
     
     # The context provides a connected room object
     room = ctx.room
+
+    job_received_time = time.perf_counter()
+    perf_summary = {}
 
     try:
         # In automatic mode, we need to fetch room info to get metadata
@@ -183,12 +237,18 @@ async def agent_job_handler(ctx: JobContext):
         metadata['api_keys'] = api_keys
         
         # CRITICAL: Validate configuration before proceeding
+        start_config = time.perf_counter()
         try:
             ConfigValidator.validate_configuration(metadata, api_keys)
         except ConfigurationError as e:
             logger.error(f"❌ Configuration validation failed: {e}")
             # Fail fast - don't try to start with invalid configuration
             raise
+        perf_summary['config_validation'] = time.perf_counter() - start_config
+        
+        # CRITICAL: Store user_id on the context for later use in event handlers
+        ctx.user_id = metadata.get("user_id", "unknown")
+        logger.info(f"Stored user_id on context: {ctx.user_id}")
 
         # --- Migrated Agent Logic ---
         try:
@@ -276,14 +336,24 @@ async def agent_job_handler(ctx: JobContext):
             ConfigValidator.validate_provider_initialization(f"{tts_provider} TTS", tts_plugin)
             
             # Configure VAD (Voice Activity Detection)
+            # VAD is crucial for turn detection - it determines when user stops speaking
             vad = silero.VAD.load()
+            logger.info("VAD loaded for voice activity and turn detection")
+            
+            # Initialize turn detector for better end-of-utterance detection
+            turn_detect = EnglishModel()
+            logger.info("Turn detector (EnglishModel) loaded for improved turn detection")
             
             # Initialize context manager if we have Supabase credentials
             context_manager = None
+            start_context_manager = time.perf_counter()
             try:
                 # Check if we can connect to client's Supabase
+                logger.info("🔍 Checking for Supabase credentials in metadata...")
                 client_supabase_url = metadata.get("supabase_url")
                 client_supabase_key = metadata.get("supabase_service_key") or metadata.get("supabase_anon_key")
+                logger.info(f"📌 Supabase URL found: {bool(client_supabase_url)}")
+                logger.info(f"📌 Supabase key found: {bool(client_supabase_key)}")
                 
                 if client_supabase_url and client_supabase_key:
                     from supabase import create_client
@@ -302,105 +372,129 @@ async def agent_job_handler(ctx: JobContext):
                     logger.warning("No client Supabase credentials found - context features disabled")
             except Exception as e:
                 logger.error(f"Failed to initialize context manager: {e}")
+                logger.error(f"Context initialization error details: {type(e).__name__}: {str(e)}")
                 context_manager = None
-            
+                # Continue without context - don't fail the entire agent
+            perf_summary['context_manager_init'] = time.perf_counter() - start_context_manager
+
             # Connect to the room first
+            start_connect = time.perf_counter()
             logger.info("Connecting to room...")
             await ctx.connect()
             logger.info("✅ Connected to room successfully")
+            perf_summary['room_connection'] = time.perf_counter() - start_connect
             
-            # Create and configure the voice agent session
-            logger.info("Creating voice agent session...")
-            # AgentSession should automatically handle participant audio
-            session = voice.AgentSession(
-                vad=vad,
-                stt=stt_plugin,
-                llm=llm_plugin,
-                tts=tts_plugin
+            # Wrap the LLM plugin with context awareness
+            logger.info("Wrapping LLM with context awareness...")
+            context_aware_llm = ContextAwareLLM(
+                base_llm=llm_plugin,
+                context_manager=context_manager,
+                user_id=ctx.user_id
             )
-            logger.info("✅ Voice agent session created")
+            logger.info("✅ Context-aware LLM wrapper created")
             
-            # Store references for event handlers
-            ctx.context_manager = context_manager
-            ctx.original_system_prompt = system_prompt
-            
-            # Add event handlers for logging and monitoring
-            @session.on("user_speech_committed")
-            def on_user_speech(msg: llm.ChatMessage):
-                logger.info(f"💬 User said: {msg.content}")
-                
-                # Store the user message for context building
-                if hasattr(ctx, 'last_user_message'):
-                    ctx.last_user_message = msg.content
-            
-            @session.on("agent_speech_committed")
-            def on_agent_speech(msg: llm.ChatMessage):
-                logger.info(f"🤖 Agent responded: {msg.content}")
-            
-            # Add handler to debug VAD and audio input
-            @session.on("vad_updated") 
-            def on_vad_updated(speaking: bool):
-                logger.info(f"🎙️ VAD updated: {'Speaking' if speaking else 'Not speaking'}")
-                
-            # Handler for user transcription in progress
-            @session.on("user_speech_transcribed")
-            def on_user_transcribed(text: str):
-                logger.info(f"📝 Transcribing: {text}")
-            
-            @session.on("agent_thinking")
-            def on_thinking_started():
-                logger.info("🤔 Agent is thinking...")
-            
-            # Add more detailed event handlers for debugging
-            @session.on("user_started_speaking")
-            def on_user_started_speaking():
-                logger.info("🎤 User started speaking")
-            
-            @session.on("user_stopped_speaking")
-            def on_user_stopped_speaking():
-                logger.info("🔇 User stopped speaking")
-            
-            @session.on("agent_started_speaking")
-            def on_agent_started_speaking():
-                logger.info("🔊 Agent started speaking")
-            
-            @session.on("agent_stopped_speaking")
-            def on_agent_stopped_speaking():
-                logger.info("🔈 Agent stopped speaking")
-            
-            # Create the agent with instructions
             # First, try to build initial context if context manager is available
             enhanced_prompt = system_prompt
             
             if context_manager:
                 try:
-                    # Build initial context (without a specific user message)
+                    # Build initial context (only user profile, no RAG searches)
                     logger.info("Building initial context for agent...")
-                    initial_context = await context_manager.build_complete_context("")
+                    initial_context = await context_manager.build_initial_context(
+                        user_id=ctx.user_id  # Pass user_id for initial context
+                    )
+                    
+                    logger.info("✅ Initial context built successfully")
+                    
                     enhanced_prompt = initial_context["enhanced_system_prompt"]
                     
                     # Log context metadata for debugging
-                    logger.info(f"Context built: {initial_context['context_metadata']}")
+                    logger.info(f"Initial context metadata: {initial_context['context_metadata']}")
                     
                     # If development mode, log the full enhanced prompt
                     if os.getenv("DEVELOPMENT_MODE", "false").lower() == "true":
                         logger.info(f"Enhanced System Prompt:\n{enhanced_prompt}")
                 except Exception as e:
                     logger.error(f"Failed to build initial context: {e}")
-                    # Fall back to original prompt
-                    enhanced_prompt = system_prompt
+                    logger.error(f"Context error type: {type(e).__name__}")
+                    logger.error(f"Context error details: {str(e)}")
+                    
+                    # Initial context errors are not critical - we can continue with basic prompt
+                    logger.warning("Initial context enhancement failed, continuing with basic prompt")
             
             # Add greeting instruction if not present
             if not any(greeting_word in enhanced_prompt.lower() for greeting_word in ['greet', 'hello', 'welcome', 'introduce']):
                 enhanced_prompt = enhanced_prompt + "\n\nWhen you first meet someone, start the conversation with a friendly greeting and ask how you can help them."
             
-            agent = voice.Agent(instructions=enhanced_prompt)
+            # Create and configure the voice agent session with instructions
+            # In LiveKit SDK v1.0+, AgentSession IS the agent - no separate agent object needed
+            logger.info("Creating voice agent session with system prompt...")
+            session = voice.AgentSession(
+                instructions=enhanced_prompt,  # Pass the system prompt directly
+                vad=vad,
+                stt=stt_plugin,
+                llm=context_aware_llm,  # Use the wrapped LLM
+                tts=tts_plugin,
+                turn_detection=turn_detect,  # Add the dedicated turn detector
+                min_endpointing_delay=0.4,  # Minimum delay before considering turn complete
+                max_endpointing_delay=6.0,  # Maximum delay before terminating turn
+            )
+            logger.info("✅ Voice agent session created")
+            
+            # Store references for event handlers
+            ctx.context_manager = context_manager
+            ctx.original_system_prompt = system_prompt
+            ctx.client_supabase = client_supabase if 'client_supabase' in locals() else None
+            ctx.conversation_id = metadata.get("conversation_id") or f"voice_{ctx.room.name}_{ctx.user_id}"
+            ctx.last_user_message = None  # Track last user message for turn storage
+            
+            # Add session event handlers for debugging and storage
+            @session.on("user_speech_committed")
+            def on_user_speech(msg: llm.ChatMessage):
+                logger.info(f"💬 User: {msg.content}")
+                logger.info(f"   [Speech content length: {len(msg.content)}]")
+                # Store the last user message for pairing with agent response
+                ctx.last_user_message = msg.content
+            
+            @session.on("agent_speech_committed")
+            def on_agent_speech(msg: llm.ChatMessage):
+                logger.info(f"🤖 Agent: {msg.content}")
+                
+                # Store conversation turn if we have both messages and Supabase client
+                if ctx.last_user_message and ctx.client_supabase:
+                    # Create async task to store the turn
+                    asyncio.create_task(_store_voice_turn(
+                        ctx.client_supabase,
+                        ctx.user_id,
+                        metadata.get("agent_id", metadata.get("agent_slug", "unknown")),
+                        ctx.conversation_id,
+                        ctx.last_user_message,
+                        msg.content
+                    ))
+                    # Clear the last user message after storing
+                    ctx.last_user_message = None
+            
+            @session.on("user_started_speaking")
+            def on_user_started():
+                logger.info("🎤 User started speaking")
+            
+            @session.on("user_stopped_speaking")
+            def on_user_stopped():
+                logger.info("🎤 User stopped speaking")
+            
+            @session.on("agent_started_speaking")
+            def on_agent_started():
+                logger.info("🔊 Agent started speaking")
+            
+            # Add debug handler for transcription events
+            @session.on("transcription_received")
+            def on_transcription(transcript: str, is_final: bool):
+                logger.info(f"📝 Transcription {'[FINAL]' if is_final else '[INTERIM]'}: '{transcript}'")
             
             # Add participant event handlers to the room
             @ctx.room.on("participant_connected")
             def on_participant_connected(participant):
                 logger.info(f"👤 Participant joined: {participant.identity} (SID: {participant.sid})")
-                # Check for tracks if available
                 if hasattr(participant, 'tracks'):
                     logger.info(f"   - Tracks published: {len(participant.tracks)}")
             
@@ -417,13 +511,10 @@ async def agent_job_handler(ctx: JobContext):
             def on_track_subscribed(track, publication, participant):
                 logger.info(f"📡 Subscribed to track from {participant.identity}: {track.name} ({track.kind})")
             
-            # Start the session - this connects it to the room
-            # According to LiveKit docs, session.start() must be awaited
+            # Start the session with just the room
+            # In LiveKit SDK v1.0+, the session itself is the agent
             logger.info("Starting agent session...")
-            
-            # The AgentSession automatically subscribes to participant audio tracks by default
-            # Just start the session with the room and agent
-            await session.start(room=ctx.room, agent=agent)
+            await session.start(room=ctx.room)
             
             # Log successful start
             logger.info(f"✅ Agent session started successfully in room: {ctx.room.name}")
@@ -515,6 +606,10 @@ async def agent_job_handler(ctx: JobContext):
     except Exception as e:
         logger.error(f"❌ Error in agent job: {e}", exc_info=True)
         raise  # Re-raise to let LiveKit handle the error
+    finally:
+        # Log summary for the entire job handler
+        perf_summary['total_job_duration'] = time.perf_counter() - job_received_time
+        log_perf("agent_job_handler_summary", ctx.room.name, perf_summary)
 
 
 async def request_filter(job_request: JobRequest) -> None:

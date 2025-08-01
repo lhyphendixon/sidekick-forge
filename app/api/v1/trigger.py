@@ -19,6 +19,16 @@ from app.core.dependencies import get_client_service, get_agent_service
 from app.integrations.livekit_client import LiveKitManager
 from livekit import api
 import os
+from supabase import create_client, Client as SupabaseClient
+
+# --- Performance Logging Helper ---
+def log_perf(event: str, room_name: str, details: Dict[str, Any]):
+    log_entry = {
+        "event": event,
+        "room_name": room_name,
+        "details": details
+    }
+    logger.info(f"PERF: {json.dumps(log_entry)}")
 
 logger = logging.getLogger(__name__)
 
@@ -302,9 +312,11 @@ async def handle_voice_trigger(
         "session_id": request.session_id,
         "conversation_id": request.conversation_id,
         "context": request.context or {},
+        # Include embedding configuration from client's additional_settings
+        "embedding": client.additional_settings.get("embedding", {}) if client.additional_settings else {},
         # Include client's Supabase credentials for context system
-        "supabase_url": client.supabase_url if hasattr(client, 'supabase_url') else None,
-        "supabase_anon_key": client.supabase_anon_key if hasattr(client, 'supabase_anon_key') else None,
+        "supabase_url": client.settings.supabase.url if client.settings and client.settings.supabase else None,
+        "supabase_anon_key": client.settings.supabase.anon_key if client.settings and client.settings.supabase else None,
         "api_keys": {
             # LLM Providers
             "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
@@ -369,7 +381,8 @@ async def handle_voice_trigger(
                 livekit_manager=backend_livekit,
                 room_name=request.room_name,
                 agent=agent,
-                client=client
+                client=client,
+                user_id=request.user_id
             )
             dispatch_duration = time.time() - dispatch_start
             logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
@@ -382,7 +395,8 @@ async def handle_voice_trigger(
             livekit_manager=backend_livekit,
             room_name=request.room_name,
             agent=agent,
-            client=client
+            client=client,
+            user_id=request.user_id
         )
         dispatch_duration = time.time() - dispatch_start
         logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
@@ -427,145 +441,367 @@ async def handle_voice_trigger(
     }
 
 
+async def _store_conversation_turn(
+    supabase_client: SupabaseClient,
+    user_id: str,
+    agent_id: str,
+    conversation_id: str,
+    user_message: str,
+    agent_response: str,
+    session_id: Optional[str] = None,
+    context_manager=None  # Optional context manager for embeddings
+) -> None:
+    """
+    Store a conversation turn immediately in the client's Supabase.
+    This implements transactional turn-based storage for unified voice/text conversations.
+    """
+    try:
+        # Get current timestamp for both messages
+        ts = datetime.utcnow().isoformat()
+        
+        # Store user message row
+        user_row = {
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "session_id": session_id,
+            "role": "user",
+            "content": user_message,
+            "transcript": user_message,  # Required field, same as content for text
+            "created_at": ts
+        }
+        user_result = supabase_client.table("conversation_transcripts").insert(user_row).execute()
+        
+        # Store assistant message row
+        assistant_row = {
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "session_id": session_id,
+            "role": "assistant",
+            "content": agent_response,
+            "transcript": agent_response,  # Required field, same as content for text
+            "created_at": ts
+        }
+        assistant_result = supabase_client.table("conversation_transcripts").insert(assistant_row).execute()
+        
+        logger.info(f"✅ Stored conversation turn: conversation_id={conversation_id} (2 rows: user + assistant)")
+        
+        # Best-effort embedding generation
+        if context_manager and hasattr(context_manager, 'embedder'):
+            try:
+                # Get row IDs from insert results
+                user_row_id = user_result.data[0]['id'] if user_result.data else None
+                assistant_row_id = assistant_result.data[0]['id'] if assistant_result.data else None
+                
+                # List of trivial messages to skip
+                trivial_messages = {'hey', 'hi', 'hello', 'ok', 'okay', 'thanks', 'thank you', 'bye', 'goodbye'}
+                
+                # Generate and update user message embedding
+                if user_row_id and len(user_message) >= 8 and user_message.lower() not in trivial_messages:
+                    try:
+                        user_embedding = await context_manager.embedder.create_embedding(user_message)
+                        supabase_client.table("conversation_transcripts").update({
+                            "embeddings": user_embedding
+                        }).eq("id", user_row_id).execute()
+                        logger.info(f"✅ Generated embedding for user message (id={user_row_id})")
+                    except Exception as embed_error:
+                        logger.warning(f"Failed to generate user message embedding: {embed_error}")
+                
+                # Generate and update assistant response embedding
+                if assistant_row_id and len(agent_response) >= 8 and agent_response.lower() not in trivial_messages:
+                    try:
+                        assistant_embedding = await context_manager.embedder.create_embedding(agent_response)
+                        supabase_client.table("conversation_transcripts").update({
+                            "embeddings": assistant_embedding
+                        }).eq("id", assistant_row_id).execute()
+                        logger.info(f"✅ Generated embedding for assistant response (id={assistant_row_id})")
+                    except Exception as embed_error:
+                        logger.warning(f"Failed to generate assistant response embedding: {embed_error}")
+                        
+            except Exception as e:
+                logger.warning(f"Failed during embedding generation process: {e}")
+                # Continue - embedding failure shouldn't break the conversation
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to store conversation turn: {e}")
+        logger.error(f"User message: {user_message[:100]}...")
+        logger.error(f"Assistant response: {agent_response[:100]}...")
+
+
 async def handle_text_trigger(
     request: TriggerAgentRequest, 
     agent, 
     client
 ) -> Dict[str, Any]:
     """
-    Handle text mode agent triggering
+    Handle text mode agent triggering with full RAG support
     
-    This should process text messages through the agent
+    This processes text messages through the agent using the same
+    context-aware system as voice conversations.
     """
-    logger.debug(f"Starting text trigger handling", extra={'agent_slug': agent.slug, 'message_length': len(request.message) if request.message else 0})
-    logger.info(f"Handling text trigger for agent {agent.slug} with message: {request.message[:50]}...")
+    logger.info(f"🚀 Starting RAG-powered text trigger for agent {agent.slug}")
+    logger.info(f"💬 User message: {request.message[:100]}...")
     
-    # Prepare context for text processing
-    text_context = {
+    # Initialize variables
+    response_text = None
+    user_id = request.user_id or "anonymous"
+    conversation_id = request.conversation_id or f"text_{request.session_id or uuid.uuid4().hex}"
+    
+    # Get LLM provider and model from agent voice settings - NO DEFAULTS
+    if not agent.voice_settings or not agent.voice_settings.llm_provider:
+        raise ValueError("Agent does not have voice settings configured with an LLM provider")
+    
+    llm_provider = agent.voice_settings.llm_provider
+    llm_model = agent.voice_settings.llm_model
+    
+    # Log the agent's voice settings for debugging
+    logger.info(f"Agent voice_settings: {agent.voice_settings}")
+    logger.info(f"Using LLM provider: {llm_provider}, model: {llm_model}")
+    
+    # Prepare metadata for context
+    # Check for embedding config in both locations (additional_settings first, then settings)
+    embedding_cfg = {}
+    if client.additional_settings and client.additional_settings.get("embedding"):
+        embedding_cfg = client.additional_settings.get("embedding", {})
+    elif client.settings and hasattr(client.settings, 'embedding') and client.settings.embedding:
+        embedding_cfg = client.settings.embedding.dict()
+    
+    metadata = {
         "agent_slug": agent.slug,
         "agent_name": agent.name,
+        "agent_id": agent.id,
         "system_prompt": agent.system_prompt,
-        "user_message": request.message,
-        "user_id": request.user_id,
-        "session_id": request.session_id,
-        "conversation_id": request.conversation_id,
-        "context": request.context or {}
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "client_id": client.id,
+        "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
+        "embedding": embedding_cfg
     }
-    logger.info(f"Text context prepared", extra=text_context)
     
-    # Check if agent has text webhook configured
-    text_webhook = agent.webhooks.text_context_webhook_url if agent.webhooks else None
+    # Get API keys from client configuration
+    api_keys = {}
+    if client.settings and client.settings.api_keys:
+        api_keys = {
+            "openai_api_key": client.settings.api_keys.openai_api_key,
+            "groq_api_key": client.settings.api_keys.groq_api_key,
+            "deepgram_api_key": client.settings.api_keys.deepgram_api_key,
+            "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key,
+            "cartesia_api_key": client.settings.api_keys.cartesia_api_key,
+            "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None),
+            "novita_api_key": client.settings.api_keys.novita_api_key,
+            "cohere_api_key": client.settings.api_keys.cohere_api_key,
+            "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key,
+            "jina_api_key": client.settings.api_keys.jina_api_key,
+        }
     
-    # API keys from client configuration
-    api_keys = client.settings.api_keys if client.settings and client.settings.api_keys else {}
-    
-    # Process text message through appropriate LLM
-    response_text = None
-    llm_provider = agent.voice_settings.llm_provider if agent.voice_settings else "openai"
-    llm_model = agent.voice_settings.llm_model if agent.voice_settings else "gpt-4"
-    
-    # Get appropriate API key
-    api_key = None
-    if llm_provider == "groq" and api_keys.groq_api_key:
-        api_key = api_keys.groq_api_key
-    elif llm_provider == "openai" and api_keys.openai_api_key:
-        api_key = api_keys.openai_api_key
-    elif llm_provider == "anthropic" and hasattr(api_keys, 'anthropic_api_key') and api_keys.anthropic_api_key:
-        api_key = api_keys.anthropic_api_key
-    
-    if api_key and api_key not in ["test_key", "test", "dummy"]:
-        try:
-            if llm_provider == "groq":
-                # Use Groq API
-                import httpx
-                async with httpx.AsyncClient() as http_client:
-                    response = await http_client.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "model": llm_model or "llama3-70b-8192",
-                            "messages": [
-                                {"role": "system", "content": agent.system_prompt},
-                                {"role": "user", "content": request.message}
-                            ],
-                            "temperature": 0.7,
-                            "max_tokens": 1000
-                        },
-                        timeout=30.0
-                    )
-                    if response.status_code == 200:
-                        result = response.json()
-                        response_text = result["choices"][0]["message"]["content"]
-                    else:
-                        logger.error(f"Groq API error: {response.status_code} - {response.text}")
-                        
-            elif llm_provider == "openai":
-                # Use OpenAI API
-                import httpx
-                async with httpx.AsyncClient() as http_client:
-                    response = await http_client.post(
-                        "https://api.openai.com/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "model": llm_model or "gpt-4",
-                            "messages": [
-                                {"role": "system", "content": agent.system_prompt},
-                                {"role": "user", "content": request.message}
-                            ],
-                            "temperature": 0.7,
-                            "max_tokens": 1000
-                        },
-                        timeout=30.0
-                    )
-                    if response.status_code == 200:
-                        result = response.json()
-                        response_text = result["choices"][0]["message"]["content"]
-                    else:
-                        logger.error(f"OpenAI API error: {response.status_code} - {response.text}")
-                        
-        except Exception as e:
-            logger.error(f"Error processing text with {llm_provider}: {str(e)}")
-    else:
-        logger.warning(f"No valid API key available for {llm_provider}")
-    
-    # If we have a text webhook and no response yet, try calling it
-    if not response_text and text_webhook:
-        try:
-            import httpx
-            async with httpx.AsyncClient() as http_client:
-                webhook_response = await http_client.post(
-                    text_webhook,
-                    json={
-                        "message": request.message,
-                        "agent": agent.slug,
-                        "user_id": request.user_id,
-                        "session_id": request.session_id,
-                        "conversation_id": request.conversation_id,
-                        "context": text_context
-                    },
-                    timeout=30.0
+    try:
+        # Initialize context manager if we have Supabase credentials
+        context_manager = None
+        client_supabase = None
+        
+        if client.settings and client.settings.supabase:
+            logger.info("🔍 Initializing context manager for RAG...")
+            from supabase import create_client
+            
+            # Create Supabase client for the client's database
+            # Use service_role_key for server-side operations to bypass RLS
+            client_supabase = create_client(
+                client.settings.supabase.url,
+                client.settings.supabase.service_role_key or client.settings.supabase.anon_key
+            )
+            
+            # Import the context manager from agent_modules
+            from app.agent_modules.context import AgentContextManager
+            from app.agent_modules.llm_wrapper import ContextAwareLLM
+            
+            # Create context manager
+            context_manager = AgentContextManager(
+                supabase_client=client_supabase,
+                agent_config=metadata,
+                user_id=user_id,
+                client_id=client.id,
+                api_keys=api_keys
+            )
+            logger.info("✅ Context manager initialized")
+        
+        # Configure LLM based on provider
+        from livekit.plugins import openai as lk_openai, groq as lk_groq
+        from livekit.agents import llm as lk_llm
+        
+        llm_plugin = None
+        if llm_provider == "groq":
+            groq_key = api_keys.get("groq_api_key")
+            if groq_key and groq_key not in ["test_key", "test", "dummy"]:
+                # Map old model names to new ones
+                if llm_model == "llama3-70b-8192" or llm_model == "llama-3.1-70b-versatile":
+                    llm_model = "llama-3.3-70b-versatile"
+                llm_plugin = lk_groq.LLM(
+                    model=llm_model or "llama-3.3-70b-versatile",
+                    api_key=groq_key
                 )
-                if webhook_response.status_code == 200:
-                    webhook_data = webhook_response.json()
-                    response_text = webhook_data.get("response", webhook_data.get("message", ""))
-        except Exception as e:
-            logger.error(f"Error calling text webhook: {str(e)}")
+                logger.info(f"✅ Initialized Groq LLM with model: {llm_model}")
+        else:  # openai
+            openai_key = api_keys.get("openai_api_key")
+            if openai_key and openai_key not in ["test_key", "test", "dummy"]:
+                llm_plugin = lk_openai.LLM(
+                    model=llm_model or "gpt-4",
+                    api_key=openai_key
+                )
+                logger.info(f"✅ Initialized OpenAI LLM with model: {llm_model}")
+        
+        if not llm_plugin:
+            raise ValueError(f"No valid API key for {llm_provider}")
+        
+        # Wrap LLM with context awareness if we have context manager
+        if context_manager:
+            logger.info("🧠 Wrapping LLM with RAG context...")
+            context_aware_llm = ContextAwareLLM(
+                base_llm=llm_plugin,
+                context_manager=context_manager,
+                user_id=user_id
+            )
+            
+            # Build complete context including conversation history and documents
+            logger.info("🔍 Building complete context with RAG...")
+            context_result = await context_manager.build_complete_context(
+                user_message=request.message,
+                user_id=user_id
+            )
+            enhanced_prompt = context_result.get("enhanced_system_prompt", agent.system_prompt)
+            
+            # Create chat context using the SDK's abstraction
+            ctx = lk_llm.ChatContext()
+            ctx.add_message(role="system", content=enhanced_prompt)
+            
+            # Short-term buffer memory: fetch last 20 messages from this conversation
+            recent_rows = []
+            try:
+                recent_q = (
+                    client_supabase
+                    .table("conversation_transcripts")
+                    .select("role,content")
+                    .eq("conversation_id", conversation_id)
+                    .order("created_at", desc=True)
+                    .limit(20)
+                    .execute()
+                )
+                # Reverse so oldest messages come first
+                recent_rows = list(reversed(recent_q.data or []))
+                if recent_rows:
+                    logger.info(f"📚 Loaded {len(recent_rows)} recent messages for buffer memory")
+            except Exception as e:
+                logger.warning(f"Couldn't load recent turns for buffer memory: {e}")
+            
+            # Inject recent history into context
+            for row in recent_rows:
+                role = row["role"] if row["role"] in ("user", "assistant") else "user"
+                text = row["content"] or ""
+                ctx.add_message(role=role, content=text)
+            
+            # Finally add the new user message
+            ctx.add_message(role="user", content=request.message)
+            
+            # Get response using LLM directly (wrapper has async issues)
+            logger.info("🤖 Generating RAG-enhanced response...")
+            stream = llm_plugin.chat(chat_ctx=ctx)
+            
+            # Collect the stream response
+            response_text = ""
+            async for chunk in stream:
+                # Handle different chunk formats from LiveKit SDK
+                if hasattr(chunk, 'choices') and chunk.choices:
+                    for choice in chunk.choices:
+                        if hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'content') and choice.delta.content:
+                            response_text += choice.delta.content
+                elif hasattr(chunk, 'delta') and chunk.delta and hasattr(chunk.delta, 'content') and chunk.delta.content:
+                    response_text += chunk.delta.content
+                elif hasattr(chunk, 'content') and chunk.content:
+                    response_text += chunk.content
+                
+            logger.info(f"✅ Generated response: {response_text[:100]}...")
+            
+        else:
+            # Fallback to basic LLM without RAG (no context manager)
+            logger.warning("⚠️ No context manager available, using basic LLM")
+            # Use ChatContext for consistency
+            ctx = lk_llm.ChatContext()
+            ctx.add_message(role="system", content=agent.system_prompt)
+            
+            # Short-term buffer memory even without RAG
+            if client_supabase:
+                recent_rows = []
+                try:
+                    recent_q = (
+                        client_supabase
+                        .table("conversation_transcripts")
+                        .select("role,content")
+                        .eq("conversation_id", conversation_id)
+                        .order("created_at", desc=True)
+                        .limit(20)
+                        .execute()
+                    )
+                    # Reverse so oldest messages come first
+                    recent_rows = list(reversed(recent_q.data or []))
+                    if recent_rows:
+                        logger.info(f"📚 Loaded {len(recent_rows)} recent messages for buffer memory (non-RAG)")
+                except Exception as e:
+                    logger.warning(f"Couldn't load recent turns for buffer memory: {e}")
+                
+                # Inject recent history into context
+                for row in recent_rows:
+                    role = row["role"] if row["role"] in ("user", "assistant") else "user"
+                    text = row["content"] or ""
+                    ctx.add_message(role=role, content=text)
+            
+            # Finally add the new user message
+            ctx.add_message(role="user", content=request.message)
+            stream = llm_plugin.chat(chat_ctx=ctx)
+            
+            # Collect the stream response
+            response_text = ""
+            async for chunk in stream:
+                # Handle different chunk formats from LiveKit SDK
+                if hasattr(chunk, 'choices') and chunk.choices:
+                    for choice in chunk.choices:
+                        if hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'content') and choice.delta.content:
+                            response_text += choice.delta.content
+                elif hasattr(chunk, 'delta') and chunk.delta and hasattr(chunk.delta, 'content') and chunk.delta.content:
+                    response_text += chunk.delta.content
+                elif hasattr(chunk, 'content') and chunk.content:
+                    response_text += chunk.content
+        
+        # Store conversation turn if we have a response and Supabase client
+        if response_text and client_supabase:
+            try:
+                await _store_conversation_turn(
+                    supabase_client=client_supabase,
+                    user_id=user_id,
+                    agent_id=agent.id,
+                    conversation_id=conversation_id,
+                    user_message=request.message,
+                    agent_response=response_text,
+                    session_id=request.session_id,
+                    context_manager=context_manager  # Pass context manager for embeddings
+                )
+                logger.info(f"✅ Text conversation turn stored for conversation_id={conversation_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to store text conversation turn: {e}")
+                # Continue - storage failure shouldn't break the response
+                
+    except Exception as e:
+        logger.error(f"❌ Error in RAG text processing: {e}", exc_info=True)
+        response_text = f"I apologize, but I encountered an error processing your message. Please try again."
     
+    # Prepare response
     return {
         "mode": "text",
         "message_received": request.message,
-        "text_context": text_context,
-        "webhook_configured": bool(text_webhook),
-        "webhook_url": text_webhook,
+        "user_id": user_id,
+        "conversation_id": conversation_id,
         "llm_provider": llm_provider,
         "llm_model": llm_model,
-        "api_key_available": bool(api_key and api_key not in ["test_key", "test", "dummy"]),
+        "rag_enabled": bool(context_manager),
         "status": "text_message_processed",
         "response": response_text or f"I'm sorry, I couldn't process your message. Please ensure the {llm_provider} API key is configured.",
         "agent_response": response_text
@@ -576,7 +812,8 @@ async def dispatch_agent_job(
     livekit_manager: LiveKitManager,
     room_name: str,
     agent,
-    client
+    client,
+    user_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Explicit dispatch mode - Directly dispatch agent to room with full configuration.
@@ -600,6 +837,14 @@ async def dispatch_agent_job(
         if not voice_settings.get('tts_provider'):
             voice_settings['tts_provider'] = 'elevenlabs'  # Use ElevenLabs since we have the API key
             
+        # Debug logging to understand client structure
+        logger.info(f"Client settings available: {bool(client.settings)}")
+        if client.settings:
+            logger.info(f"Client settings has supabase: {bool(client.settings.supabase)}")
+            if client.settings.supabase:
+                logger.info(f"Supabase URL: {client.settings.supabase.url[:50]}..." if client.settings.supabase.url else "No URL")
+                logger.info(f"Supabase anon_key exists: {bool(client.settings.supabase.anon_key)}")
+        
         job_metadata = {
             "client_id": client.id,
             "agent_slug": agent.slug,
@@ -608,10 +853,12 @@ async def dispatch_agent_job(
             "voice_settings": voice_settings,
             "webhooks": agent.webhooks.dict() if agent.webhooks else {},
             # Include client's Supabase credentials for context system
-            "supabase_url": client.supabase_url if hasattr(client, 'supabase_url') else None,
-            "supabase_anon_key": client.supabase_anon_key if hasattr(client, 'supabase_anon_key') else None,
-            # Include user_id from the request
-            "user_id": request.user_id,
+            "supabase_url": client.settings.supabase.url if client.settings and client.settings.supabase else None,
+            "supabase_anon_key": client.settings.supabase.anon_key if client.settings and client.settings.supabase else None,
+            # Include user_id if provided
+            "user_id": user_id,
+            # Include embedding configuration from client's additional_settings
+            "embedding": client.additional_settings.get("embedding", {}) if client.additional_settings else {},
             "api_keys": {
                 # LLM Providers
                 "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,

@@ -69,13 +69,21 @@ services:
       dockerfile: Dockerfile
     image: ${APP_NAME:-sidekick-forge}/agent-runtime:latest
     restart: always
-    command: python /app/entrypoint.py  # Use the existing entrypoint
+    command: python /app/entrypoint.py  # Use original entrypoint
+    volumes:
+      - ./docker/agent/entrypoint.py:/app/entrypoint.py:ro
+      - ./docker/agent/llm_wrapper.py:/app/llm_wrapper.py:ro
+      - ./docker/agent/context.py:/app/context.py:ro
+      - ./docker/agent/config_validator.py:/app/config_validator.py:ro
+      - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
     environment:
       - LIVEKIT_URL=${LIVEKIT_URL:-wss://litebridge-hw6srhvi.livekit.cloud}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Agent configuration
+      - AGENT_NAME=sidekick-agent
       # Supabase configuration for API key fallback
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}

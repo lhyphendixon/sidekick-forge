@@ -96,6 +96,9 @@
     let localParticipant = null;
     let audioTrack = null;
     let isMuted = false;
+    let audioContext = null;
+    let analyser = null;
+    let microphone = null;
 
 // Wait for LiveKit SDK to be available
 async function waitForLiveKitSDK() {
@@ -116,6 +119,61 @@ async function waitForLiveKitSDK() {
     
     console.error('LiveKit SDK not found after', maxAttempts * 500, 'ms');
     return false;
+}
+
+// Set up Web Audio API analyzer for raw audio monitoring
+function setupAudioAnalyzer(mediaStreamTrack) {
+    try {
+        console.log('🎛️ Setting up Web Audio API analyzer...');
+        
+        // Create audio context if not exists
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        
+        // Create media stream from track
+        const stream = new MediaStream([mediaStreamTrack]);
+        
+        // Connect to audio context
+        microphone = audioContext.createMediaStreamSource(stream);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        
+        microphone.connect(analyser);
+        
+        // Create buffer for frequency data
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        
+        // Monitor audio levels
+        let lastLogTime = 0;
+        function checkAudioLevel() {
+            analyser.getByteFrequencyData(dataArray);
+            
+            // Calculate average level
+            let sum = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                sum += dataArray[i];
+            }
+            const average = sum / bufferLength;
+            
+            // Log every 500ms if there's audio
+            const now = Date.now();
+            if (now - lastLogTime > 500 && average > 0) {
+                console.log(`🎛️ Raw audio level (Web Audio API): ${average.toFixed(2)}/255 ${average > 5 ? '🟢 AUDIO DETECTED' : '🟡 VERY LOW'}`);
+                lastLogTime = now;
+            }
+            
+            // Continue monitoring
+            requestAnimationFrame(checkAudioLevel);
+        }
+        
+        checkAudioLevel();
+        console.log('✅ Web Audio API analyzer set up successfully');
+        
+    } catch (error) {
+        console.error('Failed to set up audio analyzer:', error);
+    }
 }
 
 // Initialize LiveKit connection
@@ -207,7 +265,20 @@ async function initializeLiveKit() {
             // Automatic quality adjustment
             dynacast: true,
             // Log level for debugging
-            logLevel: 'warn'
+            logLevel: 'debug',
+            // Audio capture settings - reduce aggressive filtering
+            audioCaptureDefaults: {
+                echoCancellation: true,
+                noiseSuppression: false,  // Disable to prevent filtering speech
+                autoGainControl: true,
+                // Additional constraints to improve audio capture
+                sampleRate: 48000,
+                channelCount: 1
+            },
+            // Audio output settings
+            audioOutput: {
+                speakerOn: true
+            }
         });
         
         // Store room reference globally for cleanup
@@ -282,7 +353,94 @@ async function handleConnected() {
     
     // Request microphone permission and publish audio
     try {
-        await room.localParticipant.setMicrophoneEnabled(true);
+        console.log('🎤 Enabling microphone...');
+        
+        // Create custom microphone track with specific constraints
+        try {
+            // First, create a custom audio track with less aggressive processing
+            const audioConstraints = {
+                echoCancellation: true,
+                noiseSuppression: false,  // Critical: disable noise suppression
+                autoGainControl: true,
+                // Additional constraints
+                sampleRate: 48000,
+                channelCount: 1,
+                latency: 0,  // Minimize latency
+                // Try to disable browser-level VAD if possible
+                googAutoGainControl: true,
+                googNoiseSuppression: false,
+                googHighpassFilter: false,
+                googEchoCancellation: true
+            };
+            
+            // Get user media with our constraints
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: audioConstraints 
+            });
+            
+            console.log('🎤 Got custom audio stream:', stream);
+            console.log('🎤 Audio track settings:', stream.getAudioTracks()[0].getSettings());
+            
+            // Create LiveKit LocalAudioTrack from our stream
+            const localAudioTrack = await LiveKitSDK.createLocalAudioTrack({
+                deviceId: stream.getAudioTracks()[0].getSettings().deviceId,
+                echoCancellation: true,
+                noiseSuppression: false,  // Critical: disable noise suppression
+                autoGainControl: true,
+            });
+            
+            // Publish with options that minimize silence detection
+            const publishOptions = {
+                dtx: false,  // Disable discontinuous transmission
+                red: false,  // Disable redundancy encoding
+                maxBitrate: 64000,
+                // Force continuous transmission
+                simulcast: false
+            };
+            
+            // Publish the LiveKit track
+            await room.localParticipant.publishTrack(localAudioTrack, publishOptions);
+            console.log('✅ Published custom audio track');
+            
+        } catch (customTrackError) {
+            console.warn('Could not create custom track, falling back to default:', customTrackError);
+            // Fallback to standard method
+            await room.localParticipant.setMicrophoneEnabled(true);
+        }
+        
+        // The audio track will be available via the localTrackPublished event
+        // For immediate debugging, check the audio tracks if available
+        console.log('🎤 Checking local participant audio tracks...');
+        
+        if (room.localParticipant.audioTracks) {
+            try {
+                const audioTracks = Array.from(room.localParticipant.audioTracks.values());
+                console.log(`   - Found ${audioTracks.length} audio track(s)`);
+                
+                audioTracks.forEach((publication, index) => {
+                    console.log(`   - Track ${index}:`, {
+                        trackSid: publication.trackSid,
+                        isMuted: publication.isMuted,
+                        track: publication.track
+                    });
+                    
+                    // Monitor audio levels if track is available
+                    if (publication.track && publication.track.on) {
+                        console.log('   - Setting up audio level monitoring...');
+                        publication.track.on('audioLevelChanged', (level) => {
+                            console.log(`🔊 Audio level: ${level}`);
+                        });
+                    }
+                });
+            } catch (e) {
+                console.log('   - Could not access audio tracks:', e.message);
+                console.log('   - Audio tracks will be available in localTrackPublished event');
+            }
+        } else {
+            console.log('   - audioTracks property not available yet');
+            console.log('   - Audio track will be available via localTrackPublished event');
+        }
+        
         updateMicStatus('Microphone: Active');
         document.getElementById('audioLevelContainer').classList.remove('hidden');
     } catch (error) {
@@ -318,6 +476,13 @@ function handleParticipantDisconnected(participant) {
 
 // Handle active speakers (audio level visualization)
 function handleActiveSpeakers(speakers) {
+    // Ensure speakers is an array
+    if (!speakers || !Array.isArray(speakers)) {
+        // If speakers is not an array, it might be undefined or in a different format
+        console.log('Speakers parameter is not an array:', speakers);
+        return;
+    }
+    
     // Update audio level for local participant
     const localSpeaker = speakers.find(s => s.identity === room.localParticipant.identity);
     const userSpeaking = localSpeaker && localSpeaker.audioLevel > 0.01;
@@ -342,18 +507,68 @@ function handleActiveSpeakers(speakers) {
         updateStatus('user-speaking', 'Listening to you...');
     } else {
         // No one is speaking - check if agent is still connected
-        const hasAgent = Array.from(room.participants.values()).some(p => p.identity.includes('agent'));
-        if (hasAgent) {
-            updateStatus('agent-listening', 'Listening...');
+        if (room && room.participants) {
+            const hasAgent = Array.from(room.participants.values()).some(p => p.identity.includes('agent'));
+            if (hasAgent) {
+                updateStatus('agent-listening', 'Listening...');
+            }
         }
     }
 }
 
 // Handle local track published
 function handleLocalTrackPublished(publication) {
+    console.log('📡 Local track published:', {
+        kind: publication.kind,
+        trackSid: publication.trackSid,
+        trackName: publication.trackName,
+        isMuted: publication.isMuted,
+        track: publication.track
+    });
+    
     if (publication.kind === 'audio') {
         audioTrack = publication.track;
-        console.log('Audio track published');
+        console.log('🎤 Audio track published and stored');
+        
+        // Monitor audio levels
+        if (audioTrack && audioTrack.on) {
+            console.log('📊 Setting up audio level monitoring on published track...');
+            
+            let lastLogTime = 0;
+            let silenceCount = 0;
+            audioTrack.on('audioLevelChanged', (level) => {
+                // Log every 500ms to avoid spam
+                const now = Date.now();
+                if (now - lastLogTime > 500) {
+                    if (level < 0.01) {
+                        silenceCount++;
+                        console.log(`🔊 Audio level: ${level.toFixed(4)} 🔴 SILENT (${silenceCount} detections)`);
+                    } else {
+                        silenceCount = 0;
+                        console.log(`🔊 Audio level: ${level.toFixed(4)} 🟢 ACTIVE`);
+                    }
+                    lastLogTime = now;
+                }
+            });
+            
+            // Monitor mute state
+            audioTrack.on('muted', () => {
+                console.log('🔇 Track was muted by VAD/DTX');
+            });
+            
+            audioTrack.on('unmuted', () => {
+                console.log('🔊 Track was unmuted');
+            });
+            
+            // Also check the media stream track
+            if (audioTrack.mediaStreamTrack) {
+                console.log('🎙️ MediaStreamTrack settings:', audioTrack.mediaStreamTrack.getSettings());
+                console.log('🎙️ MediaStreamTrack constraints:', audioTrack.mediaStreamTrack.getConstraints());
+                
+                // Set up Web Audio API analyzer for raw audio level monitoring
+                setupAudioAnalyzer(audioTrack.mediaStreamTrack);
+            }
+        }
     }
 }
 

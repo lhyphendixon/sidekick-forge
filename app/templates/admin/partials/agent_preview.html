@@ -47,9 +47,9 @@
                                 hx-vals='{"session_id": "{{ session_id }}", "mode": "voice"}'
                                 hx-target="#previewContent"
                                 hx-swap="innerHTML"
-                                hx-on:htmx:beforeRequest="console.log('Voice mode request starting...'); window.updateModeButtons('voice'); this.disabled = true;"
-                                hx-on:htmx:afterRequest="console.log('Voice mode request completed'); window.previewCurrentMode = 'voice'; window.updateModeButtons('voice'); this.disabled = false;"
-                                hx-on:htmx:responseError="console.error('Voice mode request failed:', event.detail); this.disabled = false;"
+                                hx-on:htmx:beforeRequest="console.log('Voice mode request starting...'); window.updateModeButtons('voice'); this.disabled = true; this.innerHTML = '<svg class=\'w-4 h-4 inline mr-2 animate-spin\' xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\'><circle class=\'opacity-25\' cx=\'12\' cy=\'12\' r=\'10\' stroke=\'currentColor\' stroke-width=\'4\'></circle><path class=\'opacity-75\' fill=\'currentColor\' d=\'M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z\'></path></svg>Starting voice chat...'; document.getElementById('previewContent').innerHTML = '<div class=\'h-96 flex items-center justify-center\'><div class=\'text-center\'><svg class=\'w-16 h-16 mx-auto mb-4 text-brand-teal animate-spin\' xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\'><circle class=\'opacity-25\' cx=\'12\' cy=\'12\' r=\'10\' stroke=\'currentColor\' stroke-width=\'4\'></circle><path class=\'opacity-75\' fill=\'currentColor\' d=\'M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z\'></path></svg><p class=\'text-lg text-dark-text mb-2\'>Initializing voice chat...</p><p class=\'text-sm text-dark-text-secondary\'>This may take a few moments</p></div></div>';"
+                                hx-on:htmx:afterRequest="console.log('Voice mode request completed'); window.previewCurrentMode = 'voice'; window.updateModeButtons('voice'); this.disabled = false; this.innerHTML = '<svg class=\'w-4 h-4 inline mr-2\' fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z\'></path></svg>Voice Chat';"
+                                hx-on:htmx:responseError="console.error('Voice mode request failed:', event.detail); this.disabled = false; this.innerHTML = '<svg class=\'w-4 h-4 inline mr-2\' fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z\'></path></svg>Voice Chat';"
                                 class="mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border hover:bg-dark-border transition-all">
                             <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
@@ -79,11 +79,13 @@
                             <form hx-post="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/send"
                                   hx-target="#chatMessages"
                                   hx-swap="innerHTML"
+                                  hx-on::before-request="window.addUserMessageToChat(this)"
                                   hx-on::after-request="this.reset()"
                                   class="flex gap-2">
                                 <input type="hidden" name="session_id" value="{{ session_id }}">
                                 <input type="text" 
                                        name="message"
+                                       id="messageInput"
                                        placeholder="Type a message..." 
                                        class="flex-1 bg-dark-elevated border-dark-border text-dark-text rounded-md px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal"
                                        autocomplete="off"
@@ -132,6 +134,51 @@
     // Use window scope to persist between HTMX loads
     if (typeof window.previewCurrentMode === 'undefined') {
         window.previewCurrentMode = 'text';
+    }
+    
+    // Function to add user message to chat immediately
+    window.addUserMessageToChat = function(form) {
+        const messageInput = form.querySelector('#messageInput');
+        const message = messageInput.value;
+        if (!message) return;
+        
+        const chatMessages = document.getElementById('chatMessages');
+        
+        // Remove the "start conversation" message if it exists
+        const emptyMessage = chatMessages.querySelector('.text-center.text-dark-text-secondary');
+        if (emptyMessage) {
+            emptyMessage.remove();
+        }
+        
+        // Create user message element
+        const userMessageDiv = document.createElement('div');
+        userMessageDiv.className = 'flex justify-end';
+        userMessageDiv.innerHTML = `
+            <div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-brand-teal text-white">
+                ${message}
+            </div>
+        `;
+        
+        // Create loading indicator
+        const loadingDiv = document.createElement('div');
+        loadingDiv.className = 'flex justify-start';
+        loadingDiv.id = 'tempLoadingIndicator';
+        loadingDiv.innerHTML = `
+            <div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">
+                <div class="flex space-x-2">
+                    <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay: 0ms"></div>
+                    <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay: 150ms"></div>
+                    <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay: 300ms"></div>
+                </div>
+            </div>
+        `;
+        
+        // Add both to chat
+        chatMessages.appendChild(userMessageDiv);
+        chatMessages.appendChild(loadingDiv);
+        
+        // Scroll to bottom
+        chatMessages.scrollTop = chatMessages.scrollHeight;
     }
     
     // Function to update button styles
