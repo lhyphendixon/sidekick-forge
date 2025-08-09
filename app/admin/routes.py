@@ -175,14 +175,9 @@ async def get_system_summary() -> Dict[str, Any]:
         if not livekit_manager._initialized:
             await livekit_manager.initialize()
         
-        # Get all rooms from LiveKit
-        room_service = api.RoomServiceClient(
-            livekit_manager.url,
-            livekit_manager.api_key,
-            livekit_manager.api_secret
-        )
-        
-        rooms = await room_service.list_rooms(api.ListRoomsRequest())
+        # Get all rooms from LiveKit using the refactored manager
+        livekit_api = livekit_manager._get_api_client()
+        rooms = await livekit_api.room.list_rooms(api.ListRoomsRequest())
         
         # Count participants across all rooms
         for room in rooms.rooms:
@@ -225,13 +220,8 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
             if not livekit_manager._initialized:
                 await livekit_manager.initialize()
             
-            room_service = api.RoomServiceClient(
-                livekit_manager.url,
-                livekit_manager.api_key,
-                livekit_manager.api_secret
-            )
-            
-            rooms = await room_service.list_rooms(api.ListRoomsRequest())
+            livekit_api = livekit_manager._get_api_client()
+            rooms = await livekit_api.room.list_rooms(api.ListRoomsRequest())
             
             # Count sessions by client (assuming room name contains client id)
             for room in rooms.rooms:
@@ -361,46 +351,8 @@ async def get_all_agents() -> List[Dict[str, Any]]:
         # Create a mapping of client IDs to names for quick lookup
         client_map = {client.id: client.name for client in clients}
         
-        # Get agents from the main Supabase (faster than querying each client)
-        try:
-            from app.integrations.supabase_client import supabase_manager
-            # Ensure supabase_manager is initialized
-            if not supabase_manager._initialized:
-                await supabase_manager.initialize()
-            result = supabase_manager.auth_client.table('agents').select('*').execute()
-            
-            for agent_data in result.data:
-                # Agents in main table belong to the default client
-                # Use the default client ID from utility
-                from app.utils.default_ids import get_default_client_id
-                client_id = get_default_client_id()
-                    
-                agent_dict = {
-                    "id": agent_data.get("id"),
-                    "slug": agent_data.get("slug"),
-                    "name": agent_data.get("name"),
-                    "description": agent_data.get("description", ""),
-                    "client_id": client_id,
-                    "client_name": "Global Agent",
-                    "status": "active" if agent_data.get("enabled", True) else "inactive",
-                    "active": agent_data.get("enabled", True),
-                    "enabled": agent_data.get("enabled", True),
-                    "created_at": agent_data.get("created_at", ""),
-                    "updated_at": agent_data.get("updated_at", ""),
-                    "system_prompt": agent_data.get("system_prompt", ""),
-                    "voice_settings": agent_data.get("voice_settings", {
-                        "provider": "openai",
-                        "voice_id": "alloy",
-                        "temperature": 0.7
-                    }),
-                    "webhooks": agent_data.get("webhooks", {})
-                }
-                all_agents.append(agent_dict)
-                
-        except Exception as e:
-            logger.warning(f"Fast agent fetch failed, falling back to slow method: {e}")
-            # Fallback to the slower method if needed
-            for client in clients[:5]:  # Limit to 5 clients to prevent timeout
+        # CORRECT METHOD: Iterate through each client to get their agents
+        for client in clients:
                 try:
                     client_agents = await agent_service.get_client_agents(client.id)
                     for agent in client_agents:

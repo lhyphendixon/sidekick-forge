@@ -8,6 +8,7 @@ import asyncio
 import os
 import json
 import logging
+import inspect
 import time
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -15,11 +16,14 @@ from datetime import datetime
 from livekit import agents, rtc
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
 from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
-from livekit.plugins.turn_detector.english import EnglishModel
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from api_key_loader import APIKeyLoader
 from config_validator import ConfigValidator, ConfigurationError
 from context import AgentContextManager
-from llm_wrapper import ContextAwareLLM
+from sidekick_agent import SidekickAgent
+
+# Enable SDK debug logging for better diagnostics
+os.environ["LIVEKIT_LOG_LEVEL"] = "debug"
 
 # Configure logging
 logging.basicConfig(
@@ -29,7 +33,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Agent class removed - using VoiceAssistant directly
+# Agent logic handled via AgentSession and SidekickAgent
 
 
 # --- Performance Logging Helper ---
@@ -51,34 +55,43 @@ async def _store_voice_turn(
     agent_response: str
 ):
     """
-    Store a voice conversation turn immediately in the client's Supabase.
-    This implements transactional turn-based storage for voice conversations.
+    Store a voice conversation turn as TWO rows (user + assistant) in the client's Supabase,
+    matching the text-mode schema for unified analytics.
     """
     try:
-        # Create the conversation turn record
-        turn_data = {
-            "user_id": user_id,
-            "agent_id": agent_id,
+        ts = datetime.utcnow().isoformat()
+        # User row
+        user_row = {
             "conversation_id": conversation_id,
-            "user_message": user_message,
-            "assistant_message": agent_response,
-            "turn_timestamp": datetime.utcnow().isoformat(),
-            "source": "voice",  # Mark as voice source
-            "metadata": {
-                "stored_immediately": True,
-                "storage_version": "v2_transactional"
-            }
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "role": "user",
+            "content": user_message,
+            "transcript": user_message,
+            "created_at": ts,
+            "source": "voice",
         }
-        
-        # Store in conversation_transcripts table
-        result = await supabase_client.table("conversation_transcripts").insert(turn_data).execute()
-        
-        logger.info(f"✅ Stored voice turn: conversation_id={conversation_id}, turn_id={result.data[0]['id'] if result.data else 'unknown'}")
-        
+        # Assistant row
+        assistant_row = {
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "role": "assistant",
+            "content": agent_response,
+            "transcript": agent_response,
+            "created_at": ts,
+            "source": "voice",
+        }
+        await supabase_client.table("conversation_transcripts").insert(user_row).execute()
+        await supabase_client.table("conversation_transcripts").insert(assistant_row).execute()
+        logger.info(
+            f"✅ Stored voice turn as two rows for conversation_id={conversation_id}"
+        )
     except Exception as e:
-        logger.error(f"❌ Failed to store voice turn: {e}")
-        # Don't fail the conversation if storage fails
-        logger.error(f"Turn data that failed to store: user='{user_message[:50]}...', agent='{agent_response[:50]}...'")
+        logger.error(f"❌ Failed to store voice turn rows: {e}")
+        logger.error(
+            f"Turn data that failed: user='{(user_message or '')[:50]}...', agent='{(agent_response or '')[:50]}...'"
+        )
 
 
 async def agent_job_handler(ctx: JobContext):
@@ -258,6 +271,8 @@ async def agent_job_handler(ctx: JobContext):
             llm_provider = voice_settings.get("llm_provider", metadata.get("llm_provider", "openai"))
             
             # Configure LLM based on provider - NO FALLBACK to environment variables
+            if not llm_provider:
+                raise ConfigurationError("LLM provider required but not found (llm_provider)")
             if llm_provider == "groq":
                 groq_key = api_keys.get("groq_api_key")
                 if not groq_key:
@@ -284,7 +299,9 @@ async def agent_job_handler(ctx: JobContext):
             ConfigValidator.validate_provider_initialization(f"{llm_provider} LLM", llm_plugin)
             
             # Configure STT - NO FALLBACK to environment variables
-            stt_provider = voice_settings.get("stt_provider", "deepgram")
+            stt_provider = voice_settings.get("stt_provider")
+            if not stt_provider:
+                raise ConfigurationError("STT provider required but not found (stt_provider)")
             if stt_provider == "cartesia":
                 cartesia_key = api_keys.get("cartesia_api_key")
                 if not cartesia_key:
@@ -297,14 +314,20 @@ async def agent_job_handler(ctx: JobContext):
                 if not deepgram_key:
                     raise ConfigurationError("Deepgram API key required for STT but not found")
                 stt_plugin = deepgram.STT(
-                    api_key=deepgram_key
+                    api_key=deepgram_key,
+                    model="nova-3",          # Doc default
+                    language="en-US",        # Doc language code
+                    endpointing_ms=1000       # Encourage final segments for turn commit
                 )
+                logger.info("📊 DIAGNOSTIC: Deepgram configured with model=nova-3, language=en-US, endpointing_ms=1000")
             
             # Validate STT initialization
             ConfigValidator.validate_provider_initialization(f"{stt_provider} STT", stt_plugin)
             
             # Configure TTS - NO FALLBACK to environment variables
-            tts_provider = voice_settings.get("tts_provider", "cartesia")
+            tts_provider = voice_settings.get("tts_provider") or voice_settings.get("provider")
+            if not tts_provider:
+                raise ConfigurationError("TTS provider required but not found (tts_provider or provider)")
             if tts_provider == "elevenlabs":
                 elevenlabs_key = api_keys.get("elevenlabs_api_key")
                 if not elevenlabs_key:
@@ -337,12 +360,25 @@ async def agent_job_handler(ctx: JobContext):
             
             # Configure VAD (Voice Activity Detection)
             # VAD is crucial for turn detection - it determines when user stops speaking
-            vad = silero.VAD.load()
-            logger.info("VAD loaded for voice activity and turn detection")
+            try:
+                vad = silero.VAD.load(
+                    min_speech_duration=0.15,  # Shorter wake-up for better responsiveness
+                    min_silence_duration=0.8,  # Tolerate brief pauses in noisy environments
+                )
+                logger.info("✅ VAD loaded successfully with optimized parameters")
+                logger.info(f"📊 DIAGNOSTIC: VAD type: {type(vad)}")
+                logger.info("📊 DIAGNOSTIC: VAD params: min_speech=0.15s, min_silence=0.8s")
+            except Exception as e:
+                logger.error(f"❌ Failed to load VAD: {e}", exc_info=True)
+                raise
             
-            # Initialize turn detector for better end-of-utterance detection
-            turn_detect = EnglishModel()
-            logger.info("Turn detector (EnglishModel) loaded for improved turn detection")
+            # Load multilingual turn detector (model-based) per docs
+            try:
+                turn_detect = MultilingualModel()
+                logger.info("✅ Turn detector (MultilingualModel) loaded successfully")
+            except Exception as e:
+                logger.error(f"❌ Failed to load turn detector: {e}", exc_info=True)
+                turn_detect = None
             
             # Initialize context manager if we have Supabase credentials
             context_manager = None
@@ -384,15 +420,6 @@ async def agent_job_handler(ctx: JobContext):
             logger.info("✅ Connected to room successfully")
             perf_summary['room_connection'] = time.perf_counter() - start_connect
             
-            # Wrap the LLM plugin with context awareness
-            logger.info("Wrapping LLM with context awareness...")
-            context_aware_llm = ContextAwareLLM(
-                base_llm=llm_plugin,
-                context_manager=context_manager,
-                user_id=ctx.user_id
-            )
-            logger.info("✅ Context-aware LLM wrapper created")
-            
             # First, try to build initial context if context manager is available
             enhanced_prompt = system_prompt
             
@@ -422,24 +449,82 @@ async def agent_job_handler(ctx: JobContext):
                     # Initial context errors are not critical - we can continue with basic prompt
                     logger.warning("Initial context enhancement failed, continuing with basic prompt")
             
-            # Add greeting instruction if not present
-            if not any(greeting_word in enhanced_prompt.lower() for greeting_word in ['greet', 'hello', 'welcome', 'introduce']):
-                enhanced_prompt = enhanced_prompt + "\n\nWhen you first meet someone, start the conversation with a friendly greeting and ask how you can help them."
+            # Keep the original enhanced prompt without hardcoded greeting
+            # The proactive greeting will be handled via generate_reply() after session.start()
+            greeting_enhanced_prompt = enhanced_prompt
+            
+            # Extract the user profile from initial context if available
+            user_profile = None
+            if 'initial_context' in locals() and initial_context:
+                # Log what's in initial_context for debugging
+                logger.info(f"📊 DIAGNOSTIC: initial_context keys: {list(initial_context.keys()) if isinstance(initial_context, dict) else 'not a dict'}")
+                if "raw_context_data" in initial_context:
+                    logger.info(f"📊 DIAGNOSTIC: raw_context_data keys: {list(initial_context['raw_context_data'].keys())}")
+                    user_profile = initial_context.get("raw_context_data", {}).get("user_profile")
+                    logger.info(f"📊 DIAGNOSTIC: Extracted user_profile: {user_profile}")
+            
+            # Extract names for later use in proactive greeting (prefer profile)
+            user_name = (
+                metadata.get("user_name")
+                or metadata.get("display_name")
+                or (user_profile.get("full_name") if isinstance(user_profile, dict) and user_profile.get("full_name") else None)
+                or (user_profile.get("name") if isinstance(user_profile, dict) and user_profile.get("name") else None)
+                or "there"
+            )
+            agent_name = metadata.get("name", metadata.get("agent_name", "your AI assistant"))
+            
+            logger.info(f"📢 Agent will greet user '{user_name}' as '{agent_name}' after session starts")
+            
+            # Use base LLM plugin directly (RAG/context injection handled in SidekickAgent hooks)
+            logger.info("✅ Using base LLM plugin directly (no wrapper)")
+
+            # Preflight: verify LLM invocation works (base and wrapper) before starting session
+            async def _llm_preflight():
+                try:
+                    # Base LLM
+                    base_msgs = [
+                        llm.ChatMessage(role="system", content=[{"type": "text", "text": "You are a concise assistant."}]),
+                        llm.ChatMessage(role="user", content=[{"type": "text", "text": "Reply with the single word: pong"}])
+                    ]
+                    logger.info("🔬 LLM preflight (base): starting")
+                    base_stream = llm_plugin.chat(base_msgs)
+                    first = None
+                    async for chunk in base_stream:
+                        first = chunk
+                        break
+                    if first is None:
+                        raise RuntimeError("No tokens from base LLM preflight")
+                    logger.info("✅ LLM preflight (base) produced tokens")
+
+                    # No wrapper preflight (wrapper removed)
+                except Exception as e:
+                    logger.critical(f"🚨 LLM preflight failed: {type(e).__name__}: {e}")
+                    raise
+
+            # Optionally run LLM preflight if explicitly enabled via env
+            if os.getenv("ENABLE_LLM_PREFLIGHT", "false").lower() == "true":
+                # Run but do NOT abort session if it fails; log and continue
+                try:
+                    await asyncio.wait_for(_llm_preflight(), timeout=6.0)
+                except Exception as e:
+                    logger.warning(f"LLM preflight failed (non-blocking): {type(e).__name__}: {e}")
+            else:
+                logger.info("Skipping LLM preflight (ENABLE_LLM_PREFLIGHT=false)")
             
             # Create and configure the voice agent session with instructions
-            # In LiveKit SDK v1.0+, AgentSession IS the agent - no separate agent object needed
+            # In LiveKit SDK v1.0+, AgentSession IS the agent - no separate Agent object is required
             logger.info("Creating voice agent session with system prompt...")
+            # Create session without duplicating plugins; Agent will own stt/llm/tts/vad
             session = voice.AgentSession(
-                instructions=enhanced_prompt,  # Pass the system prompt directly
-                vad=vad,
-                stt=stt_plugin,
-                llm=context_aware_llm,  # Use the wrapped LLM
-                tts=tts_plugin,
-                turn_detection=turn_detect,  # Add the dedicated turn detector
-                min_endpointing_delay=0.4,  # Minimum delay before considering turn complete
-                max_endpointing_delay=6.0,  # Maximum delay before terminating turn
+                turn_detection="stt",
+                min_endpointing_delay=0.8,
+                max_endpointing_delay=8.0,
             )
-            logger.info("✅ Voice agent session created")
+            logger.info("✅ Voice agent session created (turn_detection='stt', Deepgram endpointing_ms=1000)")
+            
+            # Minimal diagnostics; rely on AgentSession automatic conversation flow
+            logger.info(f"📊 DIAGNOSTIC: Session type: {type(session)}")
+            logger.info(f"📊 DIAGNOSTIC: Session attributes (sample): {[attr for attr in dir(session) if not attr.startswith('_')][:20]}")
             
             # Store references for event handlers
             ctx.context_manager = context_manager
@@ -448,73 +533,182 @@ async def agent_job_handler(ctx: JobContext):
             ctx.conversation_id = metadata.get("conversation_id") or f"voice_{ctx.room.name}_{ctx.user_id}"
             ctx.last_user_message = None  # Track last user message for turn storage
             
-            # Add session event handlers for debugging and storage
-            @session.on("user_speech_committed")
-            def on_user_speech(msg: llm.ChatMessage):
-                logger.info(f"💬 User: {msg.content}")
-                logger.info(f"   [Speech content length: {len(msg.content)}]")
-                # Store the last user message for pairing with agent response
-                ctx.last_user_message = msg.content
+            # Conversation flow is automatic; avoid manual event-driven flow
+            logger.info("Using AgentSession automatic flow (v1.0 pattern)")
             
-            @session.on("agent_speech_committed")
-            def on_agent_speech(msg: llm.ChatMessage):
-                logger.info(f"🤖 Agent: {msg.content}")
-                
-                # Store conversation turn if we have both messages and Supabase client
-                if ctx.last_user_message and ctx.client_supabase:
-                    # Create async task to store the turn
-                    asyncio.create_task(_store_voice_turn(
-                        ctx.client_supabase,
-                        ctx.user_id,
-                        metadata.get("agent_id", metadata.get("agent_slug", "unknown")),
-                        ctx.conversation_id,
-                        ctx.last_user_message,
-                        msg.content
-                    ))
-                    # Clear the last user message after storing
-                    ctx.last_user_message = None
+            # Optional: minimal participant/track logging can be reintroduced for diagnostics if needed
             
-            @session.on("user_started_speaking")
-            def on_user_started():
-                logger.info("🎤 User started speaking")
+            # Start the session - LiveKit Agents v1.2.2 requires an Agent instance
+            logger.info("Starting agent session (v1.2.2 requires agent param)...")
+            agent = SidekickAgent(
+                instructions=enhanced_prompt,
+                stt=stt_plugin,
+                llm=llm_plugin,
+                tts=tts_plugin,
+                vad=vad,
+                context_manager=context_manager,
+                user_id=ctx.user_id,
+            )
+            await session.start(agent=agent, room=ctx.room)
+
+            # Minimal diagnostic event logs for STT/LLM/TTS flow and reply triggering
+            try:
+                if hasattr(session, 'on'):
+                    # Plugin introspection
+                    try:
+                        llm_obj = getattr(session, 'llm', None)
+                        logger.info(f"🔎 session.llm type: {type(llm_obj)}")
+                        current_agent = getattr(session, 'current_agent', None)
+                        if current_agent is not None:
+                            stt_t = type(getattr(current_agent, 'stt', None))
+                            llm_t = type(getattr(current_agent, 'llm', None))
+                            tts_t = type(getattr(current_agent, 'tts', None))
+                            vad_t = type(getattr(current_agent, 'vad', None))
+                            logger.info(f"🔎 current_agent plugin types: stt={stt_t}, llm={llm_t}, tts={tts_t}, vad={vad_t}")
+                    except Exception as e:
+                        logger.warning(f"Plugin introspection failed: {type(e).__name__}: {e}")
+
+                    # Helper to register and log robustly
+                    def _safe_register(event_name, callback):
+                        try:
+                            session.on(event_name)(callback)
+                            logger.info(f"🔔 Registered session event handler for '{event_name}'")
+                        except Exception as err:
+                            logger.debug(f"Could not register handler for '{event_name}': {type(err).__name__}: {err}")
+
+                    # Capture latest transcript (multiple event names across SDKs)
+                    @session.on("transcription_final")
+                    def _capture_transcription_final(evt):
+                        try:
+                            text = getattr(evt, "text", None)
+                            if isinstance(text, str) and text.strip():
+                                setattr(session, "latest_user_text", text.strip())
+                                logger.info(f"🧾 final transcript captured: '{text[:120]}' (transcription_final)")
+                        except Exception:
+                            pass
+
+                    @session.on("transcription_finalized")
+                    def _capture_transcription_finalized(evt):
+                        try:
+                            text = getattr(evt, "text", None)
+                            if isinstance(text, str) and text.strip():
+                                setattr(session, "latest_user_text", text.strip())
+                                logger.info(f"🧾 final transcript captured: '{text[:120]}' (transcription_finalized)")
+                        except Exception:
+                            pass
+
+                    # Input-level STT finals for robustness
+                    if hasattr(session, "input") and hasattr(session.input, "on"):
+                        try:
+                            @session.input.on("transcription_final")
+                            def _input_transcription_final(evt):
+                                try:
+                                    text = getattr(evt, "text", None)
+                                    if isinstance(text, str) and text.strip():
+                                        setattr(session, "latest_user_text", text.strip())
+                                        logger.info(f"🧾 input final transcript: '{text[:120]}'")
+                                except Exception:
+                                    pass
+                        except Exception:
+                            logger.debug("Could not register input transcription_final handler")
+
+                    # Track and store complete turns
+                    turn_info = {"user_message": None, "agent_response": None}
+
+                    @session.on("user_speech_committed")
+                    def _log_user_turn(committed_msg):
+                        try:
+                            content = getattr(committed_msg, "content", None)
+                            preview = None
+                            captured = None
+                            if isinstance(content, str) and content.strip():
+                                preview = content
+                                captured = content.strip()
+                            elif isinstance(content, list):
+                                for part in content:
+                                    if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                                        preview = part.get("text")
+                                        captured = preview.strip()
+                                        break
+                            logger.info(f"📝 user_speech_committed: {str(preview)[:160] if preview else '[no content]'}")
+                            if captured:
+                                setattr(session, "latest_user_text", captured)
+                                turn_info["user_message"] = captured
+                            else:
+                                # As a fallback, if we captured a final transcript earlier, bind it now
+                                try:
+                                    if hasattr(session, "latest_user_text") and isinstance(session.latest_user_text, str) and session.latest_user_text.strip():
+                                        turn_info["user_message"] = session.latest_user_text.strip()
+                                        logger.info("🧾 user_speech_committed fallback used latest_user_text")
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+                    @session.on("agent_speech_committed")
+                    def _log_agent_turn(committed_msg):
+                        try:
+                            content = getattr(committed_msg, "content", None)
+                            preview = content if isinstance(content, str) else str(content)
+                            logger.info(f"🗣️ agent_speech_committed: {str(preview)[:160] if preview else '[no content]'}")
+                        except Exception:
+                            pass
+                        # Also extract and persist turn if we have both sides
+                        try:
+                            content = getattr(committed_msg, "content", None)
+                            captured = None
+                            if isinstance(content, str) and content.strip():
+                                captured = content.strip()
+                            elif isinstance(content, list):
+                                for part in content:
+                                    if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                                        captured = part.get("text").strip()
+                                        break
+                            if captured:
+                                turn_info["agent_response"] = captured
+                                if turn_info.get("user_message") and turn_info.get("agent_response") and getattr(ctx, 'client_supabase', None):
+                                    logger.info("✅ Turn complete. Storing in database...")
+                                    try:
+                                        asyncio.create_task(
+                                            _store_voice_turn(
+                                                supabase_client=ctx.client_supabase,
+                                                user_id=ctx.user_id,
+                                                agent_id=metadata.get("agent_id", "unknown"),
+                                                conversation_id=ctx.conversation_id,
+                                                user_message=turn_info["user_message"],
+                                                agent_response=turn_info["agent_response"],
+                                            )
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Failed to schedule turn storage: {type(e).__name__}: {e}")
+                                    finally:
+                                        turn_info["user_message"] = None
+                                        turn_info["agent_response"] = None
+                        except Exception:
+                            pass
+
+                    # Simple logger for miscellaneous events
+                    def _generic_logger(event_label):
+                        def _inner(*args, **kwargs):
+                            logger.info(f"🔎 event '{event_label}' fired with args={len(args)} kwargs={len(kwargs)}")
+                        return _inner
+
+                    for ev in [
+                        "user_started_speaking",
+                        "user_stopped_speaking",
+                        "transcription_updated",
+                        "vad_event",
+                    ]:
+                        _safe_register(ev, _generic_logger(ev))
+            except Exception as e:
+                logger.warning(f"Could not register diagnostic event logs: {type(e).__name__}: {e}")
             
-            @session.on("user_stopped_speaking")
-            def on_user_stopped():
-                logger.info("🎤 User stopped speaking")
-            
-            @session.on("agent_started_speaking")
-            def on_agent_started():
-                logger.info("🔊 Agent started speaking")
-            
-            # Add debug handler for transcription events
-            @session.on("transcription_received")
-            def on_transcription(transcript: str, is_final: bool):
-                logger.info(f"📝 Transcription {'[FINAL]' if is_final else '[INTERIM]'}: '{transcript}'")
-            
-            # Add participant event handlers to the room
-            @ctx.room.on("participant_connected")
-            def on_participant_connected(participant):
-                logger.info(f"👤 Participant joined: {participant.identity} (SID: {participant.sid})")
-                if hasattr(participant, 'tracks'):
-                    logger.info(f"   - Tracks published: {len(participant.tracks)}")
-            
-            @ctx.room.on("participant_disconnected")
-            def on_participant_disconnected(participant):
-                logger.info(f"👤 Participant left: {participant.identity}")
-            
-            @ctx.room.on("track_published")
-            def on_track_published(publication, participant):
-                track_info = f"{publication.kind if hasattr(publication, 'kind') else 'unknown'}"
-                logger.info(f"📡 Track published by {participant.identity}: {track_info}")
-            
-            @ctx.room.on("track_subscribed")
-            def on_track_subscribed(track, publication, participant):
-                logger.info(f"📡 Subscribed to track from {participant.identity}: {track.name} ({track.kind})")
-            
-            # Start the session with just the room
-            # In LiveKit SDK v1.0+, the session itself is the agent
-            logger.info("Starting agent session...")
-            await session.start(room=ctx.room)
+            # Log session state after starting
+            logger.info("📊 Post-start session inspection:")
+            if hasattr(session, '_started'):
+                logger.info(f"   Session started: {getattr(session, '_started', True)}")
+            if hasattr(session, '_room'):
+                logger.info(f"   Session has room: {hasattr(session, '_room')}")
             
             # Log successful start
             logger.info(f"✅ Agent session started successfully in room: {ctx.room.name}")
@@ -525,7 +719,34 @@ async def agent_job_handler(ctx: JobContext):
             # Store session reference for the job lifecycle
             ctx.session = session
             
-            # The agent will naturally greet based on its system prompt
+            # Optional proactive greeting after successful start
+            if os.getenv("DISABLE_PROACTIVE_GREETING", "false").lower() != "true":
+                greeting_message = f"Hi {user_name}, how can I help you?"
+                async def _try_greet():
+                    try:
+                        if hasattr(session, "say") and callable(getattr(session, "say")):
+                            await asyncio.wait_for(session.say(greeting_message), timeout=5.0)
+                            logger.info("✅ Proactive greeting delivered via session.say()")
+                        elif hasattr(session, "generate_reply") and callable(getattr(session, "generate_reply")):
+                            instr = f"Say exactly this greeting: '{greeting_message}'"
+                            await asyncio.wait_for(session.generate_reply(instructions=instr), timeout=5.0)
+                            logger.info("✅ Proactive greeting delivered via session.generate_reply()")
+                        else:
+                            logger.info("⚠️ No greeting method available on session; skipping proactive greeting")
+                    except Exception as e:
+                        logger.warning(f"Proactive greeting failed or timed out: {type(e).__name__}: {e}")
+                asyncio.create_task(_try_greet())
+            else:
+                logger.info("Proactive greeting disabled via DISABLE_PROACTIVE_GREETING=true")
+
+            # Conversation flow is automatic in AgentSession; no forced replies
+            logger.info("✅ Agent ready - automatic STT→LLM→TTS flow engaged (v1.0 pattern)")
+            
+            # Remove deprecated commented greeting block (cleaned)
+            
+            logger.info("✅ Agent ready to converse")
+            logger.info("📊 DIAGNOSTIC: Agent is now in automatic STT→LLM→TTS mode")
+            
             logger.info("Agent ready to converse")
             
             # Check current participants in the room

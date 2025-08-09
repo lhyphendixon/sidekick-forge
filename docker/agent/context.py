@@ -455,11 +455,14 @@ class AgentContextManager:
         start_time = time.perf_counter()
         try:
             logger.info(f"Performing conversation RAG via match_conversation_transcripts_secure RPC...")
-            # Try to get agent identifier - could be id, agent_id, or slug
-            agent_id = self.agent_config.get("id") or self.agent_config.get("agent_id") or self.agent_config.get("agent_slug")
-            
+            # Resolve agent slug consistently with knowledge RAG
+            agent_slug = self.agent_config.get("slug") or self.agent_config.get("agent_slug")
+            # Optional: also check other identifiers for diagnostics, but we require slug for this RPC
+            agent_id = agent_slug or self.agent_config.get("id") or self.agent_config.get("agent_id")
             if not agent_id:
-                raise ValueError("No agent identifier found in config - agent_id or agent_slug required for conversation RAG")
+                raise ValueError("No agent identifier found in config - slug, agent_slug, or agent_id required for conversation RAG")
+            if not agent_slug:
+                raise ValueError("agent_slug is required for match_conversation_transcripts_secure (slug or agent_slug must be provided)")
                 
             # Generate embeddings using remote service
             query_embedding = await self.embedder.create_embedding(user_message)
@@ -467,7 +470,7 @@ class AgentContextManager:
             # NO FALLBACKS: Only use the correct RPC function
             result = self.supabase.rpc("match_conversation_transcripts_secure", {
                 "query_embeddings": query_embedding,
-                "agent_slug_param": self.agent_config.get("slug"),
+                "agent_slug_param": agent_slug,
                 "user_id_param": user_id,  # Use the passed user_id, not self.user_id
                 "match_count": 5
             }).execute()
@@ -509,8 +512,11 @@ class AgentContextManager:
         Returns:
             Formatted markdown string
         """
+        # If nothing to include, return empty string to avoid adding token noise
+        if not profile and not knowledge and not conversations:
+            return ""
+
         sections = []
-        
         # Header
         sections.append("# Agent Context\n")
         

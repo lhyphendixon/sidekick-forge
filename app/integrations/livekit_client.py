@@ -21,6 +21,7 @@ class LiveKitManager:
         self.api_secret = None
         self.url = None
         self._initialized = False
+        self.livekit_api = None
     
     async def initialize(self):
         """Initialize LiveKit connection"""
@@ -34,6 +35,8 @@ class LiveKitManager:
             # Validate credentials
             if not await LiveKitCredentialManager.validate_credentials(self.url, self.api_key, self.api_secret):
                 raise ValueError("LiveKit credentials validation failed")
+
+            self.livekit_api = api.LiveKitAPI(self.url, self.api_key, self.api_secret)
             
             # Test connection by creating a test token
             self.create_token("test", "test-room")
@@ -41,15 +44,26 @@ class LiveKitManager:
             logger.info(f"LiveKit manager initialized successfully with URL: {self.url}")
         except Exception as e:
             logger.error(f"Failed to initialize LiveKit: {e}")
+            self.livekit_api = None
             raise ServiceUnavailableError(f"Failed to connect to LiveKit: {str(e)}")
     
     async def close(self):
         """Close LiveKit connections"""
+        if self.livekit_api:
+            # LiveKitAPI uses aclose() for async close
+            await self.livekit_api.aclose()
         self._initialized = False
-    
+        self.livekit_api = None
+
+    def _get_api_client(self) -> api.LiveKitAPI:
+        if not self.livekit_api or not self._initialized:
+            raise ServiceUnavailableError("LiveKitManager is not initialized. Call initialize() first.")
+        return self.livekit_api
+
     async def health_check(self) -> bool:
         """Check LiveKit service health"""
         try:
+            self._get_api_client()
             # Try to create a token as health check
             token = self.create_token("health-check", "health-check-room")
             return bool(token)
@@ -63,7 +77,9 @@ class LiveKitManager:
         room_name: str,
         metadata: Optional[Dict[str, Any]] = None,
         permissions: Optional[api.VideoGrants] = None,
-        ttl: int = 3600  # 1 hour default
+        ttl: int = 3600,  # 1 hour default
+        dispatch_agent_name: Optional[str] = None,
+        dispatch_metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Create a LiveKit access token"""
         if not permissions:
@@ -82,10 +98,27 @@ class LiveKitManager:
         token = token.with_grants(permissions)
         
         if metadata:
-            token = token.with_metadata(str(metadata))
+            token = token.with_metadata(json.dumps(metadata))
         
         token = token.with_ttl(timedelta(seconds=ttl))
-        
+
+        # Optionally embed RoomConfiguration with RoomAgentDispatch so the agent is dispatched
+        # automatically when this participant connects (per LiveKit docs: Dispatch on participant connection)
+        try:
+            if dispatch_agent_name:
+                room_cfg = api.RoomConfiguration(
+                    agents=[
+                        api.RoomAgentDispatch(
+                            agent_name=dispatch_agent_name,
+                            metadata=json.dumps(dispatch_metadata) if dispatch_metadata else "",
+                        )
+                    ]
+                )
+                token = token.with_room_config(room_cfg)
+                logger.info(f"🔧 Embedded RoomAgentDispatch for agent '{dispatch_agent_name}' into token")
+        except Exception as e:
+            logger.warning(f"Failed to embed RoomAgentDispatch into token: {type(e).__name__}: {e}")
+
         return token.to_jwt()
     
     def create_agent_token(
@@ -128,24 +161,12 @@ class LiveKitManager:
         enable_agent_dispatch: bool = False,
         agent_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Create a LiveKit room
-        
-        Args:
-            name: Room name
-            empty_timeout: Seconds before empty room is deleted
-            max_participants: Maximum participants allowed
-            metadata: Room metadata (can be dict or JSON string)
-        """
+        """Create a LiveKit room"""
         logger.info(f"Creating room: name={name}, empty_timeout={empty_timeout}, max_participants={max_participants}")
         logger.debug(f"Metadata type: {type(metadata)}, length: {len(str(metadata)) if metadata else 0}")
         
         try:
-            # Use LiveKitAPI instead of RoomServiceClient
-            livekit_api = api.LiveKitAPI(
-                url=self.url,
-                api_key=self.api_key,
-                api_secret=self.api_secret
-            )
+            livekit_api = self._get_api_client()
             
             # Generate room name if not provided
             if not name:
@@ -155,20 +176,15 @@ class LiveKitManager:
             room_metadata = None
             if metadata:
                 if isinstance(metadata, str):
-                    # Already JSON encoded
                     room_metadata = metadata
                 else:
-                    # Need to encode to JSON
                     room_metadata = json.dumps(metadata)
             
             logger.info(f"Sending room creation request to LiveKit")
             
-            # Configure agent dispatch if enabled
             agents_list = []
             if enable_agent_dispatch:
-                # CRITICAL: Configure agent dispatch AT ROOM CREATION TIME
                 if agent_name:
-                    # Explicit dispatch - only workers with this name will receive the job
                     agent_dispatch_options = api.RoomAgentDispatch(
                         agent_name=agent_name,
                         metadata=room_metadata if room_metadata else ""
@@ -176,7 +192,6 @@ class LiveKitManager:
                     agents_list.append(agent_dispatch_options)
                     logger.info(f"🤖 Creating room with explicit agent dispatch: agent_name={agent_name}")
                 else:
-                    # General dispatch - any available worker can take the job
                     agent_dispatch_options = api.RoomAgentDispatch(
                         metadata=room_metadata if room_metadata else ""
                     )
@@ -185,25 +200,29 @@ class LiveKitManager:
             else:
                 logger.info(f"📹 Creating standard room without agent dispatch")
             
-            # Create room request with agents if configured
             room_request = api.CreateRoomRequest(
                 name=name,
                 empty_timeout=empty_timeout,
                 max_participants=max_participants,
                 metadata=room_metadata,
-                agents=agents_list  # Pass agents during initialization
+                agents=agents_list
             )
             
             room = await livekit_api.room.create_room(room_request)
             
-            logger.info(f"✅ Room created successfully with agent dispatch: name={room.name}, sid={room.sid}")
-            
+            log_msg = f"✅ Room '{room.name}' (sid: {room.sid}) created"
+            if enable_agent_dispatch:
+                log_msg += f" with agent dispatch enabled."
+            else:
+                log_msg += f" without agent dispatch."
+            logger.info(log_msg)
+
             return {
                 "name": room.name,
                 "sid": room.sid,
                 "created_at": datetime.utcnow(),
                 "max_participants": room.max_participants,
-                "metadata": metadata  # Return original metadata (not the JSON string)
+                "metadata": metadata
             }
             
         except Exception as e:
@@ -213,12 +232,7 @@ class LiveKitManager:
     async def get_room(self, room_name: str) -> Optional[Dict[str, Any]]:
         """Get room information"""
         try:
-            livekit_api = api.LiveKitAPI(
-                url=self.url,
-                api_key=self.api_key,
-                api_secret=self.api_secret
-            )
-            
+            livekit_api = self._get_api_client()
             rooms = await livekit_api.room.list_rooms(
                 api.ListRoomsRequest(names=[room_name])
             )
@@ -243,13 +257,9 @@ class LiveKitManager:
     async def list_participants(self, room_name: str) -> List[Dict[str, Any]]:
         """List participants in a room"""
         try:
-            room_service = api.RoomServiceClient(
-                self.url,
-                self.api_key,
-                self.api_secret
-            )
+            livekit_api = self._get_api_client()
             
-            participants = await room_service.list_participants(
+            participants = await livekit_api.room.list_participants(
                 api.ListParticipantsRequest(room=room_name)
             )
             
@@ -273,13 +283,8 @@ class LiveKitManager:
     async def remove_participant(self, room_name: str, identity: str) -> bool:
         """Remove a participant from a room"""
         try:
-            room_service = api.RoomServiceClient(
-                self.url,
-                self.api_key,
-                self.api_secret
-            )
-            
-            await room_service.remove_participant(
+            livekit_api = self._get_api_client()
+            await livekit_api.room.remove_participant(
                 api.RoomParticipantIdentity(
                     room=room_name,
                     identity=identity
@@ -295,13 +300,7 @@ class LiveKitManager:
     async def update_room_metadata(self, room_name: str, metadata: Dict[str, Any]) -> bool:
         """Update room metadata"""
         try:
-            livekit_api = api.LiveKitAPI(
-                url=self.url,
-                api_key=self.api_key,
-                api_secret=self.api_secret
-            )
-            
-            # Update room with new metadata
+            livekit_api = self._get_api_client()
             await livekit_api.room.update_room(
                 api.UpdateRoomRequest(
                     room=room_name,
@@ -319,13 +318,8 @@ class LiveKitManager:
     async def delete_room(self, room_name: str) -> bool:
         """Delete a LiveKit room"""
         try:
-            room_service = api.RoomServiceClient(
-                self.url,
-                self.api_key,
-                self.api_secret
-            )
-            
-            await room_service.delete_room(
+            livekit_api = self._get_api_client()
+            await livekit_api.room.delete_room(
                 api.DeleteRoomRequest(room=room_name)
             )
             
@@ -344,13 +338,8 @@ class LiveKitManager:
     ) -> bool:
         """Send data message to room participants"""
         try:
-            room_service = api.RoomServiceClient(
-                self.url,
-                self.api_key,
-                self.api_secret
-            )
-            
-            await room_service.send_data(
+            livekit_api = self._get_api_client()
+            await livekit_api.room.send_data(
                 api.SendDataRequest(
                     room=room_name,
                     data=data,

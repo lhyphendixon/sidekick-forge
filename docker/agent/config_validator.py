@@ -79,18 +79,19 @@ class ConfigValidator:
         if not voice_settings:
             raise ConfigurationError("No voice_settings in metadata")
             
-        # Apply defaults for null/missing providers
+        # Normalize providers but do NOT introduce silent defaults
+        # LLM provider must be present
         if not voice_settings.get('llm_provider'):
-            voice_settings['llm_provider'] = 'openai'
-            logger.info("No llm_provider specified, defaulting to 'openai'")
-            
+            raise ConfigurationError("Missing required voice_settings.llm_provider")
+        # STT provider must be present
         if not voice_settings.get('stt_provider'):
-            voice_settings['stt_provider'] = 'deepgram'
-            logger.info("No stt_provider specified, defaulting to 'deepgram'")
-            
-        if not voice_settings.get('tts_provider'):
-            voice_settings['tts_provider'] = 'cartesia'
-            logger.info("No tts_provider specified, defaulting to 'cartesia'")
+            raise ConfigurationError("Missing required voice_settings.stt_provider")
+        # TTS can be under tts_provider or provider (admin UI)
+        if not (voice_settings.get('tts_provider') or voice_settings.get('provider')):
+            raise ConfigurationError("Missing required TTS provider (voice_settings.tts_provider or voice_settings.provider)")
+        if not voice_settings.get('tts_provider') and voice_settings.get('provider') in ['elevenlabs', 'cartesia']:
+            voice_settings['tts_provider'] = voice_settings['provider']
+            logger.info(f"Normalized tts_provider from provider='{voice_settings['provider']}'")
             
         # Validate provider values
         valid_llm_providers = ['openai', 'groq']
@@ -105,7 +106,7 @@ class ConfigValidator:
         if stt not in valid_stt_providers:
             raise ConfigurationError(f"Invalid STT provider: {stt}. Must be one of: {valid_stt_providers}")
             
-        tts = voice_settings.get('tts_provider')
+        tts = voice_settings.get('tts_provider') or voice_settings.get('provider')
         if tts not in valid_tts_providers:
             raise ConfigurationError(f"Invalid TTS provider: {tts}. Must be one of: {valid_tts_providers}")
     
@@ -157,19 +158,19 @@ class ConfigValidator:
             required.append(('groq_api_key', 'Groq'))
             
         # STT provider
-        stt_provider = voice_settings.get('stt_provider', 'deepgram')
+        stt_provider = voice_settings.get('stt_provider')
         if stt_provider == 'deepgram':
             required.append(('deepgram_api_key', 'Deepgram STT'))
         elif stt_provider == 'cartesia':
             required.append(('cartesia_api_key', 'Cartesia STT'))
             
         # TTS provider
-        tts_provider = voice_settings.get('tts_provider', 'cartesia')
+        tts_provider = voice_settings.get('tts_provider') or voice_settings.get('provider')
         if tts_provider == 'elevenlabs':
             required.append(('elevenlabs_api_key', 'ElevenLabs TTS'))
         elif tts_provider == 'cartesia':
             # Only add if not already required for STT
-            if stt_provider != 'cartesia':
+            if stt_provider and stt_provider != 'cartesia':
                 required.append(('cartesia_api_key', 'Cartesia TTS'))
                 
         return required

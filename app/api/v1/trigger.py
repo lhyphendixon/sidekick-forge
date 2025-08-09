@@ -290,16 +290,24 @@ async def handle_voice_trigger(
     logger.info(f"🏢 Using backend LiveKit infrastructure for thin client architecture")
     
     # Prepare agent context first so we can pass it to room creation
-    # Build voice settings with proper defaults
+    # Build voice settings with NO DEFAULTS (enforce no-fallback policy)
     voice_settings = agent.voice_settings.dict() if agent.voice_settings else {}
     
-    # Apply defaults for null values
-    if not voice_settings.get('llm_provider'):
-        voice_settings['llm_provider'] = 'groq'  # Use Groq as default since we have the API key
-    if not voice_settings.get('stt_provider'):
-        voice_settings['stt_provider'] = 'deepgram'
-    if not voice_settings.get('tts_provider'):
-        voice_settings['tts_provider'] = 'elevenlabs'  # Use ElevenLabs since we have the API key
+    # Normalize provider fields (admin may store TTS as 'provider')
+    normalized_llm = voice_settings.get("llm_provider")
+    normalized_stt = voice_settings.get("stt_provider")
+    normalized_tts = voice_settings.get("tts_provider") or voice_settings.get("provider")
+
+    # Validate required providers are configured
+    missing_vs = []
+    if not normalized_llm:
+        missing_vs.append("llm_provider")
+    if not normalized_stt:
+        missing_vs.append("stt_provider")
+    if not normalized_tts:
+        missing_vs.append("tts_provider")
+    if missing_vs:
+        raise HTTPException(status_code=400, detail=f"Missing voice settings: {', '.join(missing_vs)}")
         
     agent_context = {
         "client_id": client.id,  # Add client_id for API key lookup
@@ -357,50 +365,52 @@ async def handle_voice_trigger(
     user_token = backend_livekit.create_token(
         identity=f"user_{request.user_id}",
         room_name=request.room_name,
-        metadata={"user_id": request.user_id, "client_id": client.id}
+        metadata={"user_id": request.user_id, "client_id": client.id},
+        dispatch_agent_name=None,  # Disable token dispatch
+        dispatch_metadata=None
     )
     token_duration = time.time() - token_start
     logger.info(f"⏱️ User token generation took {token_duration:.2f}s")
     logger.debug(f"Generated user token", extra={'token_length': len(user_token)})
     
-    # EXPLICITLY DISPATCH THE AGENT
-    # Check if there are already participants in the room (which might indicate an agent)
+    # Validate API keys for selected providers before dispatch (fail fast)
     try:
-        participants = await backend_livekit.list_participants(request.room_name)
-        agent_count = sum(1 for p in participants if 'agent' in p.get('identity', '').lower())
-        if agent_count > 0:
-            logger.warning(f"⚠️ Room {request.room_name} already has {agent_count} agent(s). Skipping dispatch.")
-            dispatch_info = {
-                "status": "skipped",
-                "message": f"Agent already present in room (found {agent_count} agents)",
-                "mode": "skipped_dispatch"
-            }
-        else:
-            dispatch_start = time.time()
-            dispatch_info = await dispatch_agent_job(
-                livekit_manager=backend_livekit,
-                room_name=request.room_name,
-                agent=agent,
-                client=client,
-                user_id=request.user_id
-            )
-            dispatch_duration = time.time() - dispatch_start
-            logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
-            logger.info(f"Agent dispatch completed with status: {dispatch_info.get('status')}")
+        selected_llm = normalized_llm
+        selected_stt = normalized_stt
+        selected_tts = normalized_tts
+        provider_to_key = {
+            "openai": "openai_api_key",
+            "groq": "groq_api_key",
+            "deepgram": "deepgram_api_key",
+            "elevenlabs": "elevenlabs_api_key",
+            "cartesia": "cartesia_api_key",
+        }
+        api_keys_map = agent_context.get("api_keys", {})
+        missing_keys = []
+        for provider in (selected_llm, selected_stt, selected_tts):
+            key_name = provider_to_key.get(provider)
+            if key_name and not api_keys_map.get(key_name):
+                missing_keys.append(f"{provider}:{key_name}")
+        if missing_keys:
+            raise HTTPException(status_code=400, detail=f"Missing API keys for providers: {', '.join(missing_keys)}")
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error checking participants: {e}")
-        # If we can't check, proceed with dispatch
-        dispatch_start = time.time()
-        dispatch_info = await dispatch_agent_job(
-            livekit_manager=backend_livekit,
-            room_name=request.room_name,
-            agent=agent,
-            client=client,
-            user_id=request.user_id
-        )
-        dispatch_duration = time.time() - dispatch_start
-        logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
-        logger.info(f"Agent dispatch completed with status: {dispatch_info.get('status')}")
+        raise HTTPException(status_code=400, detail=f"Provider key validation failed: {e}")
+
+    # EXPLICITLY DISPATCH THE AGENT
+    # Remove participant check and always dispatch
+    dispatch_start = time.time()
+    dispatch_info = await dispatch_agent_job(
+        livekit_manager=backend_livekit,
+        room_name=request.room_name,
+        agent=agent,
+        client=client,
+        user_id=request.user_id
+    )
+    dispatch_duration = time.time() - dispatch_start
+    logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
+    logger.info(f"Agent dispatch completed with status: {dispatch_info.get('status')}")
     
     # Add a small delay to ensure room is fully ready
     if room_info["status"] == "created":
@@ -418,7 +428,7 @@ async def handle_voice_trigger(
         logger.info(f"⏱️ Post-creation verification took {verify_duration:.2f}s")
     
     # Room has been created and agent has been explicitly dispatched
-    logger.info(f"🎯 Room {request.room_name} created and agent explicitly dispatched")
+    logger.info(f"🎯 Room {request.room_name} ready; agent dispatched explicitly via API")
     
     voice_trigger_total = time.time() - voice_trigger_start
     logger.info(f"⏱️ TOTAL voice trigger process took {voice_trigger_total:.2f}s")
@@ -829,13 +839,7 @@ async def dispatch_agent_job(
         # Build voice settings with proper defaults
         voice_settings = agent.voice_settings.dict() if agent.voice_settings else {}
         
-        # Apply defaults for null values
-        if not voice_settings.get('llm_provider'):
-            voice_settings['llm_provider'] = 'groq'  # Use Groq as default since we have the API key
-        if not voice_settings.get('stt_provider'):
-            voice_settings['stt_provider'] = 'deepgram'
-        if not voice_settings.get('tts_provider'):
-            voice_settings['tts_provider'] = 'elevenlabs'  # Use ElevenLabs since we have the API key
+        # Providers are validated in handle_voice_trigger; do not apply defaults here (no-fallback policy)
             
         # Debug logging to understand client structure
         logger.info(f"Client settings available: {bool(client.settings)}")
@@ -941,15 +945,8 @@ async def dispatch_agent_job(
         logger.error(f"   - Error type: {type(e).__name__}")
         logger.error(f"   - Room: {room_name}")
         logger.error(f"   - Agent: {agent.slug}")
-        
-        # Fallback to automatic mode if explicit dispatch fails
-        return {
-            "status": "automatic",
-            "message": f"Explicit dispatch failed ({str(e)}), falling back to automatic mode",
-            "mode": "automatic_dispatch",
-            "agent": agent.slug,
-            "error": str(e)
-        }
+        # No fallback allowed: fail fast with clear error
+        raise HTTPException(status_code=502, detail=f"Explicit dispatch failed: {type(e).__name__}: {e}")
 
 
 
@@ -1017,8 +1014,8 @@ async def ensure_livekit_room_exists(
             name=room_name,
             empty_timeout=1800,  # 30 minutes - much longer timeout for agent rooms
             max_participants=10,  # Allow multiple participants
-            metadata=metadata_json
-            # Agent dispatch flags are removed. This function ONLY creates a room.
+            metadata=metadata_json,
+            enable_agent_dispatch=False  # Disable automatic dispatch; rely on explicit API dispatch
         )
         create_duration = time.time() - create_start
         logger.info(f"⏱️ Room creation took {create_duration:.2f}s")
@@ -1031,17 +1028,7 @@ async def ensure_livekit_room_exists(
         wait_duration = time.time() - wait_start
         logger.info(f"⏱️ Room ready wait took {wait_duration:.2f}s")
         
-        # Create a placeholder token to keep the room alive
-        token_start = time.time()
-        placeholder_token = livekit_manager.create_token(
-            identity="room_keeper",
-            room_name=room_name,
-            metadata={"placeholder": True, "role": "room_keeper"}
-        )
-        token_duration = time.time() - token_start
-        logger.info(f"⏱️ Token creation took {token_duration:.2f}s")
-        
-        logger.info(f"Created placeholder token for room {room_name}")
+        # No placeholder token required; room lifetime is managed by empty_timeout
         
         # Verify room was created
         verify_start = time.time()

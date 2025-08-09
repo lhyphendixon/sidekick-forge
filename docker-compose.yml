@@ -37,7 +37,7 @@ services:
     image: redis:7-alpine
     container_name: ${APP_NAME:-sidekick-forge}-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis-data:/data
     restart: unless-stopped
@@ -72,7 +72,7 @@ services:
     command: python /app/entrypoint.py  # Use original entrypoint
     volumes:
       - ./docker/agent/entrypoint.py:/app/entrypoint.py:ro
-      - ./docker/agent/llm_wrapper.py:/app/llm_wrapper.py:ro
+      - ./docker/agent/sidekick_agent.py:/app/sidekick_agent.py:ro
       - ./docker/agent/context.py:/app/context.py:ro
       - ./docker/agent/config_validator.py:/app/config_validator.py:ro
       - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
