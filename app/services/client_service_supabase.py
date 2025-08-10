@@ -49,7 +49,6 @@ class ClientService:
             "name": client_data.name,
             # store top-level fields used by queries
             "domain": client_data.domain or "",
-            "active": True,
             "additional_settings": {
                 "description": client_data.description,
                 "domain": client_data.domain,
