@@ -24,15 +24,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self.redis_client = redis.from_url(
                 settings.redis_url,
                 encoding="utf-8",
-                decode_responses=True
+                decode_responses=True,
+                socket_connect_timeout=0.2,
+                socket_timeout=0.2,
             )
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {e}")
             self.redis_client = None
     
     async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for health checks
-        if request.url.path in ["/health", "/health/detailed"]:
+        # Skip rate limiting for health checks and admin/API dashboard interactions
+        if request.url.path in ["/health", "/health/detailed"] or request.url.path.startswith("/admin") or request.url.path.startswith("/api/v1/clients"):
             return await call_next(request)
         
         # If Redis is not available, skip rate limiting
