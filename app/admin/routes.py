@@ -2725,6 +2725,47 @@ def get_redis_client_admin():
     import redis
     return redis.Redis(host='localhost', port=6379, decode_responses=True)
 
+@router.get("/clients/{client_id}/edit", response_class=HTMLResponse)
+async def edit_client_modal(client_id: str, request: Request, admin_user: Dict[str, Any] = Depends(get_admin_user)):
+    from app.core.dependencies import get_client_service
+    client_service = get_client_service()
+    client = await client_service.get_client(client_id, auto_sync=False)
+    if not client:
+        return HTMLResponse("<div class='p-4 text-red-600'>Client not found</div>", status_code=404)
+
+    # Normalize current_api_keys for template access
+    current_api_keys = client.settings.api_keys if hasattr(client.settings, 'api_keys') else {}
+    def get_key(name):
+        try:
+            return getattr(current_api_keys, name)
+        except Exception:
+            return current_api_keys.get(name, '') if isinstance(current_api_keys, dict) else ''
+
+    html = f"""
+    <div class=\"fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center\">
+      <div class=\"bg-white rounded-lg shadow-lg w-full max-w-2xl\">
+        <div class=\"px-6 py-4 border-b\">
+          <h3 class=\"text-lg font-semibold\">Edit Client: {client.name}</h3>
+        </div>
+        <form hx-post=\"/admin/clients/{client_id}/update\" hx-target=\"#modal-container\" hx-swap=\"outerHTML\">
+          <div class=\"px-6 py-4 space-y-4\">
+            <div>
+              <label class=\"block text-sm font-medium text-gray-700 mb-1\">Cerebras API Key</label>
+              <input type=\"password\" name=\"cerebras_api_key\" value=\"{get_key('cerebras_api_key') or ''}\" placeholder=\"sk-...\" class=\"w-full px-3 py-2 border rounded-md\">
+              <p class=\"text-xs text-gray-500 mt-1\">Used when LLM provider is set to Cerebras.</p>
+            </div>
+            <!-- Optionally render other keys here as needed -->
+          </div>
+          <div class=\"px-6 py-4 border-t flex justify-end gap-2\">
+            <button type=\"button\" class=\"px-4 py-2 rounded border\" onclick=\"document.getElementById('modal-container').innerHTML='';\">Cancel</button>
+            <button type=\"submit\" class=\"px-4 py-2 rounded bg-indigo-600 text-white\">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    """
+    return HTMLResponse(html)
+
 @router.post("/clients/{client_id}/update")
 async def admin_update_client(
     client_id: str,
