@@ -61,7 +61,7 @@
         <label class="block text-sm text-gray-300 mb-1">Role</label>
         <select id="newUserRole" class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated" onchange="toggleClientPicker()">
           <option value="platform_admin">Super Admin</option>
-          <option value="tenant_admin">Admin (per client)</option>
+          <option value="tenant_admin" selected>Admin (per client)</option>
           <option value="subscriber">Subscriber (per client)</option>
         </select>
       </div>
@@ -84,7 +84,12 @@
 
 <script>
 function openAddUserModal(){
-  const m=document.getElementById('addUserModal'); if(m) m.classList.remove('hidden');
+  const m=document.getElementById('addUserModal');
+  if(m){
+    m.classList.remove('hidden');
+    // Ensure correct visibility based on current role selection
+    toggleClientPicker();
+  }
 }
 function closeAddUserModal(){
   const m=document.getElementById('addUserModal'); if(m) m.classList.add('hidden');
