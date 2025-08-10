@@ -228,7 +228,7 @@
     </nav>
 
     <!-- Global Loading Overlay -->
-    <div id="globalLoading" class="hidden fixed inset-0 bg-black/60 z-50 items-center justify-center">
+    <div id="globalLoading" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
         <div class="flex flex-col items-center gap-3">
             <div class="spinner" style="width:36px;height:36px;border-width:3px"></div>
             <div class="text-sm text-dark-text-secondary">Processing...</div>
@@ -256,6 +256,11 @@
         
         // Add loading states (HTMX)
         document.addEventListener('htmx:beforeRequest', function(event) {
+            // Skip showing loader for text chat endpoints
+            const url = event.detail.pathInfo && event.detail.pathInfo.requestPath;
+            if (url && (url.includes('/admin/agents/preview') || url.includes('/messages') || url.includes('/send'))) {
+                return;
+            }
             const overlay = document.getElementById('globalLoading');
             if (overlay) overlay.classList.remove('hidden');
         });
@@ -270,7 +275,10 @@
         });
 
         // Add loading states (Fetch-based forms)
-        window.showGlobalLoading = function() {
+        window.showGlobalLoading = function(path) {
+            if (path && (path.includes('/admin/agents/preview') || path.includes('/messages') || path.includes('/send'))) {
+                return;
+            }
             const overlay = document.getElementById('globalLoading');
             if (overlay) overlay.classList.remove('hidden');
         }

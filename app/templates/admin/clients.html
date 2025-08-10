@@ -252,7 +252,7 @@ async function addClient() {
     }
     
     try {
-        if (window.showGlobalLoading) window.showGlobalLoading();
+        if (window.showGlobalLoading) window.showGlobalLoading('/api/v1/clients/');
         const response = await fetch('/api/v1/clients/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
