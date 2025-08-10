@@ -227,6 +227,14 @@
         </div>
     </nav>
 
+    <!-- Global Loading Overlay -->
+    <div id="globalLoading" class="hidden fixed inset-0 bg-black/60 z-50 items-center justify-center">
+        <div class="flex flex-col items-center gap-3">
+            <div class="spinner" style="width:36px;height:36px;border-width:3px"></div>
+            <div class="text-sm text-dark-text-secondary">Processing...</div>
+        </div>
+    </div>
+
     <!-- Main Content -->
     <main class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
         {% block content %}{% endblock %}
@@ -246,22 +254,30 @@
         htmx.config.globalViewTransitions = true;
         htmx.config.timeout = 10000; // 10 second timeout
         
-        // Add loading states
+        // Add loading states (HTMX)
         document.addEventListener('htmx:beforeRequest', function(event) {
-            // Add loading class to trigger element
-            event.detail.elt.classList.add('opacity-50');
+            const overlay = document.getElementById('globalLoading');
+            if (overlay) overlay.classList.remove('hidden');
         });
         
         document.addEventListener('htmx:afterRequest', function(event) {
-            // Remove loading class
-            event.detail.elt.classList.remove('opacity-50');
-            
+            const overlay = document.getElementById('globalLoading');
+            if (overlay) overlay.classList.add('hidden');
             // Handle errors
-            if (event.detail.xhr.status >= 400) {
+            if (event.detail.xhr && event.detail.xhr.status >= 400) {
                 console.error('HTMX request failed:', event.detail.xhr.status);
-                // Could show error notification here
             }
         });
+
+        // Add loading states (Fetch-based forms)
+        window.showGlobalLoading = function() {
+            const overlay = document.getElementById('globalLoading');
+            if (overlay) overlay.classList.remove('hidden');
+        }
+        window.hideGlobalLoading = function() {
+            const overlay = document.getElementById('globalLoading');
+            if (overlay) overlay.classList.add('hidden');
+        }
         
         // Initialize Supabase client for logout
         const supabaseUrl = 'https://yuowazxcxwhczywurmmw.supabase.co';

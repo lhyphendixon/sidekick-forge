@@ -252,6 +252,7 @@ async function addClient() {
     }
     
     try {
+        if (window.showGlobalLoading) window.showGlobalLoading();
         const response = await fetch('/api/v1/clients/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -274,6 +275,8 @@ async function addClient() {
     } catch (error) {
         console.error('Request error:', error);
         alert('Error creating client: ' + error.message);
+    } finally {
+        if (window.hideGlobalLoading) window.hideGlobalLoading();
     }
 }
 
