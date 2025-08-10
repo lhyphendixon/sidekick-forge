@@ -172,7 +172,10 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
         data = await request.json()
         email = (data.get('email') or '').strip()
         role_key = (data.get('role_key') or 'subscriber').strip()
-        client_id = (data.get('client_id') or '').strip() or None
+        client_ids = data.get('client_ids') or []
+        if isinstance(client_ids, str):
+            client_ids = [client_ids]
+        client_ids = [cid for cid in client_ids if cid]
         if not email:
             raise HTTPException(status_code=400, detail="Email is required")
 
@@ -202,16 +205,17 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
                     'role_id': role_row['id']
                 }).execute()
         # Tenant-scoped roles: tenant_admin or subscriber
-        elif role_key in ('tenant_admin','subscriber') and client_id:
+        elif role_key in ('tenant_admin','subscriber') and client_ids:
             role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
             if role_row:
-                # Upsert tenant membership
-                admin_client.table('tenant_memberships').upsert({
-                    'user_id': user_id,
-                    'client_id': client_id,
-                    'role_id': role_row['id'],
-                    'status': 'active'
-                }).execute()
+                # Upsert tenant memberships for each selected client
+                for cid in client_ids:
+                    admin_client.table('tenant_memberships').upsert({
+                        'user_id': user_id,
+                        'client_id': cid,
+                        'role_id': role_row['id'],
+                        'status': 'active'
+                    }).execute()
 
         return HTMLResponse(status_code=201, content="Created")
     except HTTPException:

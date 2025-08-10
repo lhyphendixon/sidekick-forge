@@ -66,12 +66,13 @@
         </select>
       </div>
       <div id="clientPicker" class="hidden">
-        <label class="block text-sm text-gray-300 mb-1">Client</label>
-        <select id="newUserClientId" class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated">
+        <label class="block text-sm text-gray-300 mb-1">Client(s)</label>
+        <select id="newUserClientIds" multiple class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated min-h-[120px]">
           {% for c in clients %}
           <option value="{{ c.id }}">{{ c.name }}</option>
           {% endfor %}
         </select>
+        <p class="text-xs text-gray-500 mt-1">Hold Ctrl/Cmd to select multiple projects.</p>
       </div>
       <div class="flex items-center justify-end gap-2 mt-2">
         <button onclick="closeAddUserModal()" class="px-3 py-2 text-sm text-gray-300 hover:text-white">Cancel</button>
@@ -97,15 +98,15 @@ function toggleClientPicker(){
 async function addUser(){
   const email=document.getElementById('newUserEmail').value.trim();
   const role=document.getElementById('newUserRole').value;
-  const clientIdEl=document.getElementById('newUserClientId');
-  const client_id = (role === 'tenant_admin' || role === 'subscriber') && clientIdEl ? clientIdEl.value : null;
+  const clientIdsEl=document.getElementById('newUserClientIds');
+  const selectedClientIds = (role === 'tenant_admin' || role === 'subscriber') && clientIdsEl ? Array.from(clientIdsEl.selectedOptions).map(o => o.value) : [];
   if(!email){ alert('Please enter an email'); return; }
-  if((role === 'tenant_admin' || role === 'subscriber') && !client_id){ alert('Please select a client'); return; }
+  if((role === 'tenant_admin' || role === 'subscriber') && selectedClientIds.length === 0){ alert('Please select at least one client'); return; }
   try {
     if (window.showGlobalLoading) window.showGlobalLoading('/admin/users/create');
     const res = await fetch('/admin/users/create',{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ email, role_key: role, client_id })
+      body: JSON.stringify({ email, role_key: role, client_ids: selectedClientIds })
     });
     if(!res.ok){
       const txt = await res.text();
