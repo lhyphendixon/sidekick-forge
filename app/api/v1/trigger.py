@@ -645,7 +645,7 @@ async def handle_text_trigger(
             groq_key = api_keys.get("groq_api_key")
             if groq_key and groq_key not in ["test_key", "test", "dummy"]:
                 # Map old model names to new ones
-                if llm_model == "llama3-70b-8192" or llm_model == "llama-3.1-70b-versatile":
+                if llm_model in ("llama3-70b-8192", "llama-3.1-70b-versatile"):
                     llm_model = "llama-3.3-70b-versatile"
                 llm_plugin = lk_groq.LLM(
                     model=llm_model or "llama-3.3-70b-versatile",

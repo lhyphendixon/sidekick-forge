@@ -293,6 +293,8 @@ async def agent_job_handler(ctx: JobContext):
                 # LiveKit uses openai plugin shim for Cerebras per docs
                 # from livekit.plugins import openai as lk_openai  (already imported as openai)
                 os.environ["CEREBRAS_API_KEY"] = cerebras_key
+                # Align with Cerebras documented chat models
+                # https://inference-docs.cerebras.ai/api-reference/chat-completions
                 model = voice_settings.get("llm_model", metadata.get("model", "llama3.1-8b"))
                 llm_plugin = openai.LLM.with_cerebras(
                     model=model

@@ -1138,10 +1138,23 @@ async def agent_detail(
                                     <div>
                                         <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
                                         <select name="llm_model" id="llm-model" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <!-- OpenAI -->
                                             <option value="gpt-4o">GPT-4o (OpenAI)</option>
                                             <option value="gpt-4o-mini">GPT-4o Mini (OpenAI)</option>
-                                            <option value="llama3-70b-8192" selected>Llama 3 70B (Groq)</option>
+                                            <!-- Groq (compat names mapped in worker) -->
+                                            <option value="llama-3.3-70b-versatile" selected>Llama 3.3 70B (Groq)</option>
+                                            <option value="llama3-8b-8192">Llama 3 8B (Groq)</option>
                                             <option value="mixtral-8x7b-32768">Mixtral 8x7B (Groq)</option>
+                                            <!-- Cerebras documented chat models -->
+                                            <option value="llama3.1-8b">Llama 3.1 8B (Cerebras)</option>
+                                            <option value="llama-3.3-70b">Llama 3.3 70B (Cerebras)</option>
+                                            <option value="llama-4-scout-17b-16e-instruct">Llama 4 Scout 17B Instruct (Cerebras)</option>
+                                            <option value="llama-4-maverick-17b-128e-instruct">Llama 4 Maverick 17B Instruct (preview, Cerebras)</option>
+                                            <option value="qwen-3-32b">Qwen 3 32B (Cerebras)</option>
+                                            <option value="qwen-3-235b-a22b-instruct-2507">Qwen 3 235B Instruct (preview, Cerebras)</option>
+                                            <option value="qwen-3-235b-a22b-thinking-2507">Qwen 3 235B Thinking (preview, Cerebras)</option>
+                                            <option value="qwen-3-coder-480b">Qwen 3 Coder 480B (preview, Cerebras)</option>
+                                            <option value="gpt-oss-120b">GPT-OSS 120B (preview, Cerebras)</option>
                                         </select>
                                     </div>
                                     <div>
