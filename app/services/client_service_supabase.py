@@ -46,10 +46,12 @@ class ClientService:
         client_dict = {
             "id": client_id,
             "name": client_data.name,
+            # store top-level fields used by queries
+            "domain": client_data.domain or "",
+            "active": True,
             "additional_settings": {
                 "description": client_data.description,
                 "domain": client_data.domain,
-                "active": client_data.active,
                 "supabase_anon_key": settings.supabase.anon_key if settings.supabase else "",
                 "embedding": settings.embedding.dict() if settings.embedding else {},
                 "rerank": settings.rerank.dict() if settings.rerank else {}
