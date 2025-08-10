@@ -161,6 +161,12 @@
                         <input type="password" value="{{ client.settings.api_keys.groq_api_key or '' }}" name="groq_api_key" data-api-key="groq_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Cerebras API Key</label>
+                        <input type="password" value="{{ client.settings.api_keys.cerebras_api_key or '' }}" name="cerebras_api_key" data-api-key="cerebras_api_key"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                    </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">DeepInfra API Key</label>
