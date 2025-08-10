@@ -47,8 +47,7 @@ class ClientService:
         client_dict = {
             "id": client_id,
             "name": client_data.name,
-            # store top-level fields used by queries
-            "domain": client_data.domain or "",
+            # store minimal top-level fields only (avoid non-existent columns)
             "additional_settings": {
                 "description": client_data.description,
                 "domain": client_data.domain,
