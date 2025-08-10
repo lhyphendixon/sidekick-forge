@@ -158,6 +158,48 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
         })
     return templates.TemplateResponse("admin/users.html", {"request": request, "user": user, "users": enriched})
 
+@router.post("/users/create")
+async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
+    """Create a new user via Supabase Admin API, then assign platform role membership."""
+    try:
+        data = await request.json()
+        email = (data.get('email') or '').strip()
+        role_key = (data.get('role_key') or 'viewer').strip()
+        if not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+
+        import httpx
+        supabase_url = os.getenv('SUPABASE_URL')
+        service_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+        headers = {'apikey': service_key, 'Authorization': f'Bearer {service_key}', 'Content-Type': 'application/json'}
+
+        # Create user (no password -> magic link invite disabled here; using email only)
+        payload = {"email": email, "email_confirm": True}
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"{supabase_url}/auth/v1/admin/users", headers=headers, json=payload)
+        if r.status_code not in (200, 201):
+            return HTMLResponse(status_code=500, content="Failed to create user")
+        user = r.json()
+        user_id = user.get('id')
+
+        # Assign platform role (if key exists)
+        await supabase_manager.initialize()
+        admin_client = supabase_manager.admin_client
+        # Find role_id
+        role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+        if role_row:
+            # Upsert membership
+            admin_client.table('platform_role_memberships').upsert({
+                'user_id': user_id,
+                'role_id': role_row['id']
+            }).execute()
+
+        return HTMLResponse(status_code=201, content="Created")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return HTMLResponse(status_code=500, content="Error creating user")
+
 async def get_system_summary() -> Dict[str, Any]:
     """Get system-wide summary statistics"""
     # Get all clients from Supabase
