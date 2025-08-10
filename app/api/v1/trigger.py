@@ -329,6 +329,7 @@ async def handle_voice_trigger(
             # LLM Providers
             "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
             "groq_api_key": client.settings.api_keys.groq_api_key if client.settings and client.settings.api_keys else None,
+            "cerebras_api_key": getattr(client.settings.api_keys, 'cerebras_api_key', None) if client.settings and client.settings.api_keys else None,
             "deepinfra_api_key": client.settings.api_keys.deepinfra_api_key if client.settings and client.settings.api_keys else None,
             "replicate_api_key": client.settings.api_keys.replicate_api_key if client.settings and client.settings.api_keys else None,
             # Voice/Speech Providers
@@ -387,6 +388,8 @@ async def handle_voice_trigger(
             "cartesia": "cartesia_api_key",
         }
         api_keys_map = agent_context.get("api_keys", {})
+        # Debug missing keys
+        logger.info(f"API keys present for dispatch: {list(k for k,v in api_keys_map.items() if v) }")
         missing_keys = []
         for provider in (selected_llm, selected_stt, selected_tts):
             key_name = provider_to_key.get(provider)
@@ -868,6 +871,7 @@ async def dispatch_agent_job(
                 # LLM Providers
                 "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
                 "groq_api_key": client.settings.api_keys.groq_api_key if client.settings and client.settings.api_keys else None,
+                "cerebras_api_key": getattr(client.settings.api_keys, 'cerebras_api_key', None) if client.settings and client.settings.api_keys else None,
                 "deepinfra_api_key": client.settings.api_keys.deepinfra_api_key if client.settings and client.settings.api_keys else None,
                 "replicate_api_key": client.settings.api_keys.replicate_api_key if client.settings and client.settings.api_keys else None,
                 # Voice/Speech Providers
