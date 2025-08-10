@@ -22,6 +22,8 @@ from livekit import api
 from app.services.wordpress_site_service_supabase import WordPressSiteService
 from app.models.wordpress_site import WordPressSite, WordPressSiteCreate, WordPressSiteUpdate
 from app.utils.default_ids import get_default_client_id, get_user_id_from_request
+from app.permissions.rbac import get_platform_permissions
+from app.integrations.supabase_client import supabase_manager
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,36 @@ async def check_auth(request: Request):
         return {"authenticated": True, "user": user}
     except HTTPException:
         return {"authenticated": False}
+
+# Users management page
+@router.get("/users", response_class=HTMLResponse)
+async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_user)):
+    """Minimal Users page showing recent users and platform permissions."""
+    await supabase_manager.initialize()
+    import httpx
+    headers = {
+        'apikey': os.getenv('SUPABASE_SERVICE_ROLE_KEY', ''),
+        'Authorization': f"Bearer {os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')}",
+    }
+    users: List[Dict[str, Any]] = []
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{os.getenv('SUPABASE_URL')}/auth/v1/admin/users", headers=headers, params={"per_page": 25})
+            if r.status_code == 200:
+                data = r.json()
+                users = data.get('users', [])
+    except Exception:
+        users = []
+    enriched = []
+    for u in users:
+        perms = await get_platform_permissions(u.get('id'))
+        enriched.append({
+            "id": u.get('id'),
+            "email": u.get('email'),
+            "created_at": u.get('created_at'),
+            "permissions": sorted(list(perms)),
+        })
+    return templates.TemplateResponse("admin/users.html", {"request": request, "user": user, "users": enriched})
 
 async def get_system_summary() -> Dict[str, Any]:
     """Get system-wide summary statistics"""

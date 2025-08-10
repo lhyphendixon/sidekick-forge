@@ -6,6 +6,11 @@ import os
 # Import pure Supabase services (no Redis)
 from app.services.client_service_supabase import ClientService
 from app.services.agent_service_supabase import AgentService
+from fastapi import Depends, HTTPException, status
+from typing import Optional
+from app.middleware.auth import get_current_auth
+from app.models.user import AuthContext
+from app.permissions.rbac import has_permission
 
 def get_client_service() -> ClientService:
     """Get client service for Sidekick Forge platform database"""
@@ -18,3 +23,22 @@ def get_agent_service() -> AgentService:
     """Get agent service (Supabase only)"""
     client_service = get_client_service()
     return AgentService(client_service)
+
+
+async def require_permission(
+    permission_key: str,
+    client_id_param: Optional[str] = None,
+):
+    """Factory that returns a dependency enforcing a permission.
+
+    Usage:
+        @router.get(..., dependencies=[Depends(require_permission('agents:write', client_id_param='client_id'))])
+    """
+    async def _checker(auth: AuthContext = Depends(get_current_auth), client_id: Optional[str] = None):
+        # Allow platform_admin via platform perms
+        cid = client_id or client_id_param
+        allowed = await has_permission(str(auth.user_id), permission_key, cid)
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        return True
+    return _checker
