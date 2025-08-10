@@ -286,6 +286,17 @@ async def agent_job_handler(ctx: JobContext):
                     model=model,
                     api_key=groq_key
                 )
+            elif llm_provider == "cerebras":
+                cerebras_key = api_keys.get("cerebras_api_key")
+                if not cerebras_key:
+                    raise ConfigurationError("Cerebras API key required but not found")
+                # LiveKit uses openai plugin shim for Cerebras per docs
+                # from livekit.plugins import openai as lk_openai  (already imported as openai)
+                os.environ["CEREBRAS_API_KEY"] = cerebras_key
+                model = voice_settings.get("llm_model", metadata.get("model", "llama3.1-8b"))
+                llm_plugin = openai.LLM.with_cerebras(
+                    model=model
+                )
             else:
                 openai_key = api_keys.get("openai_api_key")
                 if not openai_key:
@@ -315,11 +326,11 @@ async def agent_job_handler(ctx: JobContext):
                     raise ConfigurationError("Deepgram API key required for STT but not found")
                 stt_plugin = deepgram.STT(
                     api_key=deepgram_key,
-                    model="nova-3",          # Doc default
-                    language="en-US",        # Doc language code
-                    endpointing_ms=1000       # Encourage final segments for turn commit
+                    model="nova-3",
+                    language="en-US",
+                    endpointing_ms=500       # Lower endpointing for faster turn commit
                 )
-                logger.info("📊 DIAGNOSTIC: Deepgram configured with model=nova-3, language=en-US, endpointing_ms=1000")
+                logger.info("📊 DIAGNOSTIC: Deepgram configured with model=nova-3, language=en-US, endpointing_ms=500")
             
             # Validate STT initialization
             ConfigValidator.validate_provider_initialization(f"{stt_provider} STT", stt_plugin)
@@ -362,8 +373,8 @@ async def agent_job_handler(ctx: JobContext):
             # VAD is crucial for turn detection - it determines when user stops speaking
             try:
                 vad = silero.VAD.load(
-                    min_speech_duration=0.15,  # Shorter wake-up for better responsiveness
-                    min_silence_duration=0.8,  # Tolerate brief pauses in noisy environments
+                    min_speech_duration=0.12,  # slightly quicker start
+                    min_silence_duration=0.5,  # faster end detection
                 )
                 logger.info("✅ VAD loaded successfully with optimized parameters")
                 logger.info(f"📊 DIAGNOSTIC: VAD type: {type(vad)}")
@@ -517,10 +528,10 @@ async def agent_job_handler(ctx: JobContext):
             # Create session without duplicating plugins; Agent will own stt/llm/tts/vad
             session = voice.AgentSession(
                 turn_detection="stt",
-                min_endpointing_delay=0.8,
-                max_endpointing_delay=8.0,
+                min_endpointing_delay=0.25,
+                max_endpointing_delay=3.0,
             )
-            logger.info("✅ Voice agent session created (turn_detection='stt', Deepgram endpointing_ms=1000)")
+            logger.info("✅ Voice agent session created (turn_detection='stt', Deepgram endpointing_ms=500)")
             
             # Minimal diagnostics; rely on AgentSession automatic conversation flow
             logger.info(f"📊 DIAGNOSTIC: Session type: {type(session)}")

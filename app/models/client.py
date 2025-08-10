@@ -38,6 +38,7 @@ class APIKeys(BaseModel):
     # LLM Providers
     openai_api_key: Optional[str] = None
     groq_api_key: Optional[str] = None
+    cerebras_api_key: Optional[str] = None
     deepinfra_api_key: Optional[str] = None
     replicate_api_key: Optional[str] = None
     

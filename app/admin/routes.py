@@ -1131,6 +1131,7 @@ async def agent_detail(
                                         <select name="llm_provider" id="llm-provider" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
                                             <option value="openai">OpenAI</option>
                                             <option value="groq" selected>Groq</option>
+                                            <option value="cerebras">Cerebras</option>
                                             <option value="deepinfra">DeepInfra</option>
                                         </select>
                                     </div>
@@ -1900,8 +1901,10 @@ async def send_preview_message(
                     api_keys = {
                         'openai_api_key': config.get('openai_api_key', os.getenv('OPENAI_API_KEY', '')),
                         'groq_api_key': config.get('groq_api_key', ''),
+                        'cerebras_api_key': config.get('cerebras_api_key', ''),
                         'deepgram_api_key': config.get('deepgram_api_key', ''),
-                        'elevenlabs_api_key': config.get('elevenlabs_api_key', '')
+                        'elevenlabs_api_key': config.get('elevenlabs_api_key', ''),
+                        'cartesia_api_key': config.get('cartesia_api_key', '')
                     }
             except Exception as e:
                 logger.warning(f"Failed to get agent configuration: {e}")
@@ -1909,10 +1912,11 @@ async def send_preview_message(
                 api_keys = {
                     'openai_api_key': os.getenv('OPENAI_API_KEY', ''),
                     'groq_api_key': os.getenv('GROQ_API_KEY', ''),
+                    'cerebras_api_key': os.getenv('CEREBRAS_API_KEY', ''),
                 }
             
             # Process the message using AI
-            if api_keys.get('openai_api_key') or api_keys.get('groq_api_key'):
+            if api_keys.get('openai_api_key') or api_keys.get('groq_api_key') or api_keys.get('cerebras_api_key'):
                 # Use OpenAI or Groq to generate response
                 import httpx
                 
@@ -1942,6 +1946,27 @@ async def send_preview_message(
                     elif api_keys.get('groq_api_key'):
                         # Use Groq as fallback
                         logger.info(f"Using Groq API for agent {agent.name}")
+                    elif api_keys.get('cerebras_api_key'):
+                        # Minimal Cerebras test path for admin preview (text-only)
+                        import httpx
+                        logger.info(f"Using Cerebras API for agent {agent.name}")
+                        headers = {"Authorization": f"Bearer {api_keys['cerebras_api_key']}"}
+                        request_data = {
+                            "model": "llama3.1-8b",
+                            "messages": [
+                                {"role": "system", "content": agent.system_prompt or "You are a helpful assistant."},
+                                {"role": "user", "content": message}
+                            ],
+                            "stream": False
+                        }
+                        async with httpx.AsyncClient() as client:
+                            response = await client.post("https://api.cerebras.ai/v1/chat/completions", headers=headers, json=request_data, timeout=30.0)
+                            if response.status_code == 200:
+                                data = response.json()
+                                text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                                if text:
+                                    return JSONResponse({"success": True, "response": text})
+                            raise Exception(f"Cerebras API error: {response.status_code}")
                         logger.debug(f"System prompt length: {len(agent.system_prompt) if agent.system_prompt else 0}")
                         
                         # Try multiple Groq models in case some are unavailable
@@ -2765,6 +2790,7 @@ async def admin_update_client(
             api_keys=APIKeys(
                 openai_api_key=form.get("openai_api_key") or (current_api_keys.openai_api_key if hasattr(current_api_keys, 'openai_api_key') else current_api_keys.get('openai_api_key') if isinstance(current_api_keys, dict) else None),
                 groq_api_key=form.get("groq_api_key") or (current_api_keys.groq_api_key if hasattr(current_api_keys, 'groq_api_key') else current_api_keys.get('groq_api_key') if isinstance(current_api_keys, dict) else None),
+                cerebras_api_key=form.get("cerebras_api_key") or (current_api_keys.cerebras_api_key if hasattr(current_api_keys, 'cerebras_api_key') else current_api_keys.get('cerebras_api_key') if isinstance(current_api_keys, dict) else None),
                 deepinfra_api_key=form.get("deepinfra_api_key") or (current_api_keys.deepinfra_api_key if hasattr(current_api_keys, 'deepinfra_api_key') else current_api_keys.get('deepinfra_api_key') if isinstance(current_api_keys, dict) else None),
                 replicate_api_key=form.get("replicate_api_key") or (current_api_keys.replicate_api_key if hasattr(current_api_keys, 'replicate_api_key') else current_api_keys.get('replicate_api_key') if isinstance(current_api_keys, dict) else None),
                 deepgram_api_key=form.get("deepgram_api_key") or (current_api_keys.deepgram_api_key if hasattr(current_api_keys, 'deepgram_api_key') else current_api_keys.get('deepgram_api_key') if isinstance(current_api_keys, dict) else None),

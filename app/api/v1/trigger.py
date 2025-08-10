@@ -381,6 +381,7 @@ async def handle_voice_trigger(
         provider_to_key = {
             "openai": "openai_api_key",
             "groq": "groq_api_key",
+            "cerebras": "cerebras_api_key",
             "deepgram": "deepgram_api_key",
             "elevenlabs": "elevenlabs_api_key",
             "cartesia": "cartesia_api_key",
