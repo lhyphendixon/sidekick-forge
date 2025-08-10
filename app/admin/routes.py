@@ -1472,7 +1472,21 @@ async def agent_detail(
                                 // window.location.reload();
                             }} else {{
                                 const error = await response.json();
-                                alert(`Error saving configuration: ${{error.detail || 'Unknown error'}}`);
+                                
+                                // Check if it's an API key validation error
+                                if (response.status === 400 && error.detail && typeof error.detail === 'object' && error.detail.missing_keys) {{
+                                    // Build error message for missing API keys
+                                    let errorMessage = 'Cannot save configuration - Missing API keys:\\n\\n';
+                                    error.detail.missing_keys.forEach(key => {{
+                                        errorMessage += `• ${{key.provider_type}} provider "${{key.provider}}" requires ${{key.required_key}}\\n`;
+                                    }});
+                                    errorMessage += `\\nPlease add the missing API keys for client "${{error.detail.client_name}}" in the client settings.`;
+                                    alert(errorMessage);
+                                }} else {{
+                                    // Generic error
+                                    const errorMsg = typeof error.detail === 'string' ? error.detail : (error.detail?.error || 'Unknown error');
+                                    alert(`Error saving configuration: ${{errorMsg}}`);
+                                }}
                             }}
                         }} catch (error) {{
                             alert(`Error saving configuration: ${{error.message}}`);
@@ -2737,14 +2751,101 @@ async def admin_update_agent(
         # Parse JSON body
         data = await request.json()
         
-        # Get agent service
-        from app.core.dependencies import get_agent_service
+        # Get agent and client services
+        from app.core.dependencies import get_agent_service, get_client_service
         agent_service = get_agent_service()
+        client_service = get_client_service()
         
         # Get existing agent
         agent = await agent_service.get_agent(client_id, agent_slug)
         if not agent:
             return {"error": "Agent not found", "status": 404}
+        
+        # Get client to check API keys
+        client = await client_service.get_client(client_id)
+        if not client:
+            return {"error": "Client not found", "status": 404}
+        
+        # Validate API keys if voice_settings are provided
+        if "voice_settings" in data:
+            voice_settings = data["voice_settings"]
+            missing_keys = []
+            
+            # Define provider to API key mappings
+            llm_provider_keys = {
+                "openai": "openai_api_key",
+                "groq": "groq_api_key",
+                "cerebras": "cerebras_api_key",
+                "deepinfra": "deepinfra_api_key",
+                "replicate": "replicate_api_key"
+            }
+            
+            stt_provider_keys = {
+                "deepgram": "deepgram_api_key",
+                "groq": "groq_api_key",
+                "openai": "openai_api_key",
+                "cartesia": "cartesia_api_key"
+            }
+            
+            tts_provider_keys = {
+                "openai": "openai_api_key",
+                "elevenlabs": "elevenlabs_api_key",
+                "cartesia": "cartesia_api_key",
+                "speechify": "speechify_api_key",
+                "replicate": "replicate_api_key"
+            }
+            
+            # Check LLM provider
+            if "llm_provider" in voice_settings and voice_settings["llm_provider"]:
+                llm_provider = voice_settings["llm_provider"]
+                if llm_provider in llm_provider_keys:
+                    required_key = llm_provider_keys[llm_provider]
+                    if not hasattr(client.settings.api_keys, required_key) or not getattr(client.settings.api_keys, required_key):
+                        missing_keys.append({
+                            "provider_type": "LLM",
+                            "provider": llm_provider,
+                            "required_key": required_key,
+                            "message": f"LLM provider '{llm_provider}' requires {required_key}"
+                        })
+            
+            # Check STT provider
+            if "stt_provider" in voice_settings and voice_settings["stt_provider"]:
+                stt_provider = voice_settings["stt_provider"]
+                if stt_provider in stt_provider_keys:
+                    required_key = stt_provider_keys[stt_provider]
+                    if not hasattr(client.settings.api_keys, required_key) or not getattr(client.settings.api_keys, required_key):
+                        missing_keys.append({
+                            "provider_type": "STT",
+                            "provider": stt_provider,
+                            "required_key": required_key,
+                            "message": f"STT provider '{stt_provider}' requires {required_key}"
+                        })
+            
+            # Check TTS provider
+            if "tts_provider" in voice_settings and voice_settings["tts_provider"]:
+                tts_provider = voice_settings["tts_provider"]
+                if tts_provider in tts_provider_keys:
+                    required_key = tts_provider_keys[tts_provider]
+                    if not hasattr(client.settings.api_keys, required_key) or not getattr(client.settings.api_keys, required_key):
+                        missing_keys.append({
+                            "provider_type": "TTS",
+                            "provider": tts_provider,
+                            "required_key": required_key,
+                            "message": f"TTS provider '{tts_provider}' requires {required_key}"
+                        })
+            
+            # If missing keys found, return validation error
+            if missing_keys:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "Missing API keys for selected providers",
+                        "missing_keys": missing_keys,
+                        "client_id": client_id,
+                        "client_name": client.name
+                    }
+                )
         
         # Prepare update data
         from app.models.agent import AgentUpdate, VoiceSettings, WebhookSettings

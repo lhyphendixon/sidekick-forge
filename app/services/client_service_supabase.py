@@ -86,6 +86,8 @@ class ClientService:
                 client_dict["siliconflow_api_key"] = api_keys.siliconflow_api_key
             if api_keys.jina_api_key:
                 client_dict["jina_api_key"] = api_keys.jina_api_key
+            if api_keys.cerebras_api_key:
+                client_dict["cerebras_api_key"] = api_keys.cerebras_api_key
             # Note: anthropic_api_key removed - not in APIKeys model
         
         # Store in Supabase
@@ -185,6 +187,8 @@ class ClientService:
                     update_dict["siliconflow_api_key"] = api_keys.siliconflow_api_key
                 if api_keys.jina_api_key is not None:
                     update_dict["jina_api_key"] = api_keys.jina_api_key
+                if api_keys.cerebras_api_key is not None:
+                    update_dict["cerebras_api_key"] = api_keys.cerebras_api_key
                 # Note: anthropic_api_key is not in the APIKeys model
             
             # Note: We don't have a settings column in the platform database
@@ -581,7 +585,7 @@ class ClientService:
             settings_dict["api_keys"] = {}
         api_key_fields = [
             "openai_api_key", "groq_api_key", "deepgram_api_key", "elevenlabs_api_key",
-            "cartesia_api_key", "replicate_api_key", "deepinfra_api_key",
+            "cartesia_api_key", "replicate_api_key", "deepinfra_api_key", "cerebras_api_key",
             "novita_api_key", "cohere_api_key", "siliconflow_api_key", "jina_api_key", "speechify_api_key"
         ]
         for key_field in api_key_fields:

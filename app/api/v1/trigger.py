@@ -599,6 +599,7 @@ async def handle_text_trigger(
         api_keys = {
             "openai_api_key": client.settings.api_keys.openai_api_key,
             "groq_api_key": client.settings.api_keys.groq_api_key,
+            "cerebras_api_key": getattr(client.settings.api_keys, 'cerebras_api_key', None),
             "deepgram_api_key": client.settings.api_keys.deepgram_api_key,
             "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key,
             "cartesia_api_key": client.settings.api_keys.cartesia_api_key,
@@ -639,30 +640,13 @@ async def handle_text_trigger(
             )
             logger.info("✅ Context manager initialized")
         
-        # Configure LLM based on provider
-        from livekit.plugins import openai as lk_openai, groq as lk_groq
+        # Configure LLM based on provider (shared factory)
+        from app.shared.llm_factory import get_llm
         from livekit.agents import llm as lk_llm
         
         llm_plugin = None
-        if llm_provider == "groq":
-            groq_key = api_keys.get("groq_api_key")
-            if groq_key and groq_key not in ["test_key", "test", "dummy"]:
-                # Map old model names to new ones
-                if llm_model in ("llama3-70b-8192", "llama-3.1-70b-versatile"):
-                    llm_model = "llama-3.3-70b-versatile"
-                llm_plugin = lk_groq.LLM(
-                    model=llm_model or "llama-3.3-70b-versatile",
-                    api_key=groq_key
-                )
-                logger.info(f"✅ Initialized Groq LLM with model: {llm_model}")
-        else:  # openai
-            openai_key = api_keys.get("openai_api_key")
-            if openai_key and openai_key not in ["test_key", "test", "dummy"]:
-                llm_plugin = lk_openai.LLM(
-                    model=llm_model or "gpt-4",
-                    api_key=openai_key
-                )
-                logger.info(f"✅ Initialized OpenAI LLM with model: {llm_model}")
+        llm_plugin = get_llm(llm_provider, llm_model, api_keys)
+        logger.info(f"✅ Initialized {llm_provider} LLM with model: {llm_model}")
         
         if not llm_plugin:
             raise ValueError(f"No valid API key for {llm_provider}")
