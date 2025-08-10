@@ -66,7 +66,13 @@ async def create_client(client: ClientCreate) -> Client:
         if not client.name:
             raise HTTPException(status_code=400, detail="Client name is required")
         
-        if not client.supabase_project_url or not client.supabase_service_role_key:
+        if not client.settings or not client.settings.supabase:
+            raise HTTPException(
+                status_code=400,
+                detail="Supabase configuration is required"
+            )
+        
+        if not client.settings.supabase.url or not client.settings.supabase.service_role_key:
             raise HTTPException(
                 status_code=400,
                 detail="Supabase project URL and service role key are required"
