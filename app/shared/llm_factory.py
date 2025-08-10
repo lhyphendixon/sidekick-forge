@@ -28,6 +28,14 @@ def get_llm(provider: str, model: Optional[str], api_keys: Dict[str, Optional[st
         # Default to a valid documented model
         return lk_openai.LLM.with_cerebras(model=model or 'llama3.1-8b', api_key=key)
 
+    if provider == 'deepinfra':
+        key = api_keys.get('deepinfra_api_key')
+        if not key:
+            raise ValueError('Missing API key for DeepInfra')
+        # DeepInfra exposes an OpenAI-compatible API at this base URL
+        # Reference: https://deepinfra.com/docs/openai
+        return lk_openai.LLM(model=model or 'meta-llama/Llama-3.1-8B-Instruct', api_key=key, base_url='https://api.deepinfra.com/v1/openai')
+
     if provider == 'openai' or not provider:
         key = api_keys.get('openai_api_key')
         if not key:

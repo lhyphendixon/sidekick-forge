@@ -27,10 +27,15 @@ class ClientService:
         
     async def create_client(self, client_data: ClientCreate) -> ClientInDB:
         """Create a new client"""
+        import uuid
+        
+        # Generate UUID if not provided
+        client_id = client_data.id if client_data.id else str(uuid.uuid4())
+        
         # Check if client already exists
-        existing = await self.get_client(client_data.id)
+        existing = await self.get_client(client_id)
         if existing:
-            raise HTTPException(status_code=400, detail=f"Client with ID {client_data.id} already exists")
+            raise HTTPException(status_code=400, detail=f"Client with ID {client_id} already exists")
         
         # Create client object with all fields
         now = datetime.now(timezone.utc)
@@ -39,7 +44,7 @@ class ClientService:
         settings = client_data.settings or ClientSettings()
         
         client_dict = {
-            "id": client_data.id,
+            "id": client_id,
             "name": client_data.name,
             "additional_settings": {
                 "description": client_data.description,
@@ -344,7 +349,17 @@ class ClientService:
         """Get a client by ID with optional auto-sync from client's Supabase"""
         import time
         import logging
+        import uuid
         logger = logging.getLogger(__name__)
+        
+        # Validate UUID format
+        try:
+            # Try to parse as UUID to validate format
+            uuid.UUID(client_id)
+        except (ValueError, AttributeError):
+            # Invalid UUID format, return None
+            logger.warning(f"Invalid UUID format for client_id: {client_id}")
+            return None
         
         method_start = time.time()
         query_start = time.time()

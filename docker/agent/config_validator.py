@@ -94,7 +94,7 @@ class ConfigValidator:
             logger.info(f"Normalized tts_provider from provider='{voice_settings['provider']}'")
             
         # Validate provider values
-        valid_llm_providers = ['openai', 'groq', 'cerebras']
+        valid_llm_providers = ['openai', 'groq', 'cerebras', 'deepinfra']
         valid_stt_providers = ['deepgram', 'cartesia']
         valid_tts_providers = ['elevenlabs', 'cartesia']
         
@@ -158,6 +158,8 @@ class ConfigValidator:
             required.append(('groq_api_key', 'Groq'))
         elif llm_provider == 'cerebras':
             required.append(('cerebras_api_key', 'Cerebras'))
+        elif llm_provider == 'deepinfra':
+            required.append(('deepinfra_api_key', 'DeepInfra'))
             
         # STT provider
         stt_provider = voice_settings.get('stt_provider')

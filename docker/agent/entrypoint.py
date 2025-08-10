@@ -299,6 +299,17 @@ async def agent_job_handler(ctx: JobContext):
                 llm_plugin = openai.LLM.with_cerebras(
                     model=model
                 )
+            elif llm_provider == "deepinfra":
+                deepinfra_key = api_keys.get("deepinfra_api_key")
+                if not deepinfra_key:
+                    raise ConfigurationError("DeepInfra API key required but not found")
+                model = voice_settings.get("llm_model", metadata.get("model", "meta-llama/Llama-3.1-8B-Instruct"))
+                # Use OpenAI-compatible base_url for DeepInfra
+                llm_plugin = openai.LLM(
+                    model=model,
+                    api_key=deepinfra_key,
+                    base_url="https://api.deepinfra.com/v1/openai"
+                )
             else:
                 openai_key = api_keys.get("openai_api_key")
                 if not openai_key:

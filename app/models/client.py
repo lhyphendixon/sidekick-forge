@@ -105,7 +105,7 @@ class Client(BaseModel):
 
 class ClientCreate(BaseModel):
     """Create a new client"""
-    id: str = Field(..., description="Unique client identifier (e.g., 'autonomite-agent', 'live-free-academy')")
+    id: Optional[str] = Field(None, description="Optional client identifier UUID. If not provided, will be auto-generated")
     name: str = Field(..., description="Client name")
     description: Optional[str] = None
     domain: Optional[str] = None
