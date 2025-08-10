@@ -43,9 +43,9 @@ class ClientService:
         # Extract settings into separate columns
         settings = client_data.settings or ClientSettings()
         
+        # Persist slug inside additional_settings for backward compatibility
         client_dict = {
             "id": client_id,
-            "slug": client_data.slug,
             "name": client_data.name,
             # store top-level fields used by queries
             "domain": client_data.domain or "",
@@ -53,6 +53,7 @@ class ClientService:
             "additional_settings": {
                 "description": client_data.description,
                 "domain": client_data.domain,
+                "slug": client_data.slug,
                 "supabase_anon_key": settings.supabase.anon_key if settings.supabase else "",
                 "embedding": settings.embedding.dict() if settings.embedding else {},
                 "rerank": settings.rerank.dict() if settings.rerank else {}
@@ -128,7 +129,11 @@ class ClientService:
         if update_data.name is not None:
             update_dict["name"] = update_data.name
         if update_data.slug is not None:
-            update_dict["slug"] = update_data.slug
+            # Merge slug into additional_settings JSONB
+            result = self.supabase.table(self.table_name).select("additional_settings").eq("id", client_id).execute()
+            existing_additional = result.data[0].get("additional_settings", {}) if result.data else {}
+            merged_additional = {**existing_additional, **{"slug": update_data.slug}}
+            update_dict["additional_settings"] = merged_additional
             
         # Fields that go in additional_settings JSONB
         additional_settings = {}
@@ -623,10 +628,18 @@ class ClientService:
         if "rerank" in additional and additional["rerank"]:
             settings_dict["rerank"] = additional["rerank"]
         
+        # Compute slug from column, additional_settings, or name fallback
+        raw_slug = db_row.get("slug") or additional.get("slug")
+        if not raw_slug:
+            # simple slugify from name or domain
+            base = (db_row.get("name") or db_row.get("domain") or "client").lower()
+            import re
+            raw_slug = re.sub(r"[^a-z0-9]+", "-", base).strip("-") or "client"
+
         # Create ClientInDB instance
         return ClientInDB(
             id=db_row["id"],
-            slug=db_row.get("slug", ""),
+            slug=raw_slug,
             name=db_row["name"],
             description=additional.get("description", db_row.get("description")),
             domain=additional.get("domain", db_row.get("domain")),
