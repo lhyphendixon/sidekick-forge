@@ -194,12 +194,32 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
         user = r.json()
         user_id = user.get('id')
 
+        # Helper to ensure basic roles exist
+        def _seed_core_roles(client):
+            try:
+                core = [
+                    {"key": "platform_admin", "scope": "platform", "description": "Platform-wide administrator"},
+                    {"key": "tenant_admin", "scope": "tenant", "description": "Tenant administrator"},
+                    {"key": "agent_manager", "scope": "tenant", "description": "Manage agents and content"},
+                    {"key": "viewer", "scope": "tenant", "description": "Read-only"},
+                    {"key": "subscriber", "scope": "tenant", "description": "Use-only role"},
+                ]
+                for r in core:
+                    client.table('roles').upsert(r, on_conflict='key').execute()
+            except Exception:
+                pass
+
         # Assign roles based on selection
         await supabase_manager.initialize()
         admin_client = supabase_manager.admin_client
         # Platform Super Admin
         if role_key == 'platform_admin':
-            role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+            role_row = None
+            try:
+                role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+            except Exception:
+                _seed_core_roles(admin_client)
+                role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
             if role_row:
                 admin_client.table('platform_role_memberships').upsert({
                     'user_id': user_id,
@@ -207,7 +227,12 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
                 }).execute()
         # Tenant-scoped roles: tenant_admin or subscriber
         elif role_key in ('tenant_admin','subscriber') and client_ids:
-            role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+            role_row = None
+            try:
+                role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+            except Exception:
+                _seed_core_roles(admin_client)
+                role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
             if role_row:
                 # Upsert tenant memberships for each selected client
                 for cid in client_ids:
