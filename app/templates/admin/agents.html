@@ -11,6 +11,7 @@
                 <h1 class="text-2xl font-bold text-dark-text">Agent Management</h1>
                 <p class="text-dark-text-secondary">Manage AI agents across all clients</p>
             </div>
+            {% if user.role in ['superadmin','admin'] %}
             <div class="flex gap-2">
                 <button class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all"
                         onclick="showAddAgentModal()">
@@ -21,6 +22,7 @@
                     Create Defaults
                 </button>
             </div>
+            {% endif %}
         </div>
     </div>
 
@@ -84,16 +86,18 @@
             </div>
             
             <div class="mt-4 space-y-3">
-                <div class="flex justify-between items-center">
-                    <a href="/admin/agents/{{ agent.client_id }}/{{ agent.slug }}" 
-                       class="text-brand-teal hover:text-brand-teal/80 text-sm font-medium transition-colors">
-                        Edit
-                    </a>
-                    <button onclick="confirmDeleteAgent('{{ agent.client_id }}', '{{ agent.slug }}', '{{ agent.name }}')" 
-                            class="text-brand-salmon hover:text-brand-salmon/80 text-sm font-medium transition-colors">
-                        Delete
-                    </button>
-                </div>
+                {% if user.role in ['superadmin','admin'] %}
+                    <div class="flex justify-between items-center">
+                        <a href="/admin/agents/{{ agent.client_id }}/{{ agent.slug }}" 
+                           class="text-brand-teal hover:text-brand-teal/80 text-sm font-medium transition-colors">
+                            Edit
+                        </a>
+                        <button onclick="confirmDeleteAgent('{{ agent.client_id }}', '{{ agent.slug }}', '{{ agent.name }}')" 
+                                class="text-brand-salmon hover:text-brand-salmon/80 text-sm font-medium transition-colors">
+                            Delete
+                        </button>
+                    </div>
+                {% endif %}
                 {% if agent.client_id %}
                 <button hx-get="/admin/agents/preview/{{ agent.client_id }}/{{ agent.slug }}" 
                         hx-target="#modal-container" 

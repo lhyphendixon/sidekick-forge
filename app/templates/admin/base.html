@@ -186,22 +186,28 @@
                                class="{% if request.url.path == '/admin/' %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Dashboard
                             </a>
+                            {% if user.role in ['superadmin','admin'] %}
                             <a href="/admin/clients" 
                                class="{% if '/admin/clients' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Clients
                             </a>
+                            {% endif %}
                             <a href="/admin/agents" 
                                class="{% if '/admin/agents' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Agents
                             </a>
-                             <a href="/admin/users" 
-                                class="{% if '/admin/users' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                            {% if user.role in ['superadmin','admin'] %}
+                            <a href="/admin/users" 
+                               class="{% if '/admin/users' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Users
-                             </a>
+                            </a>
+                            {% endif %}
+                            {% if user.role in ['superadmin','admin'] %}
                             <a href="/admin/knowledge-base" 
                                class="{% if '/admin/knowledge-base' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Knowledge Base
                             </a>
+                            {% endif %}
                             <a href="/admin/monitoring" 
                                class="{% if '/admin/monitoring' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Monitoring

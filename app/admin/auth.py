@@ -74,7 +74,7 @@ async def get_current_admin_user(
     
     return {
         "username": user["username"],
-        "role": user["role"],
+        "role": user["role"],  # superadmin maps to platform-wide
         "authenticated_at": datetime.utcnow().isoformat()
     }
 
