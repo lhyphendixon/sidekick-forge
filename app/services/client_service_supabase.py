@@ -61,7 +61,6 @@ class ClientService:
             "livekit_url": settings.livekit.server_url if settings.livekit else "",
             "livekit_api_key": settings.livekit.api_key if settings.livekit else "",
             "livekit_api_secret": settings.livekit.api_secret if settings.livekit else "",
-            "settings": settings.dict() if settings else {},
             "created_at": now.isoformat(),
             "updated_at": now.isoformat()
         }
