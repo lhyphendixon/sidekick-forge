@@ -1482,13 +1482,60 @@ async def agent_detail(
                         }}
                     }}
 
-                    // Initialize - Set current values
+                    // LLM model options per provider
+                    const modelOptionsByProvider = {{
+                        openai: [
+                            {{ value: 'gpt-4o', label: 'GPT-4o (OpenAI)' }},
+                            {{ value: 'gpt-4o-mini', label: 'GPT-4o Mini (OpenAI)' }}
+                        ],
+                        groq: [
+                            {{ value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B (Groq)' }},
+                            {{ value: 'llama3-8b-8192', label: 'Llama 3 8B (Groq)' }},
+                            {{ value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B (Groq)' }}
+                        ],
+                        cerebras: [
+                            {{ value: 'llama3.1-8b', label: 'Llama 3.1 8B (Cerebras)' }},
+                            {{ value: 'llama-3.3-70b', label: 'Llama 3.3 70B (Cerebras)' }},
+                            {{ value: 'llama-4-scout-17b-16e-instruct', label: 'Llama 4 Scout 17B Instruct (Cerebras)' }},
+                            {{ value: 'llama-4-maverick-17b-128e-instruct', label: 'Llama 4 Maverick 17B Instruct (preview, Cerebras)' }},
+                            {{ value: 'qwen-3-32b', label: 'Qwen 3 32B (Cerebras)' }},
+                            {{ value: 'qwen-3-235b-a22b-instruct-2507', label: 'Qwen 3 235B Instruct (preview, Cerebras)' }},
+                            {{ value: 'qwen-3-235b-a22b-thinking-2507', label: 'Qwen 3 235B Thinking (preview, Cerebras)' }},
+                            {{ value: 'qwen-3-coder-480b', label: 'Qwen 3 Coder 480B (preview, Cerebras)' }},
+                            {{ value: 'gpt-oss-120b', label: 'GPT-OSS 120B (preview, Cerebras)' }}
+                        ],
+                        deepinfra: [
+                            {{ value: 'meta-llama/Llama-3.1-8B-Instruct', label: 'Llama 3.1 8B Instruct (DeepInfra)' }},
+                            {{ value: 'mistralai/Mixtral-8x7B-Instruct-v0.1', label: 'Mixtral 8x7B Instruct (DeepInfra)' }}
+                        ]
+                    }};
+
+                    function updateLLMModels(presetModel) {{
+                        const providerSel = document.getElementById('llm-provider');
+                        const modelSel = document.getElementById('llm-model');
+                        const provider = providerSel.value || 'groq';
+                        const options = modelOptionsByProvider[provider] || [];
+                        const current = presetModel || modelSel.value || '{llm_model}';
+                        // Rebuild options
+                        modelSel.innerHTML = '';
+                        options.forEach(opt => {{
+                            const o = document.createElement('option');
+                            o.value = opt.value; o.textContent = opt.label;
+                            modelSel.appendChild(o);
+                        }});
+                        // Select current if present, else first
+                        const hasCurrent = options.some(o => o.value === current);
+                        modelSel.value = hasCurrent ? current : (options[0] ? options[0].value : '');
+                    }}
+
+                    // Initialize - Set current values and model list per provider
                     document.getElementById('tts-provider').value = '{tts_provider}';
                     document.getElementById('llm-provider').value = '{llm_provider}';
-                    document.getElementById('llm-model').value = '{llm_model}';
+                    updateLLMModels('{llm_model}');
                     document.getElementById('stt-provider').value = '{stt_provider}';
                     document.getElementById('temperature-range').value = '{temperature}';
                     document.getElementById('temperature-value').textContent = '{temperature}';
+                    document.getElementById('llm-provider').addEventListener('change', () => updateLLMModels());
                     toggleTTSProviderSettings();
                 </script>
             </body>
