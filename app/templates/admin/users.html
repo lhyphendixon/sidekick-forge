@@ -58,12 +58,19 @@
         <input type="email" id="newUserEmail" class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated" placeholder="user@example.com" required />
       </div>
       <div>
-        <label class="block text-sm text-gray-300 mb-1">Platform Role</label>
-        <select id="newUserRole" class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated">
-          <option value="viewer">Viewer</option>
-          <option value="agent_manager">Agent Manager</option>
-          <option value="tenant_admin">Tenant Admin</option>
-          <option value="platform_admin">Platform Admin</option>
+        <label class="block text-sm text-gray-300 mb-1">Role</label>
+        <select id="newUserRole" class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated" onchange="toggleClientPicker()">
+          <option value="platform_admin">Super Admin</option>
+          <option value="tenant_admin">Admin (per client)</option>
+          <option value="subscriber">Subscriber (per client)</option>
+        </select>
+      </div>
+      <div id="clientPicker" class="hidden">
+        <label class="block text-sm text-gray-300 mb-1">Client</label>
+        <select id="newUserClientId" class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated">
+          {% for c in clients %}
+          <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
         </select>
       </div>
       <div class="flex items-center justify-end gap-2 mt-2">
@@ -81,15 +88,24 @@ function openAddUserModal(){
 function closeAddUserModal(){
   const m=document.getElementById('addUserModal'); if(m) m.classList.add('hidden');
 }
+function toggleClientPicker(){
+  const role = document.getElementById('newUserRole').value;
+  const picker = document.getElementById('clientPicker');
+  if(role === 'tenant_admin' || role === 'subscriber'){ picker.classList.remove('hidden'); }
+  else { picker.classList.add('hidden'); }
+}
 async function addUser(){
   const email=document.getElementById('newUserEmail').value.trim();
   const role=document.getElementById('newUserRole').value;
+  const clientIdEl=document.getElementById('newUserClientId');
+  const client_id = (role === 'tenant_admin' || role === 'subscriber') && clientIdEl ? clientIdEl.value : null;
   if(!email){ alert('Please enter an email'); return; }
+  if((role === 'tenant_admin' || role === 'subscriber') && !client_id){ alert('Please select a client'); return; }
   try {
     if (window.showGlobalLoading) window.showGlobalLoading('/admin/users/create');
     const res = await fetch('/admin/users/create',{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ email, role_key: role })
+      body: JSON.stringify({ email, role_key: role, client_id })
     });
     if(!res.ok){
       const txt = await res.text();

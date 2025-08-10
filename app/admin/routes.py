@@ -156,7 +156,14 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
             "created_at": u.get('created_at'),
             "permissions": sorted(list(perms)),
         })
-    return templates.TemplateResponse("admin/users.html", {"request": request, "user": user, "users": enriched})
+    # Fetch clients for client-scoped role assignment
+    try:
+        from app.core.dependencies import get_client_service
+        clients = await get_client_service().get_all_clients()
+        clients_ctx = [{"id": c.id, "name": c.name} for c in clients]
+    except Exception:
+        clients_ctx = []
+    return templates.TemplateResponse("admin/users.html", {"request": request, "user": user, "users": enriched, "clients": clients_ctx})
 
 @router.post("/users/create")
 async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
@@ -164,7 +171,8 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
     try:
         data = await request.json()
         email = (data.get('email') or '').strip()
-        role_key = (data.get('role_key') or 'viewer').strip()
+        role_key = (data.get('role_key') or 'subscriber').strip()
+        client_id = (data.get('client_id') or '').strip() or None
         if not email:
             raise HTTPException(status_code=400, detail="Email is required")
 
@@ -182,17 +190,28 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
         user = r.json()
         user_id = user.get('id')
 
-        # Assign platform role (if key exists)
+        # Assign roles based on selection
         await supabase_manager.initialize()
         admin_client = supabase_manager.admin_client
-        # Find role_id
-        role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
-        if role_row:
-            # Upsert membership
-            admin_client.table('platform_role_memberships').upsert({
-                'user_id': user_id,
-                'role_id': role_row['id']
-            }).execute()
+        # Platform Super Admin
+        if role_key == 'platform_admin':
+            role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+            if role_row:
+                admin_client.table('platform_role_memberships').upsert({
+                    'user_id': user_id,
+                    'role_id': role_row['id']
+                }).execute()
+        # Tenant-scoped roles: tenant_admin or subscriber
+        elif role_key in ('tenant_admin','subscriber') and client_id:
+            role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+            if role_row:
+                # Upsert tenant membership
+                admin_client.table('tenant_memberships').upsert({
+                    'user_id': user_id,
+                    'client_id': client_id,
+                    'role_id': role_row['id'],
+                    'status': 'active'
+                }).execute()
 
         return HTMLResponse(status_code=201, content="Created")
     except HTTPException:
