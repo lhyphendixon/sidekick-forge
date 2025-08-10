@@ -45,6 +45,7 @@ class ClientService:
         
         client_dict = {
             "id": client_id,
+            "slug": client_data.slug,
             "name": client_data.name,
             # store top-level fields used by queries
             "domain": client_data.domain or "",
@@ -126,6 +127,8 @@ class ClientService:
         # Direct column updates
         if update_data.name is not None:
             update_dict["name"] = update_data.name
+        if update_data.slug is not None:
+            update_dict["slug"] = update_data.slug
             
         # Fields that go in additional_settings JSONB
         additional_settings = {}
@@ -623,6 +626,7 @@ class ClientService:
         # Create ClientInDB instance
         return ClientInDB(
             id=db_row["id"],
+            slug=db_row.get("slug", ""),
             name=db_row["name"],
             description=additional.get("description", db_row.get("description")),
             domain=additional.get("domain", db_row.get("domain")),

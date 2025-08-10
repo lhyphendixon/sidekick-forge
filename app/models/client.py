@@ -88,6 +88,7 @@ class ClientSettings(BaseModel):
 class Client(BaseModel):
     """Client model for multi-tenant support"""
     id: str = Field(..., description="Unique client identifier")
+    slug: str = Field(..., description="URL-friendly identifier", pattern="^[a-z0-9\-]+$")
     name: str = Field(..., description="Client name")
     description: Optional[str] = Field(None, description="Client description")
     domain: Optional[str] = Field(None, description="Client's primary domain")
@@ -106,6 +107,7 @@ class Client(BaseModel):
 class ClientCreate(BaseModel):
     """Create a new client"""
     id: Optional[str] = Field(None, description="Optional client identifier UUID. If not provided, will be auto-generated")
+    slug: str = Field(..., description="URL-friendly identifier", pattern="^[a-z0-9\-]+$")
     name: str = Field(..., description="Client name")
     description: Optional[str] = None
     domain: Optional[str] = None
@@ -114,6 +116,7 @@ class ClientCreate(BaseModel):
 
 class ClientUpdate(BaseModel):
     """Update client information"""
+    slug: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
     domain: Optional[str] = None
