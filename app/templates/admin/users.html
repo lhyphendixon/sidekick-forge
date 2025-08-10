@@ -64,8 +64,8 @@
       <div>
         <label class="block text-sm text-gray-300 mb-1">Role</label>
         <select id="newUserRole" class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated" onchange="toggleClientPicker()">
-          <option value="platform_admin">Super Admin</option>
-          <option value="tenant_admin" selected>Admin (per client)</option>
+          <option value="super_admin">Super Admin</option>
+          <option value="admin" selected>Admin (per client)</option>
           <option value="subscriber">Subscriber (per client)</option>
         </select>
       </div>
@@ -109,10 +109,10 @@ async function addUser(){
   const full_name=document.getElementById('newUserName').value.trim();
   const role=document.getElementById('newUserRole').value;
   const clientIdsEl=document.getElementById('newUserClientIds');
-  const selectedClientIds = (role === 'tenant_admin' || role === 'subscriber') && clientIdsEl ? Array.from(clientIdsEl.selectedOptions).map(o => o.value) : [];
+  const selectedClientIds = (role === 'admin' || role === 'subscriber') && clientIdsEl ? Array.from(clientIdsEl.selectedOptions).map(o => o.value) : [];
   if(!full_name){ alert('Please enter a name'); return; }
   if(!email){ alert('Please enter an email'); return; }
-  if((role === 'tenant_admin' || role === 'subscriber') && selectedClientIds.length === 0){ alert('Please select at least one client'); return; }
+  if((role === 'admin' || role === 'subscriber') && selectedClientIds.length === 0){ alert('Please select at least one client'); return; }
   try {
     if (window.showGlobalLoading) window.showGlobalLoading('/admin/users/create');
     const res = await fetch('/admin/users/create',{

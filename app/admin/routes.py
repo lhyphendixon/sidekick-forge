@@ -172,7 +172,7 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
         data = await request.json()
         full_name = (data.get('full_name') or '').strip()
         email = (data.get('email') or '').strip()
-        role_key = (data.get('role_key') or 'subscriber').strip()
+        role_key = (data.get('role_key') or 'subscriber').strip()  # expected: super_admin | admin | subscriber
         client_ids = data.get('client_ids') or []
         if isinstance(client_ids, str):
             client_ids = [client_ids]
@@ -198,10 +198,8 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
         def _seed_core_roles(client):
             try:
                 core = [
-                    {"key": "platform_admin", "scope": "platform", "description": "Platform-wide administrator"},
-                    {"key": "tenant_admin", "scope": "tenant", "description": "Tenant administrator"},
-                    {"key": "agent_manager", "scope": "tenant", "description": "Manage agents and content"},
-                    {"key": "viewer", "scope": "tenant", "description": "Read-only"},
+                    {"key": "super_admin", "scope": "platform", "description": "Platform-wide administrator"},
+                    {"key": "admin", "scope": "tenant", "description": "Tenant administrator"},
                     {"key": "subscriber", "scope": "tenant", "description": "Use-only role"},
                 ]
                 for r in core:
@@ -213,7 +211,7 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
         await supabase_manager.initialize()
         admin_client = supabase_manager.admin_client
         # Platform Super Admin
-        if role_key == 'platform_admin':
+        if role_key == 'super_admin':
             role_row = None
             try:
                 role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
@@ -226,7 +224,7 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
                     'role_id': role_row['id']
                 }).execute()
         # Tenant-scoped roles: tenant_admin or subscriber
-        elif role_key in ('tenant_admin','subscriber') and client_ids:
+        elif role_key in ('admin','subscriber') and client_ids:
             role_row = None
             try:
                 role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
