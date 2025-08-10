@@ -170,13 +170,14 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
     """Create a new user via Supabase Admin API, then assign platform role membership."""
     try:
         data = await request.json()
+        full_name = (data.get('full_name') or '').strip()
         email = (data.get('email') or '').strip()
         role_key = (data.get('role_key') or 'subscriber').strip()
         client_ids = data.get('client_ids') or []
         if isinstance(client_ids, str):
             client_ids = [client_ids]
         client_ids = [cid for cid in client_ids if cid]
-        if not email:
+        if not full_name or not email:
             raise HTTPException(status_code=400, detail="Email is required")
 
         import httpx
@@ -185,7 +186,7 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
         headers = {'apikey': service_key, 'Authorization': f'Bearer {service_key}', 'Content-Type': 'application/json'}
 
         # Create user (no password -> magic link invite disabled here; using email only)
-        payload = {"email": email, "email_confirm": True}
+        payload = {"email": email, "email_confirm": True, "user_metadata": {"full_name": full_name}}
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.post(f"{supabase_url}/auth/v1/admin/users", headers=headers, json=payload)
         if r.status_code not in (200, 201):
