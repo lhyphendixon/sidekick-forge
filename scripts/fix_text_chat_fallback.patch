@@ -1,0 +1,33 @@
+--- a/app/api/v1/trigger.py
++++ b/app/api/v1/trigger.py
+@@ -670,13 +670,23 @@ async def handle_text_trigger(
+                 user_id=user_id
+             )
+             
+-            # Build complete context including conversation history and documents
+-            logger.info("🔍 Building complete context with RAG...")
+-            context_result = await context_manager.build_complete_context(
+-                user_message=request.message,
+-                user_id=user_id
+-            )
+-            enhanced_prompt = context_result.get("enhanced_system_prompt", agent.system_prompt)
++            # Try to build complete context, but don't fail if RAG functions are missing
++            enhanced_prompt = agent.system_prompt
++            try:
++                logger.info("🔍 Building complete context with RAG...")
++                context_result = await context_manager.build_complete_context(
++                    user_message=request.message,
++                    user_id=user_id
++                )
++                enhanced_prompt = context_result.get("enhanced_system_prompt", agent.system_prompt)
++                logger.info("✅ RAG context built successfully")
++            except Exception as rag_error:
++                # Log the error but continue without RAG
++                logger.warning(f"⚠️ RAG context building failed (continuing without RAG): {rag_error}")
++                # Continue with basic system prompt
++                enhanced_prompt = agent.system_prompt
++                # Don't raise the exception - we can still work without RAG
++                pass
+             
+             # Create chat context using the SDK's abstraction
+             ctx = lk_llm.ChatContext()

@@ -615,16 +615,26 @@ async def handle_text_trigger(
         context_manager = None
         client_supabase = None
         
-        if client.settings and client.settings.supabase:
+        # Check for Supabase credentials in both old and new locations
+        supabase_url = None
+        supabase_key = None
+        
+        # First check direct fields (new structure)
+        if hasattr(client, 'supabase_url') and client.supabase_url:
+            supabase_url = client.supabase_url
+            supabase_key = client.supabase_service_role_key
+        # Then check settings.supabase (old structure)
+        elif client.settings and hasattr(client.settings, 'supabase'):
+            supabase_url = client.settings.supabase.url
+            supabase_key = client.settings.supabase.service_role_key or client.settings.supabase.anon_key
+        
+        if supabase_url and supabase_key:
             logger.info("🔍 Initializing context manager for RAG...")
             from supabase import create_client
             
             # Create Supabase client for the client's database
             # Use service_role_key for server-side operations to bypass RLS
-            client_supabase = create_client(
-                client.settings.supabase.url,
-                client.settings.supabase.service_role_key or client.settings.supabase.anon_key
-            )
+            client_supabase = create_client(supabase_url, supabase_key)
             
             # Import the context manager from agent_modules
             from app.agent_modules.context import AgentContextManager
@@ -660,13 +670,23 @@ async def handle_text_trigger(
                 user_id=user_id
             )
             
-            # Build complete context including conversation history and documents
-            logger.info("🔍 Building complete context with RAG...")
-            context_result = await context_manager.build_complete_context(
-                user_message=request.message,
-                user_id=user_id
-            )
-            enhanced_prompt = context_result.get("enhanced_system_prompt", agent.system_prompt)
+            # Try to build complete context, but don't fail if RAG functions are missing
+            enhanced_prompt = agent.system_prompt
+            try:
+                logger.info("🔍 Building complete context with RAG...")
+                context_result = await context_manager.build_complete_context(
+                    user_message=request.message,
+                    user_id=user_id
+                )
+                enhanced_prompt = context_result.get("enhanced_system_prompt", agent.system_prompt)
+                logger.info("✅ RAG context built successfully")
+            except Exception as rag_error:
+                # Log the error but continue without RAG
+                logger.warning(f"⚠️ RAG context building failed (continuing without RAG): {rag_error}")
+                # Continue with basic system prompt
+                enhanced_prompt = agent.system_prompt
+                # Don't raise the exception - we can still work without RAG
+                pass
             
             # Create chat context using the SDK's abstraction
             ctx = lk_llm.ChatContext()

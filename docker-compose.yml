@@ -9,7 +9,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - APP_ENV=development
+      - APP_ENV=production
+      - DEVELOPMENT_MODE=false
       - REDIS_HOST=redis
       - DATABASE_URL=${DATABASE_URL}
       - DOMAIN_NAME=${DOMAIN_NAME}
@@ -23,6 +24,7 @@ services:
       - LIVEKIT_URL=${LIVEKIT_URL}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      # Remove duplicate DEVELOPMENT_MODE to avoid conflicting overrides
     volumes:
       - ./app:/app/app
       - ./logs:/app/logs

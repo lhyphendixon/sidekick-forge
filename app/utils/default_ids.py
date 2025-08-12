@@ -5,22 +5,22 @@ Provides centralized management of default client and user IDs
 import os
 from typing import Optional
 
-# Default client ID - Autonomite
-# This should be loaded from environment or database in production
-DEFAULT_CLIENT_ID = os.getenv("DEFAULT_CLIENT_ID", "11389177-e4d8-49a9-9a00-f77bb4de6592")
+# No default client ID - must be explicitly provided
+# Load from environment if needed, but NO hardcoded fallbacks
+DEFAULT_CLIENT_ID = os.getenv("DEFAULT_CLIENT_ID", None)
 
-# Default admin user ID for testing/preview
-# This should be the actual admin user's ID from authentication
-DEFAULT_ADMIN_USER_ID = os.getenv("DEFAULT_ADMIN_USER_ID", "351bb07b-03fc-4fb4-b09b-748ef8a72084")
+# No default admin user ID - must come from authentication
+# Load from environment if needed, but NO hardcoded fallbacks
+DEFAULT_ADMIN_USER_ID = os.getenv("DEFAULT_ADMIN_USER_ID", None)
 
 
-def get_default_client_id() -> str:
-    """Get the default client ID (Autonomite)"""
+def get_default_client_id() -> Optional[str]:
+    """Get the default client ID if configured (should be None in production)"""
     return DEFAULT_CLIENT_ID
 
 
-def get_default_admin_user_id() -> str:
-    """Get the default admin user ID for testing/preview"""
+def get_default_admin_user_id() -> Optional[str]:
+    """Get the default admin user ID if configured (should be None in production)"""
     return DEFAULT_ADMIN_USER_ID
 
 
@@ -34,39 +34,42 @@ def validate_uuid(uuid_string: str) -> bool:
     return bool(uuid_pattern.match(uuid_string))
 
 
-def get_client_id_from_request(request_client_id: Optional[str]) -> str:
+def get_client_id_from_request(request_client_id: Optional[str]) -> Optional[str]:
     """
-    Get client ID from request or use default
+    Get client ID from request - should be explicitly provided
     
     Args:
         request_client_id: Client ID from request
         
     Returns:
-        Valid client ID (from request or default)
+        Valid client ID from request or None if not provided
     """
     if request_client_id and validate_uuid(request_client_id):
         return request_client_id
-    return get_default_client_id()
+    # Return None instead of default - let caller handle missing client ID
+    return None
 
 
-def get_user_id_from_request(request_user_id: Optional[str], admin_user: Optional[dict] = None) -> str:
+def get_user_id_from_request(request_user_id: Optional[str], admin_user: Optional[dict] = None) -> Optional[str]:
     """
-    Get user ID from request, admin session, or use default
+    Get user ID from request or admin session - no defaults
     
     Args:
         request_user_id: User ID from request
         admin_user: Admin user from session
         
     Returns:
-        Valid user ID (from request, session, or default)
+        Valid user ID from request/session or None
     """
     # First try request
     if request_user_id and validate_uuid(request_user_id):
         return request_user_id
     
-    # Then try admin session
-    if admin_user and admin_user.get('id') and validate_uuid(admin_user['id']):
-        return admin_user['id']
+    # Then try admin session - check both 'id' and 'user_id' fields
+    if admin_user:
+        user_id = admin_user.get('user_id') or admin_user.get('id')
+        if user_id and validate_uuid(user_id):
+            return user_id
     
-    # Finally use default
-    return get_default_admin_user_id()
+    # Return None - no defaults
+    return None

@@ -182,10 +182,12 @@
                     </div>
                     <div class="hidden md:block">
                         <div class="ml-10 flex items-baseline space-x-2">
+                            {% if user.role in ['superadmin','admin'] %}
                             <a href="/admin/" 
                                class="{% if request.url.path == '/admin/' %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Dashboard
                             </a>
+                            {% endif %}
                             {% if user.role in ['superadmin','admin'] %}
                             <a href="/admin/clients" 
                                class="{% if '/admin/clients' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
@@ -194,7 +196,7 @@
                             {% endif %}
                             <a href="/admin/agents" 
                                class="{% if '/admin/agents' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
-                                Agents
+                                Sidekicks
                             </a>
                             {% if user.role in ['superadmin','admin'] %}
                             <a href="/admin/users" 
@@ -208,10 +210,12 @@
                                 Knowledge Base
                             </a>
                             {% endif %}
+                            {% if user.role in ['superadmin','admin'] %}
                             <a href="/admin/monitoring" 
                                class="{% if '/admin/monitoring' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Monitoring
                             </a>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -237,13 +241,8 @@
         </div>
     </nav>
 
-    <!-- Global Loading Overlay -->
-    <div id="globalLoading" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
-        <div class="flex flex-col items-center gap-3">
-            <div class="spinner" style="width:36px;height:36px;border-width:3px"></div>
-            <div class="text-sm text-dark-text-secondary">Processing...</div>
-        </div>
-    </div>
+    <!-- Global Loading Overlay - Disabled -->
+    <div id="globalLoading" class="hidden" style="display:none !important"></div>
 
     <!-- Main Content -->
     <main class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
@@ -263,38 +262,33 @@
         // Configure HTMX
         htmx.config.globalViewTransitions = true;
         htmx.config.timeout = 10000; // 10 second timeout
-        
-        // Add loading states (HTMX)
-        document.addEventListener('htmx:beforeRequest', function(event) {
-            // Skip showing loader for text chat endpoints
-            const url = event.detail.pathInfo && event.detail.pathInfo.requestPath;
-            if (url && (url.includes('/admin/agents/preview') || url.includes('/messages') || url.includes('/send'))) {
-                return;
+
+        // Attach Supabase admin token to all HTMX requests
+        document.addEventListener('htmx:configRequest', function (event) {
+            try {
+                const token = localStorage.getItem('admin_token');
+                if (token) {
+                    event.detail.headers['Authorization'] = `Bearer ${token}`;
+                }
+            } catch (e) {
+                console.warn('Could not attach Authorization header:', e);
             }
-            const overlay = document.getElementById('globalLoading');
-            if (overlay) overlay.classList.remove('hidden');
         });
         
+        // Loading states disabled - removed to fix infinite loading issue
         document.addEventListener('htmx:afterRequest', function(event) {
-            const overlay = document.getElementById('globalLoading');
-            if (overlay) overlay.classList.add('hidden');
             // Handle errors
             if (event.detail.xhr && event.detail.xhr.status >= 400) {
                 console.error('HTMX request failed:', event.detail.xhr.status);
             }
         });
 
-        // Add loading states (Fetch-based forms)
+        // Loading functions disabled - removed to fix infinite loading issue
         window.showGlobalLoading = function(path) {
-            if (path && (path.includes('/admin/agents/preview') || path.includes('/messages') || path.includes('/send'))) {
-                return;
-            }
-            const overlay = document.getElementById('globalLoading');
-            if (overlay) overlay.classList.remove('hidden');
+            // Disabled
         }
         window.hideGlobalLoading = function() {
-            const overlay = document.getElementById('globalLoading');
-            if (overlay) overlay.classList.add('hidden');
+            // Disabled
         }
         
         // Initialize Supabase client for logout
@@ -353,17 +347,33 @@
                 return;
             }
             
-            // Check if user is authenticated with Supabase
-            const { data: { session } } = await supabase.auth.getSession();
+            // Simplified auth check - only redirect if no token at all
+            if (!hasAdminToken) {
+                // Check if user has a Supabase session
+                const { data: { session } } = await supabase.auth.getSession();
+                
+                if (!session) {
+                    // No token and no session - redirect to login
+                    console.log('No authentication found, redirecting to login');
+                    window.location.href = '/admin/login?redirect=auth_required';
+                    return;
+                } else {
+                    // Has session but no admin_token cookie - set it
+                    if (session.access_token) {
+                        document.cookie = `admin_token=${session.access_token}; path=/; max-age=28800`;
+                        localStorage.setItem('admin_token', session.access_token);
+                        // Reload to apply the token
+                        window.location.reload();
+                        return;
+                    }
+                }
+            }
             
-            if (!session && !hasAdminToken) {
-                // Not authenticated, redirect to login
-                window.location.href = '/admin/login';
-                return;
-            } else if (session) {
-                // Update user display
+            // Update user display if we have a session
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session && session.user) {
                 const userDisplay = document.getElementById('current-user-display');
-                if (userDisplay && session.user) {
+                if (userDisplay) {
                     userDisplay.textContent = session.user.email || session.user.user_metadata?.username || 'Admin';
                 }
             }

@@ -37,7 +37,7 @@
         /* Form hover effect */
         .login-form {
             transition: all 0.3s ease-in-out;
-            border: 2px solid #2a2a2a;
+            border: 2px solid #e5e7eb; /* gray-200 */
         }
         .login-form:hover {
             border-color: #01a4a6;
@@ -46,16 +46,16 @@
         
         /* Input styles */
         input {
-            background-color: #252525 !important;
-            border-color: #2a2a2a !important;
-            color: #e0e0e0 !important;
+            background-color: #ffffff !important; /* white */
+            border-color: #e5e7eb !important;     /* gray-200 */
+            color: #111827 !important;            /* gray-900 */
         }
         input:focus {
             border-color: #01a4a6 !important;
             box-shadow: 0 0 0 3px rgba(1, 164, 166, 0.1) !important;
         }
         input::placeholder {
-            color: #a0a0a0;
+            color: #9ca3af; /* gray-400 */
         }
         
         /* Button styles */
@@ -74,34 +74,34 @@
     </style>
 </head>
 <body class="min-h-screen flex items-center justify-center bg-dark-bg">
-    <div class="login-form bg-dark-surface rounded-lg p-8 w-full max-w-md">
+    <div class="login-form bg-white rounded-lg p-8 w-full max-w-md">
         <div class="text-center mb-8">
-            <img src="/static/images/autonomite-logo.png" alt="Autonomite Logo" class="h-16 mx-auto mb-6">
-            <h1 class="text-2xl font-bold text-dark-text">Admin Dashboard</h1>
-            <p class="text-dark-text-secondary">Sign in to access the admin dashboard</p>
+            <img src="https://sidekickforge.com/static/images/sidekick-forge-logo.png" alt="Sidekick Forge" class="h-16 mx-auto mb-6">
+            <h1 class="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
+            <p class="text-gray-600">Sign in to access the admin dashboard</p>
         </div>
         
         <form id="loginForm" class="space-y-6">
             <div>
-                <label for="email" class="block text-sm font-medium text-dark-text">Email</label>
+                <label for="email" class="block text-sm font-medium text-gray-900">Email</label>
                 <input 
                     type="email" 
                     id="email" 
                     name="email" 
                     required 
-                    class="mt-1 block w-full px-3 py-2 border border-dark-border rounded-md shadow-sm placeholder-dark-text-secondary focus:outline-none focus:ring-brand-teal focus:border-brand-teal"
+                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-brand-teal focus:border-brand-teal"
                     placeholder="admin@autonomite.ai"
                 >
             </div>
             
             <div>
-                <label for="password" class="block text-sm font-medium text-dark-text">Password</label>
+                <label for="password" class="block text-sm font-medium text-gray-900">Password</label>
                 <input 
                     type="password" 
                     id="password" 
                     name="password" 
                     required 
-                    class="mt-1 block w-full px-3 py-2 border border-dark-border rounded-md shadow-sm placeholder-dark-text-secondary focus:outline-none focus:ring-brand-teal focus:border-brand-teal"
+                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-brand-teal focus:border-brand-teal"
                     placeholder="Your password"
                 >
             </div>
@@ -127,22 +127,24 @@
             </div>
         </form>
         
-        <div id="errorMessage" class="mt-4 p-3 bg-red-900/20 border border-red-500/30 text-red-400 rounded hidden"></div>
-        <div id="loadingMessage" class="mt-4 p-3 bg-brand-teal/10 border border-brand-teal/30 text-brand-teal rounded hidden">
+        <div id="errorMessage" class="mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded hidden"></div>
+        <div id="loadingMessage" class="mt-4 p-3 bg-teal-50 border border-teal-200 text-teal-700 rounded hidden">
             Signing in...
         </div>
-        <div id="successMessage" class="mt-4 p-3 bg-green-900/20 border border-green-500/30 text-green-400 rounded hidden"></div>
+        <div id="successMessage" class="mt-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded hidden"></div>
         
         <!-- Development mode hint -->
-        <div class="mt-4 p-3 bg-brand-teal/10 border border-brand-teal/30 text-brand-teal rounded text-sm">
+        {% if development_mode %}
+        <div class="mt-4 p-3 bg-teal-50 border border-teal-200 text-teal-700 rounded text-sm">
             <strong>Development Mode:</strong> Use email <code>admin@autonomite.ai</code> and password <code>dev</code>
         </div>
+        {% endif %}
     </div>
 
     <script>
-        // Initialize Supabase client
-        const supabaseUrl = 'https://yuowazxcxwhczywurmmw.supabase.co';
-        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODQ1NzMsImV4cCI6MjA1MTM2MDU3M30.SmqTIWrScKQWkJ2_PICWVJYpRSKfvqkRcjMMt0ApH1U';
+        // Initialize Supabase client with production credentials injected server-side
+        const supabaseUrl = "{{ supabase_url }}";
+        const supabaseKey = "{{ supabase_anon_key }}";
         const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
 
         // Check if already logged in or handle password reset
@@ -151,16 +153,25 @@
             const referrer = document.referrer;
             const isFromAdmin = referrer && referrer.includes('/admin') && !referrer.includes('/admin/login');
             
-            if (isFromAdmin) {
+            // Check if we're in a redirect loop (came from admin page)
+            const urlParams = new URLSearchParams(window.location.search);
+            const fromRedirect = urlParams.get('redirect') === 'auth_required';
+            
+            if (isFromAdmin || fromRedirect) {
                 // Clear any stale tokens if we were redirected from admin
+                console.log('Clearing stale tokens due to redirect from admin');
                 localStorage.removeItem('admin_token');
                 document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+                await supabase.auth.signOut();
+                // Don't try to auto-redirect, stay on login page
+                return;
             }
+            
             // Check if this is a password reset callback
-            const urlParams = new URLSearchParams(window.location.hash.substring(1));
-            const accessToken = urlParams.get('access_token');
-            const refreshToken = urlParams.get('refresh_token');
-            const type = urlParams.get('type');
+            const hashParams = new URLSearchParams(window.location.hash.substring(1));
+            const accessToken = hashParams.get('access_token');
+            const refreshToken = hashParams.get('refresh_token');
+            const type = hashParams.get('type');
             
             if (type === 'recovery' && accessToken && refreshToken) {
                 // This is a password reset callback - set the session
@@ -187,33 +198,10 @@
                 }
             }
             
-            // Normal session check - skip if we have a development token
-            const adminToken = document.cookie.split('; ').find(row => row.startsWith('admin_token='));
-            const hasDevToken = adminToken && adminToken.split('=')[1] === 'dev-token';
-            
-            if (!hasDevToken) {
-                const { data: { session } } = await supabase.auth.getSession();
-                if (session) {
-                    // Verify the session is actually valid
-                    try {
-                        const { data: { user }, error } = await supabase.auth.getUser();
-                        if (user && !error) {
-                            // Session is valid, redirect to admin
-                            window.location.href = '/admin/';
-                        } else {
-                            // Session is invalid, clear it
-                            await supabase.auth.signOut();
-                            localStorage.removeItem('admin_token');
-                            document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-                        }
-                    } catch (error) {
-                        // Error validating session, clear it
-                        await supabase.auth.signOut();
-                        localStorage.removeItem('admin_token');
-                        document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-                    }
-                }
-            }
+            // DISABLE auto-redirect to prevent loops
+            // Users must manually login even if they have a session
+            // This prevents the redirect loop issue
+            console.log('Auto-redirect disabled to prevent loops');
         });
 
         // Handle login form
@@ -231,13 +219,17 @@
             loadingMessage.classList.remove('hidden');
             errorMessage.classList.add('hidden');
             
-            // Development mode - bypass authentication
-            // Check if we should use development mode (for any hostname when using dev credentials)
-            if (email === 'admin@autonomite.ai' && password === 'dev') {
-                // Set development mode cookies
+            // Check for development mode bypass
+            const isDevelopment = window.location.hostname === 'localhost' || 
+                                 window.location.hostname === '127.0.0.1' ||
+                                 {% if development_mode %}true{% else %}false{% endif %};
+            
+            if (isDevelopment && email === 'admin@autonomite.ai' && password === 'dev') {
+                // Development mode bypass
+                console.log('Using development mode bypass');
                 localStorage.setItem('admin_token', 'dev-token');
-                document.cookie = `admin_token=dev-token; path=/; max-age=28800`;
-                document.cookie = `DEVELOPMENT_MODE=true; path=/; max-age=28800`;
+                document.cookie = 'admin_token=dev-token; path=/; max-age=28800';
+                document.cookie = 'DEVELOPMENT_MODE=true; path=/; max-age=28800';
                 window.location.href = '/admin/';
                 return;
             }
@@ -292,7 +284,7 @@
             
             try {
                 const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: 'https://agents.autonomite.net/admin/login'
+                    redirectTo: window.location.origin + '/admin/login'
                 });
                 
                 if (error) {

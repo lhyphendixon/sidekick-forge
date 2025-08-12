@@ -251,11 +251,11 @@
             
             <!-- Agent Selection (appears after client selection) -->
             <div id="agent-selection" class="mb-6 overflow-hidden transition-all duration-500 ease-in-out" style="max-height: 0; opacity: 0;">
-                <h4 class="text-md font-medium text-dark-text mb-3">Grant Access to Agents</h4>
+                <h4 class="text-md font-medium text-dark-text mb-3">Grant Access to Sidekicks</h4>
                 <div class="mb-4">
                     <div class="agent-checkbox">
                         <input type="checkbox" id="all-agents" value="all">
-                        <label for="all-agents" class="text-dark-text font-medium">All Agents (Current and Future)</label>
+                        <label for="all-agents" class="text-dark-text font-medium">All Sidekicks (Current and Future)</label>
                     </div>
                     <p class="text-xs text-dark-text-secondary mt-1 ml-6">Documents will be available to all existing agents and any new agents created in the future</p>
                 </div>
@@ -366,7 +366,7 @@
                 <div class="mb-4">
                     <div class="agent-checkbox">
                         <input type="checkbox" id="modal-all-agents" value="all">
-                        <label for="modal-all-agents" class="text-dark-text font-medium">All Agents (Current and Future)</label>
+                        <label for="modal-all-agents" class="text-dark-text font-medium">All Sidekicks (Current and Future)</label>
                     </div>
                 </div>
                 <div id="modal-specific-agents">
@@ -439,48 +439,42 @@ class KnowledgeBaseManager {
                     console.log('Multiple clients detected, showing client selection');
                     this.isMultiClient = true;
                     this.showClientSelection();
-                    this.currentClient = this.clients[0].id; // Default to first client
+                    // No default - user must select from dropdown
+                    this.currentClient = null;
+                    this.showNotification('Please select a client from the dropdown', 'info');
                 } else if (this.clients.length === 1) {
                     console.log('Single client detected:', this.clients[0]);
-                    this.currentClient = this.clients[0].id;
+                    // Even with single client, require explicit selection
+                    this.currentClient = null;
+                    this.showNotification('Please select the client from the dropdown', 'info');
                     // Show client selection even for single client to make it clear which client is being used
                     this.showClientSelection();
                 } else {
-                    console.log('No clients found, using default test client');
-                    // Use the test client ID from the platform
-                    this.currentClient = '11389177-e4d8-49a9-9a00-f77bb4de6592';
-                    // Create a fake client for display
-                    this.clients = [{
-                        id: '11389177-e4d8-49a9-9a00-f77bb4de6592',
-                        name: 'Autonomite',
-                        domain: 'autonomite.ai'
-                    }];
-                    this.showClientSelection();
+                    console.log('No clients found');
+                    this.showNotification('No clients available. Please contact administrator.', 'error');
+                    this.currentClient = null;
+                    // Disable upload functionality when no clients
+                    const uploadBtn = document.getElementById('upload-btn');
+                    if (uploadBtn) uploadBtn.disabled = true;
                 }
                 console.log('Current client set to:', this.currentClient);
             } else {
-                console.log('Clients API failed, using default test client');
-                // Use the test client ID from the platform
-                this.currentClient = '11389177-e4d8-49a9-9a00-f77bb4de6592';
-                // Create a fake client for display
-                this.clients = [{
-                    id: '11389177-e4d8-49a9-9a00-f77bb4de6592',
-                    name: 'Autonomite',
-                    domain: 'autonomite.ai'
-                }];
-                this.showClientSelection();
+                console.log('Clients API failed');
+                this.showNotification('Failed to load clients. Please refresh the page.', 'error');
+                this.currentClient = null;
+                // Disable upload functionality on API failure
+                const uploadBtn = document.getElementById('upload-btn');
+                if (uploadBtn) uploadBtn.disabled = true;
             }
         } catch (error) {
             console.error('Failed to load user info:', error);
-            // Use the test client ID from the platform
-            this.currentClient = '11389177-e4d8-49a9-9a00-f77bb4de6592';
-            // Create a fake client for display
-            this.clients = [{
-                id: '11389177-e4d8-49a9-9a00-f77bb4de6592',
-                name: 'Autonomite',
-                domain: 'autonomite.ai'
-            }];
-            this.showClientSelection();
+            // No fallback - require proper client selection
+            this.currentClient = null;
+            this.showNotification('Failed to load user info. Please refresh the page.', 'error');
+            // Don't create fake clients - show error instead
+            this.clients = [];
+            const uploadBtn = document.getElementById('upload-btn');
+            if (uploadBtn) uploadBtn.disabled = true;
         }
     }
 
@@ -497,6 +491,14 @@ class KnowledgeBaseManager {
         clientSelection.style.display = 'block';
         clientSelect.innerHTML = '';
         
+        // Add placeholder option to force selection
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = '-- Select a Client --';
+        placeholder.disabled = true;
+        placeholder.selected = !this.currentClient;
+        clientSelect.appendChild(placeholder);
+        
         this.clients.forEach(client => {
             const option = document.createElement('option');
             option.value = client.id;
@@ -504,6 +506,11 @@ class KnowledgeBaseManager {
             clientSelect.appendChild(option);
             console.log('Added client option:', client.name, client.id);
         });
+        
+        // Set the current selection if available
+        if (this.currentClient) {
+            clientSelect.value = this.currentClient;
+        }
         
         clientSelect.addEventListener('change', async (e) => {
             this.currentClient = e.target.value;
@@ -920,7 +927,7 @@ class KnowledgeBaseManager {
         // Determine agent access display
         let agentAccessText = '';
         if (doc.agent_access === 'all') {
-            agentAccessText = '<i class="fas fa-globe text-brand-teal mr-1"></i>All Agents';
+            agentAccessText = '<i class="fas fa-globe text-brand-teal mr-1"></i>All Sidekicks';
         } else if (doc.agent_ids && doc.agent_ids.length > 0) {
             const agentCount = doc.agent_ids.length;
             agentAccessText = `<i class="fas fa-robot text-brand-orange mr-1"></i>${agentCount} Agent${agentCount > 1 ? 's' : ''}`;

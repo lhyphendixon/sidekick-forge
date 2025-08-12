@@ -99,7 +99,17 @@ from app.admin.auth import get_admin_user
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     """Admin login page"""
-    return templates.TemplateResponse("admin/login.html", {"request": request})
+    from app.config import settings
+    import os
+    return templates.TemplateResponse(
+        "admin/login.html",
+        {
+            "request": request,
+            "supabase_url": settings.supabase_url,
+            "supabase_anon_key": settings.supabase_anon_key,
+            "development_mode": os.getenv("DEVELOPMENT_MODE", "false").lower() == "true",
+        },
+    )
 
 @router.get("/reset-password", response_class=HTMLResponse)
 async def reset_password_page(request: Request):
@@ -147,14 +157,94 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
                 users = data.get('users', [])
     except Exception:
         users = []
+    # Prepare role id cache for RBAC if available
+    role_id_map: Dict[str, Optional[str]] = {"super_admin": None, "admin": None, "subscriber": None}
+    try:
+        admin_client = supabase_manager.admin_client
+        for key in list(role_id_map.keys()):
+            try:
+                row = (
+                    admin_client.table('roles')
+                    .select('id,key')
+                    .eq('key', key)
+                    .single()
+                    .execute()
+                    .data
+                )
+                role_id_map[key] = row.get('id') if row else None
+            except Exception:
+                role_id_map[key] = None
+    except Exception:
+        pass
+
     enriched = []
     for u in users:
-        perms = await get_platform_permissions(u.get('id'))
+        user_id = u.get('id')
+        user_email = u.get('email')
+        created_at = u.get('created_at')
+        metadata = u.get('user_metadata') or {}
+
+        roles_display: List[str] = []
+
+        # Try RBAC first
+        try:
+            admin_client = supabase_manager.admin_client
+            # Platform super_admin
+            sa_id = role_id_map.get('super_admin')
+            if sa_id:
+                pr = (
+                    admin_client.table('platform_role_memberships')
+                    .select('role_id')
+                    .eq('user_id', user_id)
+                    .eq('role_id', sa_id)
+                    .execute()
+                    .data
+                )
+                if pr:
+                    roles_display.append('Super Admin')
+
+            # Tenant memberships
+            admin_id = role_id_map.get('admin')
+            sub_id = role_id_map.get('subscriber')
+            try:
+                tm_rows = (
+                    admin_client.table('tenant_memberships')
+                    .select('client_id,role_id,status')
+                    .eq('user_id', user_id)
+                    .execute()
+                    .data
+                ) or []
+            except Exception:
+                tm_rows = []
+            if tm_rows:
+                admin_count = sum(1 for r in tm_rows if r.get('role_id') == admin_id)
+                sub_count = sum(1 for r in tm_rows if r.get('role_id') == sub_id)
+                if admin_count:
+                    roles_display.append(f'Admin ({admin_count})')
+                if sub_count:
+                    roles_display.append(f'Subscriber ({sub_count})')
+        except Exception:
+            # Ignore RBAC errors
+            pass
+
+        # Fallback to Auth metadata if no RBAC-derived roles
+        if not roles_display and isinstance(metadata, dict):
+            if (metadata.get('platform_role') or '').lower() == 'super_admin':
+                roles_display.append('Super Admin')
+            ta = metadata.get('tenant_assignments') or {}
+            if isinstance(ta, dict):
+                admin_ids = ta.get('admin_client_ids') or []
+                subscriber_ids = ta.get('subscriber_client_ids') or []
+                if admin_ids:
+                    roles_display.append(f'Admin ({len(admin_ids)})')
+                if subscriber_ids:
+                    roles_display.append(f'Subscriber ({len(subscriber_ids)})')
+
         enriched.append({
-            "id": u.get('id'),
-            "email": u.get('email'),
-            "created_at": u.get('created_at'),
-            "permissions": sorted(list(perms)),
+            "id": user_id,
+            "email": user_email,
+            "created_at": created_at,
+            "roles": roles_display if roles_display else [],
         })
     # Fetch clients for client-scoped role assignment
     try:
@@ -181,18 +271,58 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
             raise HTTPException(status_code=400, detail="Email is required")
 
         import httpx
-        supabase_url = os.getenv('SUPABASE_URL')
-        service_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+        from app.config import settings
+        supabase_url = settings.supabase_url
+        service_key = settings.supabase_service_role_key
+        if not supabase_url or not service_key:
+            return HTMLResponse(status_code=500, content="Supabase credentials not configured")
         headers = {'apikey': service_key, 'Authorization': f'Bearer {service_key}', 'Content-Type': 'application/json'}
 
         # Create user (no password -> magic link invite disabled here; using email only)
-        payload = {"email": email, "email_confirm": True, "user_metadata": {"full_name": full_name}}
+        # Include role/client assignments in initial user_metadata so roles persist even without RBAC tables
+        initial_user_metadata = {"full_name": full_name}
+        if role_key == 'super_admin':
+            initial_user_metadata.update({
+                'platform_role': 'super_admin',
+                'tenant_assignments': None
+            })
+        elif role_key in ('admin', 'subscriber'):
+            initial_user_metadata.update({
+                'platform_role': None,
+                'tenant_assignments': {
+                    'admin_client_ids': client_ids if role_key == 'admin' else [],
+                    'subscriber_client_ids': client_ids if role_key == 'subscriber' else [],
+                }
+            })
+        payload = {"email": email, "email_confirm": True, "user_metadata": initial_user_metadata}
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.post(f"{supabase_url}/auth/v1/admin/users", headers=headers, json=payload)
         if r.status_code not in (200, 201):
-            return HTMLResponse(status_code=500, content="Failed to create user")
-        user = r.json()
-        user_id = user.get('id')
+            # Handle "already exists" by looking up existing user and continuing
+            try:
+                if r.status_code in (400, 409):
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        r_lookup = await client.get(
+                            f"{supabase_url}/auth/v1/admin/users",
+                            headers=headers,
+                            params={"email": email}
+                        )
+                    if r_lookup.status_code == 200:
+                        data = r_lookup.json()
+                        existing = [u for u in data.get("users", []) if u.get("email", "").lower() == email.lower()]
+                        if existing:
+                            user_id = existing[0].get("id")
+                        else:
+                            return HTMLResponse(status_code=500, content=f"Failed to create user: {r.text}")
+                    else:
+                        return HTMLResponse(status_code=500, content=f"Failed to create user: {r.text}")
+                else:
+                    return HTMLResponse(status_code=500, content=f"Failed to create user: {r.text}")
+            except Exception:
+                return HTMLResponse(status_code=500, content="Error creating user")
+        else:
+            user = r.json()
+            user_id = user.get('id')
 
         # Helper to ensure basic roles exist
         def _seed_core_roles(client):
@@ -207,45 +337,371 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
             except Exception:
                 pass
 
-        # Assign roles based on selection
-        await supabase_manager.initialize()
-        admin_client = supabase_manager.admin_client
-        # Platform Super Admin
-        if role_key == 'super_admin':
-            role_row = None
-            try:
-                role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
-            except Exception:
-                _seed_core_roles(admin_client)
-                role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
-            if role_row:
-                admin_client.table('platform_role_memberships').upsert({
-                    'user_id': user_id,
-                    'role_id': role_row['id']
-                }).execute()
-        # Tenant-scoped roles: tenant_admin or subscriber
-        elif role_key in ('admin','subscriber') and client_ids:
-            role_row = None
-            try:
-                role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
-            except Exception:
-                _seed_core_roles(admin_client)
-                role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
-            if role_row:
-                # Upsert tenant memberships for each selected client
-                for cid in client_ids:
-                    admin_client.table('tenant_memberships').upsert({
+        # Assign roles based on selection (best-effort; don't fail user creation)
+        try:
+            await supabase_manager.initialize()
+            admin_client = supabase_manager.admin_client
+            # Platform Super Admin
+            if role_key == 'super_admin':
+                role_row = None
+                try:
+                    role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+                except Exception:
+                    _seed_core_roles(admin_client)
+                    role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+                if role_row:
+                    admin_client.table('platform_role_memberships').upsert({
                         'user_id': user_id,
-                        'client_id': cid,
-                        'role_id': role_row['id'],
-                        'status': 'active'
+                        'role_id': role_row['id']
                     }).execute()
+            # Tenant-scoped roles: admin or subscriber
+            elif role_key in ('admin','subscriber') and client_ids:
+                role_row = None
+                try:
+                    role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+                except Exception:
+                    _seed_core_roles(admin_client)
+                    role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+                if role_row:
+                    # Upsert tenant memberships for each selected client
+                    for cid in client_ids:
+                        admin_client.table('tenant_memberships').upsert({
+                            'user_id': user_id,
+                            'client_id': cid,
+                            'role_id': role_row['id'],
+                            'status': 'active'
+                        }).execute()
+        except Exception as assign_error:
+            logger.error(f"Role assignment failed for {email}: {assign_error}", exc_info=True)
+            # Fallback: persist role info in Supabase Auth user_metadata so UI and auth can resolve roles
+            try:
+                meta_update = {}
+                if role_key == 'super_admin':
+                    meta_update = {
+                        'user_metadata': {
+                            'platform_role': 'super_admin',
+                            'tenant_assignments': None
+                        }
+                    }
+                elif role_key in ('admin', 'subscriber'):
+                    meta_update = {
+                        'user_metadata': {
+                            'platform_role': None,
+                            'tenant_assignments': {
+                                'admin_client_ids': client_ids if role_key == 'admin' else [],
+                                'subscriber_client_ids': client_ids if role_key == 'subscriber' else [],
+                            }
+                        }
+                    }
+                if meta_update:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        r_meta = await client.patch(f"{supabase_url}/auth/v1/admin/users/{user_id}", headers=headers, json=meta_update)
+                    if r_meta.status_code not in (200, 201):
+                        async with httpx.AsyncClient(timeout=10) as client:
+                            r_meta = await client.put(f"{supabase_url}/auth/v1/admin/users/{user_id}", headers=headers, json=meta_update)
+                    if r_meta.status_code in (200, 201):
+                        logger.info(f"User metadata role assignment saved for {email} as {role_key}")
+                    else:
+                        logger.error(f"Failed to save user metadata for {email}: {r_meta.status_code} {r_meta.text}")
+            except Exception as meta_err:
+                logger.error(f"Metadata fallback for role assignment failed for {email}: {meta_err}", exc_info=True)
 
         return HTMLResponse(status_code=201, content="Created")
     except HTTPException:
         raise
     except Exception as e:
         return HTMLResponse(status_code=500, content="Error creating user")
+
+@router.get("/users/{user_id}/assignments")
+async def get_user_assignments(user_id: str, admin: Dict[str, Any] = Depends(get_admin_user)):
+    """Return current role assignment for a user to prefill the edit modal."""
+    try:
+        await supabase_manager.initialize()
+        admin_client = supabase_manager.admin_client
+
+        # Resolve role ids
+        def get_role_id(role_key: str) -> Optional[str]:
+            try:
+                row = (
+                    admin_client.table("roles")
+                    .select("id,key")
+                    .eq("key", role_key)
+                    .single()
+                    .execute()
+                    .data
+                )
+                return row.get("id") if row else None
+            except Exception:
+                return None
+
+        super_admin_role_id = get_role_id("super_admin")
+        admin_role_id = get_role_id("admin")
+        subscriber_role_id = get_role_id("subscriber")
+
+        # Check platform super_admin
+        if super_admin_role_id:
+            try:
+                pr = (
+                    admin_client.table("platform_role_memberships")
+                    .select("role_id")
+                    .eq("user_id", user_id)
+                    .eq("role_id", super_admin_role_id)
+                    .execute()
+                    .data
+                )
+                if pr:
+                    return {"role_key": "super_admin", "client_ids": []}
+            except Exception:
+                pass
+
+        # Check tenant memberships for admin/subscriber
+        def get_client_ids_for_role(role_id: Optional[str]) -> List[str]:
+            if not role_id:
+                return []
+            try:
+                rows = (
+                    admin_client.table("tenant_memberships")
+                    .select("client_id")
+                    .eq("user_id", user_id)
+                    .eq("role_id", role_id)
+                    .execute()
+                    .data
+                )
+                return [r.get("client_id") for r in rows if r.get("client_id")]
+            except Exception:
+                return []
+
+        admin_clients = get_client_ids_for_role(admin_role_id)
+        if admin_clients:
+            return {"role_key": "admin", "client_ids": admin_clients}
+
+        subscriber_clients = get_client_ids_for_role(subscriber_role_id)
+        if subscriber_clients:
+            return {"role_key": "subscriber", "client_ids": subscriber_clients}
+
+        # Fallback: read from Supabase Auth user_metadata if RBAC tables not configured
+        try:
+            from app.config import settings
+            import httpx
+            headers = {
+                'apikey': settings.supabase_service_role_key,
+                'Authorization': f'Bearer {settings.supabase_service_role_key}',
+            }
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(f"{settings.supabase_url}/auth/v1/admin/users/{user_id}", headers=headers)
+            if r.status_code == 200:
+                user = r.json()
+                meta = user.get('user_metadata', {}) or {}
+                platform_role = meta.get('platform_role')
+                if platform_role == 'super_admin':
+                    return {"role_key": "super_admin", "client_ids": []}
+                ta = meta.get('tenant_assignments', {}) or {}
+                admin_ids = ta.get('admin_client_ids') or []
+                subscriber_ids = ta.get('subscriber_client_ids') or []
+                if admin_ids:
+                    return {"role_key": "admin", "client_ids": admin_ids}
+                if subscriber_ids:
+                    return {"role_key": "subscriber", "client_ids": subscriber_ids}
+        except Exception:
+            pass
+
+        # Default if no assignments found anywhere
+        return {"role_key": "subscriber", "client_ids": []}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return HTMLResponse(status_code=500, content="Failed to fetch user assignments")
+
+@router.post("/users/update")
+async def update_user_roles(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
+    """Update a user's role assignments (platform super_admin or tenant roles)."""
+    try:
+        data = await request.json()
+        user_id = (data.get("user_id") or "").strip()
+        role_key = (data.get("role_key") or "").strip()
+        client_ids = data.get("client_ids") or []
+        if isinstance(client_ids, str):
+            client_ids = [client_ids]
+        client_ids = [cid for cid in client_ids if cid]
+
+        if not user_id or role_key not in ("super_admin", "admin", "subscriber"):
+            raise HTTPException(status_code=400, detail="Invalid payload")
+        if role_key in ("admin","subscriber") and not client_ids:
+            raise HTTPException(status_code=400, detail="At least one client_id is required for this role")
+
+        await supabase_manager.initialize()
+        admin_client = supabase_manager.admin_client
+
+        # Helpers
+        def seed_core_roles(client):
+            try:
+                core = [
+                    {"key": "super_admin", "scope": "platform", "description": "Platform-wide administrator"},
+                    {"key": "admin", "scope": "tenant", "description": "Tenant administrator"},
+                    {"key": "subscriber", "scope": "tenant", "description": "Use-only role"},
+                ]
+                for r in core:
+                    client.table("roles").upsert(r, on_conflict="key").execute()
+            except Exception:
+                pass
+
+        def get_role_id(role_key_local: str) -> Optional[str]:
+            try:
+                row = (
+                    admin_client.table("roles").select("id,key").eq("key", role_key_local).single().execute().data
+                )
+                if not row:
+                    seed_core_roles(admin_client)
+                    row = (
+                        admin_client.table("roles").select("id,key").eq("key", role_key_local).single().execute().data
+                    )
+                return row.get("id") if row else None
+            except Exception:
+                return None
+
+        # Update assignments using RBAC tables if available; otherwise fallback to Auth user_metadata
+        try:
+            if role_key == "super_admin":
+                sa_id = get_role_id("super_admin")
+                if sa_id:
+                    admin_client.table("platform_role_memberships").upsert({
+                        "user_id": user_id,
+                        "role_id": sa_id,
+                    }).execute()
+                    return HTMLResponse(status_code=200, content="Updated")
+                # Fallback to metadata
+                raise RuntimeError("RBAC roles not present")
+            else:
+                # For tenant roles, reset existing admin/subscriber memberships and apply new ones
+                admin_id = get_role_id("admin")
+                sub_id = get_role_id("subscriber")
+                target_role_id = admin_id if role_key == "admin" else sub_id
+                if target_role_id:
+                    try:
+                        if admin_id:
+                            admin_client.table("tenant_memberships").delete().eq("user_id", user_id).eq("role_id", admin_id).execute()
+                    except Exception:
+                        pass
+                    try:
+                        if sub_id:
+                            admin_client.table("tenant_memberships").delete().eq("user_id", user_id).eq("role_id", sub_id).execute()
+                    except Exception:
+                        pass
+                    for cid in client_ids:
+                        admin_client.table("tenant_memberships").upsert({
+                            "user_id": user_id,
+                            "client_id": cid,
+                            "role_id": target_role_id,
+                            "status": "active",
+                        }).execute()
+                    return HTMLResponse(status_code=200, content="Updated")
+                # Fallback to metadata
+                raise RuntimeError("RBAC roles not present")
+        except Exception:
+            # Fallback: store assignments in Supabase Auth user_metadata
+            from app.config import settings
+            import httpx
+            headers = {
+                'apikey': settings.supabase_service_role_key,
+                'Authorization': f'Bearer {settings.supabase_service_role_key}',
+                'Content-Type': 'application/json',
+            }
+            if role_key == 'super_admin':
+                meta_update = {
+                    'user_metadata': {
+                        'platform_role': 'super_admin',
+                        'tenant_assignments': None
+                    }
+                }
+            else:
+                meta_update = {
+                    'user_metadata': {
+                        'platform_role': None,
+                        'tenant_assignments': {
+                            'admin_client_ids': client_ids if role_key == 'admin' else [],
+                            'subscriber_client_ids': client_ids if role_key == 'subscriber' else [],
+                        }
+                    }
+                }
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.patch(
+                    f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers=headers,
+                    json=meta_update
+                )
+                if r.status_code not in (200, 201):
+                    # Try PUT as a fallback
+                    r = await client.put(
+                        f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                        headers=headers,
+                        json=meta_update
+                    )
+            if r.status_code in (200, 201):
+                return HTMLResponse(status_code=200, content="Updated")
+            else:
+                return HTMLResponse(status_code=500, content="Failed to update user")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return HTMLResponse(status_code=500, content="Failed to update user")
+
+@router.post("/users/set-password")
+async def set_user_password(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
+    """Set a Supabase Auth password for a user (admin operation)."""
+    try:
+        payload = await request.json()
+        user_id = (payload.get("user_id") or "").strip()
+        email = (payload.get("email") or "").strip()
+        new_password = payload.get("password") or ""
+        if not user_id or not new_password:
+            raise HTTPException(status_code=400, detail="user_id and password are required")
+        if len(new_password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+        from app.config import settings
+        import httpx
+        headers = {
+            'apikey': settings.supabase_service_role_key,
+            'Authorization': f'Bearer {settings.supabase_service_role_key}',
+            'Content-Type': 'application/json',
+        }
+
+        # Verify user exists and email matches
+        async with httpx.AsyncClient(timeout=10) as client:
+            r_get = await client.get(
+                f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                headers=headers
+            )
+        if r_get.status_code != 200:
+            return HTMLResponse(status_code=404, content="User not found")
+        user = r_get.json()
+        current_email = (user.get('email') or '').strip()
+        # If email provided and differs, attempt to update both email and password together
+        update_body: Dict[str, Any] = { 'password': new_password }
+        if email and email.lower() != current_email.lower():
+            update_body['email'] = email
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            r_patch = await client.patch(
+                f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                headers=headers,
+                json=update_body
+            )
+            if r_patch.status_code not in (200, 201):
+                # Some installations may require PUT
+                r_put = await client.put(
+                    f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers=headers,
+                    json=update_body
+                )
+                if r_put.status_code not in (200, 201):
+                    return HTMLResponse(status_code=500, content=f"Failed to update password: {r_patch.text or r_put.text}")
+
+        return HTMLResponse(status_code=200, content="Password updated")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return HTMLResponse(status_code=500, content="Error updating password")
 
 async def get_system_summary() -> Dict[str, Any]:
     """Get system-wide summary statistics"""
@@ -595,18 +1051,75 @@ async def agents_page(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Agent management page"""
-    # Get agents from all clients
+    # Determine which clients this user can see
+    visible_client_ids: List[str] = []
     try:
-        agents = await get_all_agents()
+        # Superadmins see all clients
+        if admin_user.get("role") == "superadmin":
+            from app.core.dependencies import get_client_service
+            client_service = get_client_service()
+            clients_all = await client_service.get_all_clients()
+            visible_client_ids = [c.id for c in clients_all]
+        else:
+            # Subscribers/Admins: load tenant assignments from metadata
+            # Note: If RBAC tables are added, we can replace this with tenant_memberships
+            from app.integrations.supabase_client import supabase_manager
+            if not supabase_manager._initialized:
+                await supabase_manager.initialize()
+            # Fetch user to read metadata
+            import httpx
+            headers = {
+                'apikey': supabase_manager.admin_client.supabase_key if hasattr(supabase_manager.admin_client, 'supabase_key') else os.getenv('SUPABASE_SERVICE_ROLE_KEY', ''),
+                'Authorization': f"Bearer {os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')}",
+            }
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(f"{os.getenv('SUPABASE_URL')}/auth/v1/admin/users/{admin_user.get('user_id')}", headers=headers)
+            if r.status_code == 200:
+                user = r.json()
+                meta = user.get('user_metadata') or {}
+                ta = meta.get('tenant_assignments') or {}
+                if admin_user.get('role') == 'admin':
+                    visible_client_ids = ta.get('admin_client_ids') or []
+                else:
+                    visible_client_ids = ta.get('subscriber_client_ids') or []
+    except Exception:
+        visible_client_ids = []
+
+    # Get agents from visible clients only
+    try:
+        if admin_user.get("role") == "superadmin":
+            agents = await get_all_agents()
+        else:
+            from app.core.dependencies import get_agent_service
+            agent_service = get_agent_service()
+            agents = []
+            for cid in visible_client_ids:
+                client_agents = await agent_service.get_client_agents(cid)
+                # Attach client_name via client service
+                try:
+                    from app.core.dependencies import get_client_service
+                    client_service = get_client_service()
+                    client = await client_service.get_client(cid)
+                    client_name = client.name if hasattr(client, 'name') else (client.get('name') if isinstance(client, dict) else 'Unknown')
+                except Exception:
+                    client_name = 'Unknown'
+                for a in client_agents:
+                    a_dict = a.dict() if hasattr(a, 'dict') else a
+                    a_dict['client_name'] = client_name
+                    agents.append(a_dict)
     except Exception as e:
         logger.error(f"Failed to load agents: {e}")
         agents = []
     
-    # Get all clients for the filter dropdown
+    # Get all clients for the filter dropdown (restrict for non-superadmin)
     try:
         from app.core.dependencies import get_client_service
         client_service = get_client_service()
-        clients = await client_service.get_all_clients()
+        if admin_user.get("role") == "superadmin":
+            clients = await client_service.get_all_clients()
+        else:
+            clients_all = await client_service.get_all_clients()
+            clients = [c for c in clients_all if c.id in set(visible_client_ids)]
     except Exception as e:
         logger.error(f"Failed to load clients: {e}")
         # Return minimal client data if database is inaccessible
@@ -780,6 +1293,7 @@ async def agent_detail(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Agent detail and configuration page"""
+    # Subscribers can view detail but not edit; page template handles action buttons
     try:
         # Simple approach: For "global" agents, use the same method as the agents list page
         if client_id == "global":
@@ -1066,6 +1580,7 @@ async def agent_detail(
             system_prompt = str(system_prompt_raw).replace('<', '&lt;').replace('>', '&gt;')
             agent_description = str(agent_description_raw).replace('"', '&quot;')
             agent_image_url = str(agent_image_url_raw).replace('"', '&quot;')
+            # client_id is already available as a function parameter - no escaping needed as it's a UUID
             
             working_html = f'''
             <!DOCTYPE html>
@@ -1467,7 +1982,7 @@ async def agent_detail(
                                 <h2 class="text-xl font-bold text-white mb-4">Voice Preview</h2>
                                 <div class="flex items-center space-x-4">
                                     <button type="button" 
-                                            hx-get="/admin/agents/preview/{get_default_client_id()}/{agent_slug_clean}" 
+                                            hx-get="/admin/agents/preview/{client_id}/{agent_slug_clean}" 
                                             hx-target="#modal-container" 
                                             hx-swap="innerHTML"
                                             class="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 font-medium">
@@ -1853,9 +2368,11 @@ async def agent_preview_modal_legacy(
     agent_slug: str,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Legacy route - redirect to new format with default client_id"""
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url=f"/admin/agents/preview/{get_default_client_id()}/{agent_slug}", status_code=307)
+    """Legacy route - return error since no client_id provided"""
+    raise HTTPException(
+        status_code=400,
+        detail="Client ID is required. Please use /admin/agents/preview/{client_id}/{agent_slug}"
+    )
 
 @router.get("/agents/preview/{client_id}/{agent_slug}", response_class=HTMLResponse)
 async def agent_preview_modal(
@@ -1879,7 +2396,7 @@ async def agent_preview_modal(
         
         # Handle agents - all agents should go through standard workflow
         logger.info(f"Handling preview for client_id={client_id}")
-        if client_id == get_default_client_id():
+        if False:  # Removed default client ID check - no longer using defaults
             try:
                 # Ensure supabase_manager is initialized
                 if not supabase_manager._initialized:
@@ -2068,6 +2585,20 @@ async def send_preview_message(
     try:
         # Use the trigger endpoint to get a real AI response
         from app.api.v1.trigger import handle_text_trigger, TriggerAgentRequest, TriggerMode
+        from app.utils.default_ids import validate_uuid
+        
+        # Require logged-in user's UUID; no generic or fallback
+        user_id = None
+        if admin_user:
+            user_id = admin_user.get('user_id') or admin_user.get('id')
+        # Normalize to string to satisfy Pydantic model typing
+        if user_id is not None:
+            user_id = str(user_id)
+        # Enforce presence and validity
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if not validate_uuid(user_id):
+            raise HTTPException(status_code=400, detail="Invalid user_id for authenticated user")
         
         # Create a mock request for the text trigger
         trigger_request = TriggerAgentRequest(
@@ -2075,8 +2606,7 @@ async def send_preview_message(
             client_id=client_id,
             mode=TriggerMode.TEXT,
             message=message,
-            # Use the actual user's UUID for proper context loading
-            user_id=get_user_id_from_request(None, admin_user),
+            user_id=user_id,
             session_id=session_id,
             conversation_id=conversation_id  # Use the session's conversation_id
         )
@@ -2225,9 +2755,12 @@ async def send_preview_message(
             ai_response = result.get("response", f"I'm {agent.name}. I'm currently in preview mode. In production, I would process your message: '{message}'")
         
     except Exception as e:
-        logger.warning(f"Preview AI response failed: {e}")
-        # Fallback to a simple preview response
-        ai_response = f"I'm {agent.name}, your AI assistant. (Preview mode - actual AI processing would happen in production)"
+        import traceback
+        logger.error(f"Preview AI response failed: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        # Fallback to a simple preview response with error detail
+        ai_response = f"I'm {agent.name}. Error: {str(e)[:100]}"
     
     # Add AI response
     messages.append({"content": ai_response, "is_user": False})
@@ -2868,6 +3401,11 @@ async def admin_update_agent(
     request: Request
 ):
     """Admin endpoint to update agent using Supabase service"""
+    # Enforce admin-only
+    from app.admin.auth import get_admin_user
+    admin_user = await get_admin_user(request)
+    if admin_user.get("role") not in ("admin", "superadmin"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     try:
         # Parse JSON body
         data = await request.json()
@@ -3169,8 +3707,9 @@ async def admin_update_client(
         else:
             logger.warning(f"⚠️ Failed to sync API keys to client database")
         
-        # If this is the Autonomite client, sync LiveKit credentials to backend
-        if client_id == get_default_client_id():
+        # Check if we should sync LiveKit credentials to backend for specific clients
+        # This was previously checking for a default client ID which no longer exists
+        if False:  # Disabled - no default client ID
             from app.services.backend_livekit_sync import BackendLiveKitSync
             sync_success = await BackendLiveKitSync.sync_credentials()
             if sync_success:
@@ -3421,6 +3960,9 @@ async def upload_knowledge_base_document(
 ):
     """Upload document to knowledge base using document processor"""
     try:
+        # Set max content length to 50MB
+        request._max_content_length = 50 * 1024 * 1024
+        
         # Parse form data
         form = await request.form()
         file = form.get("file")

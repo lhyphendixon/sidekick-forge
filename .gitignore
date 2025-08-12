@@ -122,6 +122,11 @@ backups/
 *.backup
 *.sql
 
+# Local artifacts to exclude from version control
+cookies.txt
+wget-log
+scripts/script_env/
+
 # OS files
 Thumbs.db
 .DS_Store

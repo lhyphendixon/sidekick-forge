@@ -19,7 +19,8 @@
           <th class="px-4 py-3">Email</th>
           <th class="px-4 py-3">User ID</th>
           <th class="px-4 py-3">Created</th>
-          <th class="px-4 py-3">Platform Permissions</th>
+          <th class="px-4 py-3">Roles</th>
+          <th class="px-4 py-3">Actions</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-dark-border">
@@ -29,15 +30,19 @@
           <td class="px-4 py-3 text-xs text-gray-400">{{ u.id }}</td>
           <td class="px-4 py-3 text-xs text-gray-400 timestamp" data-timestamp="{{ u.created_at }}">{{ u.created_at }}</td>
           <td class="px-4 py-3 text-xs">
-            {% if u.permissions and u.permissions|length > 0 %}
+            {% if u.roles and u.roles|length > 0 %}
               <div class="flex flex-wrap gap-1">
-                {% for p in u.permissions %}
-                  <span class="px-2 py-0.5 rounded bg-dark-elevated border border-dark-border text-gray-300">{{ p }}</span>
+                {% for r in u.roles %}
+                  <span class="px-2 py-0.5 rounded bg-dark-elevated border border-dark-border text-gray-300">{{ r }}</span>
                 {% endfor %}
               </div>
             {% else %}
               <span class="text-gray-500">none</span>
             {% endif %}
+          </td>
+          <td class="px-4 py-3 text-xs">
+            <button class="px-2 py-1 rounded border border-dark-border hover:border-brand-teal" onclick="openEditUserModal('{{ u.id }}','{{ u.email }}')">Edit</button>
+            <button class="ml-2 px-2 py-1 rounded border border-dark-border hover:border-brand-teal" onclick="(document.getElementById('editUserId').value='{{ u.id }}',document.getElementById('editUserEmail').value='{{ u.email }}',promptAndSetPassword())">Set Password</button>
           </td>
         </tr>
         {% endfor %}
@@ -86,6 +91,44 @@
   </div>
 </div>
 
+<!-- Edit User Modal -->
+<div id="editUserModal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
+  <div class="bg-dark-surface border border-dark-border rounded-lg p-6 w-full max-w-md">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold text-white">Edit User</h2>
+      <button onclick="closeEditUserModal()" class="text-gray-400 hover:text-white">✕</button>
+    </div>
+    <div class="space-y-4">
+      <input type="hidden" id="editUserId" />
+      <div>
+        <label class="block text-sm text-gray-300 mb-1">Email</label>
+        <input type="text" id="editUserEmail" disabled class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated" />
+      </div>
+      <div>
+        <label class="block text-sm text-gray-300 mb-1">Role</label>
+        <select id="editUserRole" class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated" onchange="toggleEditClientPicker()">
+          <option value="super_admin">Super Admin</option>
+          <option value="admin">Admin (per client)</option>
+          <option value="subscriber">Subscriber (per client)</option>
+        </select>
+      </div>
+      <div id="editClientPicker" class="hidden">
+        <label class="block text-sm text-gray-300 mb-1">Client(s)</label>
+        <select id="editUserClientIds" multiple class="w-full px-3 py-2 rounded border border-dark-border bg-dark-elevated min-h-[120px]">
+          {% for c in clients %}
+          <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+        <p class="text-xs text-gray-500 mt-1">Hold Ctrl/Cmd to select multiple projects.</p>
+      </div>
+      <div class="flex items-center justify-end gap-2 mt-2">
+        <button onclick="closeEditUserModal()" class="px-3 py-2 text-sm text-gray-300 hover:text-white">Cancel</button>
+        <button onclick="saveUserEdits()" class="btn-primary px-3 py-2 rounded text-sm">Save</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
 <script>
 function openAddUserModal(){
   const m=document.getElementById('addUserModal');
@@ -101,7 +144,7 @@ function closeAddUserModal(){
 function toggleClientPicker(){
   const role = document.getElementById('newUserRole').value;
   const picker = document.getElementById('clientPicker');
-  if(role === 'tenant_admin' || role === 'subscriber'){ picker.classList.remove('hidden'); }
+  if(role === 'admin' || role === 'subscriber'){ picker.classList.remove('hidden'); }
   else { picker.classList.add('hidden'); }
 }
 async function addUser(){
@@ -132,6 +175,93 @@ async function addUser(){
     alert('Error creating user');
   } finally {
     if (window.hideGlobalLoading) window.hideGlobalLoading();
+  }
+}
+
+function openEditUserModal(userId, email){
+  const m=document.getElementById('editUserModal');
+  if(!m) return;
+  document.getElementById('editUserId').value = userId;
+  document.getElementById('editUserEmail').value = email;
+  // Prefill assignments
+  fetch(`/admin/users/${userId}/assignments`).then(async r => {
+    if(!r.ok){ throw new Error(await r.text()); }
+    return r.json();
+  }).then(data => {
+    const roleSel = document.getElementById('editUserRole');
+    const clientSel = document.getElementById('editUserClientIds');
+    roleSel.value = data.role_key || 'subscriber';
+    // Clear selections
+    for (const opt of clientSel.options) { opt.selected = false; }
+    (data.client_ids || []).forEach(id => {
+      const opt = Array.from(clientSel.options).find(o => o.value === id);
+      if (opt) opt.selected = true;
+    });
+    toggleEditClientPicker();
+    m.classList.remove('hidden');
+  }).catch(err => {
+    console.error('Failed to load assignments', err);
+    alert('Failed to load user');
+  });
+}
+function closeEditUserModal(){
+  const m=document.getElementById('editUserModal'); if(m) m.classList.add('hidden');
+}
+function toggleEditClientPicker(){
+  const role = document.getElementById('editUserRole').value;
+  const picker = document.getElementById('editClientPicker');
+  if(role === 'admin' || role === 'subscriber'){ picker.classList.remove('hidden'); }
+  else { picker.classList.add('hidden'); }
+}
+async function saveUserEdits(){
+  const user_id = document.getElementById('editUserId').value;
+  const role_key = document.getElementById('editUserRole').value;
+  const clientSel = document.getElementById('editUserClientIds');
+  const client_ids = (role_key === 'admin' || role_key === 'subscriber') ? Array.from(clientSel.selectedOptions).map(o => o.value) : [];
+  if ((role_key === 'admin' || role_key === 'subscriber') && client_ids.length === 0) {
+    alert('Please select at least one client for this role.');
+    return;
+  }
+  try {
+    const res = await fetch('/admin/users/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id, role_key, client_ids })
+    });
+    if(!res.ok){
+      const txt = await res.text();
+      console.error('Update user failed', res.status, txt);
+      alert('Failed to update user');
+      return;
+    }
+    closeEditUserModal();
+    window.location.reload();
+  } catch(e){
+    console.error(e);
+    alert('Error updating user');
+  }
+}
+
+// Password update UI (inline minimal prompt)
+async function promptAndSetPassword(){
+  const user_id = document.getElementById('editUserId').value;
+  const email = document.getElementById('editUserEmail').value;
+  const pwd = window.prompt('Enter a new password (min 8 chars) for '+email+':');
+  if(!pwd){ return; }
+  if(pwd.length < 8){ alert('Password must be at least 8 characters'); return; }
+  try{
+    const res = await fetch('/admin/users/set-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id, email, password: pwd })
+    });
+    if(!res.ok){
+      const txt = await res.text();
+      console.error('Set password failed', res.status, txt);
+      alert('Failed to set password');
+      return;
+    }
+    alert('Password updated');
+  }catch(e){
+    console.error(e); alert('Error updating password');
   }
 }
 </script>
