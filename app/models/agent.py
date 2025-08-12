@@ -29,6 +29,9 @@ class VoiceSettings(BaseModel):
     stt_provider: Optional[str] = Field(None, description="STT provider (deepgram, groq, etc)")
     stt_language: Optional[str] = Field(default="en", description="STT language")
     
+    # TTS provider setting (missing earlier; required for voice flow)
+    tts_provider: Optional[str] = Field(None, description="TTS provider (openai, elevenlabs, cartesia, etc)")
+    
     # TTS provider-specific settings
     model: Optional[str] = Field(None, description="TTS model (for providers that support multiple models)")
     output_format: Optional[str] = Field(None, description="Output format (for Cartesia)")

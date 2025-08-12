@@ -46,7 +46,7 @@ class ToolConfigurationBase(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class ToolConfiguration(ToolConfigurationBase):
-    """Tool configuration model matching production autonomite_tools table"""
+    """Tool configuration model matching production sidekick_tools table"""
     id: Optional[UUID] = None
     user_id: Optional[UUID] = None
     created_at: Optional[datetime] = None

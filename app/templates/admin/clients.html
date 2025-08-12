@@ -88,13 +88,11 @@
                     
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700">Client ID*</label>
-                            <input type="text" id="clientId" required pattern="[a-z0-9\-]+"
+                            <label class="block text-sm font-medium text-gray-700">Client Slug*</label>
+                            <input type="text" id="clientSlug" required pattern="[a-z0-9\-]+"
                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
-                                   placeholder="e.g., my-client-name">
-                            <p class="mt-1 text-xs text-gray-500">Lowercase letters, numbers, and hyphens only</p>
+                                   placeholder="e.g., my-client">
                         </div>
-                        
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Client Name*</label>
                             <input type="text" id="clientName" required
@@ -102,17 +100,17 @@
                                    placeholder="e.g., My Client Name">
                         </div>
                         
-                        <div class="md:col-span-2">
-                            <label class="block text-sm font-medium text-gray-700">Description</label>
-                            <textarea id="clientDescription" rows="2"
-                                      class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"></textarea>
-                        </div>
-                        
-                        <div class="md:col-span-2">
+                        <div>
                             <label class="block text-sm font-medium text-gray-700">Domain</label>
                             <input type="text" id="clientDomain"
                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
                                    placeholder="e.g., myclient.com">
+                        </div>
+                        
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700">Description</label>
+                            <textarea id="clientDescription" rows="2"
+                                      class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"></textarea>
                         </div>
                     </div>
                     
@@ -222,7 +220,7 @@ async function addClient() {
     }
     
     const clientData = {
-        id: document.getElementById('clientId').value,
+        slug: document.getElementById('clientSlug').value,
         name: document.getElementById('clientName').value,
         description: document.getElementById('clientDescription').value || null,
         domain: document.getElementById('clientDomain').value || null,
@@ -254,6 +252,7 @@ async function addClient() {
     }
     
     try {
+        if (window.showGlobalLoading) window.showGlobalLoading('/api/v1/clients/');
         const response = await fetch('/api/v1/clients/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -276,6 +275,8 @@ async function addClient() {
     } catch (error) {
         console.error('Request error:', error);
         alert('Error creating client: ' + error.message);
+    } finally {
+        if (window.hideGlobalLoading) window.hideGlobalLoading();
     }
 }
 

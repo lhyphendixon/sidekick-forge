@@ -82,9 +82,9 @@ class EnhancedMissionCriticalTests:
             
         # Check for deployment scripts
         deploy_scripts = [
-            "/root/autonomite-agent-platform/scripts/deploy_agent.sh",
-            "/root/autonomite-agent-platform/scripts/verify_deployment.sh",
-            "/root/autonomite-agent-platform/scripts/quick_restart.sh"
+            "/root/sidekick-forge/scripts/deploy_agent.sh",
+            "/root/sidekick-forge/scripts/verify_deployment.sh",
+            "/root/sidekick-forge/scripts/quick_restart.sh"
         ]
         
         for script in deploy_scripts:

@@ -4,7 +4,7 @@ Test client configuration update
 """
 import asyncio
 import sys
-sys.path.append('/root/autonomite-agent-platform')
+sys.path.append('/root/sidekick-forge')
 
 from app.core.dependencies import get_client_service
 from app.models.client import ClientUpdate, ClientSettings, LiveKitConfig, APIKeys

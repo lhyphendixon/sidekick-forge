@@ -3,6 +3,7 @@ Enhanced Client management service using Supabase only (no Redis)
 """
 import json
 import logging
+import os
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from fastapi import HTTPException
@@ -191,7 +192,7 @@ class ClientService:
         """Initialize default clients if they don't exist"""
         default_clients = [
             {
-                "id": "df91fd06-816f-4273-a903-5a4861277040",
+                "id": os.getenv("DEFAULT_CLIENT_ID", "11389177-e4d8-49a9-9a00-f77bb4de6592"),  # From environment
                 "name": "Autonomite",
                 "description": "Autonomite AI Platform",
                 "domain": "autonomite.ai",

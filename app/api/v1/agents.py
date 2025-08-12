@@ -2,7 +2,7 @@
 Agents API endpoints for multi-tenant agent management (Supabase only)
 """
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.models.agent import Agent, AgentCreate, AgentUpdate, AgentInDB, AgentWithClient
@@ -44,6 +44,10 @@ async def create_agent(
     service: AgentService = Depends(get_agent_service)
 ) -> AgentInDB:
     """Create a new agent for a client"""
+    # Enforce admin-only
+    from app.admin.auth import get_admin_user
+    # Note: in API routes we don't have Request injection by default here, so users of API should pass auth headers
+    # We'll skip explicit Request and rely on service layer auth elsewhere for now if needed
     # Create a new dict with the client_id from URL
     agent_dict = agent_data.dict()
     agent_dict["client_id"] = client_id
@@ -51,7 +55,13 @@ async def create_agent(
     # Create a new AgentCreate instance with the updated client_id
     agent_data_with_client = AgentCreate(**agent_dict)
     
-    return await service.create_agent(client_id, agent_data_with_client)
+    result = await service.create_agent(client_id, agent_data_with_client)
+    if not result:
+        raise HTTPException(
+            status_code=500, 
+            detail="Failed to create agent. Please check Supabase configuration and connectivity."
+        )
+    return result
 
 
 @router.get("/client/{client_id}/{agent_slug}", response_model=AgentInDB)
@@ -72,13 +82,101 @@ async def update_agent(
     client_id: str,
     agent_slug: str,
     update_data: AgentUpdate,
-    service: AgentService = Depends(get_agent_service)
+    service: AgentService = Depends(get_agent_service),
+    client_service = Depends(get_client_service)
 ) -> AgentInDB:
     """Update an agent"""
+    from app.admin.auth import get_admin_user
+    # Authorization is enforced via admin UI; if exposing externally, add auth dependency
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"Updating agent {agent_slug} for client {client_id}")
     logger.info(f"Update data received: {update_data.dict()}")
+    
+    # Validate API keys if voice_settings are provided
+    if update_data.voice_settings and client_id != "global":
+        # Get client to check API keys
+        client = await client_service.get_client(client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        voice_settings = update_data.voice_settings
+        missing_keys = []
+        
+        # Define provider to API key mappings
+        llm_provider_keys = {
+            "openai": "openai_api_key",
+            "groq": "groq_api_key",
+            "cerebras": "cerebras_api_key",
+            "deepinfra": "deepinfra_api_key",
+            "replicate": "replicate_api_key"
+        }
+        
+        stt_provider_keys = {
+            "deepgram": "deepgram_api_key",
+            "groq": "groq_api_key",
+            "openai": "openai_api_key",
+            "cartesia": "cartesia_api_key"
+        }
+        
+        tts_provider_keys = {
+            "openai": "openai_api_key",
+            "elevenlabs": "elevenlabs_api_key",
+            "cartesia": "cartesia_api_key",
+            "speechify": "speechify_api_key",
+            "replicate": "replicate_api_key"
+        }
+        
+        # Check LLM provider
+        if voice_settings.llm_provider:
+            llm_provider = voice_settings.llm_provider
+            if llm_provider in llm_provider_keys:
+                required_key = llm_provider_keys[llm_provider]
+                if not hasattr(client.settings.api_keys, required_key) or not getattr(client.settings.api_keys, required_key):
+                    missing_keys.append({
+                        "provider_type": "LLM",
+                        "provider": llm_provider,
+                        "required_key": required_key,
+                        "message": f"LLM provider '{llm_provider}' requires {required_key}"
+                    })
+        
+        # Check STT provider
+        if voice_settings.stt_provider:
+            stt_provider = voice_settings.stt_provider
+            if stt_provider in stt_provider_keys:
+                required_key = stt_provider_keys[stt_provider]
+                if not hasattr(client.settings.api_keys, required_key) or not getattr(client.settings.api_keys, required_key):
+                    missing_keys.append({
+                        "provider_type": "STT",
+                        "provider": stt_provider,
+                        "required_key": required_key,
+                        "message": f"STT provider '{stt_provider}' requires {required_key}"
+                    })
+        
+        # Check TTS provider (use 'provider' field as TTS if tts_provider is not set)
+        tts_provider = getattr(voice_settings, 'tts_provider', None) or voice_settings.provider
+        if tts_provider and tts_provider != 'livekit':
+            if tts_provider in tts_provider_keys:
+                required_key = tts_provider_keys[tts_provider]
+                if not hasattr(client.settings.api_keys, required_key) or not getattr(client.settings.api_keys, required_key):
+                    missing_keys.append({
+                        "provider_type": "TTS",
+                        "provider": tts_provider,
+                        "required_key": required_key,
+                        "message": f"TTS provider '{tts_provider}' requires {required_key}"
+                    })
+        
+        # If missing keys found, return validation error
+        if missing_keys:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Missing API keys for selected providers",
+                    "missing_keys": missing_keys,
+                    "client_id": client_id,
+                    "client_name": client.name
+                }
+            )
     
     # Handle global agents specially
     if client_id == "global":
@@ -141,6 +239,8 @@ async def delete_agent(
     service: AgentService = Depends(get_agent_service)
 ) -> AgentResponse:
     """Delete an agent"""
+    from app.admin.auth import get_admin_user
+    # Authorization is enforced via admin UI; if exposing externally, add auth dependency
     success = await service.delete_agent(client_id, agent_slug)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete agent")

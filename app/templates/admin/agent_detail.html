@@ -391,24 +391,57 @@ async function saveAgent() {
         return;
     }
     
+    // Extract provider information from provider config if available
+    const voiceSettings = {
+        provider: document.getElementById('voiceProvider').value,
+        voice_id: document.getElementById('voiceId').value,
+        temperature: parseFloat(document.getElementById('voiceTemperature').value),
+        provider_config: providerConfig
+    };
+    
+    // First check if config form dropdowns exist and use their values directly
+    // This ensures we capture the current selection even if "Apply Configuration" wasn't clicked
+    if (document.getElementById('config_llm_provider')) {
+        voiceSettings.llm_provider = document.getElementById('config_llm_provider').value;
+        voiceSettings.llm_model = document.getElementById('config_llm_model').value;
+    } else if (providerConfig && providerConfig.llm) {
+        // Fall back to provider config if dropdowns don't exist
+        voiceSettings.llm_provider = providerConfig.llm.provider;
+        voiceSettings.llm_model = providerConfig.llm.model;
+    }
+    
+    if (document.getElementById('config_stt_provider')) {
+        voiceSettings.stt_provider = document.getElementById('config_stt_provider').value;
+    } else if (providerConfig && providerConfig.stt) {
+        voiceSettings.stt_provider = providerConfig.stt.provider;
+    }
+    
+    if (document.getElementById('config_tts_provider')) {
+        voiceSettings.tts_provider = document.getElementById('config_tts_provider').value;
+    } else if (providerConfig && providerConfig.tts) {
+        voiceSettings.tts_provider = providerConfig.tts.provider;
+    }
+    
     const updateData = {
         name: document.getElementById('agentName').value,
         description: document.getElementById('agentDescription').value || null,
         agent_image: document.getElementById('agentImage').value || null,
         system_prompt: document.getElementById('systemPrompt').value,
         enabled: document.getElementById('agentEnabled').checked,
-        voice_settings: {
-            provider: document.getElementById('voiceProvider').value,
-            voice_id: document.getElementById('voiceId').value,
-            temperature: parseFloat(document.getElementById('voiceTemperature').value),
-            provider_config: providerConfig
-        },
+        voice_settings: voiceSettings,
         webhooks: {
             voice_context_webhook_url: document.getElementById('voiceWebhook').value || null,
             text_context_webhook_url: document.getElementById('textWebhook').value || null
         },
         tools_config: toolsConfig
     };
+    
+    // Debug logging to see what providers are being sent
+    console.log('Saving agent with providers:', {
+        llm: voiceSettings.llm_provider,
+        stt: voiceSettings.stt_provider,
+        tts: voiceSettings.tts_provider
+    });
     
     try {
         const response = await fetch(`/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/update`, {
@@ -417,11 +450,17 @@ async function saveAgent() {
             body: JSON.stringify(updateData)
         });
         
+        const result = await response.json();
+        
         if (response.ok) {
             showNotification('success', 'Agent configuration saved successfully!');
         } else {
-            const error = await response.json();
-            showNotification('error', 'Error saving agent: ' + (error.detail || 'Unknown error'));
+            // Check for API key validation errors
+            if (result.missing_keys && result.missing_keys.length > 0) {
+                showApiKeyErrorModal(result);
+            } else {
+                showNotification('error', 'Error saving agent: ' + (result.error || 'Unknown error'));
+            }
         }
     } catch (error) {
         showNotification('error', 'Error saving agent: ' + error.message);
@@ -481,12 +520,12 @@ function updateTTSSettings() {
 function applyConfiguration() {
     {% if latest_config %}
     // Get values from config form
-    const llmProvider = document.getElementById('config_llm_provider').value;
-    const llmModel = document.getElementById('config_llm_model').value;
-    const temperature = parseFloat(document.getElementById('config_temperature').value);
-    const sttProvider = document.getElementById('config_stt_provider').value;
-    const sttModel = document.getElementById('config_stt_model').value;
-    const ttsProvider = document.getElementById('config_tts_provider').value;
+    const llmProvider = document.getElementById('config_llm_provider') ? document.getElementById('config_llm_provider').value : null;
+    const llmModel = document.getElementById('config_llm_model') ? document.getElementById('config_llm_model').value : null;
+    const temperature = document.getElementById('config_temperature') ? parseFloat(document.getElementById('config_temperature').value) : 0.7;
+    const sttProvider = document.getElementById('config_stt_provider') ? document.getElementById('config_stt_provider').value : null;
+    const sttModel = document.getElementById('config_stt_model') ? document.getElementById('config_stt_model').value : null;
+    const ttsProvider = document.getElementById('config_tts_provider') ? document.getElementById('config_tts_provider').value : null;
     
     // Build provider config
     const providerConfig = {
@@ -570,6 +609,84 @@ function showNotification(type, message) {
         notification.classList.add('opacity-0', 'translate-x-full');
         setTimeout(() => notification.remove(), 300);
     }, 3000);
+}
+
+function showApiKeyErrorModal(errorData) {
+    // Remove existing modal if any
+    const existingModal = document.getElementById('apiKeyErrorModal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    // Build the missing keys list HTML
+    let missingKeysHtml = '';
+    errorData.missing_keys.forEach(key => {
+        missingKeysHtml += `
+            <li class="mb-2">
+                <span class="font-semibold">${key.provider_type} Provider:</span> 
+                <span class="text-gray-700">${key.provider}</span>
+                <br>
+                <span class="text-sm text-gray-600">Required API key: <code class="bg-gray-100 px-1 py-0.5 rounded">${key.required_key}</code></span>
+            </li>
+        `;
+    });
+    
+    // Create modal HTML
+    const modalHtml = `
+        <div id="apiKeyErrorModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4">
+                <div class="bg-red-50 border-b border-red-200 px-6 py-4 rounded-t-lg">
+                    <h3 class="text-lg font-semibold text-red-800 flex items-center">
+                        <i class="bi bi-exclamation-triangle-fill mr-2"></i>
+                        Missing API Keys for Selected Providers
+                    </h3>
+                </div>
+                <div class="px-6 py-4">
+                    <p class="text-gray-700 mb-4">
+                        The agent configuration cannot be saved because the client 
+                        <strong>${errorData.client_name}</strong> is missing API keys for the selected providers:
+                    </p>
+                    <ul class="list-disc list-inside bg-gray-50 rounded-lg p-4 mb-4">
+                        ${missingKeysHtml}
+                    </ul>
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <p class="text-sm text-blue-800">
+                            <strong>How to fix:</strong><br>
+                            1. Go to the <a href="/admin/clients/${errorData.client_id}/edit" 
+                               class="text-blue-600 hover:text-blue-800 underline"
+                               onclick="document.getElementById('apiKeyErrorModal').remove()">
+                               Client Settings</a> page<br>
+                            2. Add the missing API keys<br>
+                            3. Save the client configuration<br>
+                            4. Return here and save the agent configuration again
+                        </p>
+                    </div>
+                </div>
+                <div class="px-6 py-4 border-t bg-gray-50 rounded-b-lg flex justify-end">
+                    <button type="button" 
+                            onclick="document.getElementById('apiKeyErrorModal').remove()"
+                            class="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Add modal to body
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    // Add escape key handler
+    const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+            const modal = document.getElementById('apiKeyErrorModal');
+            if (modal) {
+                modal.remove();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        }
+    };
+    document.addEventListener('keydown', handleEscape);
 }
 </script>
 {% endblock %}

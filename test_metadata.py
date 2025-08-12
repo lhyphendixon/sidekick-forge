@@ -21,7 +21,7 @@ test_metadata = {
         "deepgram_api_key": "test_key",
         "cartesia_api_key": "test_key"
     },
-    "created_by": "autonomite_backend",
+    "created_by": "sidekick_backend",
     "created_at": "2025-07-25T00:00:00"
 }
 

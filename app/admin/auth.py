@@ -74,7 +74,7 @@ async def get_current_admin_user(
     
     return {
         "username": user["username"],
-        "role": user["role"],
+        "role": user["role"],  # superadmin maps to platform-wide
         "authenticated_at": datetime.utcnow().isoformat()
     }
 
@@ -152,22 +152,21 @@ async def get_admin_user_from_session(request: Request) -> Optional[Dict[str, An
 async def get_admin_user(request: Request) -> Dict[str, Any]:
     """Get admin user using Supabase authentication"""
     
-    # Development mode bypass
-    if os.getenv("DEVELOPMENT_MODE", "true") == "true":
-        return {
-            "user_id": "dev-admin",
-            "email": "admin@autonomite.ai",
-            "role": "superadmin",
-            "auth_method": "development",
-            "authenticated_at": datetime.utcnow().isoformat()
-        }
-    
-    # Try to get token from Authorization header
+    # Try to get token from Authorization header or cookie first
     auth_header = request.headers.get("authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         # Try to get from cookies (for browser-based auth)
         token = request.cookies.get("admin_token")
         if not token:
+            # Only allow development bypass if explicitly enabled
+            if os.getenv("DEVELOPMENT_MODE", "false").lower() == "true":
+                return {
+                    "user_id": "dev-admin",
+                    "email": "admin@autonomite.ai",
+                    "role": "superadmin",
+                    "auth_method": "development",
+                    "authenticated_at": datetime.utcnow().isoformat()
+                }
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication required - please login",
@@ -176,19 +175,93 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
     else:
         token = auth_header.split(" ")[1]
     
+    # Check for development token
+    if token == "dev-token" and os.getenv("DEVELOPMENT_MODE", "false").lower() == "true":
+        return {
+            "user_id": "dev-admin",
+            "email": "admin@autonomite.ai",
+            "role": "superadmin",
+            "auth_method": "development",
+            "authenticated_at": datetime.utcnow().isoformat()
+        }
+    
     try:
         # Verify token with Supabase
         from app.integrations.supabase_client import supabase_manager
-        
+        # Ensure initialized
+        if not getattr(supabase_manager, "_initialized", False):
+            try:
+                import asyncio
+                if asyncio.get_event_loop().is_running():
+                    # In async context
+                    await supabase_manager.initialize()
+                else:
+                    asyncio.run(supabase_manager.initialize())
+            except Exception:
+                pass
         # Use Supabase to verify the JWT token
         user_response = supabase_manager.admin_client.auth.get_user(token)
         
         if user_response.user:
             user = user_response.user
+            # Determine role using RBAC if available, else fallback to user_metadata
+            role = "subscriber"
+            try:
+                admin_client = supabase_manager.admin_client
+                # Check platform super_admin role via RBAC
+                try:
+                    role_row = (
+                        admin_client.table('roles')
+                        .select('id')
+                        .eq('key', 'super_admin')
+                        .single()
+                        .execute()
+                        .data
+                    )
+                    super_admin_role_id = role_row.get('id') if role_row else None
+                except Exception:
+                    super_admin_role_id = None
+                if super_admin_role_id:
+                    pr = (
+                        admin_client.table('platform_role_memberships')
+                        .select('role_id')
+                        .eq('user_id', user.id)
+                        .eq('role_id', super_admin_role_id)
+                        .execute()
+                        .data
+                    )
+                    if pr:
+                        role = 'superadmin'
+                # If not superadmin, check metadata and tenant assignments
+                if role != 'superadmin':
+                    meta = getattr(user, 'user_metadata', None) or {}
+                    platform_role = (meta.get('platform_role') or '').lower() if isinstance(meta, dict) else ''
+                    if platform_role == 'super_admin':
+                        role = 'superadmin'
+                    else:
+                        ta = meta.get('tenant_assignments') if isinstance(meta, dict) else None
+                        if isinstance(ta, dict):
+                            admin_ids = ta.get('admin_client_ids') or []
+                            role = 'admin' if admin_ids else 'subscriber'
+                        else:
+                            role = 'subscriber'
+            except Exception:
+                # Safe fallback to metadata only
+                meta = getattr(user, 'user_metadata', None) or {}
+                platform_role = (meta.get('platform_role') or '').lower() if isinstance(meta, dict) else ''
+                if platform_role == 'super_admin':
+                    role = 'superadmin'
+                else:
+                    ta = meta.get('tenant_assignments') if isinstance(meta, dict) else None
+                    if isinstance(ta, dict) and (ta.get('admin_client_ids') or []):
+                        role = 'admin'
+                    else:
+                        role = 'subscriber'
+
             return {
                 "user_id": user.id,
                 "email": user.email,
-                "role": "admin",  # All authenticated users are admin for now
+                "role": role,
                 "auth_method": "supabase",
                 "authenticated_at": datetime.utcnow().isoformat()
             }
@@ -199,8 +272,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             )
             
     except Exception as e:
-        # For development, allow bypass
-        if os.getenv("DEVELOPMENT_MODE") == "true":
+        # For development, allow bypass only if explicitly enabled and no valid token flow
+        if os.getenv("DEVELOPMENT_MODE", "false").lower() == "true":
             return {
                 "user_id": "dev-admin",
                 "email": "dev@autonomite.ai",

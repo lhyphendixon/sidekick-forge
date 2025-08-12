@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def update_env_file(url, api_key, api_secret):
     """Update .env file with LiveKit credentials"""
-    env_path = "/root/autonomite-agent-platform/.env"
+    env_path = "/root/sidekick-forge/.env"
     
     # Read existing env
     lines = []

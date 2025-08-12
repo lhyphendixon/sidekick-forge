@@ -5,36 +5,50 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: autonomite-fastapi
+    container_name: ${APP_NAME:-sidekick-forge}-fastapi
     ports:
       - "8000:8000"
     environment:
-      - APP_ENV=development
+      - APP_ENV=production
+      - DEVELOPMENT_MODE=false
       - REDIS_HOST=redis
       - DATABASE_URL=${DATABASE_URL}
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - APP_NAME=${APP_NAME}
+      - PLATFORM_NAME=${PLATFORM_NAME}
+      # Platform Supabase credentials
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      # LiveKit credentials  
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      # Remove duplicate DEVELOPMENT_MODE to avoid conflicting overrides
     volumes:
       - ./app:/app/app
       - ./logs:/app/logs
+      - ./app/static:/app/static
     depends_on:
       - redis
     restart: unless-stopped
     networks:
-      - autonomite-network
+      - platform-network
 
   redis:
     image: redis:7-alpine
-    container_name: autonomite-redis
+    container_name: ${APP_NAME:-sidekick-forge}-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis-data:/data
     restart: unless-stopped
     networks:
-      - autonomite-network
+      - platform-network
 
   nginx:
     image: nginx:alpine
-    container_name: autonomite-nginx
+    container_name: ${APP_NAME:-sidekick-forge}-nginx
     ports:
       - "80:80"
       - "443:443"
@@ -42,22 +56,36 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./ssl:/etc/nginx/ssl:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+      - ./app/static:/app/static:ro
     depends_on:
       - fastapi
     restart: unless-stopped
     networks:
-      - autonomite-network
+      - platform-network
 
   agent-worker:
-    image: autonomite/agent-runtime:latest
+    build:
+      context: ./docker/agent
+      dockerfile: Dockerfile
+    image: ${APP_NAME:-sidekick-forge}/agent-runtime:latest
     restart: always
-    command: python /app/entrypoint.py  # Use the existing entrypoint
+    command: python /app/entrypoint.py  # Use original entrypoint
+    volumes:
+      - ./docker/agent/entrypoint.py:/app/entrypoint.py:ro
+      - ./docker/agent/sidekick_agent.py:/app/sidekick_agent.py:ro
+      - ./docker/agent/context.py:/app/context.py:ro
+      - ./docker/agent/config_validator.py:/app/config_validator.py:ro
+      - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
     environment:
       - LIVEKIT_URL=${LIVEKIT_URL:-wss://litebridge-hw6srhvi.livekit.cloud}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Agent configuration
+      - AGENT_NAME=sidekick-agent
       # Supabase configuration for API key fallback
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
@@ -77,11 +105,12 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - COHERE_API_KEY=${COHERE_API_KEY:-}
     networks:
-      - autonomite-network
+      - platform-network
 
 volumes:
   redis-data:
 
 networks:
-  autonomite-network:
+  platform-network:
+    name: ${APP_NAME:-sidekick-forge}-network
     driver: bridge

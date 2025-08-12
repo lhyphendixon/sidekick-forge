@@ -207,7 +207,7 @@ async def admin_dashboard(request: Request):
                 
                 <div class="footer">
                     <p>🚀 <strong>Autonomite SaaS Platform</strong> - AI Agent Management for WordPress</p>
-                    <p>Minimal mode for development handoff | Server: agents.autonomite.net</p>
+                    <p>Minimal mode for development handoff | Server: {os.getenv('DOMAIN_NAME', 'localhost')}</p>
                 </div>
             </div>
         </body>

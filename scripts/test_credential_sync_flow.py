@@ -10,7 +10,7 @@ This script verifies that:
 import asyncio
 import sys
 import os
-sys.path.append('/root/autonomite-agent-platform')
+sys.path.append('/root/sidekick-forge')
 
 from app.core.dependencies import get_client_service
 from app.services.backend_livekit_sync import BackendLiveKitSync

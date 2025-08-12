@@ -5,7 +5,8 @@ import os
 
 class Settings(BaseSettings):
     # Application Settings
-    app_name: str = "autonomite-saas"
+    app_name: str = Field(default="sidekick-forge", env="APP_NAME")
+    platform_name: str = Field(default="Sidekick Forge", env="PLATFORM_NAME")
     app_env: str = Field(default="production", env="APP_ENV")
     debug: bool = Field(default=False, env="DEBUG")
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
@@ -22,9 +23,10 @@ class Settings(BaseSettings):
     jwt_expiration_minutes: int = Field(default=1440, env="JWT_EXPIRATION_MINUTES")
     
     # Supabase Configuration (CRITICAL: Both service and anon keys needed)
-    supabase_url: str = Field(default="https://yuowazxcxwhczywurmmw.supabase.co", env="SUPABASE_URL")
-    supabase_service_role_key: str = Field(default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.tN4FaKbNTCPU7ooCh9kH-qZcxeHCDo46Y0LfOjzKO0o", env="SUPABASE_SERVICE_ROLE_KEY")
-    supabase_anon_key: str = Field(default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODQ1NzMsImV4cCI6MjA1MTM2MDU3M30.SmqTIWrScKQWkJ2_PICWVJYpRSKfvqkRcjMMt0ApH1U", env="SUPABASE_ANON_KEY")
+    # IMPORTANT: No defaults - must be loaded from environment to avoid credential mismatches
+    supabase_url: str = Field(..., env="SUPABASE_URL")
+    supabase_service_role_key: str = Field(..., env="SUPABASE_SERVICE_ROLE_KEY")
+    supabase_anon_key: str = Field(..., env="SUPABASE_ANON_KEY")
     
     # Supabase Auth Configuration
     supabase_auth_enabled: bool = Field(default=True, env="SUPABASE_AUTH_ENABLED")
@@ -75,8 +77,8 @@ class Settings(BaseSettings):
     performance_monitoring: bool = Field(default=False, env="PERFORMANCE_MONITORING")
     
     # SSL/Domain Configuration
-    domain_name: str = Field(default="agents.autonomite.net", env="DOMAIN_NAME")
-    ssl_email: str = Field(default="admin@autonomite.net", env="SSL_EMAIL")
+    domain_name: str = Field(env="DOMAIN_NAME")  # Required - no default
+    ssl_email: str = Field(default="admin@sidekickforge.com", env="SSL_EMAIL")
     
     # Monitoring
     sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN")

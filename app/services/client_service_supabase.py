@@ -2,6 +2,7 @@
 Enhanced Client management service using Supabase only (no Redis)
 """
 import json
+import os
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from fastapi import HTTPException
@@ -26,10 +27,15 @@ class ClientService:
         
     async def create_client(self, client_data: ClientCreate) -> ClientInDB:
         """Create a new client"""
+        import uuid
+        
+        # Generate UUID if not provided
+        client_id = client_data.id if client_data.id else str(uuid.uuid4())
+        
         # Check if client already exists
-        existing = await self.get_client(client_data.id)
+        existing = await self.get_client(client_id)
         if existing:
-            raise HTTPException(status_code=400, detail=f"Client with ID {client_data.id} already exists")
+            raise HTTPException(status_code=400, detail=f"Client with ID {client_id} already exists")
         
         # Create client object with all fields
         now = datetime.now(timezone.utc)
@@ -37,22 +43,58 @@ class ClientService:
         # Extract settings into separate columns
         settings = client_data.settings or ClientSettings()
         
+        # Persist slug inside additional_settings for backward compatibility
         client_dict = {
-            "id": client_data.id,
+            "id": client_id,
             "name": client_data.name,
-            "description": client_data.description,
-            "domain": client_data.domain,
-            "active": client_data.active,
+            # store minimal top-level fields only (avoid non-existent columns)
+            "additional_settings": {
+                "description": client_data.description,
+                "domain": client_data.domain,
+                "slug": client_data.slug,
+                "supabase_anon_key": settings.supabase.anon_key if settings.supabase else "",
+                "embedding": settings.embedding.dict() if settings.embedding else {},
+                "rerank": settings.rerank.dict() if settings.rerank else {}
+            },
             "supabase_url": settings.supabase.url if settings.supabase else "",
-            "supabase_anon_key": settings.supabase.anon_key if settings.supabase else "",
             "supabase_service_role_key": settings.supabase.service_role_key if settings.supabase else "",
-            "livekit_server_url": settings.livekit.server_url if settings.livekit else "",
+            "livekit_url": settings.livekit.server_url if settings.livekit else "",
             "livekit_api_key": settings.livekit.api_key if settings.livekit else "",
             "livekit_api_secret": settings.livekit.api_secret if settings.livekit else "",
-            "settings": settings.dict() if settings else {},
             "created_at": now.isoformat(),
             "updated_at": now.isoformat()
         }
+        
+        # Add API keys as direct columns if present
+        if settings.api_keys:
+            api_keys = settings.api_keys
+            if api_keys.openai_api_key:
+                client_dict["openai_api_key"] = api_keys.openai_api_key
+            if api_keys.groq_api_key:
+                client_dict["groq_api_key"] = api_keys.groq_api_key
+            if api_keys.deepinfra_api_key:
+                client_dict["deepinfra_api_key"] = api_keys.deepinfra_api_key
+            if api_keys.replicate_api_key:
+                client_dict["replicate_api_key"] = api_keys.replicate_api_key
+            if api_keys.deepgram_api_key:
+                client_dict["deepgram_api_key"] = api_keys.deepgram_api_key
+            if api_keys.elevenlabs_api_key:
+                client_dict["elevenlabs_api_key"] = api_keys.elevenlabs_api_key
+            if api_keys.cartesia_api_key:
+                client_dict["cartesia_api_key"] = api_keys.cartesia_api_key
+            if api_keys.speechify_api_key:
+                client_dict["speechify_api_key"] = api_keys.speechify_api_key
+            if api_keys.novita_api_key:
+                client_dict["novita_api_key"] = api_keys.novita_api_key
+            if api_keys.cohere_api_key:
+                client_dict["cohere_api_key"] = api_keys.cohere_api_key
+            if api_keys.siliconflow_api_key:
+                client_dict["siliconflow_api_key"] = api_keys.siliconflow_api_key
+            if api_keys.jina_api_key:
+                client_dict["jina_api_key"] = api_keys.jina_api_key
+            if api_keys.cerebras_api_key:
+                client_dict["cerebras_api_key"] = api_keys.cerebras_api_key
+            # Note: anthropic_api_key removed - not in APIKeys model
         
         # Store in Supabase
         result = self.supabase.table(self.table_name).insert(client_dict).execute()
@@ -80,32 +122,89 @@ class ClientService:
         # Update fields
         update_dict = {}
         
+        # Direct column updates
         if update_data.name is not None:
             update_dict["name"] = update_data.name
+        if update_data.slug is not None:
+            # Merge slug into additional_settings JSONB
+            result = self.supabase.table(self.table_name).select("additional_settings").eq("id", client_id).execute()
+            existing_additional = result.data[0].get("additional_settings", {}) if result.data else {}
+            merged_additional = {**existing_additional, **{"slug": update_data.slug}}
+            update_dict["additional_settings"] = merged_additional
+            
+        # Fields that go in additional_settings JSONB
+        additional_settings = {}
         if update_data.description is not None:
-            update_dict["description"] = update_data.description
+            additional_settings["description"] = update_data.description
         if update_data.domain is not None:
-            update_dict["domain"] = update_data.domain
+            additional_settings["domain"] = update_data.domain
         if update_data.active is not None:
-            update_dict["active"] = update_data.active
+            additional_settings["active"] = update_data.active
+            
+        # Add embedding and rerank settings to additional_settings
+        if update_data.settings:
+            if update_data.settings.embedding:
+                additional_settings["embedding"] = update_data.settings.embedding.dict()
+            if update_data.settings.rerank:
+                additional_settings["rerank"] = update_data.settings.rerank.dict()
+            
+        # If we have additional settings to update, add them to update_dict
+        if additional_settings:
+            # Get existing additional_settings
+            result = self.supabase.table(self.table_name).select("additional_settings").eq("id", client_id).execute()
+            existing_additional = result.data[0].get("additional_settings", {}) if result.data else {}
+            
+            # Merge with new settings
+            merged_additional = {**existing_additional, **additional_settings}
+            update_dict["additional_settings"] = merged_additional
             
         # Handle settings update
         if update_data.settings:
             settings = update_data.settings
             if settings.supabase:
                 update_dict["supabase_url"] = settings.supabase.url
-                update_dict["supabase_anon_key"] = settings.supabase.anon_key
                 update_dict["supabase_service_role_key"] = settings.supabase.service_role_key
+                # Store anon_key in additional_settings since column doesn't exist
+                if settings.supabase.anon_key:
+                    additional_settings["supabase_anon_key"] = settings.supabase.anon_key
             if settings.livekit:
-                update_dict["livekit_server_url"] = settings.livekit.server_url
+                update_dict["livekit_url"] = settings.livekit.server_url
                 update_dict["livekit_api_key"] = settings.livekit.api_key
                 update_dict["livekit_api_secret"] = settings.livekit.api_secret
             
-            # Merge with existing settings
-            existing_settings = client.settings.dict() if client.settings else {}
-            new_settings = update_data.settings.dict()
-            merged_settings = {**existing_settings, **new_settings}
-            update_dict["settings"] = merged_settings
+            # Also update API key columns directly
+            if settings.api_keys:
+                api_keys = settings.api_keys
+                if api_keys.openai_api_key is not None:
+                    update_dict["openai_api_key"] = api_keys.openai_api_key
+                if api_keys.groq_api_key is not None:
+                    update_dict["groq_api_key"] = api_keys.groq_api_key
+                if api_keys.deepinfra_api_key is not None:
+                    update_dict["deepinfra_api_key"] = api_keys.deepinfra_api_key
+                if api_keys.replicate_api_key is not None:
+                    update_dict["replicate_api_key"] = api_keys.replicate_api_key
+                if api_keys.deepgram_api_key is not None:
+                    update_dict["deepgram_api_key"] = api_keys.deepgram_api_key
+                if api_keys.elevenlabs_api_key is not None:
+                    update_dict["elevenlabs_api_key"] = api_keys.elevenlabs_api_key
+                if api_keys.cartesia_api_key is not None:
+                    update_dict["cartesia_api_key"] = api_keys.cartesia_api_key
+                if api_keys.speechify_api_key is not None:
+                    update_dict["speechify_api_key"] = api_keys.speechify_api_key
+                if api_keys.novita_api_key is not None:
+                    update_dict["novita_api_key"] = api_keys.novita_api_key
+                if api_keys.cohere_api_key is not None:
+                    update_dict["cohere_api_key"] = api_keys.cohere_api_key
+                if api_keys.siliconflow_api_key is not None:
+                    update_dict["siliconflow_api_key"] = api_keys.siliconflow_api_key
+                if api_keys.jina_api_key is not None:
+                    update_dict["jina_api_key"] = api_keys.jina_api_key
+                if api_keys.cerebras_api_key is not None:
+                    update_dict["cerebras_api_key"] = api_keys.cerebras_api_key
+                # Note: anthropic_api_key is not in the APIKeys model
+            
+            # Note: We don't have a settings column in the platform database
+            # All settings are stored in individual columns
         
         if update_dict:
             update_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -152,9 +251,9 @@ class ClientService:
         # Check if the provided API key matches the client's license key
         return client.settings.license_key == api_key if client.settings else False
     
-    async def get_client_supabase_config(self, client_id: str) -> Optional[Dict[str, str]]:
+    async def get_client_supabase_config(self, client_id: str, auto_sync: bool = False) -> Optional[Dict[str, str]]:
         """Get Supabase configuration for a specific client"""
-        client = await self.get_client(client_id)
+        client = await self.get_client(client_id, auto_sync=auto_sync)
         if not client or not client.settings or not client.settings.supabase:
             return None
             
@@ -164,9 +263,9 @@ class ClientService:
             "service_role_key": client.settings.supabase.service_role_key
         }
     
-    async def get_client_supabase_client(self, client_id: str) -> Optional[SupabaseClient]:
+    async def get_client_supabase_client(self, client_id: str, auto_sync: bool = False) -> Optional[SupabaseClient]:
         """Get a Supabase client instance for a specific client"""
-        config = await self.get_client_supabase_config(client_id)
+        config = await self.get_client_supabase_config(client_id, auto_sync=auto_sync)
         if not config or not config["url"] or not config["service_role_key"]:
             return None
             
@@ -179,7 +278,7 @@ class ClientService:
         """Initialize default clients if they don't exist"""
         default_clients = [
             {
-                "id": "df91fd06-816f-4273-a903-5a4861277040",
+                "id": os.getenv("DEFAULT_CLIENT_ID", "11389177-e4d8-49a9-9a00-f77bb4de6592"),  # From environment
                 "name": "Autonomite",
                 "description": "Autonomite AI Platform",
                 "domain": "autonomite.ai",
@@ -255,19 +354,43 @@ class ClientService:
     
     async def get_client(self, client_id: str, auto_sync: bool = True) -> Optional[ClientInDB]:
         """Get a client by ID with optional auto-sync from client's Supabase"""
+        import time
+        import logging
+        import uuid
+        logger = logging.getLogger(__name__)
+        
+        # Validate UUID format
+        try:
+            # Try to parse as UUID to validate format
+            uuid.UUID(client_id)
+        except (ValueError, AttributeError):
+            # Invalid UUID format, return None
+            logger.warning(f"Invalid UUID format for client_id: {client_id}")
+            return None
+        
+        method_start = time.time()
+        query_start = time.time()
         result = self.supabase.table(self.table_name).select("*").eq("id", client_id).execute()
+        logger.info(f"[TIMING] client query took {time.time() - query_start:.2f}s")
         
         if result.data and len(result.data) > 0:
+            parse_start = time.time()
             client = self._db_to_model(result.data[0])
+            logger.info(f"[TIMING] _db_to_model took {time.time() - parse_start:.2f}s")
             
             # If auto_sync is enabled, update settings from client's Supabase
             if auto_sync and client.settings and client.settings.supabase and client.settings.supabase.url and client.settings.supabase.service_role_key:
                 try:
+                    sync_start = time.time()
+                    logger.info(f"[TIMING] Starting auto-sync for client {client_id}")
+                    
                     # Fetch latest settings from client's Supabase
+                    fetch_start = time.time()
                     synced_settings = await self.fetch_settings_from_supabase(
                         client.settings.supabase.url,
                         client.settings.supabase.service_role_key
                     )
+                    logger.info(f"[TIMING] fetch_settings_from_supabase took {time.time() - fetch_start:.2f}s")
                     
                     # Update client settings with synced data
                     if synced_settings.get('api_keys'):
@@ -277,16 +400,47 @@ class ClientService:
                             if value and hasattr(client.settings.api_keys, key):
                                 setattr(client.settings.api_keys, key, value)
                     
-                    # Update the client in database with synced settings
-                    update_dict = {"settings": client.settings.dict(), "updated_at": datetime.now(timezone.utc).isoformat()}
-                    self.supabase.table(self.table_name).update(update_dict).eq("id", client_id).execute()
+                    # Update the client in database with synced API keys
+                    update_start = time.time()
+                    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+                    
+                    # Update individual API key columns ONLY if they're missing in platform DB
+                    if synced_settings.get('api_keys'):
+                        # First get current platform values
+                        platform_result = self.supabase.table(self.table_name).select(
+                            'openai_api_key, groq_api_key, deepgram_api_key, elevenlabs_api_key, '
+                            'cartesia_api_key, speechify_api_key, deepinfra_api_key, replicate_api_key, '
+                            'novita_api_key, cohere_api_key, siliconflow_api_key, jina_api_key'
+                        ).eq('id', client_id).execute()
+                        
+                        platform_keys = platform_result.data[0] if platform_result.data else {}
+                        
+                        for key, value in synced_settings['api_keys'].items():
+                            # Only update if platform doesn't have this key or it's a placeholder
+                            platform_value = platform_keys.get(key)
+                            if value and key in ['openai_api_key', 'groq_api_key', 'deepgram_api_key', 
+                                               'elevenlabs_api_key', 'cartesia_api_key', 'speechify_api_key',
+                                               'deepinfra_api_key', 'replicate_api_key', 'novita_api_key',
+                                               'cohere_api_key', 'siliconflow_api_key', 'jina_api_key']:
+                                if not platform_value or platform_value == '<needs-actual-key>':
+                                    update_dict[key] = value
+                                    logger.info(f"Auto-sync: Adding missing {key} from client database")
+                                else:
+                                    logger.debug(f"Auto-sync: Keeping platform value for {key}")
+                    
+                    if len(update_dict) > 1:  # More than just updated_at
+                        self.supabase.table(self.table_name).update(update_dict).eq("id", client_id).execute()
+                    logger.info(f"[TIMING] client update took {time.time() - update_start:.2f}s")
+                    logger.info(f"[TIMING] Total auto-sync took {time.time() - sync_start:.2f}s")
                     
                 except Exception as e:
                     # Log but don't fail if sync fails
-                    print(f"Auto-sync failed for client {client_id}: {e}")
+                    logger.warning(f"Auto-sync failed for client {client_id}: {e}")
             
+            logger.info(f"[TIMING] TOTAL get_client took {time.time() - method_start:.2f}s")
             return client
         
+        logger.info(f"[TIMING] TOTAL get_client (not found) took {time.time() - method_start:.2f}s")
         return None
     
     async def fetch_settings_from_supabase(self, supabase_url: str, service_key: str) -> Dict[str, Any]:
@@ -432,30 +586,65 @@ class ClientService:
         settings_dict = db_row.get("settings", {})
         
         # Override with individual columns if they exist
-        if "supabase_url" in db_row:
-            if "supabase" not in settings_dict:
-                settings_dict["supabase"] = {}
-            settings_dict["supabase"]["url"] = db_row.get("supabase_url", "")
-            settings_dict["supabase"]["anon_key"] = db_row.get("supabase_anon_key", "")
-            settings_dict["supabase"]["service_role_key"] = db_row.get("supabase_service_role_key", "")
+        # Supabase config (required)
+        if "supabase" not in settings_dict:
+            settings_dict["supabase"] = {}
+        settings_dict["supabase"]["url"] = db_row.get("supabase_url", "")
+        # Get anon_key from additional_settings since column doesn't exist
+        additional = db_row.get("additional_settings", {})
+        settings_dict["supabase"]["anon_key"] = additional.get("supabase_anon_key", "")
+        settings_dict["supabase"]["service_role_key"] = db_row.get("supabase_service_role_key", "")
         
-        if "livekit_server_url" in db_row:
-            if "livekit" not in settings_dict:
-                settings_dict["livekit"] = {}
-            settings_dict["livekit"]["server_url"] = db_row.get("livekit_server_url", "")
-            settings_dict["livekit"]["api_key"] = db_row.get("livekit_api_key", "")
-            settings_dict["livekit"]["api_secret"] = db_row.get("livekit_api_secret", "")
+        # LiveKit config (required by model but may be empty)
+        if "livekit" not in settings_dict:
+            settings_dict["livekit"] = {}
+        settings_dict["livekit"]["server_url"] = db_row.get("livekit_url", db_row.get("livekit_server_url", ""))
+        settings_dict["livekit"]["api_key"] = db_row.get("livekit_api_key", "")
+        settings_dict["livekit"]["api_secret"] = db_row.get("livekit_api_secret", "")
         
+        # API keys from individual columns
+        if "api_keys" not in settings_dict:
+            settings_dict["api_keys"] = {}
+        api_key_fields = [
+            "openai_api_key", "groq_api_key", "deepgram_api_key", "elevenlabs_api_key",
+            "cartesia_api_key", "replicate_api_key", "deepinfra_api_key", "cerebras_api_key",
+            "novita_api_key", "cohere_api_key", "siliconflow_api_key", "jina_api_key", "speechify_api_key"
+        ]
+        for key_field in api_key_fields:
+            if key_field in db_row and db_row[key_field]:
+                settings_dict["api_keys"][key_field] = db_row[key_field]
+        
+        # Extract additional fields from additional_settings JSONB
+        additional = db_row.get("additional_settings", {})
+        
+        # Get embedding settings from additional_settings
+        if "embedding" in additional and additional["embedding"]:
+            settings_dict["embedding"] = additional["embedding"]
+        
+        # Get rerank settings from additional_settings
+        if "rerank" in additional and additional["rerank"]:
+            settings_dict["rerank"] = additional["rerank"]
+        
+        # Compute slug from column, additional_settings, or name fallback
+        raw_slug = db_row.get("slug") or additional.get("slug")
+        if not raw_slug:
+            # simple slugify from name or domain
+            base = (db_row.get("name") or db_row.get("domain") or "client").lower()
+            import re
+            raw_slug = re.sub(r"[^a-z0-9]+", "-", base).strip("-") or "client"
+
         # Create ClientInDB instance
         return ClientInDB(
             id=db_row["id"],
+            slug=raw_slug,
             name=db_row["name"],
-            description=db_row.get("description"),
-            domain=db_row.get("domain"),
-            active=db_row.get("active", True),
+            description=additional.get("description", db_row.get("description")),
+            domain=additional.get("domain", db_row.get("domain")),
+            active=additional.get("active", db_row.get("active", True)),
             settings=ClientSettings(**settings_dict) if settings_dict else ClientSettings(),
             created_at=db_row.get("created_at"),
-            updated_at=db_row.get("updated_at")
+            updated_at=db_row.get("updated_at"),
+            additional_settings=additional  # Include the full additional_settings
         )
     
     def get_cache_stats(self) -> Dict[str, Any]:

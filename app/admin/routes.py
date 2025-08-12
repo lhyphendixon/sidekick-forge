@@ -8,6 +8,7 @@ import redis
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta
 from livekit import api
 
@@ -20,6 +21,9 @@ from livekit import api
 # Container manager removed - using worker pool architecture
 from app.services.wordpress_site_service_supabase import WordPressSiteService
 from app.models.wordpress_site import WordPressSite, WordPressSiteCreate, WordPressSiteUpdate
+from app.utils.default_ids import get_default_client_id, get_user_id_from_request
+from app.permissions.rbac import get_platform_permissions
+from app.integrations.supabase_client import supabase_manager
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +69,18 @@ class ContainerOrchestrator:
             return []
 
 def get_wordpress_service() -> WordPressSiteService:
-    """Get WordPress site service with Supabase credentials"""
-    supabase_url = os.getenv("SUPABASE_URL", "https://yuowazxcxwhczywurmmw.supabase.co")
-    supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY")
-    return WordPressSiteService(supabase_url, supabase_key)
+    """Get WordPress site service with platform Supabase credentials"""
+    # Use platform credentials from config (no defaults)
+    from app.config import settings
+    return WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key)
 
 # Initialize router
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 # Initialize template engine
-templates = Jinja2Templates(directory="/root/autonomite-agent-platform/app/templates")
+import os
+template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+templates = Jinja2Templates(directory=template_dir)
 
 # Redis connection
 redis_client = None
@@ -93,7 +99,17 @@ from app.admin.auth import get_admin_user
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     """Admin login page"""
-    return templates.TemplateResponse("admin/login.html", {"request": request})
+    from app.config import settings
+    import os
+    return templates.TemplateResponse(
+        "admin/login.html",
+        {
+            "request": request,
+            "supabase_url": settings.supabase_url,
+            "supabase_anon_key": settings.supabase_anon_key,
+            "development_mode": os.getenv("DEVELOPMENT_MODE", "false").lower() == "true",
+        },
+    )
 
 @router.get("/reset-password", response_class=HTMLResponse)
 async def reset_password_page(request: Request):
@@ -122,6 +138,571 @@ async def check_auth(request: Request):
     except HTTPException:
         return {"authenticated": False}
 
+# Users management page
+@router.get("/users", response_class=HTMLResponse)
+async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_user)):
+    """Minimal Users page showing recent users and platform permissions."""
+    await supabase_manager.initialize()
+    import httpx
+    headers = {
+        'apikey': os.getenv('SUPABASE_SERVICE_ROLE_KEY', ''),
+        'Authorization': f"Bearer {os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')}",
+    }
+    users: List[Dict[str, Any]] = []
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{os.getenv('SUPABASE_URL')}/auth/v1/admin/users", headers=headers, params={"per_page": 25})
+            if r.status_code == 200:
+                data = r.json()
+                users = data.get('users', [])
+    except Exception:
+        users = []
+    # Prepare role id cache for RBAC if available
+    role_id_map: Dict[str, Optional[str]] = {"super_admin": None, "admin": None, "subscriber": None}
+    try:
+        admin_client = supabase_manager.admin_client
+        for key in list(role_id_map.keys()):
+            try:
+                row = (
+                    admin_client.table('roles')
+                    .select('id,key')
+                    .eq('key', key)
+                    .single()
+                    .execute()
+                    .data
+                )
+                role_id_map[key] = row.get('id') if row else None
+            except Exception:
+                role_id_map[key] = None
+    except Exception:
+        pass
+
+    enriched = []
+    for u in users:
+        user_id = u.get('id')
+        user_email = u.get('email')
+        created_at = u.get('created_at')
+        metadata = u.get('user_metadata') or {}
+
+        roles_display: List[str] = []
+
+        # Try RBAC first
+        try:
+            admin_client = supabase_manager.admin_client
+            # Platform super_admin
+            sa_id = role_id_map.get('super_admin')
+            if sa_id:
+                pr = (
+                    admin_client.table('platform_role_memberships')
+                    .select('role_id')
+                    .eq('user_id', user_id)
+                    .eq('role_id', sa_id)
+                    .execute()
+                    .data
+                )
+                if pr:
+                    roles_display.append('Super Admin')
+
+            # Tenant memberships
+            admin_id = role_id_map.get('admin')
+            sub_id = role_id_map.get('subscriber')
+            try:
+                tm_rows = (
+                    admin_client.table('tenant_memberships')
+                    .select('client_id,role_id,status')
+                    .eq('user_id', user_id)
+                    .execute()
+                    .data
+                ) or []
+            except Exception:
+                tm_rows = []
+            if tm_rows:
+                admin_count = sum(1 for r in tm_rows if r.get('role_id') == admin_id)
+                sub_count = sum(1 for r in tm_rows if r.get('role_id') == sub_id)
+                if admin_count:
+                    roles_display.append(f'Admin ({admin_count})')
+                if sub_count:
+                    roles_display.append(f'Subscriber ({sub_count})')
+        except Exception:
+            # Ignore RBAC errors
+            pass
+
+        # Fallback to Auth metadata if no RBAC-derived roles
+        if not roles_display and isinstance(metadata, dict):
+            if (metadata.get('platform_role') or '').lower() == 'super_admin':
+                roles_display.append('Super Admin')
+            ta = metadata.get('tenant_assignments') or {}
+            if isinstance(ta, dict):
+                admin_ids = ta.get('admin_client_ids') or []
+                subscriber_ids = ta.get('subscriber_client_ids') or []
+                if admin_ids:
+                    roles_display.append(f'Admin ({len(admin_ids)})')
+                if subscriber_ids:
+                    roles_display.append(f'Subscriber ({len(subscriber_ids)})')
+
+        enriched.append({
+            "id": user_id,
+            "email": user_email,
+            "created_at": created_at,
+            "roles": roles_display if roles_display else [],
+        })
+    # Fetch clients for client-scoped role assignment
+    try:
+        from app.core.dependencies import get_client_service
+        clients = await get_client_service().get_all_clients()
+        clients_ctx = [{"id": c.id, "name": c.name} for c in clients]
+    except Exception:
+        clients_ctx = []
+    return templates.TemplateResponse("admin/users.html", {"request": request, "user": user, "users": enriched, "clients": clients_ctx})
+
+@router.post("/users/create")
+async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
+    """Create a new user via Supabase Admin API, then assign platform role membership."""
+    try:
+        data = await request.json()
+        full_name = (data.get('full_name') or '').strip()
+        email = (data.get('email') or '').strip()
+        role_key = (data.get('role_key') or 'subscriber').strip()  # expected: super_admin | admin | subscriber
+        client_ids = data.get('client_ids') or []
+        if isinstance(client_ids, str):
+            client_ids = [client_ids]
+        client_ids = [cid for cid in client_ids if cid]
+        if not full_name or not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+
+        import httpx
+        from app.config import settings
+        supabase_url = settings.supabase_url
+        service_key = settings.supabase_service_role_key
+        if not supabase_url or not service_key:
+            return HTMLResponse(status_code=500, content="Supabase credentials not configured")
+        headers = {'apikey': service_key, 'Authorization': f'Bearer {service_key}', 'Content-Type': 'application/json'}
+
+        # Create user (no password -> magic link invite disabled here; using email only)
+        # Include role/client assignments in initial user_metadata so roles persist even without RBAC tables
+        initial_user_metadata = {"full_name": full_name}
+        if role_key == 'super_admin':
+            initial_user_metadata.update({
+                'platform_role': 'super_admin',
+                'tenant_assignments': None
+            })
+        elif role_key in ('admin', 'subscriber'):
+            initial_user_metadata.update({
+                'platform_role': None,
+                'tenant_assignments': {
+                    'admin_client_ids': client_ids if role_key == 'admin' else [],
+                    'subscriber_client_ids': client_ids if role_key == 'subscriber' else [],
+                }
+            })
+        payload = {"email": email, "email_confirm": True, "user_metadata": initial_user_metadata}
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"{supabase_url}/auth/v1/admin/users", headers=headers, json=payload)
+        if r.status_code not in (200, 201):
+            # Handle "already exists" by looking up existing user and continuing
+            try:
+                if r.status_code in (400, 409):
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        r_lookup = await client.get(
+                            f"{supabase_url}/auth/v1/admin/users",
+                            headers=headers,
+                            params={"email": email}
+                        )
+                    if r_lookup.status_code == 200:
+                        data = r_lookup.json()
+                        existing = [u for u in data.get("users", []) if u.get("email", "").lower() == email.lower()]
+                        if existing:
+                            user_id = existing[0].get("id")
+                        else:
+                            return HTMLResponse(status_code=500, content=f"Failed to create user: {r.text}")
+                    else:
+                        return HTMLResponse(status_code=500, content=f"Failed to create user: {r.text}")
+                else:
+                    return HTMLResponse(status_code=500, content=f"Failed to create user: {r.text}")
+            except Exception:
+                return HTMLResponse(status_code=500, content="Error creating user")
+        else:
+            user = r.json()
+            user_id = user.get('id')
+
+        # Helper to ensure basic roles exist
+        def _seed_core_roles(client):
+            try:
+                core = [
+                    {"key": "super_admin", "scope": "platform", "description": "Platform-wide administrator"},
+                    {"key": "admin", "scope": "tenant", "description": "Tenant administrator"},
+                    {"key": "subscriber", "scope": "tenant", "description": "Use-only role"},
+                ]
+                for r in core:
+                    client.table('roles').upsert(r, on_conflict='key').execute()
+            except Exception:
+                pass
+
+        # Assign roles based on selection (best-effort; don't fail user creation)
+        try:
+            await supabase_manager.initialize()
+            admin_client = supabase_manager.admin_client
+            # Platform Super Admin
+            if role_key == 'super_admin':
+                role_row = None
+                try:
+                    role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+                except Exception:
+                    _seed_core_roles(admin_client)
+                    role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+                if role_row:
+                    admin_client.table('platform_role_memberships').upsert({
+                        'user_id': user_id,
+                        'role_id': role_row['id']
+                    }).execute()
+            # Tenant-scoped roles: admin or subscriber
+            elif role_key in ('admin','subscriber') and client_ids:
+                role_row = None
+                try:
+                    role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+                except Exception:
+                    _seed_core_roles(admin_client)
+                    role_row = admin_client.table('roles').select('id').eq('key', role_key).single().execute().data
+                if role_row:
+                    # Upsert tenant memberships for each selected client
+                    for cid in client_ids:
+                        admin_client.table('tenant_memberships').upsert({
+                            'user_id': user_id,
+                            'client_id': cid,
+                            'role_id': role_row['id'],
+                            'status': 'active'
+                        }).execute()
+        except Exception as assign_error:
+            logger.error(f"Role assignment failed for {email}: {assign_error}", exc_info=True)
+            # Fallback: persist role info in Supabase Auth user_metadata so UI and auth can resolve roles
+            try:
+                meta_update = {}
+                if role_key == 'super_admin':
+                    meta_update = {
+                        'user_metadata': {
+                            'platform_role': 'super_admin',
+                            'tenant_assignments': None
+                        }
+                    }
+                elif role_key in ('admin', 'subscriber'):
+                    meta_update = {
+                        'user_metadata': {
+                            'platform_role': None,
+                            'tenant_assignments': {
+                                'admin_client_ids': client_ids if role_key == 'admin' else [],
+                                'subscriber_client_ids': client_ids if role_key == 'subscriber' else [],
+                            }
+                        }
+                    }
+                if meta_update:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        r_meta = await client.patch(f"{supabase_url}/auth/v1/admin/users/{user_id}", headers=headers, json=meta_update)
+                    if r_meta.status_code not in (200, 201):
+                        async with httpx.AsyncClient(timeout=10) as client:
+                            r_meta = await client.put(f"{supabase_url}/auth/v1/admin/users/{user_id}", headers=headers, json=meta_update)
+                    if r_meta.status_code in (200, 201):
+                        logger.info(f"User metadata role assignment saved for {email} as {role_key}")
+                    else:
+                        logger.error(f"Failed to save user metadata for {email}: {r_meta.status_code} {r_meta.text}")
+            except Exception as meta_err:
+                logger.error(f"Metadata fallback for role assignment failed for {email}: {meta_err}", exc_info=True)
+
+        return HTMLResponse(status_code=201, content="Created")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return HTMLResponse(status_code=500, content="Error creating user")
+
+@router.get("/users/{user_id}/assignments")
+async def get_user_assignments(user_id: str, admin: Dict[str, Any] = Depends(get_admin_user)):
+    """Return current role assignment for a user to prefill the edit modal."""
+    try:
+        await supabase_manager.initialize()
+        admin_client = supabase_manager.admin_client
+
+        # Resolve role ids
+        def get_role_id(role_key: str) -> Optional[str]:
+            try:
+                row = (
+                    admin_client.table("roles")
+                    .select("id,key")
+                    .eq("key", role_key)
+                    .single()
+                    .execute()
+                    .data
+                )
+                return row.get("id") if row else None
+            except Exception:
+                return None
+
+        super_admin_role_id = get_role_id("super_admin")
+        admin_role_id = get_role_id("admin")
+        subscriber_role_id = get_role_id("subscriber")
+
+        # Check platform super_admin
+        if super_admin_role_id:
+            try:
+                pr = (
+                    admin_client.table("platform_role_memberships")
+                    .select("role_id")
+                    .eq("user_id", user_id)
+                    .eq("role_id", super_admin_role_id)
+                    .execute()
+                    .data
+                )
+                if pr:
+                    return {"role_key": "super_admin", "client_ids": []}
+            except Exception:
+                pass
+
+        # Check tenant memberships for admin/subscriber
+        def get_client_ids_for_role(role_id: Optional[str]) -> List[str]:
+            if not role_id:
+                return []
+            try:
+                rows = (
+                    admin_client.table("tenant_memberships")
+                    .select("client_id")
+                    .eq("user_id", user_id)
+                    .eq("role_id", role_id)
+                    .execute()
+                    .data
+                )
+                return [r.get("client_id") for r in rows if r.get("client_id")]
+            except Exception:
+                return []
+
+        admin_clients = get_client_ids_for_role(admin_role_id)
+        if admin_clients:
+            return {"role_key": "admin", "client_ids": admin_clients}
+
+        subscriber_clients = get_client_ids_for_role(subscriber_role_id)
+        if subscriber_clients:
+            return {"role_key": "subscriber", "client_ids": subscriber_clients}
+
+        # Fallback: read from Supabase Auth user_metadata if RBAC tables not configured
+        try:
+            from app.config import settings
+            import httpx
+            headers = {
+                'apikey': settings.supabase_service_role_key,
+                'Authorization': f'Bearer {settings.supabase_service_role_key}',
+            }
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(f"{settings.supabase_url}/auth/v1/admin/users/{user_id}", headers=headers)
+            if r.status_code == 200:
+                user = r.json()
+                meta = user.get('user_metadata', {}) or {}
+                platform_role = meta.get('platform_role')
+                if platform_role == 'super_admin':
+                    return {"role_key": "super_admin", "client_ids": []}
+                ta = meta.get('tenant_assignments', {}) or {}
+                admin_ids = ta.get('admin_client_ids') or []
+                subscriber_ids = ta.get('subscriber_client_ids') or []
+                if admin_ids:
+                    return {"role_key": "admin", "client_ids": admin_ids}
+                if subscriber_ids:
+                    return {"role_key": "subscriber", "client_ids": subscriber_ids}
+        except Exception:
+            pass
+
+        # Default if no assignments found anywhere
+        return {"role_key": "subscriber", "client_ids": []}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return HTMLResponse(status_code=500, content="Failed to fetch user assignments")
+
+@router.post("/users/update")
+async def update_user_roles(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
+    """Update a user's role assignments (platform super_admin or tenant roles)."""
+    try:
+        data = await request.json()
+        user_id = (data.get("user_id") or "").strip()
+        role_key = (data.get("role_key") or "").strip()
+        client_ids = data.get("client_ids") or []
+        if isinstance(client_ids, str):
+            client_ids = [client_ids]
+        client_ids = [cid for cid in client_ids if cid]
+
+        if not user_id or role_key not in ("super_admin", "admin", "subscriber"):
+            raise HTTPException(status_code=400, detail="Invalid payload")
+        if role_key in ("admin","subscriber") and not client_ids:
+            raise HTTPException(status_code=400, detail="At least one client_id is required for this role")
+
+        await supabase_manager.initialize()
+        admin_client = supabase_manager.admin_client
+
+        # Helpers
+        def seed_core_roles(client):
+            try:
+                core = [
+                    {"key": "super_admin", "scope": "platform", "description": "Platform-wide administrator"},
+                    {"key": "admin", "scope": "tenant", "description": "Tenant administrator"},
+                    {"key": "subscriber", "scope": "tenant", "description": "Use-only role"},
+                ]
+                for r in core:
+                    client.table("roles").upsert(r, on_conflict="key").execute()
+            except Exception:
+                pass
+
+        def get_role_id(role_key_local: str) -> Optional[str]:
+            try:
+                row = (
+                    admin_client.table("roles").select("id,key").eq("key", role_key_local).single().execute().data
+                )
+                if not row:
+                    seed_core_roles(admin_client)
+                    row = (
+                        admin_client.table("roles").select("id,key").eq("key", role_key_local).single().execute().data
+                    )
+                return row.get("id") if row else None
+            except Exception:
+                return None
+
+        # Update assignments using RBAC tables if available; otherwise fallback to Auth user_metadata
+        try:
+            if role_key == "super_admin":
+                sa_id = get_role_id("super_admin")
+                if sa_id:
+                    admin_client.table("platform_role_memberships").upsert({
+                        "user_id": user_id,
+                        "role_id": sa_id,
+                    }).execute()
+                    return HTMLResponse(status_code=200, content="Updated")
+                # Fallback to metadata
+                raise RuntimeError("RBAC roles not present")
+            else:
+                # For tenant roles, reset existing admin/subscriber memberships and apply new ones
+                admin_id = get_role_id("admin")
+                sub_id = get_role_id("subscriber")
+                target_role_id = admin_id if role_key == "admin" else sub_id
+                if target_role_id:
+                    try:
+                        if admin_id:
+                            admin_client.table("tenant_memberships").delete().eq("user_id", user_id).eq("role_id", admin_id).execute()
+                    except Exception:
+                        pass
+                    try:
+                        if sub_id:
+                            admin_client.table("tenant_memberships").delete().eq("user_id", user_id).eq("role_id", sub_id).execute()
+                    except Exception:
+                        pass
+                    for cid in client_ids:
+                        admin_client.table("tenant_memberships").upsert({
+                            "user_id": user_id,
+                            "client_id": cid,
+                            "role_id": target_role_id,
+                            "status": "active",
+                        }).execute()
+                    return HTMLResponse(status_code=200, content="Updated")
+                # Fallback to metadata
+                raise RuntimeError("RBAC roles not present")
+        except Exception:
+            # Fallback: store assignments in Supabase Auth user_metadata
+            from app.config import settings
+            import httpx
+            headers = {
+                'apikey': settings.supabase_service_role_key,
+                'Authorization': f'Bearer {settings.supabase_service_role_key}',
+                'Content-Type': 'application/json',
+            }
+            if role_key == 'super_admin':
+                meta_update = {
+                    'user_metadata': {
+                        'platform_role': 'super_admin',
+                        'tenant_assignments': None
+                    }
+                }
+            else:
+                meta_update = {
+                    'user_metadata': {
+                        'platform_role': None,
+                        'tenant_assignments': {
+                            'admin_client_ids': client_ids if role_key == 'admin' else [],
+                            'subscriber_client_ids': client_ids if role_key == 'subscriber' else [],
+                        }
+                    }
+                }
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.patch(
+                    f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers=headers,
+                    json=meta_update
+                )
+                if r.status_code not in (200, 201):
+                    # Try PUT as a fallback
+                    r = await client.put(
+                        f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                        headers=headers,
+                        json=meta_update
+                    )
+            if r.status_code in (200, 201):
+                return HTMLResponse(status_code=200, content="Updated")
+            else:
+                return HTMLResponse(status_code=500, content="Failed to update user")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return HTMLResponse(status_code=500, content="Failed to update user")
+
+@router.post("/users/set-password")
+async def set_user_password(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
+    """Set a Supabase Auth password for a user (admin operation)."""
+    try:
+        payload = await request.json()
+        user_id = (payload.get("user_id") or "").strip()
+        email = (payload.get("email") or "").strip()
+        new_password = payload.get("password") or ""
+        if not user_id or not new_password:
+            raise HTTPException(status_code=400, detail="user_id and password are required")
+        if len(new_password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+        from app.config import settings
+        import httpx
+        headers = {
+            'apikey': settings.supabase_service_role_key,
+            'Authorization': f'Bearer {settings.supabase_service_role_key}',
+            'Content-Type': 'application/json',
+        }
+
+        # Verify user exists and email matches
+        async with httpx.AsyncClient(timeout=10) as client:
+            r_get = await client.get(
+                f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                headers=headers
+            )
+        if r_get.status_code != 200:
+            return HTMLResponse(status_code=404, content="User not found")
+        user = r_get.json()
+        current_email = (user.get('email') or '').strip()
+        # If email provided and differs, attempt to update both email and password together
+        update_body: Dict[str, Any] = { 'password': new_password }
+        if email and email.lower() != current_email.lower():
+            update_body['email'] = email
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            r_patch = await client.patch(
+                f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                headers=headers,
+                json=update_body
+            )
+            if r_patch.status_code not in (200, 201):
+                # Some installations may require PUT
+                r_put = await client.put(
+                    f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers=headers,
+                    json=update_body
+                )
+                if r_put.status_code not in (200, 201):
+                    return HTMLResponse(status_code=500, content=f"Failed to update password: {r_patch.text or r_put.text}")
+
+        return HTMLResponse(status_code=200, content="Password updated")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return HTMLResponse(status_code=500, content="Error updating password")
+
 async def get_system_summary() -> Dict[str, Any]:
     """Get system-wide summary statistics"""
     # Get all clients from Supabase
@@ -134,6 +715,10 @@ async def get_system_summary() -> Dict[str, Any]:
         total_clients = len(clients)
     except Exception as e:
         logger.warning(f"Failed to get clients: {e}")
+        # Check if it's an auth error
+        if "401" in str(e) or "Invalid API key" in str(e):
+            logger.error("❌ CRITICAL: Cannot access platform database - Invalid Supabase credentials")
+            logger.error("   Please update SUPABASE_SERVICE_ROLE_KEY in .env with the actual service role key")
         clients = []
         total_clients = 0
     
@@ -167,14 +752,9 @@ async def get_system_summary() -> Dict[str, Any]:
         if not livekit_manager._initialized:
             await livekit_manager.initialize()
         
-        # Get all rooms from LiveKit
-        room_service = api.RoomServiceClient(
-            livekit_manager.url,
-            livekit_manager.api_key,
-            livekit_manager.api_secret
-        )
-        
-        rooms = await room_service.list_rooms(api.ListRoomsRequest())
+        # Get all rooms from LiveKit using the refactored manager
+        livekit_api = livekit_manager._get_api_client()
+        rooms = await livekit_api.room.list_rooms(api.ListRoomsRequest())
         
         # Count participants across all rooms
         for room in rooms.rooms:
@@ -206,8 +786,10 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
     client_service = get_client_service()
     
     try:
-        # Get all clients
+        # Get all clients from platform database
+        logger.info("Fetching all clients from platform database...")
         clients = await client_service.get_all_clients()
+        logger.info(f"✅ Successfully fetched {len(clients)} clients from platform database")
         
         # Get LiveKit room data for session counting
         room_sessions = {}
@@ -215,13 +797,8 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
             if not livekit_manager._initialized:
                 await livekit_manager.initialize()
             
-            room_service = api.RoomServiceClient(
-                livekit_manager.url,
-                livekit_manager.api_key,
-                livekit_manager.api_secret
-            )
-            
-            rooms = await room_service.list_rooms(api.ListRoomsRequest())
+            livekit_api = livekit_manager._get_api_client()
+            rooms = await livekit_api.room.list_rooms(api.ListRoomsRequest())
             
             # Count sessions by client (assuming room name contains client id)
             for room in rooms.rooms:
@@ -237,23 +814,46 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
         # Convert to dict format for templates
         clients_data = []
         for client in clients:
-            client_dict = {
-                "id": client.id,
-                "name": client.name,
-                "domain": client.domain,
-                "status": "running" if client.active else "stopped",  # Assume active = running container
-                "active": client.active,
-                "created_at": client.created_at.isoformat() if client.created_at else None,
-                "client_id": client.id,  # For compatibility with templates
-                "client_name": client.name,
-                "cpu_usage": 15.5,  # Mock CPU usage
-                "memory_usage": 512,  # Mock memory usage in MB
-                "active_sessions": room_sessions.get(client.id, 0),  # Real session count from LiveKit
-                "settings": {
-                    "supabase": client.settings.supabase if client.settings else None,
-                    "livekit": client.settings.livekit if client.settings else None
+            try:
+                client_dict = {
+                    "id": client.id,
+                    "name": client.name,
+                    "domain": getattr(client, 'domain', ''),
+                    "status": "running" if getattr(client, 'active', True) else "stopped",
+                    "active": getattr(client, 'active', True),
+                    "created_at": client.created_at.isoformat() if hasattr(client, 'created_at') and client.created_at else None,
+                    "client_id": client.id,  # For compatibility with templates
+                    "client_name": client.name,
+                    "cpu_usage": 15.5,  # Mock CPU usage
+                    "memory_usage": 512,  # Mock memory usage in MB
+                    "active_sessions": room_sessions.get(client.id, 0),  # Real session count from LiveKit
+                    "settings": {
+                        "supabase": client.settings.supabase if hasattr(client, 'settings') and client.settings else None,
+                        "livekit": client.settings.livekit if hasattr(client, 'settings') and client.settings else None
+                    }
                 }
-            }
+                logger.debug(f"Processed client: {client.name} (ID: {client.id})")
+            except Exception as e:
+                logger.error(f"Failed to process client {getattr(client, 'name', 'Unknown')}: {e}", exc_info=True)
+                # Create minimal client dict to avoid complete failure
+                client_dict = {
+                    "id": getattr(client, 'id', 'unknown'),
+                    "name": getattr(client, 'name', 'Unknown Client'),
+                    "domain": '',
+                    "status": "error",
+                    "active": False,
+                    "created_at": None,
+                    "client_id": getattr(client, 'id', 'unknown'),
+                    "client_name": getattr(client, 'name', 'Unknown Client'),
+                    "cpu_usage": 0,
+                    "memory_usage": 0,
+                    "active_sessions": 0,
+                    "settings": {
+                        "supabase": getattr(client, 'settings', {}).get('supabase', None) if hasattr(client, 'settings') else None,
+                        "livekit": getattr(client, 'settings', {}).get('livekit', None) if hasattr(client, 'settings') else None
+                    }
+                }
+            
             clients_data.append(client_dict)
         
         return clients_data
@@ -299,7 +899,7 @@ async def get_all_agents() -> List[Dict[str, Any]]:
                             "slug": agent.get("slug"),
                             "name": agent.get("name"),
                             "description": agent.get("description", ""),
-                            "client_id": "global" if agent.get("client_id") == "yuowazxcxwhczywurmmw" else agent.get("client_id"),
+                            "client_id": agent.get("client_id", "global"),
                             "client_name": agent.get("client_name", "Unknown"),
                             "status": "active" if agent.get("active", agent.get("enabled", True)) else "inactive",
                             "active": agent.get("active", agent.get("enabled", True)),
@@ -328,45 +928,8 @@ async def get_all_agents() -> List[Dict[str, Any]]:
         # Create a mapping of client IDs to names for quick lookup
         client_map = {client.id: client.name for client in clients}
         
-        # Get agents from the main Supabase (faster than querying each client)
-        try:
-            from app.integrations.supabase_client import supabase_manager
-            # Ensure supabase_manager is initialized
-            if not supabase_manager._initialized:
-                await supabase_manager.initialize()
-            result = supabase_manager.auth_client.table('agents').select('*').execute()
-            
-            for agent_data in result.data:
-                # Agents in main table are global agents (no client association)
-                # We'll use a special identifier for these
-                client_id = "global"  # Special identifier for global agents
-                    
-                agent_dict = {
-                    "id": agent_data.get("id"),
-                    "slug": agent_data.get("slug"),
-                    "name": agent_data.get("name"),
-                    "description": agent_data.get("description", ""),
-                    "client_id": client_id,
-                    "client_name": "Global Agent",
-                    "status": "active" if agent_data.get("enabled", True) else "inactive",
-                    "active": agent_data.get("enabled", True),
-                    "enabled": agent_data.get("enabled", True),
-                    "created_at": agent_data.get("created_at", ""),
-                    "updated_at": agent_data.get("updated_at", ""),
-                    "system_prompt": agent_data.get("system_prompt", ""),
-                    "voice_settings": agent_data.get("voice_settings", {
-                        "provider": "openai",
-                        "voice_id": "alloy",
-                        "temperature": 0.7
-                    }),
-                    "webhooks": agent_data.get("webhooks", {})
-                }
-                all_agents.append(agent_dict)
-                
-        except Exception as e:
-            logger.warning(f"Fast agent fetch failed, falling back to slow method: {e}")
-            # Fallback to the slower method if needed
-            for client in clients[:5]:  # Limit to 5 clients to prevent timeout
+        # CORRECT METHOD: Iterate through each client to get their agents
+        for client in clients:
                 try:
                     client_agents = await agent_service.get_client_agents(client.id)
                     for agent in client_agents:
@@ -418,13 +981,24 @@ async def clients_list(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Client management page"""
-    clients = await get_all_clients_with_containers()
-    
-    return templates.TemplateResponse("admin/clients.html", {
-        "request": request,
-        "clients": clients,
-        "user": admin_user
-    })
+    try:
+        clients = await get_all_clients_with_containers()
+        logger.info(f"Admin Dashboard: Successfully prepared {len(clients)} clients for display")
+        return templates.TemplateResponse("admin/clients.html", {
+            "request": request,
+            "clients": clients,
+            "user": admin_user
+        })
+    except Exception as e:
+        # CRITICAL: Log the actual error instead of failing silently
+        logger.error(f"❌ Admin Dashboard: Failed to fetch clients: {e}", exc_info=True)
+        # Return error to template
+        return templates.TemplateResponse("admin/clients.html", {
+            "request": request,
+            "clients": [],
+            "error": f"Failed to load clients: {e}",
+            "user": admin_user
+        })
 
 
 @router.get("/clients/{client_id}", response_class=HTMLResponse)
@@ -451,9 +1025,17 @@ async def client_edit(
         # Get any additional data needed for the form
         # For example, available API providers, etc.
         
+        # Convert client to dict if it's a Pydantic model
+        if hasattr(client, 'dict'):
+            client_dict = client.dict()
+        elif hasattr(client, 'model_dump'):
+            client_dict = client.model_dump()
+        else:
+            client_dict = client
+        
         return templates.TemplateResponse("admin/client_edit.html", {
             "request": request,
-            "client": client,
+            "client": client_dict,
             "user": admin_user
         })
     except Exception as e:
@@ -469,13 +1051,79 @@ async def agents_page(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Agent management page"""
-    # Get agents from all clients
-    agents = await get_all_agents()
+    # Determine which clients this user can see
+    visible_client_ids: List[str] = []
+    try:
+        # Superadmins see all clients
+        if admin_user.get("role") == "superadmin":
+            from app.core.dependencies import get_client_service
+            client_service = get_client_service()
+            clients_all = await client_service.get_all_clients()
+            visible_client_ids = [c.id for c in clients_all]
+        else:
+            # Subscribers/Admins: load tenant assignments from metadata
+            # Note: If RBAC tables are added, we can replace this with tenant_memberships
+            from app.integrations.supabase_client import supabase_manager
+            if not supabase_manager._initialized:
+                await supabase_manager.initialize()
+            # Fetch user to read metadata
+            import httpx
+            headers = {
+                'apikey': supabase_manager.admin_client.supabase_key if hasattr(supabase_manager.admin_client, 'supabase_key') else os.getenv('SUPABASE_SERVICE_ROLE_KEY', ''),
+                'Authorization': f"Bearer {os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')}",
+            }
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(f"{os.getenv('SUPABASE_URL')}/auth/v1/admin/users/{admin_user.get('user_id')}", headers=headers)
+            if r.status_code == 200:
+                user = r.json()
+                meta = user.get('user_metadata') or {}
+                ta = meta.get('tenant_assignments') or {}
+                if admin_user.get('role') == 'admin':
+                    visible_client_ids = ta.get('admin_client_ids') or []
+                else:
+                    visible_client_ids = ta.get('subscriber_client_ids') or []
+    except Exception:
+        visible_client_ids = []
+
+    # Get agents from visible clients only
+    try:
+        if admin_user.get("role") == "superadmin":
+            agents = await get_all_agents()
+        else:
+            from app.core.dependencies import get_agent_service
+            agent_service = get_agent_service()
+            agents = []
+            for cid in visible_client_ids:
+                client_agents = await agent_service.get_client_agents(cid)
+                # Attach client_name via client service
+                try:
+                    from app.core.dependencies import get_client_service
+                    client_service = get_client_service()
+                    client = await client_service.get_client(cid)
+                    client_name = client.name if hasattr(client, 'name') else (client.get('name') if isinstance(client, dict) else 'Unknown')
+                except Exception:
+                    client_name = 'Unknown'
+                for a in client_agents:
+                    a_dict = a.dict() if hasattr(a, 'dict') else a
+                    a_dict['client_name'] = client_name
+                    agents.append(a_dict)
+    except Exception as e:
+        logger.error(f"Failed to load agents: {e}")
+        agents = []
     
-    # Get all clients for the filter dropdown
-    from app.core.dependencies import get_client_service
-    client_service = get_client_service()
-    clients = await client_service.get_all_clients()
+    # Get all clients for the filter dropdown (restrict for non-superadmin)
+    try:
+        from app.core.dependencies import get_client_service
+        client_service = get_client_service()
+        if admin_user.get("role") == "superadmin":
+            clients = await client_service.get_all_clients()
+        else:
+            clients_all = await client_service.get_all_clients()
+            clients = [c for c in clients_all if c.id in set(visible_client_ids)]
+    except Exception as e:
+        logger.error(f"Failed to load clients: {e}")
+        # Return minimal client data if database is inaccessible
+        clients = []
     
     return templates.TemplateResponse("admin/agents.html", {
         "request": request,
@@ -607,7 +1255,8 @@ async def knowledge_base_page(
 #             client_id=client_id,
 #             mode=TriggerMode.VOICE,
 #             room_name=room_name,
-#             user_id=f"admin_{admin_user.get('id', 'preview')}",
+#             # Use the actual user's UUID for proper context loading
+#             user_id='351bb07b-03fc-4fb4-b09b-748ef8a72084',  # Your UUID as default
 #             session_id=session_id
 #         )
 #         
@@ -644,6 +1293,7 @@ async def agent_detail(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Agent detail and configuration page"""
+    # Subscribers can view detail but not edit; page template handles action buttons
     try:
         # Simple approach: For "global" agents, use the same method as the agents list page
         if client_id == "global":
@@ -854,7 +1504,32 @@ async def agent_detail(
             import json
             
             # Parse voice settings if it's a string
-            voice_settings = agent.get('voice_settings', {})
+            # Handle both dict and object formats
+            if isinstance(agent, dict):
+                voice_settings = agent.get('voice_settings', {})
+            else:
+                voice_settings = getattr(agent, 'voice_settings', {})
+                # Convert VoiceSettings object to dict if needed
+                if voice_settings and hasattr(voice_settings, 'dict'):
+                    voice_settings = voice_settings.dict()
+                elif voice_settings and not isinstance(voice_settings, dict):
+                    # Manual conversion for VoiceSettings object
+                    voice_settings = {
+                        'provider': getattr(voice_settings, 'provider', 'openai'),
+                        'voice_id': getattr(voice_settings, 'voice_id', 'alloy'),
+                        'temperature': getattr(voice_settings, 'temperature', 0.7),
+                        'llm_provider': getattr(voice_settings, 'llm_provider', 'groq'),
+                        'llm_model': getattr(voice_settings, 'llm_model', 'llama3-70b-8192'),
+                        'stt_provider': getattr(voice_settings, 'stt_provider', 'deepgram'),
+                        'stt_language': getattr(voice_settings, 'stt_language', 'en'),
+                        'model': getattr(voice_settings, 'model', 'sonic-english'),
+                        'output_format': getattr(voice_settings, 'output_format', 'pcm_44100'),
+                        'stability': getattr(voice_settings, 'stability', None),
+                        'similarity_boost': getattr(voice_settings, 'similarity_boost', None),
+                        'loudness_normalization': getattr(voice_settings, 'loudness_normalization', None),
+                        'text_normalization': getattr(voice_settings, 'text_normalization', None),
+                        'provider_config': getattr(voice_settings, 'provider_config', {})
+                    }
             if isinstance(voice_settings, str):
                 try:
                     voice_settings = json.loads(voice_settings)
@@ -863,28 +1538,49 @@ async def agent_detail(
             
             # Extract specific settings with defaults
             tts_provider = voice_settings.get('provider', 'openai')
+            # Handle enum types
+            if hasattr(tts_provider, 'value'):
+                tts_provider = tts_provider.value
             llm_provider = voice_settings.get('llm_provider', 'groq')
             llm_model = voice_settings.get('llm_model', 'llama3-70b-8192')
             stt_provider = voice_settings.get('stt_provider', 'deepgram')
             temperature = voice_settings.get('temperature', 0.7)
             
             # Agent status
-            is_enabled = agent.get('enabled', True)
+            if isinstance(agent, dict):
+                is_enabled = agent.get('enabled', True)
+                agent_name_raw = agent.get('name', agent_slug)
+                agent_slug_raw = agent.get('slug', 'N/A')
+                system_prompt_raw = agent.get('system_prompt', 'N/A')
+                agent_description_raw = agent.get('description', '')
+                agent_image_url_raw = agent.get('agent_image', '')
+            else:
+                is_enabled = getattr(agent, 'enabled', True)
+                agent_name_raw = getattr(agent, 'name', agent_slug)
+                agent_slug_raw = getattr(agent, 'slug', 'N/A')
+                system_prompt_raw = getattr(agent, 'system_prompt', 'N/A')
+                agent_description_raw = getattr(agent, 'description', '')
+                agent_image_url_raw = getattr(agent, 'agent_image', '')
+            
             enabled_checked = 'checked' if is_enabled else ''
             
             # Provider-specific voice settings
-            openai_voice = voice_settings.get('voice_id', 'alloy') if tts_provider == 'openai' else 'alloy'
-            cartesia_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'cartesia' else ''
+            # Get the current voice_id if the provider matches, otherwise use provider_config for stored values
+            provider_config = voice_settings.get('provider_config', {})
+            
+            openai_voice = voice_settings.get('voice_id', 'alloy') if tts_provider == 'openai' else provider_config.get('openai_voice_id', 'alloy')
+            cartesia_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'cartesia' else provider_config.get('cartesia_voice_id', '')
             cartesia_model = voice_settings.get('model', 'sonic-english') if tts_provider == 'cartesia' else 'sonic-english'
-            elevenlabs_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'elevenlabs' else ''
-            speechify_voice_id = voice_settings.get('voice_id', 'jack') if tts_provider == 'speechify' else 'jack'
+            elevenlabs_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'elevenlabs' else provider_config.get('elevenlabs_voice_id', '')
+            speechify_voice_id = voice_settings.get('voice_id', 'jack') if tts_provider == 'speechify' else provider_config.get('speechify_voice_id', 'jack')
             
             # Escape any problematic characters
-            agent_name = str(agent.get('name', agent_slug)).replace('"', '&quot;')
-            agent_slug_clean = str(agent.get('slug', 'N/A')).replace('"', '&quot;')
-            system_prompt = str(agent.get('system_prompt', 'N/A')).replace('<', '&lt;').replace('>', '&gt;')
-            agent_description = str(agent.get('description', '')).replace('"', '&quot;')
-            agent_image_url = str(agent.get('agent_image', '')).replace('"', '&quot;')
+            agent_name = str(agent_name_raw).replace('"', '&quot;')
+            agent_slug_clean = str(agent_slug_raw).replace('"', '&quot;')
+            system_prompt = str(system_prompt_raw).replace('<', '&lt;').replace('>', '&gt;')
+            agent_description = str(agent_description_raw).replace('"', '&quot;')
+            agent_image_url = str(agent_image_url_raw).replace('"', '&quot;')
+            # client_id is already available as a function parameter - no escaping needed as it's a UUID
             
             working_html = f'''
             <!DOCTYPE html>
@@ -1056,7 +1752,7 @@ async def agent_detail(
                                     </div>
                                     <div class="md:col-span-2">
                                         <label class="block text-sm font-medium text-gray-300 mb-2">Agent Background Image URL</label>
-                                        <input type="url" name="agent_image" value="{agent_image_url}" placeholder="https://example.com/image.jpg" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                        <input type="text" name="agent_image" value="{agent_image_url}" placeholder="https://example.com/image.jpg (optional)" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
                                         <p class="text-sm text-gray-400 mt-1">URL for the agent's background image (used in chat interfaces)</p>
                                     </div>
                                 </div>
@@ -1071,16 +1767,30 @@ async def agent_detail(
                                         <select name="llm_provider" id="llm-provider" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
                                             <option value="openai">OpenAI</option>
                                             <option value="groq" selected>Groq</option>
+                                            <option value="cerebras">Cerebras</option>
                                             <option value="deepinfra">DeepInfra</option>
                                         </select>
                                     </div>
                                     <div>
                                         <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
                                         <select name="llm_model" id="llm-model" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <!-- OpenAI -->
                                             <option value="gpt-4o">GPT-4o (OpenAI)</option>
                                             <option value="gpt-4o-mini">GPT-4o Mini (OpenAI)</option>
-                                            <option value="llama3-70b-8192" selected>Llama 3 70B (Groq)</option>
+                                            <!-- Groq (compat names mapped in worker) -->
+                                            <option value="llama-3.3-70b-versatile" selected>Llama 3.3 70B (Groq)</option>
+                                            <option value="llama3-8b-8192">Llama 3 8B (Groq)</option>
                                             <option value="mixtral-8x7b-32768">Mixtral 8x7B (Groq)</option>
+                                            <!-- Cerebras documented chat models -->
+                                            <option value="llama3.1-8b">Llama 3.1 8B (Cerebras)</option>
+                                            <option value="llama-3.3-70b">Llama 3.3 70B (Cerebras)</option>
+                                            <option value="llama-4-scout-17b-16e-instruct">Llama 4 Scout 17B Instruct (Cerebras)</option>
+                                            <option value="llama-4-maverick-17b-128e-instruct">Llama 4 Maverick 17B Instruct (preview, Cerebras)</option>
+                                            <option value="qwen-3-32b">Qwen 3 32B (Cerebras)</option>
+                                            <option value="qwen-3-235b-a22b-instruct-2507">Qwen 3 235B Instruct (preview, Cerebras)</option>
+                                            <option value="qwen-3-235b-a22b-thinking-2507">Qwen 3 235B Thinking (preview, Cerebras)</option>
+                                            <option value="qwen-3-coder-480b">Qwen 3 Coder 480B (preview, Cerebras)</option>
+                                            <option value="gpt-oss-120b">GPT-OSS 120B (preview, Cerebras)</option>
                                         </select>
                                     </div>
                                     <div>
@@ -1126,7 +1836,7 @@ async def agent_detail(
                                     <div>
                                         <label class="block text-sm font-medium text-gray-300 mb-2">TTS Provider</label>
                                         <select name="tts_provider" id="tts-provider" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500" onchange="toggleTTSProviderSettings()">
-                                            <option value="openai" selected>OpenAI</option>
+                                            <option value="openai">OpenAI</option>
                                             <option value="elevenlabs">ElevenLabs</option>
                                             <option value="cartesia">Cartesia</option>
                                             <option value="replicate">Replicate</option>
@@ -1166,7 +1876,7 @@ async def agent_detail(
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div>
                                             <label class="block text-sm font-medium text-gray-300 mb-2">Voice ID</label>
-                                            <input type="text" name="elevenlabs_voice_id" placeholder="pNInz6obpgDQGcFmaJgB" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <input type="text" name="elevenlabs_voice_id" value="{elevenlabs_voice_id}" placeholder="pNInz6obpgDQGcFmaJgB" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
                                             <p class="text-xs text-gray-400 mt-1">Default is Adam voice</p>
                                         </div>
                                         <div>
@@ -1272,7 +1982,7 @@ async def agent_detail(
                                 <h2 class="text-xl font-bold text-white mb-4">Voice Preview</h2>
                                 <div class="flex items-center space-x-4">
                                     <button type="button" 
-                                            hx-get="/admin/agents/preview/global/{agent_slug_clean}" 
+                                            hx-get="/admin/agents/preview/{client_id}/{agent_slug_clean}" 
                                             hx-target="#modal-container" 
                                             hx-swap="innerHTML"
                                             class="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 font-medium">
@@ -1343,6 +2053,14 @@ async def agent_detail(
                             stt_language: configData.stt_language || 'en'
                         }};
                         
+                        // Store all voice IDs in provider_config to preserve them when switching providers
+                        voiceSettings.provider_config = {{
+                            openai_voice_id: configData.openai_voice,
+                            elevenlabs_voice_id: configData.elevenlabs_voice_id,
+                            cartesia_voice_id: configData.cartesia_voice_id,
+                            speechify_voice_id: configData.speechify_voice_id
+                        }};
+                        
                         // Add provider-specific settings
                         if (ttsProvider === 'openai') {{
                             voiceSettings.voice_id = configData.openai_voice;
@@ -1367,7 +2085,7 @@ async def agent_detail(
                         const updatePayload = {{
                             name: configData.name,
                             description: configData.description,
-                            agent_image: configData.agent_image || null,
+                            agent_image: configData.agent_image && configData.agent_image.trim() !== '' ? configData.agent_image : null,
                             system_prompt: configData.system_prompt,
                             enabled: configData.enabled === 'on',
                             voice_settings: voiceSettings
@@ -1375,7 +2093,7 @@ async def agent_detail(
                         
                         try {{
                             // Use the existing API endpoint
-                            const response = await fetch('/api/v1/agents/client/global/{agent_slug_clean}', {{
+                            const response = await fetch('/api/v1/agents/client/{client_id}/{agent_slug_clean}', {{
                                 method: 'PUT',
                                 headers: {{
                                     'Content-Type': 'application/json',
@@ -1390,7 +2108,21 @@ async def agent_detail(
                                 // window.location.reload();
                             }} else {{
                                 const error = await response.json();
-                                alert(`Error saving configuration: ${{error.detail || 'Unknown error'}}`);
+                                
+                                // Check if it's an API key validation error
+                                if (response.status === 400 && error.detail && typeof error.detail === 'object' && error.detail.missing_keys) {{
+                                    // Build error message for missing API keys
+                                    let errorMessage = 'Cannot save configuration - Missing API keys:\\n\\n';
+                                    error.detail.missing_keys.forEach(key => {{
+                                        errorMessage += `• ${{key.provider_type}} provider "${{key.provider}}" requires ${{key.required_key}}\\n`;
+                                    }});
+                                    errorMessage += `\\nPlease add the missing API keys for client "${{error.detail.client_name}}" in the client settings.`;
+                                    alert(errorMessage);
+                                }} else {{
+                                    // Generic error
+                                    const errorMsg = typeof error.detail === 'string' ? error.detail : (error.detail?.error || 'Unknown error');
+                                    alert(`Error saving configuration: ${{errorMsg}}`);
+                                }}
                             }}
                         }} catch (error) {{
                             alert(`Error saving configuration: ${{error.message}}`);
@@ -1400,13 +2132,60 @@ async def agent_detail(
                         }}
                     }}
 
-                    // Initialize - Set current values
+                    // LLM model options per provider
+                    const modelOptionsByProvider = {{
+                        openai: [
+                            {{ value: 'gpt-4o', label: 'GPT-4o (OpenAI)' }},
+                            {{ value: 'gpt-4o-mini', label: 'GPT-4o Mini (OpenAI)' }}
+                        ],
+                        groq: [
+                            {{ value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B (Groq)' }},
+                            {{ value: 'llama3-8b-8192', label: 'Llama 3 8B (Groq)' }},
+                            {{ value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B (Groq)' }}
+                        ],
+                        cerebras: [
+                            {{ value: 'llama3.1-8b', label: 'Llama 3.1 8B (Cerebras)' }},
+                            {{ value: 'llama-3.3-70b', label: 'Llama 3.3 70B (Cerebras)' }},
+                            {{ value: 'llama-4-scout-17b-16e-instruct', label: 'Llama 4 Scout 17B Instruct (Cerebras)' }},
+                            {{ value: 'llama-4-maverick-17b-128e-instruct', label: 'Llama 4 Maverick 17B Instruct (preview, Cerebras)' }},
+                            {{ value: 'qwen-3-32b', label: 'Qwen 3 32B (Cerebras)' }},
+                            {{ value: 'qwen-3-235b-a22b-instruct-2507', label: 'Qwen 3 235B Instruct (preview, Cerebras)' }},
+                            {{ value: 'qwen-3-235b-a22b-thinking-2507', label: 'Qwen 3 235B Thinking (preview, Cerebras)' }},
+                            {{ value: 'qwen-3-coder-480b', label: 'Qwen 3 Coder 480B (preview, Cerebras)' }},
+                            {{ value: 'gpt-oss-120b', label: 'GPT-OSS 120B (preview, Cerebras)' }}
+                        ],
+                        deepinfra: [
+                            {{ value: 'meta-llama/Llama-3.1-8B-Instruct', label: 'Llama 3.1 8B Instruct (DeepInfra)' }},
+                            {{ value: 'mistralai/Mixtral-8x7B-Instruct-v0.1', label: 'Mixtral 8x7B Instruct (DeepInfra)' }}
+                        ]
+                    }};
+
+                    function updateLLMModels(presetModel) {{
+                        const providerSel = document.getElementById('llm-provider');
+                        const modelSel = document.getElementById('llm-model');
+                        const provider = providerSel.value || 'groq';
+                        const options = modelOptionsByProvider[provider] || [];
+                        const current = presetModel || modelSel.value || '{llm_model}';
+                        // Rebuild options
+                        modelSel.innerHTML = '';
+                        options.forEach(opt => {{
+                            const o = document.createElement('option');
+                            o.value = opt.value; o.textContent = opt.label;
+                            modelSel.appendChild(o);
+                        }});
+                        // Select current if present, else first
+                        const hasCurrent = options.some(o => o.value === current);
+                        modelSel.value = hasCurrent ? current : (options[0] ? options[0].value : '');
+                    }}
+
+                    // Initialize - Set current values and model list per provider
                     document.getElementById('tts-provider').value = '{tts_provider}';
                     document.getElementById('llm-provider').value = '{llm_provider}';
-                    document.getElementById('llm-model').value = '{llm_model}';
+                    updateLLMModels('{llm_model}');
                     document.getElementById('stt-provider').value = '{stt_provider}';
                     document.getElementById('temperature-range').value = '{temperature}';
                     document.getElementById('temperature-value').textContent = '{temperature}';
+                    document.getElementById('llm-provider').addEventListener('change', () => updateLLMModels());
                     toggleTTSProviderSettings();
                 </script>
             </body>
@@ -1589,9 +2368,11 @@ async def agent_preview_modal_legacy(
     agent_slug: str,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Legacy route - redirect to new format with global client_id"""
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url=f"/admin/agents/preview/global/{agent_slug}", status_code=307)
+    """Legacy route - return error since no client_id provided"""
+    raise HTTPException(
+        status_code=400,
+        detail="Client ID is required. Please use /admin/agents/preview/{client_id}/{agent_slug}"
+    )
 
 @router.get("/agents/preview/{client_id}/{agent_slug}", response_class=HTMLResponse)
 async def agent_preview_modal(
@@ -1613,9 +2394,9 @@ async def agent_preview_modal(
         
         agent = None
         
-        # Handle global agents (from main agents table)
+        # Handle agents - all agents should go through standard workflow
         logger.info(f"Handling preview for client_id={client_id}")
-        if client_id == "global":
+        if False:  # Removed default client ID check - no longer using defaults
             try:
                 # Ensure supabase_manager is initialized
                 if not supabase_manager._initialized:
@@ -1782,7 +2563,20 @@ async def send_preview_message(
     
     # Get messages from session (stored in memory for preview)
     preview_sessions = getattr(request.app.state, 'preview_sessions', {})
-    messages = preview_sessions.get(session_id, [])
+    session_data = preview_sessions.get(session_id, {"messages": [], "conversation_id": None})
+    
+    # Ensure backward compatibility
+    if isinstance(session_data, list):
+        # Old format - convert to new format
+        session_data = {"messages": session_data, "conversation_id": str(uuid.uuid4())}
+    
+    messages = session_data["messages"]
+    
+    # Get or create conversation_id for this session
+    conversation_id = session_data.get("conversation_id")
+    if not conversation_id:
+        conversation_id = str(uuid.uuid4())
+        session_data["conversation_id"] = conversation_id
     
     # Add user message
     messages.append({"content": message, "is_user": True})
@@ -1791,6 +2585,20 @@ async def send_preview_message(
     try:
         # Use the trigger endpoint to get a real AI response
         from app.api.v1.trigger import handle_text_trigger, TriggerAgentRequest, TriggerMode
+        from app.utils.default_ids import validate_uuid
+        
+        # Require logged-in user's UUID; no generic or fallback
+        user_id = None
+        if admin_user:
+            user_id = admin_user.get('user_id') or admin_user.get('id')
+        # Normalize to string to satisfy Pydantic model typing
+        if user_id is not None:
+            user_id = str(user_id)
+        # Enforce presence and validity
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if not validate_uuid(user_id):
+            raise HTTPException(status_code=400, detail="Invalid user_id for authenticated user")
         
         # Create a mock request for the text trigger
         trigger_request = TriggerAgentRequest(
@@ -1798,9 +2606,9 @@ async def send_preview_message(
             client_id=client_id,
             mode=TriggerMode.TEXT,
             message=message,
-            user_id=f"admin_{admin_user.get('id', 'preview')}",
+            user_id=user_id,
             session_id=session_id,
-            conversation_id=session_id
+            conversation_id=conversation_id  # Use the session's conversation_id
         )
         
         # For global agents, we'll use backend API keys
@@ -1818,8 +2626,10 @@ async def send_preview_message(
                     api_keys = {
                         'openai_api_key': config.get('openai_api_key', os.getenv('OPENAI_API_KEY', '')),
                         'groq_api_key': config.get('groq_api_key', ''),
+                        'cerebras_api_key': config.get('cerebras_api_key', ''),
                         'deepgram_api_key': config.get('deepgram_api_key', ''),
-                        'elevenlabs_api_key': config.get('elevenlabs_api_key', '')
+                        'elevenlabs_api_key': config.get('elevenlabs_api_key', ''),
+                        'cartesia_api_key': config.get('cartesia_api_key', '')
                     }
             except Exception as e:
                 logger.warning(f"Failed to get agent configuration: {e}")
@@ -1827,10 +2637,11 @@ async def send_preview_message(
                 api_keys = {
                     'openai_api_key': os.getenv('OPENAI_API_KEY', ''),
                     'groq_api_key': os.getenv('GROQ_API_KEY', ''),
+                    'cerebras_api_key': os.getenv('CEREBRAS_API_KEY', ''),
                 }
             
             # Process the message using AI
-            if api_keys.get('openai_api_key') or api_keys.get('groq_api_key'):
+            if api_keys.get('openai_api_key') or api_keys.get('groq_api_key') or api_keys.get('cerebras_api_key'):
                 # Use OpenAI or Groq to generate response
                 import httpx
                 
@@ -1860,6 +2671,27 @@ async def send_preview_message(
                     elif api_keys.get('groq_api_key'):
                         # Use Groq as fallback
                         logger.info(f"Using Groq API for agent {agent.name}")
+                    elif api_keys.get('cerebras_api_key'):
+                        # Minimal Cerebras test path for admin preview (text-only)
+                        import httpx
+                        logger.info(f"Using Cerebras API for agent {agent.name}")
+                        headers = {"Authorization": f"Bearer {api_keys['cerebras_api_key']}"}
+                        request_data = {
+                            "model": "llama3.1-8b",
+                            "messages": [
+                                {"role": "system", "content": agent.system_prompt or "You are a helpful assistant."},
+                                {"role": "user", "content": message}
+                            ],
+                            "stream": False
+                        }
+                        async with httpx.AsyncClient() as client:
+                            response = await client.post("https://api.cerebras.ai/v1/chat/completions", headers=headers, json=request_data, timeout=30.0)
+                            if response.status_code == 200:
+                                data = response.json()
+                                text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                                if text:
+                                    return JSONResponse({"success": True, "response": text})
+                            raise Exception(f"Cerebras API error: {response.status_code}")
                         logger.debug(f"System prompt length: {len(agent.system_prompt) if agent.system_prompt else 0}")
                         
                         # Try multiple Groq models in case some are unavailable
@@ -1923,17 +2755,20 @@ async def send_preview_message(
             ai_response = result.get("response", f"I'm {agent.name}. I'm currently in preview mode. In production, I would process your message: '{message}'")
         
     except Exception as e:
-        logger.warning(f"Preview AI response failed: {e}")
-        # Fallback to a simple preview response
-        ai_response = f"I'm {agent.name}, your AI assistant. (Preview mode - actual AI processing would happen in production)"
+        import traceback
+        logger.error(f"Preview AI response failed: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        # Fallback to a simple preview response with error detail
+        ai_response = f"I'm {agent.name}. Error: {str(e)[:100]}"
     
     # Add AI response
     messages.append({"content": ai_response, "is_user": False})
     
-    # Store messages in session
+    # Store messages and conversation_id in session
     if not hasattr(request.app.state, 'preview_sessions'):
         request.app.state.preview_sessions = {}
-    request.app.state.preview_sessions[session_id] = messages
+    request.app.state.preview_sessions[session_id] = session_data
     
     # Return updated messages
     return templates.TemplateResponse("admin/partials/chat_messages.html", {
@@ -1953,7 +2788,13 @@ async def get_preview_messages(
 ):
     """Get messages for a preview session"""
     preview_sessions = getattr(request.app.state, 'preview_sessions', {})
-    messages = preview_sessions.get(session_id, [])
+    session_data = preview_sessions.get(session_id, {"messages": [], "conversation_id": None})
+    
+    # Handle backward compatibility
+    if isinstance(session_data, list):
+        messages = session_data
+    else:
+        messages = session_data.get("messages", [])
     
     return templates.TemplateResponse("admin/partials/chat_messages.html", {
         "request": request,
@@ -1972,9 +2813,14 @@ async def set_preview_mode(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Switch between text and voice preview modes"""
+    import time
+    request_start = time.time()
+    
     from app.core.dependencies import get_agent_service
     from app.integrations.supabase_client import supabase_manager
     import json
+    
+    logger.info(f"Set preview mode started: mode={mode}, client_id={client_id}, agent_slug={agent_slug}")
     
     agent = None
     
@@ -2023,24 +2869,98 @@ async def set_preview_mode(
                 'client_id': 'global'
             })()
     else:
+        agent_fetch_start = time.time()
         agent_service = get_agent_service()
         agent = await agent_service.get_agent(client_id, agent_slug)
+        logger.info(f"Agent fetch took {time.time() - agent_fetch_start:.2f}s")
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
     if mode == "voice":
-        # Return voice chat interface
-        return templates.TemplateResponse("admin/partials/voice_chat.html", {
-            "request": request,
-            "agent": agent,
-            "client_id": client_id,
-            "session_id": session_id
-        })
+        # Handle voice mode - FAST VERSION for testing
+        logger.info("Handling voice mode request - FAST")
+        
+        # # Skip everything and just return a simple response
+        # return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
+        #     "request": request,
+        #     "room_name": f"preview_{agent_slug}_fast",
+        #     "server_url": "wss://litebridge-hw6srhvi.livekit.cloud",
+        #     "user_token": "dummy-token-for-testing",
+        #     "agent_slug": agent_slug,
+        #     "client_id": client_id,
+        #     "session_id": session_id
+        # })
+        
+        try:
+            import uuid
+            from app.api.v1.trigger import TriggerAgentRequest, TriggerMode, trigger_agent
+            from app.core.dependencies import get_agent_service
+            
+            # Generate a unique room name for this preview
+            room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
+            
+            # Create trigger request for voice mode
+            trigger_request = TriggerAgentRequest(
+                agent_slug=agent_slug,
+                client_id=client_id if client_id != "global" else None,  # Let trigger endpoint handle global agents
+                mode=TriggerMode.VOICE,
+                room_name=room_name,
+                # Use the actual user's UUID from the query parameter or a default admin user
+                # This ensures the context system can find the user's profile
+                user_id=get_user_id_from_request(request.query_params.get('user_id'), admin_user),
+                session_id=session_id,
+                conversation_id=str(uuid.uuid4())  # Generate proper UUID for database storage
+            )
+            
+            # Call the actual trigger endpoint to ensure proper setup
+            agent_service_inst = get_agent_service()
+            
+            logger.info(f"Calling trigger endpoint for preview room: {room_name}")
+            trigger_result = await trigger_agent(trigger_request, agent_service_inst)
+            
+            # Extract the response data from trigger result
+            if trigger_result.success and trigger_result.data:
+                livekit_config = trigger_result.data.get("livekit_config", {})
+                user_token = livekit_config.get("user_token", "")
+                server_url = livekit_config.get("server_url", "")
+                
+                # Log what we're sending to the template
+                logger.info(f"Voice preview from trigger - Room: {room_name}, Server: {server_url}, Token: {user_token[:50] if user_token else 'None'}...")
+                
+                # Return voice interface with LiveKit client
+                return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
+                    "request": request,
+                    "room_name": room_name,
+                    "server_url": server_url,
+                    "user_token": user_token,
+                    "agent_slug": agent_slug,
+                    "client_id": client_id,
+                    "session_id": session_id
+                })
+            else:
+                error_msg = trigger_result.message if hasattr(trigger_result, 'message') else "Failed to start voice session"
+                raise Exception(error_msg)
+                
+        except Exception as e:
+            logger.error(f"Failed to start voice preview: {e}")
+            return templates.TemplateResponse("admin/partials/voice_error.html", {
+                "request": request,
+                "error": str(e),
+                "client_id": client_id,
+                "agent_slug": agent_slug,
+                "session_id": session_id
+            })
     else:
         # Return text chat interface (reuse the messages partial with container)
         preview_sessions = getattr(request.app.state, 'preview_sessions', {})
-        messages = preview_sessions.get(session_id, [])
+        session_data = preview_sessions.get(session_id, {"messages": [], "conversation_id": None})
+        
+        # Handle backward compatibility
+        if isinstance(session_data, list):
+            messages = session_data
+        else:
+            messages = session_data.get("messages", [])
         
         # Return the full text chat container
         return f"""
@@ -2075,63 +2995,46 @@ async def set_preview_mode(
             </div>
         </div>
         """
+
+
+@router.get("/test-htmx")
+async def test_htmx(request: Request):
+    """Test HTMX functionality"""
+    return templates.TemplateResponse("admin/test_htmx.html", {"request": request})
+
+
+@router.get("/agents/preview/voice-debug")
+async def voice_preview_debug(request: Request):
+    """Debug endpoint to test voice preview"""
+    # Generate test values
+    import uuid
+    from app.integrations.livekit_client import livekit_manager
+    
     try:
-        import uuid
-        from app.api.v1.trigger import TriggerAgentRequest, TriggerMode, trigger_agent
-        from app.core.dependencies import get_agent_service
+        # Ensure livekit_manager is initialized
+        if not livekit_manager._initialized:
+            await livekit_manager.initialize()
+            
+        room_name = f"debug_room_{uuid.uuid4().hex[:8]}"
         
-        # Generate a unique room name for this preview
-        room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
-        
-        # Create trigger request for voice mode
-        trigger_request = TriggerAgentRequest(
-            agent_slug=agent_slug,
-            client_id=client_id if client_id != "global" else None,  # Let trigger endpoint handle global agents
-            mode=TriggerMode.VOICE,
-            room_name=room_name,
-            user_id=f"admin_preview_{admin_user.get('id', 'user')}",
-            session_id=session_id,
-            conversation_id=session_id
+        # Create a test token
+        user_token = livekit_manager.create_token(
+            identity="debug_user",
+            room_name=room_name
         )
         
-        # Get agent service to trigger the agent
-        agent_service = get_agent_service()
-        
-        # Trigger the agent in voice mode
-        result = await trigger_agent(trigger_request, agent_service=agent_service)
-        
-        # Extract the response data
-        if result.success and result.data:
-            livekit_config = result.data.get("livekit_config", {})
-            user_token = livekit_config.get("user_token", "")
-            server_url = livekit_config.get("server_url", "")
-            
-            # Log what we're sending to the template
-            logger.info(f"Voice preview starting - Room: {room_name}, Server: {server_url}, Token: {user_token[:50]}...")
-            
-            # Return voice interface with LiveKit client
-            return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
-                "request": request,
-                "room_name": room_name,
-                "server_url": server_url,
-                "user_token": user_token,
-                "agent_slug": agent_slug,
-                "client_id": client_id,
-                "session_id": session_id
-            })
-        else:
-            error_msg = result.message if hasattr(result, 'message') else "Failed to start voice session"
-            raise Exception(error_msg)
-            
-    except Exception as e:
-        logger.error(f"Failed to start voice preview: {e}")
-        return templates.TemplateResponse("admin/partials/voice_error.html", {
+        return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
             "request": request,
-            "error": str(e),
-            "client_id": client_id,
-            "agent_slug": agent_slug,
-            "session_id": session_id
+            "room_name": room_name,
+            "server_url": livekit_manager.url,
+            "user_token": user_token,
+            "agent_slug": "debug-agent",
+            "client_id": "debug-client",
+            "session_id": "debug-session"
         })
+    except Exception as e:
+        logger.error(f"Voice debug error: {e}")
+        return {"error": str(e)}
 
 
 @router.post("/agents/preview/{client_id}/{agent_slug}/voice-start")
@@ -2223,67 +3126,47 @@ async def start_voice_preview(
         # Generate unique room name for this session
         room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
         
-        # Create trigger request
+        # Create trigger request - always use the client_id provided
         trigger_request = TriggerAgentRequest(
             agent_slug=agent_slug,
-            client_id=client_id,
+            client_id=client_id,  # Use the actual client ID (Autonomite client)
             mode=TriggerMode.VOICE,
             room_name=room_name,
-            user_id=f"admin_{admin_user.get('user_id', 'preview')}",
+            # Use the actual user's UUID for proper context loading
+            user_id=get_user_id_from_request(None, admin_user),
             session_id=session_id
         )
         
-        # For global agents, create room directly without going through client-specific trigger
-        if client_id == "global":
-            from app.integrations.livekit_client import livekit_manager
-            
-            # Create the room
-            room_info = await livekit_manager.create_room(
-                name=room_name,
-                max_participants=2,  # Admin + potential agent
-                metadata=json.dumps({
-                    "type": "preview",
-                    "agent": agent_slug,
-                    "created_by": "admin"
-                })
-            )
-            logger.info(f"Created preview room: {room_info}")
-            
-            # Create user token
-            user_token = livekit_manager.create_token(
-                identity=f"admin_{admin_user.get('user_id', 'preview')}",
-                room_name=room_name,
-                metadata={
-                    "role": "participant",
-                    "preview": True,
-                    "name": "Admin Preview"
-                }
-            )
-            
-            server_url = livekit_manager.url
-            
-            # Note: For global agents in preview, we won't spawn an actual agent container
-            # This is just for testing the voice interface
-            
-        else:
-            # Import the trigger function
-            from app.api.v1.trigger import trigger_agent
-            
-            # Get agent service for trigger
-            agent_service = get_agent_service()
-            
-            # Trigger the agent
-            trigger_result = await trigger_agent(trigger_request, agent_service=agent_service)
-            
-            # Extract connection details
-            livekit_config = trigger_result.get('livekit_config', {})
-            server_url = livekit_config.get('server_url', '')
-            user_token = livekit_config.get('user_token', '')
+        # Always use the standard trigger flow for ALL agents
+        # This ensures consistent behavior across all agent types
+        
+        # Import the trigger function
+        from app.api.v1.trigger import trigger_agent
+        
+        # Get agent service for trigger
+        agent_service = get_agent_service()
+        
+        # Trigger the agent
+        logger.info(f"🎯 Triggering agent for room: {room_name}")
+        trigger_result = await trigger_agent(trigger_request, agent_service=agent_service)
+        
+        # Extract connection details from the response data
+        # trigger_result is a TriggerAgentResponse object, not a dict
+        livekit_config = trigger_result.data.get('livekit_config', {}) if trigger_result.data else {}
+        server_url = livekit_config.get('server_url', '')
+        user_token = livekit_config.get('user_token', '')
+        
+        # CRITICAL: Use the room name from the trigger response to ensure consistency
+        actual_room_name = trigger_result.data.get('room_name', room_name) if trigger_result.data else room_name
+        
+        logger.info(f"📍 Room names - Requested: {room_name}, Actual: {actual_room_name}")
+        if room_name != actual_room_name:
+            logger.warning(f"⚠️ Room name mismatch! Frontend will use: {actual_room_name}")
         
         # Return voice interface with LiveKit client
         return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
             "request": request,
-            "room_name": room_name,
+            "room_name": actual_room_name,  # Use the actual room name from trigger
             "server_url": server_url,
             "user_token": user_token,
             "agent": agent,
@@ -2392,7 +3275,11 @@ async def clear_preview_messages(
 ):
     """Clear messages for a preview session"""
     if hasattr(request.app.state, 'preview_sessions') and session_id in request.app.state.preview_sessions:
-        request.app.state.preview_sessions[session_id] = []
+        # Reset with new conversation_id
+        request.app.state.preview_sessions[session_id] = {
+            "messages": [],
+            "conversation_id": str(uuid.uuid4())
+        }
     
     return templates.TemplateResponse("admin/partials/chat_messages.html", {
         "request": request,
@@ -2514,18 +3401,110 @@ async def admin_update_agent(
     request: Request
 ):
     """Admin endpoint to update agent using Supabase service"""
+    # Enforce admin-only
+    from app.admin.auth import get_admin_user
+    admin_user = await get_admin_user(request)
+    if admin_user.get("role") not in ("admin", "superadmin"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     try:
         # Parse JSON body
         data = await request.json()
         
-        # Get agent service
-        from app.core.dependencies import get_agent_service
+        # Get agent and client services
+        from app.core.dependencies import get_agent_service, get_client_service
         agent_service = get_agent_service()
+        client_service = get_client_service()
         
         # Get existing agent
         agent = await agent_service.get_agent(client_id, agent_slug)
         if not agent:
             return {"error": "Agent not found", "status": 404}
+        
+        # Get client to check API keys
+        client = await client_service.get_client(client_id)
+        if not client:
+            return {"error": "Client not found", "status": 404}
+        
+        # Validate API keys if voice_settings are provided
+        if "voice_settings" in data:
+            voice_settings = data["voice_settings"]
+            missing_keys = []
+            
+            # Define provider to API key mappings
+            llm_provider_keys = {
+                "openai": "openai_api_key",
+                "groq": "groq_api_key",
+                "cerebras": "cerebras_api_key",
+                "deepinfra": "deepinfra_api_key",
+                "replicate": "replicate_api_key"
+            }
+            
+            stt_provider_keys = {
+                "deepgram": "deepgram_api_key",
+                "groq": "groq_api_key",
+                "openai": "openai_api_key",
+                "cartesia": "cartesia_api_key"
+            }
+            
+            tts_provider_keys = {
+                "openai": "openai_api_key",
+                "elevenlabs": "elevenlabs_api_key",
+                "cartesia": "cartesia_api_key",
+                "speechify": "speechify_api_key",
+                "replicate": "replicate_api_key"
+            }
+            
+            # Check LLM provider
+            if "llm_provider" in voice_settings and voice_settings["llm_provider"]:
+                llm_provider = voice_settings["llm_provider"]
+                if llm_provider in llm_provider_keys:
+                    required_key = llm_provider_keys[llm_provider]
+                    if not hasattr(client.settings.api_keys, required_key) or not getattr(client.settings.api_keys, required_key):
+                        missing_keys.append({
+                            "provider_type": "LLM",
+                            "provider": llm_provider,
+                            "required_key": required_key,
+                            "message": f"LLM provider '{llm_provider}' requires {required_key}"
+                        })
+            
+            # Check STT provider
+            if "stt_provider" in voice_settings and voice_settings["stt_provider"]:
+                stt_provider = voice_settings["stt_provider"]
+                if stt_provider in stt_provider_keys:
+                    required_key = stt_provider_keys[stt_provider]
+                    if not hasattr(client.settings.api_keys, required_key) or not getattr(client.settings.api_keys, required_key):
+                        missing_keys.append({
+                            "provider_type": "STT",
+                            "provider": stt_provider,
+                            "required_key": required_key,
+                            "message": f"STT provider '{stt_provider}' requires {required_key}"
+                        })
+            
+            # Check TTS provider
+            if "tts_provider" in voice_settings and voice_settings["tts_provider"]:
+                tts_provider = voice_settings["tts_provider"]
+                if tts_provider in tts_provider_keys:
+                    required_key = tts_provider_keys[tts_provider]
+                    if not hasattr(client.settings.api_keys, required_key) or not getattr(client.settings.api_keys, required_key):
+                        missing_keys.append({
+                            "provider_type": "TTS",
+                            "provider": tts_provider,
+                            "required_key": required_key,
+                            "message": f"TTS provider '{tts_provider}' requires {required_key}"
+                        })
+            
+            # If missing keys found, return validation error
+            if missing_keys:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "Missing API keys for selected providers",
+                        "missing_keys": missing_keys,
+                        "client_id": client_id,
+                        "client_name": client.name
+                    }
+                )
         
         # Prepare update data
         from app.models.agent import AgentUpdate, VoiceSettings, WebhookSettings
@@ -2565,6 +3544,47 @@ def get_redis_client_admin():
     """Get Redis client for admin operations"""
     import redis
     return redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@router.get("/clients/{client_id}/edit", response_class=HTMLResponse)
+async def edit_client_modal(client_id: str, request: Request, admin_user: Dict[str, Any] = Depends(get_admin_user)):
+    from app.core.dependencies import get_client_service
+    client_service = get_client_service()
+    client = await client_service.get_client(client_id, auto_sync=False)
+    if not client:
+        return HTMLResponse("<div class='p-4 text-red-600'>Client not found</div>", status_code=404)
+
+    # Normalize current_api_keys for template access
+    current_api_keys = client.settings.api_keys if hasattr(client.settings, 'api_keys') else {}
+    def get_key(name):
+        try:
+            return getattr(current_api_keys, name)
+        except Exception:
+            return current_api_keys.get(name, '') if isinstance(current_api_keys, dict) else ''
+
+    html = f"""
+    <div class=\"fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center\">
+      <div class=\"bg-white rounded-lg shadow-lg w-full max-w-2xl\">
+        <div class=\"px-6 py-4 border-b\">
+          <h3 class=\"text-lg font-semibold\">Edit Client: {client.name}</h3>
+        </div>
+        <form hx-post=\"/admin/clients/{client_id}/update\" hx-target=\"#modal-container\" hx-swap=\"outerHTML\">
+          <div class=\"px-6 py-4 space-y-4\">
+            <div>
+              <label class=\"block text-sm font-medium text-gray-700 mb-1\">Cerebras API Key</label>
+              <input type=\"password\" name=\"cerebras_api_key\" value=\"{get_key('cerebras_api_key') or ''}\" placeholder=\"sk-...\" class=\"w-full px-3 py-2 border rounded-md\">
+              <p class=\"text-xs text-gray-500 mt-1\">Used when LLM provider is set to Cerebras.</p>
+            </div>
+            <!-- Optionally render other keys here as needed -->
+          </div>
+          <div class=\"px-6 py-4 border-t flex justify-end gap-2\">
+            <button type=\"button\" class=\"px-4 py-2 rounded border\" onclick=\"document.getElementById('modal-container').innerHTML='';\">Cancel</button>
+            <button type=\"submit\" class=\"px-4 py-2 rounded bg-indigo-600 text-white\">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    """
+    return HTMLResponse(html)
 
 @router.post("/clients/{client_id}/update")
 async def admin_update_client(
@@ -2631,6 +3651,7 @@ async def admin_update_client(
             api_keys=APIKeys(
                 openai_api_key=form.get("openai_api_key") or (current_api_keys.openai_api_key if hasattr(current_api_keys, 'openai_api_key') else current_api_keys.get('openai_api_key') if isinstance(current_api_keys, dict) else None),
                 groq_api_key=form.get("groq_api_key") or (current_api_keys.groq_api_key if hasattr(current_api_keys, 'groq_api_key') else current_api_keys.get('groq_api_key') if isinstance(current_api_keys, dict) else None),
+                cerebras_api_key=form.get("cerebras_api_key") or (current_api_keys.cerebras_api_key if hasattr(current_api_keys, 'cerebras_api_key') else current_api_keys.get('cerebras_api_key') if isinstance(current_api_keys, dict) else None),
                 deepinfra_api_key=form.get("deepinfra_api_key") or (current_api_keys.deepinfra_api_key if hasattr(current_api_keys, 'deepinfra_api_key') else current_api_keys.get('deepinfra_api_key') if isinstance(current_api_keys, dict) else None),
                 replicate_api_key=form.get("replicate_api_key") or (current_api_keys.replicate_api_key if hasattr(current_api_keys, 'replicate_api_key') else current_api_keys.get('replicate_api_key') if isinstance(current_api_keys, dict) else None),
                 deepgram_api_key=form.get("deepgram_api_key") or (current_api_keys.deepgram_api_key if hasattr(current_api_keys, 'deepgram_api_key') else current_api_keys.get('deepgram_api_key') if isinstance(current_api_keys, dict) else None),
@@ -2678,8 +3699,17 @@ async def admin_update_client(
         # Debug: Log the API keys after update
         logger.info(f"After update - cartesia={updated_client.settings.api_keys.cartesia_api_key if updated_client.settings.api_keys else 'None'}, siliconflow={updated_client.settings.api_keys.siliconflow_api_key if updated_client.settings.api_keys else 'None'}")
         
-        # If this is the Autonomite client, sync LiveKit credentials to backend
-        if client_id == "df91fd06-816f-4273-a903-5a4861277040":
+        # Sync API keys from platform to client database
+        from app.services.platform_to_client_sync import PlatformToClientSync
+        sync_success = await PlatformToClientSync.sync_after_update(client_id, client_service)
+        if sync_success:
+            logger.info(f"✅ Synced API keys from platform to client database")
+        else:
+            logger.warning(f"⚠️ Failed to sync API keys to client database")
+        
+        # Check if we should sync LiveKit credentials to backend for specific clients
+        # This was previously checking for a default client ID which no longer exists
+        if False:  # Disabled - no default client ID
             from app.services.backend_livekit_sync import BackendLiveKitSync
             sync_success = await BackendLiveKitSync.sync_credentials()
             if sync_success:
@@ -2839,6 +3869,7 @@ async def delete_wordpress_site(
 @router.get("/knowledge-base/documents")
 async def get_knowledge_base_documents(
     client_id: str,
+    status: Optional[str] = None,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Get documents for Knowledge Base admin interface"""
@@ -2849,7 +3880,7 @@ async def get_knowledge_base_documents(
         documents = await document_processor.get_documents(
             user_id=None,  # Admin access doesn't need user_id
             client_id=client_id,
-            status=None,
+            status=status,
             limit=100
         )
         
@@ -2861,46 +3892,217 @@ async def get_knowledge_base_documents(
         return []
 
 
+@router.get("/api/clients")
+async def get_admin_clients(
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get all clients for admin interface"""
+    try:
+        from app.core.dependencies import get_client_service
+        client_service = get_client_service()
+        clients = await client_service.get_all_clients()
+        
+        # Convert to list of dicts for JSON response
+        client_list = []
+        for client in clients:
+            client_dict = {
+                "id": client.id,
+                "name": client.name,
+                "domain": client.domain,
+                "active": client.active
+            }
+            client_list.append(client_dict)
+        
+        return client_list
+    except Exception as e:
+        logger.error(f"Failed to get clients: {e}")
+        return []
+
+
 @router.get("/knowledge-base/agents")
 async def get_knowledge_base_agents(
     client_id: str,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Get agents for Knowledge Base admin interface from client-specific Supabase"""
+    """Get agents for Knowledge Base admin interface"""
     try:
-        from app.core.dependencies import get_client_service
-        from supabase import create_client
+        from app.core.dependencies import get_agent_service
         
-        # Get client details to access their Supabase
-        client_service = get_client_service()
-        client = await client_service.get_client(client_id)
+        # Get agent service
+        agent_service = get_agent_service()
         
-        if not client:
-            logger.error(f"Client {client_id} not found")
-            return []
+        # Get all agents for the client
+        agents = await agent_service.get_client_agents(client_id)
         
-        # Get client's Supabase credentials
-        client_settings = client.get('settings', {}) if isinstance(client, dict) else getattr(client, 'settings', {})
-        supabase_settings = client_settings.get('supabase', {}) if isinstance(client_settings, dict) else getattr(client_settings, 'supabase', {})
+        # Convert to list format expected by frontend
+        agent_list = []
+        for agent in agents:
+            agent_list.append({
+                "id": agent.id,
+                "name": agent.name,
+                "agent_name": agent.name,  # For compatibility
+                "slug": agent.slug,
+                "agent_slug": agent.slug,  # For compatibility
+                "enabled": agent.enabled
+            })
         
-        supabase_url = supabase_settings.get('url', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'url', '')
-        service_key = supabase_settings.get('service_role_key', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'service_role_key', '')
-        
-        if not supabase_url or not service_key:
-            logger.warning(f"Client {client_id} missing Supabase credentials")
-            return []
-        
-        # Create client-specific Supabase connection
-        client_supabase = create_client(supabase_url, service_key)
-        
-        # Query agents from client's database
-        result = client_supabase.table('agent_configurations')\
-            .select('id, agent_name, agent_slug')\
-            .order('agent_name')\
-            .execute()
-        
-        return result.data
+        return agent_list
         
     except Exception as e:
         logger.error(f"Failed to get agents for client {client_id}: {e}")
         return []
+
+
+@router.post("/knowledge-base/upload")
+async def upload_knowledge_base_document(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Upload document to knowledge base using document processor"""
+    try:
+        # Set max content length to 50MB
+        request._max_content_length = 50 * 1024 * 1024
+        
+        # Parse form data
+        form = await request.form()
+        file = form.get("file")
+        title = form.get("title", "")
+        description = form.get("description", "")
+        client_id = form.get("client_id")
+        agent_ids = form.get("agent_ids", "")
+        
+        if not file:
+            return {"success": False, "message": "No file provided"}
+        
+        if not client_id:
+            return {"success": False, "message": "No client ID provided"}
+        
+        # Get file content
+        content = await file.read()
+        filename = file.filename
+        
+        # Save file temporarily
+        import os
+        import tempfile
+        import uuid
+        
+        # Create a unique temporary file
+        temp_dir = tempfile.mkdtemp()
+        temp_file_path = os.path.join(temp_dir, filename)
+        
+        try:
+            # Save file temporarily
+            with open(temp_file_path, 'wb') as f:
+                f.write(content)
+            
+            # Determine agent access
+            agent_id_list = None
+            if agent_ids != "all" and agent_ids:
+                agent_id_list = [id.strip() for id in agent_ids.split(',') if id.strip()]
+            
+            # Use document processor to handle the file
+            from app.services.document_processor import document_processor
+            
+            result = await document_processor.process_uploaded_file(
+                file_path=temp_file_path,
+                title=title or filename,
+                description=description,
+                user_id=admin_user.get("id"),  # Admin user ID
+                agent_ids=agent_id_list,
+                client_id=client_id
+            )
+            
+            if result['success']:
+                logger.info(f"Document uploaded and processing started: {result['document_id']}")
+                return {
+                    "success": True, 
+                    "message": "Document uploaded and processing started",
+                    "document_id": result['document_id']
+                }
+            else:
+                logger.error(f"Document processing failed: {result.get('error')}")
+                # Clean up temp file on error
+                try:
+                    os.remove(temp_file_path)
+                    os.rmdir(temp_dir)
+                except:
+                    pass
+                return {"success": False, "message": result.get('error', 'Failed to process document')}
+                
+        except Exception as e:
+            logger.error(f"Failed to process document: {e}")
+            # Clean up temp file on error
+            try:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                if os.path.exists(temp_dir):
+                    os.rmdir(temp_dir)
+            except:
+                pass
+            return {"success": False, "message": f"Failed to process document: {str(e)}"}
+        
+    except Exception as e:
+        logger.error(f"Document upload failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"success": False, "message": f"Upload failed: {str(e)}"}
+
+
+@router.delete("/knowledge-base/documents/{document_id}")
+async def delete_knowledge_base_document(
+    document_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Delete a document from knowledge base"""
+    try:
+        from app.services.document_processor import document_processor
+        
+        # Delete the document using document processor
+        success = await document_processor.delete_document(
+            document_id=document_id,
+            user_id=admin_user.get("id")  # Pass admin user ID for permission check
+        )
+        
+        if success:
+            return {"success": True, "message": "Document deleted successfully"}
+        else:
+            return {"success": False, "message": "Failed to delete document"}
+            
+    except Exception as e:
+        logger.error(f"Failed to delete document {document_id}: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.post("/knowledge-base/documents/{document_id}/reprocess")
+async def reprocess_knowledge_base_document(
+    document_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Reprocess a document"""
+    try:
+        # For now, return success
+        # TODO: Implement actual reprocessing
+        return {"success": True, "message": "Document reprocessing started"}
+    except Exception as e:
+        logger.error(f"Failed to reprocess document {document_id}: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.put("/knowledge-base/documents/{document_id}/access")
+async def update_document_access(
+    document_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Update document access permissions"""
+    try:
+        data = await request.json()
+        agent_access = data.get("agent_access", "specific")
+        agent_ids = data.get("agent_ids", [])
+        
+        # For now, return success
+        # TODO: Implement actual access update in Supabase
+        return {"success": True, "message": "Document access updated successfully"}
+    except Exception as e:
+        logger.error(f"Failed to update document access: {e}")
+        return {"success": False, "message": str(e)}

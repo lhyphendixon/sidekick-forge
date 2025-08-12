@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HTMX Test</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+    <h1>HTMX Test</h1>
+    
+    <button hx-get="/health" hx-target="#result">Test Health Endpoint</button>
+    
+    <div id="result"></div>
+    
+    <hr>
+    
+    <button hx-post="/admin/agents/preview/df91fd06-816f-4273-a903-5a4861277040/clarence-coherence/set-mode"
+            hx-vals='{"session_id": "test-123", "mode": "voice"}'
+            hx-target="#voice-result">
+        Test Voice Mode
+    </button>
+    
+    <div id="voice-result"></div>
+</body>
+</html>

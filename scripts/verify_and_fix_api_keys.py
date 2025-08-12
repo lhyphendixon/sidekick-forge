@@ -8,7 +8,7 @@ import json
 import asyncio
 from typing import Dict, Any
 
-sys.path.append('/root/autonomite-agent-platform')
+sys.path.append('/root/sidekick-forge')
 
 from supabase import create_client
 from app.services.client_service_supabase import ClientService
@@ -140,7 +140,7 @@ async def verify_client_api_keys(client_id: str = 'df91fd06-816f-4273-a903-5a486
     print("-" * 60)
     
     # Add the agent path
-    sys.path.append('/root/autonomite-agent-platform/docker/agent')
+    sys.path.append('/root/sidekick-forge/docker/agent')
     # Simulate what happens in the agent
     from api_key_loader import APIKeyLoader
     

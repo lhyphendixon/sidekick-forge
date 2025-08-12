@@ -30,7 +30,7 @@ async def list_tools(
     """
     try:
         # Build query
-        query = supabase_manager.admin_client.table("autonomite_tools").select("*")
+        query = supabase_manager.admin_client.table("sidekick_tools").select("*")
         
         # Filter by user if user auth
         if auth.is_user_auth:
@@ -102,7 +102,7 @@ async def create_tool(
         
         # Create tool
         result = await supabase_manager.execute_query(
-            supabase_manager.admin_client.table("autonomite_tools").insert(tool_data)
+            supabase_manager.admin_client.table("sidekick_tools").insert(tool_data)
         )
         
         return APIResponse(
@@ -130,7 +130,7 @@ async def get_tool(
     Get tool configuration details
     """
     try:
-        query = supabase_manager.admin_client.table("autonomite_tools").select("*").eq("id", str(tool_id))
+        query = supabase_manager.admin_client.table("sidekick_tools").select("*").eq("id", str(tool_id))
         
         # Filter by user if user auth
         if auth.is_user_auth:
@@ -168,7 +168,7 @@ async def update_tool(
     """
     try:
         # Check tool exists
-        query = supabase_manager.admin_client.table("autonomite_tools").select("*").eq("id", str(tool_id)).eq("user_id", auth.user_id)
+        query = supabase_manager.admin_client.table("sidekick_tools").select("*").eq("id", str(tool_id)).eq("user_id", auth.user_id)
         result = await supabase_manager.execute_query(query)
         
         if not result:
@@ -178,7 +178,7 @@ async def update_tool(
         update_data = request.dict(exclude_unset=True)
         
         result = await supabase_manager.execute_query(
-            supabase_manager.admin_client.table("autonomite_tools")
+            supabase_manager.admin_client.table("sidekick_tools")
             .update(update_data)
             .eq("id", str(tool_id))
         )
@@ -209,7 +209,7 @@ async def delete_tool(
     """
     try:
         # Check tool exists
-        query = supabase_manager.admin_client.table("autonomite_tools").select("*").eq("id", str(tool_id)).eq("user_id", auth.user_id)
+        query = supabase_manager.admin_client.table("sidekick_tools").select("*").eq("id", str(tool_id)).eq("user_id", auth.user_id)
         result = await supabase_manager.execute_query(query)
         
         if not result:
@@ -224,7 +224,7 @@ async def delete_tool(
         
         # Delete tool
         await supabase_manager.execute_query(
-            supabase_manager.admin_client.table("autonomite_tools")
+            supabase_manager.admin_client.table("sidekick_tools")
             .delete()
             .eq("id", str(tool_id))
         )
@@ -258,7 +258,7 @@ async def execute_tool(
     """
     try:
         # Get tool configuration
-        query = supabase_manager.admin_client.table("autonomite_tools").select("*").eq("id", str(request.tool_id))
+        query = supabase_manager.admin_client.table("sidekick_tools").select("*").eq("id", str(request.tool_id))
         result = await supabase_manager.execute_query(query)
         
         if not result:
@@ -356,8 +356,8 @@ async def get_agent_tools(
         # Format response
         formatted_tools = []
         for tool_config in tools:
-            if tool_config.get("autonomite_tools"):
-                tool_data = tool_config["autonomite_tools"]
+            if tool_config.get("sidekick_tools"):
+                tool_data = tool_config["sidekick_tools"]
                 tool_data["enabled_for_agent"] = tool_config["enabled"]
                 tool_data["configuration_override"] = tool_config.get("configuration_override", {})
                 formatted_tools.append(tool_data)

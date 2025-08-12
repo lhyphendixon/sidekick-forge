@@ -38,6 +38,7 @@ class APIKeys(BaseModel):
     # LLM Providers
     openai_api_key: Optional[str] = None
     groq_api_key: Optional[str] = None
+    cerebras_api_key: Optional[str] = None
     deepinfra_api_key: Optional[str] = None
     replicate_api_key: Optional[str] = None
     
@@ -87,6 +88,7 @@ class ClientSettings(BaseModel):
 class Client(BaseModel):
     """Client model for multi-tenant support"""
     id: str = Field(..., description="Unique client identifier")
+    slug: str = Field(..., description="URL-friendly identifier", pattern=r"^[a-z0-9\-]+$")
     name: str = Field(..., description="Client name")
     description: Optional[str] = Field(None, description="Client description")
     domain: Optional[str] = Field(None, description="Client's primary domain")
@@ -94,6 +96,7 @@ class Client(BaseModel):
     active: bool = Field(default=True, description="Whether client is active")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    additional_settings: Dict[str, Any] = Field(default_factory=dict, description="Additional client-specific settings")
     
     class Config:
         json_encoders = {
@@ -103,7 +106,8 @@ class Client(BaseModel):
 
 class ClientCreate(BaseModel):
     """Create a new client"""
-    id: str = Field(..., description="Unique client identifier (e.g., 'autonomite-agent', 'live-free-academy')")
+    id: Optional[str] = Field(None, description="Optional client identifier UUID. If not provided, will be auto-generated")
+    slug: str = Field(..., description="URL-friendly identifier", pattern=r"^[a-z0-9\-]+$")
     name: str = Field(..., description="Client name")
     description: Optional[str] = None
     domain: Optional[str] = None
@@ -112,6 +116,7 @@ class ClientCreate(BaseModel):
 
 class ClientUpdate(BaseModel):
     """Update client information"""
+    slug: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
     domain: Optional[str] = None

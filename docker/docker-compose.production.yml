@@ -1,20 +1,24 @@
 version: '3.8'
 
 services:
-  # Main backend API service
+  # Main backend API
   api:
+    container_name: sidekick-forge_api
+    image: sidekick-forge-api
     build:
       context: ../
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/api/Dockerfile
     env_file:
       - ../.env
     ports:
       - "8000:8000"
     volumes:
-      - ../logs/app:/app/logs
+      - ../app:/app # Mount the app directory for development
+      - ../logs:/app/logs
       - ../data:/app/data
-    networks:
-      - autonomite
+    depends_on:
+      - redis
+      - db
     restart: always
     logging:
       driver: "json-file"
@@ -36,45 +40,20 @@ services:
       retries: 3
       start_period: 40s
 
-  # Supabase database
-  db:
-    image: supabase/postgres:15.1.0.11
-    env_file:
-      - ../.env.db
-    ports:
-      - "5432:5432"
-    volumes:
-      - ../data/db:/var/lib/postgresql/data
-    networks:
-      - autonomite
-    restart: always
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "5"
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Redis for caching and temporary data
   redis:
     image: redis:alpine
-    command: redis-server --save 60 1 --loglevel warning
-    container_name: autonomite-agent-platform_redis
+    container_name: sidekick-forge_redis
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
     ports:
       - "6379:6379"
     volumes:
       - ../data/redis:/data
     networks:
-      - autonomite
+      - sidekick-forge
     restart: always
     logging:
       driver: "json-file"
@@ -97,32 +76,32 @@ services:
     build:
       context: ./agent
       dockerfile: Dockerfile
-    image: autonomite/livekit-agent:latest
-    container_name: autonomite-agent-builder
+    image: sidekick-forge/livekit-agent:latest
+    container_name: sidekick-agent-builder
     command: echo "Agent image built successfully"
     profiles:
       - build
 
 networks:
-  autonomite:
+  sidekick-network:
     driver: bridge
     ipam:
       config:
         - subnet: 172.20.0.0/16
   
-  autonomite-agents-network:
+  sidekick-agents-network:
     driver: bridge
     ipam:
       config:
         - subnet: 172.21.0.0/16
     labels:
-      managed_by: "autonomite-saas"
+      managed_by: "sidekick-forge"
 
 # No local volumes in production - using mounted directories
 volumes:
-  autonomite-db-data:
-  autonomite-redis-data:
+  sidekick-db-data:
+  sidekick-redis-data:
 
 networks:
   default:
-    name: autonomite-network
+    name: sidekick-network

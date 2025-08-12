@@ -43,7 +43,9 @@ class DocumentProcessor:
     def __init__(self):
         self.supabase = None  # Will be initialized on first use
         self.ai_processor = ai_processor
-        self.client_supabase_connections = {}  # Cache for client-specific connections
+        # Cache client-specific Supabase connections with the credentials used to build them
+        # Structure: { client_id: { 'client': SupabaseClient, 'url': str, 'key': str } }
+        self.client_supabase_connections = {}
         self.supported_types = {
             'pdf': self._extract_pdf_text,
             'txt': self._extract_text_file,
@@ -62,10 +64,8 @@ class DocumentProcessor:
         return self.supabase
     
     async def _get_client_supabase(self, client_id: str):
-        """Get client-specific Supabase connection"""
-        if client_id in self.client_supabase_connections:
-            logger.info(f"Using cached Supabase connection for client {client_id}")
-            return self.client_supabase_connections[client_id]
+        """Get client-specific Supabase connection, refreshing cache if credentials changed"""
+        cached = self.client_supabase_connections.get(client_id)
         
         try:
             logger.info(f"Creating new Supabase connection for client {client_id}")
@@ -81,20 +81,53 @@ class DocumentProcessor:
                 return None
             
             # Get client's Supabase credentials
-            client_settings = client.get('settings', {}) if isinstance(client, dict) else getattr(client, 'settings', {})
-            supabase_settings = client_settings.get('supabase', {}) if isinstance(client_settings, dict) else getattr(client_settings, 'supabase', {})
+            # Check if credentials are stored directly on client record (new structure)
+            if isinstance(client, dict):
+                supabase_url = client.get('supabase_url', '')
+                service_key = client.get('supabase_service_role_key', '')
+            else:
+                supabase_url = getattr(client, 'supabase_url', '')
+                service_key = getattr(client, 'supabase_service_role_key', '')
             
-            supabase_url = supabase_settings.get('url', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'url', '')
-            service_key = supabase_settings.get('service_role_key', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'service_role_key', '')
+            # Fall back to checking settings.supabase (old structure) if not found
+            if not supabase_url or not service_key:
+                client_settings = client.get('settings', {}) if isinstance(client, dict) else getattr(client, 'settings', {})
+                supabase_settings = client_settings.get('supabase', {}) if isinstance(client_settings, dict) else getattr(client_settings, 'supabase', {})
+                
+                if not supabase_url:
+                    supabase_url = supabase_settings.get('url', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'url', '')
+                if not service_key:
+                    service_key = supabase_settings.get('service_role_key', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'service_role_key', '')
             
             if not supabase_url or not service_key:
                 logger.warning(f"Client {client_id} missing Supabase credentials")
                 return None
             
-            # Create and cache client-specific connection
-            client_supabase = create_client(supabase_url, service_key)
-            self.client_supabase_connections[client_id] = client_supabase
-            
+            # Check if this client is using the main Supabase instance
+            from app.config import settings
+            if supabase_url == settings.supabase_url:
+                logger.info(f"Client {client_id} uses main Supabase instance, using admin client")
+                client_supabase = self._ensure_supabase()
+                used_key = settings.supabase_service_role_key
+            else:
+                client_supabase = create_client(supabase_url, service_key)
+                used_key = service_key
+
+            # If we had a cached connection, ensure credentials match; if not, overwrite cache
+            if cached:
+                cached_url = cached.get('url')
+                cached_key = cached.get('key')
+                if cached_url == supabase_url and cached_key == used_key:
+                    # Keep existing cached client
+                    return cached.get('client')
+
+            # Store/refresh cache entry
+            self.client_supabase_connections[client_id] = {
+                'client': client_supabase,
+                'url': supabase_url,
+                'key': used_key,
+            }
+
             return client_supabase
             
         except Exception as e:
@@ -230,13 +263,10 @@ class DocumentProcessor:
                     'file_path': file_path,
                     'mime_type': file_info.get('mime_type'),
                     'upload_date': datetime.now(timezone.utc).isoformat(),
-                    'processing_started': datetime.now(timezone.utc).isoformat()
+                    'processing_started': datetime.now(timezone.utc).isoformat(),
+                    'description': description if description else ''  # Store description in metadata
                 }
             }
-            
-            # Only include description if it's provided and not empty (some client schemas may not have this column)
-            if description and description.strip():
-                document_data['description'] = description
             
             # Use client-specific Supabase if client_id provided
             if client_id:
@@ -277,7 +307,7 @@ class DocumentProcessor:
             # Extract text
             extracted_text = await self._extract_text(file_path)
             if not extracted_text:
-                await self._update_document_status(document_id, 'error', 'Failed to extract text')
+                await self._update_document_status(document_id, 'error', 'Failed to extract text', client_id)
                 return
             
             # Clean and chunk text
@@ -298,6 +328,11 @@ class DocumentProcessor:
                         # Convert to dict if it's a model object
                         if hasattr(client_settings, 'dict'):
                             client_settings = client_settings.dict()
+                        
+                        logger.info(f"[DEBUG] Got client settings for {client_id}")
+                        logger.info(f"[DEBUG] Embedding provider: {client_settings.get('embedding', {}).get('provider')}")
+                        logger.info(f"[DEBUG] API keys available: {list(client_settings.get('api_keys', {}).keys())}")
+                        logger.info(f"[DEBUG] SiliconFlow key present: {'siliconflow_api_key' in client_settings.get('api_keys', {})}")
                 except Exception as e:
                     logger.warning(f"Could not get client settings for embeddings: {e}")
             
@@ -713,32 +748,70 @@ class DocumentProcessor:
             logger.error(f"Error fetching documents: {e}")
             return []
     
-    async def delete_document(self, document_id: str, user_id: str = None) -> bool:
-        """Delete a document and its chunks"""
+    async def delete_document(self, document_id: str, user_id: str = None, client_id: str = None) -> bool:
+        """Delete a document and its chunks from the appropriate client database"""
         try:
-            # Get document info first
-            supabase = self._ensure_supabase()
-            doc_result = supabase.table('documents').select('*').eq('id', document_id).single().execute()
+            # If no client_id provided, we need to find which client owns this document
+            # This is a multi-tenant system where each client has their own database
+            if not client_id:
+                # Try to find the document in each client's database
+                from app.core.dependencies import get_client_service
+                client_service = get_client_service()
+                clients = await client_service.get_all_clients()
+                
+                for client in clients:
+                    try:
+                        client_supabase = await self._get_client_supabase(client.id)
+                        if client_supabase:
+                            # Check if document exists in this client's database
+                            check_result = client_supabase.table('documents').select('id').eq('id', document_id).execute()
+                            if check_result.data:
+                                client_id = client.id
+                                logger.info(f"Found document {document_id} in client {client_id} database")
+                                break
+                    except Exception as e:
+                        logger.debug(f"Document not in client {client.id}: {e}")
+                        continue
+                
+                if not client_id:
+                    logger.error(f"Document {document_id} not found in any client database")
+                    return False
             
-            if not doc_result.data:
+            # Get the client-specific Supabase connection
+            supabase = await self._get_client_supabase(client_id)
+            if not supabase:
+                logger.error(f"Could not get Supabase connection for client {client_id}")
                 return False
             
-            document = doc_result.data
+            # Get document info first
+            doc_result = supabase.table('documents').select('*').eq('id', document_id).execute()
+            
+            if not doc_result.data:
+                logger.error(f"Document {document_id} not found in client {client_id} database")
+                return False
+            
+            document = doc_result.data[0] if isinstance(doc_result.data, list) else doc_result.data
             
             # Check ownership if user_id provided
             if user_id and document.get('user_id') != user_id:
+                logger.error(f"User {user_id} does not own document {document_id}")
                 return False
             
             # Delete physical file if it exists
             metadata = document.get('metadata', {})
             file_path = metadata.get('file_path')
             if file_path and os.path.exists(file_path):
-                os.remove(file_path)
+                try:
+                    os.remove(file_path)
+                    logger.info(f"Deleted physical file: {file_path}")
+                except Exception as e:
+                    logger.warning(f"Could not delete physical file {file_path}: {e}")
             
             # Delete from database (cascades to chunks due to foreign key)
             delete_result = supabase.table('documents').delete().eq('id', document_id).execute()
             
-            return delete_result.data is not None
+            logger.info(f"Successfully deleted document {document_id} from client {client_id} database")
+            return True
             
         except Exception as e:
             logger.error(f"Error deleting document {document_id}: {e}")

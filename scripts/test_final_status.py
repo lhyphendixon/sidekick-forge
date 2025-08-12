@@ -79,7 +79,7 @@ async def main():
         import os
         files = {
             "/opt/autonomite-saas/agent-runtime/Dockerfile": "Agent Dockerfile",
-            "/root/autonomite-agent-platform/docker-compose.yml": "Docker Compose Config",
+            "/root/sidekick-forge/docker-compose.yml": "Docker Compose Config",
             "/opt/autonomite-saas/app/api/v1/containers.py": "Worker Status API",
             "/opt/autonomite-saas/app/api/v1/trigger.py": "Trigger Endpoint",
             "/opt/autonomite-saas/agent-runtime/entrypoint.py": "Worker Entrypoint"
@@ -151,7 +151,7 @@ async def main():
                 
             features = {
                 "LiveKit dispatch": "dispatch_agent_job" in trigger_content and "create_dispatch" in trigger_content,
-                "Worker pool pattern": "agent-worker" in trigger_content or "autonomite-agent" in trigger_content,
+                "Worker pool pattern": "agent-worker" in trigger_content or "sidekick-agent" in trigger_content,
                 "Backend LiveKit": "livekit_manager" in trigger_content,
                 "Job metadata": "job_metadata" in trigger_content
             }

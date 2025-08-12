@@ -512,7 +512,7 @@ class ClientService:
         
         default_clients = [
             {
-                "id": "autonomite-agent",
+                "id": "sidekick-agent",
                 "name": "Autonomite Agent",
                 "description": "First-party agents by Autonomite",
                 "domain": "autonomite.net",

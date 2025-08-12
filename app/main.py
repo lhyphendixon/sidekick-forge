@@ -5,6 +5,11 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
 from datetime import datetime
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file BEFORE importing settings
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 
 from app.config import settings
 from app.api.v1 import api_router
@@ -76,17 +81,18 @@ async def lifespan(app: FastAPI):
     
     logger.info("All services initialized successfully")
     
-    # Sync LiveKit credentials from Autonomite client on startup
+    # Verify platform has valid LiveKit credentials
     try:
-        from app.services.backend_livekit_sync import BackendLiveKitSync
-        logger.info("Syncing LiveKit credentials from Autonomite client...")
-        sync_result = await BackendLiveKitSync.sync_credentials()
-        if sync_result:
-            logger.info("✅ LiveKit credentials synced successfully on startup")
+        from app.services.platform_credential_sync import PlatformCredentialSync
+        logger.info("Verifying platform LiveKit credentials...")
+        valid = await PlatformCredentialSync.verify_platform_credentials()
+        if valid:
+            logger.info("✅ Platform LiveKit credentials are valid")
         else:
-            logger.warning("⚠️ LiveKit credential sync failed - using existing credentials")
+            logger.warning("⚠️ Platform LiveKit credentials are invalid or missing")
+            logger.warning("   Please update LIVEKIT_* variables in .env")
     except Exception as e:
-        logger.error(f"Error syncing LiveKit credentials on startup: {e}")
+        logger.error(f"Error verifying platform credentials: {e}")
     
     yield
     
@@ -150,7 +156,12 @@ except Exception as e:
     logger.warning(f"Multi-tenant routes not loaded: {e}")
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="/root/autonomite-agent-platform/app/static"), name="static")
+import os
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+else:
+    logger.warning(f"Static directory not found at {static_dir}, skipping static file mount")
 
 # Include admin dashboard (full version with all features)
 # Temporarily disabled multi-tenant admin to restore original styling
