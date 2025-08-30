@@ -200,8 +200,10 @@ async def auth_exception_handler(request: Request, exc):
 
 # Include webhook routers
 from app.api.webhooks import livekit_router, supabase_router
+from app.api.embed import router as embed_router
 app.include_router(livekit_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(embed_router)
 
 # Root endpoint
 @app.get("/", tags=["health"])

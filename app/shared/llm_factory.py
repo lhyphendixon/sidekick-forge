@@ -15,6 +15,8 @@ def get_llm(provider: str, model: Optional[str], api_keys: Dict[str, Optional[st
         key = api_keys.get('groq_api_key')
         if not key:
             raise ValueError('Missing API key for Groq')
+            
+        
         # Map legacy Groq model names to current
         if model in ('llama3-70b-8192', 'llama-3.1-70b-versatile'):
             model = 'llama-3.3-70b-versatile'

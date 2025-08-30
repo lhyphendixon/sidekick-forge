@@ -26,6 +26,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         "/docs",
         "/redoc",
         "/openapi.json",
+        "/embed",
+        "/api/embed/",
         "/api/v1/auth/signup",
         "/api/v1/auth/login",
         "/api/v1/wordpress/register",

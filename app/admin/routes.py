@@ -1,6 +1,6 @@
 from fastapi.responses import RedirectResponse
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from typing import Dict, Any, List, Optional
 import redis.asyncio as aioredis
@@ -81,6 +81,13 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 import os
 template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
 templates = Jinja2Templates(directory=template_dir)
+# Inject Supabase settings into Jinja globals so base.html can use them everywhere
+try:
+    from app.config import settings as _settings_for_templates
+    templates.env.globals['supabase_url'] = _settings_for_templates.supabase_url
+    templates.env.globals['supabase_anon_key'] = _settings_for_templates.supabase_anon_key
+except Exception:
+    pass
 
 # Redis connection
 redis_client = None
@@ -253,7 +260,8 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
         clients_ctx = [{"id": c.id, "name": c.name} for c in clients]
     except Exception:
         clients_ctx = []
-    return templates.TemplateResponse("admin/users.html", {"request": request, "user": user, "users": enriched, "clients": clients_ctx})
+    from app.config import settings
+    return templates.TemplateResponse("admin/users.html", {"request": request, "user": user, "users": enriched, "clients": clients_ctx, "supabase_url": settings.supabase_url, "supabase_anon_key": settings.supabase_anon_key})
 
 @router.post("/users/create")
 async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
@@ -2381,127 +2389,55 @@ async def agent_preview_modal(
     agent_slug: str,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Return the agent preview modal"""
-    import uuid
-    import json
-    
+    """Return the agent preview modal that embeds the production embed UI in an iframe"""
     try:
-        logger.info(f"Preview modal requested for client_id={client_id}, agent_slug={agent_slug}")
-        
-        # Get agent details
-        from app.core.dependencies import get_agent_service
-        from app.integrations.supabase_client import supabase_manager
-        
-        agent = None
-        
-        # Handle agents - all agents should go through standard workflow
-        logger.info(f"Handling preview for client_id={client_id}")
-        if False:  # Removed default client ID check - no longer using defaults
-            try:
-                # Ensure supabase_manager is initialized
-                if not supabase_manager._initialized:
-                    logger.info("Initializing supabase_manager")
-                    await supabase_manager.initialize()
-                # Use auth_client (with anon key) instead of admin_client for reading agents
-                logger.info(f"Querying agents table for slug={agent_slug}")
-                result = supabase_manager.auth_client.table('agents').select('*').eq('slug', agent_slug).execute()
-                logger.info(f"Supabase query result: {result.data if result else 'No result'}")
-                if result.data and len(result.data) > 0:
-                    agent_data = result.data[0]
-                    # Convert to agent object format
-                    agent = type('Agent', (), {
-                        'id': agent_data.get('id'),
-                        'slug': agent_data.get('slug'),
-                        'name': agent_data.get('name'),
-                        'description': agent_data.get('description', ''),
-                        'system_prompt': agent_data.get('system_prompt', ''),
-                        'enabled': agent_data.get('enabled', True),
-                        'voice_settings': json.loads(agent_data.get('voice_settings')) if isinstance(agent_data.get('voice_settings'), str) else agent_data.get('voice_settings') or {
-                            'provider': 'openai',
-                            'voice_id': 'alloy',
-                            'temperature': 0.7
-                        },
-                        'webhooks': agent_data.get('webhooks', {}),
-                        'client_id': 'global'
-                    })()
-                else:
-                    logger.info(f"No agent found in database for slug={agent_slug}, using fallback")
-                    # Fallback for testing - create a mock agent
-                    agent = type('Agent', (), {
-                        'id': f'{agent_slug}-global',
-                        'slug': agent_slug,
-                        'name': agent_slug.replace('-', ' ').title(),
-                        'description': 'Test agent for preview',
-                        'system_prompt': 'You are a helpful AI assistant.',
-                        'enabled': True,
-                        'voice_settings': {
-                            'provider': 'openai',
-                            'voice_id': 'alloy',
-                            'temperature': 0.7
-                        },
-                        'webhooks': {},
-                        'client_id': 'global'
-                    })()
-            except Exception as e:
-                logger.error(f"Failed to get global agent: {e}")
-                # Fallback for testing - create a mock agent
-                agent = type('Agent', (), {
-                    'id': f'{agent_slug}-global',
-                    'slug': agent_slug,
-                    'name': agent_slug.replace('-', ' ').title(),
-                    'description': 'Test agent for preview',
-                    'system_prompt': 'You are a helpful AI assistant.',
-                    'enabled': True,
-                    'voice_settings': {
-                        'provider': 'openai',
-                        'voice_id': 'alloy',
-                        'temperature': 0.7
-                    },
-                    'webhooks': {},
-                    'client_id': 'global'
-                })()
-        else:
-            # Use normal agent service for client-specific agents
-            agent_service = get_agent_service()
-            agent = await agent_service.get_agent(client_id, agent_slug)
-        logger.info(f"Agent after loading: {agent}")
-        if not agent:
-            logger.warning(f"Agent not found for {client_id}/{agent_slug}")
-            return HTMLResponse(
-                content="""
-                <div class="fixed inset-0 bg-gray-900 bg-opacity-90 flex items-center justify-center z-50">
-                    <div class="bg-dark-surface p-6 rounded-lg border border-dark-border max-w-md">
-                        <h3 class="text-lg font-medium text-dark-text mb-2">Agent Not Found</h3>
-                        <p class="text-sm text-dark-text-secondary mb-4">The requested agent could not be found.</p>
-                        <button hx-on:click="document.getElementById('modal-container').innerHTML = ''" 
-                                class="btn-primary px-4 py-2 rounded text-sm">Close</button>
-                    </div>
-                </div>
-                """,
-                status_code=404
-            )
-        
-        # Generate a unique session ID for this preview
-        session_id = f"preview_{uuid.uuid4().hex[:8]}"
-        
-        logger.info(f"Rendering template with agent={agent}, session_id={session_id}")
-        return templates.TemplateResponse("admin/partials/agent_preview.html", {
-            "request": request,
-            "agent": agent,
-            "client_id": client_id,
-            "session_id": session_id
-        })
-        
+        logger.info(f"Preview (embed) modal requested for client_id={client_id}, agent_slug={agent_slug}")
+        host = request.base_url.hostname
+        iframe_src = f"https://{host}/embed/{client_id}/{agent_slug}?theme=dark&source=admin"
+        modal_html = f"""
+        <div class=\"fixed inset-0 bg-black/80 flex items-center justify-center z-50\">
+          <div class=\"bg-dark-surface border border-dark-border rounded-lg w-full max-w-3xl h-[80vh] flex flex-col\">
+            <div class=\"flex items-center justify-between p-3 border-b border-dark-border\">
+              <h3 class=\"text-dark-text text-sm\">Preview Sidekick</h3>
+              <button class=\"px-3 py-1 text-sm border border-dark-border rounded\" hx-on:click=\"document.getElementById('modal-container').innerHTML=''\">Close</button>
+            </div>
+            <div class=\"flex-1\">
+              <iframe id=\"embedFrame\" src=\"{iframe_src}\" allow=\"microphone; camera\" referrerpolicy=\"strict-origin-when-cross-origin\" style=\"border:0;width:100%;height:100%\"></iframe>
+            </div>
+          </div>
+          <script>
+            (function(){{
+              try {{
+                var iframe = document.getElementById('embedFrame');
+                if (!iframe) return;
+                iframe.addEventListener('load', async function() {{
+                  try {{
+                    // Use global Supabase client from admin base to get current session
+                    var sb = window.__adminSupabaseClient || null;
+                    if (!sb || !sb.auth || !sb.auth.getSession) return;
+                    var res = await sb.auth.getSession();
+                    var session = (res && res.data && res.data.session) ? res.data.session : null;
+                    if (session && session.access_token && session.refresh_token) {{
+                      iframe.contentWindow.postMessage({{ type: 'supabase-session', access_token: session.access_token, refresh_token: session.refresh_token }}, '*');
+                    }}
+                  }} catch (e) {{ console.warn('[preview->embed] token post failed', e); }}
+                }});
+              }} catch (e) {{ console.warn('[preview modal] init failed', e); }}
+            }})();
+          </script>
+        </div>
+        """
+        return HTMLResponse(content=modal_html)
     except Exception as e:
-        logger.error(f"Error loading agent preview: {e}", exc_info=True)
+        logger.error(f"Error loading embed preview: {e}", exc_info=True)
         return HTMLResponse(
             content=f"""
-            <div class="fixed inset-0 bg-gray-900 bg-opacity-90 flex items-center justify-center z-50">
-                <div class="bg-dark-surface p-6 rounded-lg border border-dark-border max-w-md">
-                    <h3 class="text-lg font-medium text-dark-text mb-2">Error Loading Preview</h3>
-                    <p class="text-sm text-dark-text-secondary mb-4">{str(e)}</p>
-                    <button hx-on:click="document.getElementById('modal-container').innerHTML = ''" 
-                            class="btn-primary px-4 py-2 rounded text-sm">Close</button>
+            <div class=\"fixed inset-0 bg-gray-900 bg-opacity-90 flex items-center justify-center z-50\">
+                <div class=\"bg-dark-surface p-6 rounded-lg border border-dark-border max-w-md\">
+                    <h3 class=\"text-lg font-medium text-dark-text mb-2\">Error Loading Preview</h3>
+                    <p class=\"text-sm text-dark-text-secondary mb-4\">{str(e)}</p>
+                    <button hx-on:click=\"document.getElementById('modal-container').innerHTML = ''\" 
+                            class=\"btn-primary px-4 py-2 rounded text-sm\">Close</button>
                 </div>
             </div>
             """,
@@ -2775,6 +2711,125 @@ async def send_preview_message(
         "request": request,
         "messages": messages,
         "is_loading": False
+    })
+
+
+@router.post("/agents/preview/{client_id}/{agent_slug}/stream")
+async def stream_preview_message(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    message: str = Form(...),
+    session_id: str = Form(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Stream a message reply in preview mode using SSE-like chunking."""
+    from app.core.dependencies import get_agent_service, get_client_service
+    from app.shared.llm_factory import get_llm
+    from livekit.agents import llm as lk_llm
+    import json, asyncio
+
+    async def generate():
+        try:
+            try:
+                logger.info("[preview-stream] start")
+            except Exception:
+                pass
+            # Send an initial SSE comment to open the stream quickly
+            try:
+                yield ":stream-open\n\n"
+            except Exception:
+                pass
+            # Load agent and client
+            agent_service = get_agent_service()
+            client_service = get_client_service()
+            agent = await agent_service.get_agent(client_id, agent_slug)
+            if not agent:
+                yield f"data: {json.dumps({'error': 'Agent not found'})}\n\n"
+                return
+            client = await client_service.get_client(client_id)
+
+            # Build context from preview session history
+            preview_sessions = getattr(request.app.state, 'preview_sessions', {})
+            session_data = preview_sessions.get(session_id, {"messages": [], "conversation_id": None})
+            history = session_data.get("messages", [])
+            ctx = lk_llm.ChatContext()
+            if getattr(agent, 'system_prompt', None):
+                ctx.add_message(role="system", content=agent.system_prompt)
+            for m in history[-10:]:
+                ctx.add_message(role=("user" if m.get("is_user") else "assistant"), content=m.get("content", ""))
+            ctx.add_message(role="user", content=message)
+
+            # Provider/model and keys
+            vs = getattr(agent, 'voice_settings', None)
+            llm_provider = getattr(vs, 'llm_provider', None) or 'openai'
+            llm_model = getattr(vs, 'llm_model', None) or 'gpt-4'
+            api_keys = (getattr(client, 'settings', None) and getattr(client.settings, 'api_keys', None)) or {}
+            api_keys = api_keys.dict() if hasattr(api_keys, 'dict') else {}
+
+            # Init LLM via factory and stream
+            llm = get_llm(llm_provider, llm_model, api_keys)
+            stream = llm.chat(chat_ctx=ctx)
+            full_text = ""
+            # Stream token chunks as they arrive
+            import re
+            async for chunk in stream:
+                delta = None
+                try:
+                    if hasattr(chunk, 'choices') and chunk.choices:
+                        part = getattr(chunk.choices[0], 'delta', None) or getattr(chunk.choices[0], 'message', None)
+                        if part and hasattr(part, 'content') and part.content:
+                            delta = part.content
+                    if not delta and hasattr(chunk, 'content') and chunk.content:
+                        delta = chunk.content
+                    if not delta and hasattr(chunk, 'text') and getattr(chunk, 'text'):
+                        delta = getattr(chunk, 'text')
+                    if not delta and isinstance(chunk, str):
+                        # Some providers can send plain strings; allow those
+                        delta = chunk if chunk.strip() else None
+                    if not delta:
+                        # Regex fallback: extract content='...' fragments from stringified chunk
+                        s = str(chunk)
+                        matches = re.findall(r"content=\'([^\']*)\'", s)
+                        if not matches:
+                            matches = re.findall(r'content=\"([^\"]*)\"', s)
+                        if matches:
+                            delta = ''.join(matches)
+                except Exception:
+                    delta = None
+                if delta:
+                    full_text += delta
+                    # Log length for diagnostics without leaking content
+                    try:
+                        logger.info(f"[preview-stream] delta len={len(delta)}")
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'delta': delta})}\n\n"
+                    await asyncio.sleep(0)
+
+            # Save assistant message back to preview session
+            if not hasattr(request.app.state, 'preview_sessions'):
+                request.app.state.preview_sessions = {}
+            session_data.setdefault("messages", []).append({
+                "message_id": f"asst_{int(asyncio.get_event_loop().time()*1000)}",
+                "role": "assistant",
+                "content": full_text,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metadata": {"agent_slug": agent.slug, "model": llm_model}
+            })
+            request.app.state.preview_sessions[session_id] = session_data
+            try:
+                logger.info(f"[preview-stream] done len={len(full_text)}")
+            except Exception:
+                pass
+            # Send completion with full_text for fallback rendering on client
+            yield f"data: {json.dumps({'done': True, 'full_text': full_text})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
     })
 
 
@@ -3327,6 +3382,29 @@ async def get_trigger_info(
         </div>
     </div>
     """
+
+
+@router.get("/agents/{client_id}/{agent_slug}/embed-code", response_class=HTMLResponse)
+async def embed_code_modal(request: Request, client_id: str, agent_slug: str, admin_user: Dict[str, Any] = Depends(get_admin_user)):
+    host = request.base_url.hostname
+    iframe = f"""<iframe
+src=\"https://{host}/embed/{client_id}/{agent_slug}?theme=dark\"
+style=\"border:0;width:100%;max-width:420px;height:640px\"
+allow=\"microphone; camera\"
+referrerpolicy=\"strict-origin-when-cross-origin\"></iframe>"""
+    return HTMLResponse("""
+<div class=\"fixed inset-0 z-50 flex items-center justify-center bg-black/50\">
+  <div class=\"bg-dark-surface border border-dark-border rounded-lg p-4 max-w-lg w-full\">
+    <h3 class=\"text-lg text-dark-text mb-3\">Copy Embed Code</h3>
+    <textarea id=\"embedCode\" class=\"w-full bg-dark-elevated text-dark-text border border-dark-border rounded p-2\" rows=\"6\" readonly>""" + iframe + """</textarea>
+    <div class=\"mt-3 flex gap-2\">
+      <button class=\"btn-primary px-3 py-2 rounded text-sm\" onclick=\"var b=this; navigator.clipboard.writeText(document.getElementById('embedCode').value).then(function(){ b.disabled=true; var t=b.textContent; b.textContent='Copied!'; setTimeout(function(){ b.textContent=t; b.disabled=false; },1200); });\">Copy</button>
+      <button class=\"px-3 py-2 rounded text-sm border border-dark-border\" hx-on:click=\"document.getElementById('modal-container').innerHTML=''\">Close</button>
+    </div>
+    <p class=\"text-dark-text-secondary text-xs mt-3\">Ensure your site origin is in this Sidekick’s allowlist.</p>
+  </div>
+</div>
+""")
 
 
 @router.get("/monitoring", response_class=HTMLResponse)

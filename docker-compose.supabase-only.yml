@@ -1,0 +1,143 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend - Supabase-only mode
+  sidekick-forge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sidekick-forge-api
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=production
+      - USE_SUPABASE_ONLY=true
+    ports:
+      - "8000:8000"
+    networks:
+      - sidekick-network
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis - For compatibility only (not used for data persistence)
+  redis:
+    image: redis:7-alpine
+    container_name: sidekick-forge-redis
+    command: >
+      redis-server
+      --appendonly no
+      --save ""
+      --maxmemory 128mb
+      --maxmemory-policy noeviction
+    networks:
+      - sidekick-network
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # LiveKit Agent Worker (for "session-agent-rag" jobs) - Production Architecture
+  agent-worker:
+    build:
+      context: ./docker/agent
+      dockerfile: Dockerfile
+    container_name: sidekick-forge-agent-worker
+    env_file:
+      - .env
+    environment:
+      # Core LiveKit configuration
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      
+      # Platform Database configuration  
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      
+      # Worker configuration - match production setup
+      - AGENT_SLUG=session-agent-rag  # Default agent name (matches production)
+      - AGENT_NAME=session-agent-rag  # For compatibility with agent config
+      - SITE_ID=default  # Required by production agent config
+      - LOG_LEVEL=INFO
+      
+      # Voice AI configuration (required for production agent)
+      - STT_PROVIDER=groq
+      - STT_MODEL=whisper-large-v3-turbo
+      - TTS_PROVIDER=openai  
+      - TTS_MODEL=tts-1
+      - VOICE_ID=alloy
+      - MODEL=gpt-4-turbo-preview
+      - TEMPERATURE=0.7
+      - SYSTEM_PROMPT=You are a helpful AI assistant for voice conversations.
+      
+      # API Keys for voice AI functionality
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVEN_LABS_API_KEY}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - CARTESIA_API_KEY=${CARTESIA_API_KEY}
+    networks:
+      - sidekick-network
+    depends_on:
+      - sidekick-forge
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  sidekick-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+
+# No volumes needed - all data persisted in Supabase
+volumes: {}

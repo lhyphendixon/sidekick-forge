@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sidekick Embed</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'brand-teal': '#01a4a6',
+            'brand-orange': '#fc7244',
+            'dark-bg': '#000000',
+            'dark-surface': 'rgb(20, 20, 20)',
+            'dark-elevated': '#252525',
+            'dark-border': '#2a2a2a',
+            'dark-text': '#e0e0e0',
+            'dark-text-secondary': '#a0a0a0'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    html, body { height: 100%; }
+    body { margin: 0; background:#000000; color:#e0e0e0; height:100%; }
+    .htmx-indicator { opacity: 0; transition: opacity 300ms ease; }
+    .htmx-request .htmx-indicator { opacity: 1; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.47.10/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+</head>
+<body>
+  <div class="max-w-md mx-auto p-3 h-full">
+    <div class="bg-dark-surface border border-dark-border rounded-lg h-full flex flex-col">
+      <div id="auth" class="p-4 space-y-2">
+        <h3 class="text-lg text-dark-text">Sign in</h3>
+        <input id="email" class="w-full bg-dark-elevated text-dark-text border border-dark-border rounded p-2" placeholder="email" />
+        <input id="password" class="w-full bg-dark-elevated text-dark-text border border-dark-border rounded p-2" placeholder="password" type="password" />
+        <div class="flex gap-2">
+          <button class="btn-primary px-3 py-2 rounded text-sm" onclick="login()">Login</button>
+          <button class="px-3 py-2 rounded text-sm border border-dark-border" onclick="signup()">Create account</button>
+        </div>
+        <div id="auth-msg" class="text-dark-text-secondary text-sm"></div>
+      </div>
+      <div id="chat" class="hidden flex-1 flex flex-col">
+        <div class="p-3 border-b border-dark-border flex gap-2">
+          <button id="tab-text" class="mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-brand-teal text-white" onclick="switchTab('text')">Text</button>
+          <button id="tab-voice" class="mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border" onclick="switchTab('voice')">Voice</button>
+        </div>
+        <div id="panel-text" class="flex-1 flex flex-col">
+          <div class="flex-1 flex flex-col">
+            <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-4">
+              <div class="text-center text-dark-text-secondary text-sm py-8">
+                <p>Start a conversation with your sidekick</p>
+                <p class="text-xs mt-2">Messages are not saved</p>
+              </div>
+            </div>
+            <div class="border-t border-dark-border p-3">
+              <form onsubmit="return sendMsg(event)" class="flex gap-2">
+                <input id="msg" name="message" placeholder="Type a message..." class="flex-1 bg-dark-elevated border-dark-border text-dark-text rounded-md px-3 py-2 border" autocomplete="off" required />
+                <button type="submit" class="btn-primary px-4 py-2 rounded text-sm font-medium">Send</button>
+              </form>
+            </div>
+          </div>
+        </div>
+        <div id="panel-voice" class="hidden p-4 flex-1 flex flex-col items-center justify-center">
+          <div class="text-dark-text-secondary mb-4 text-center">Start a voice chat with your sidekick.</div>
+          <div class="flex items-center gap-2 mb-2">
+            <button id="voiceStartBtn" class="inline-flex items-center gap-2 px-4 py-2 bg-brand-teal text-white rounded-lg hover:bg-brand-teal/90 transition-all" onclick="startVoice()">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 1a3 3 0 013 3v7a3 3 0 11-6 0V4a3 3 0 013-3zm7 10a7 7 0 01-14 0M5 21h14"/></svg>
+              <span>Start Voice Chat</span>
+            </button>
+            <button id="voiceEndBtn" class="hidden inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-all" onclick="endVoice()">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              <span>End Call</span>
+            </button>
+          </div>
+          <div id="voiceStatus" class="text-xs text-dark-text-secondary text-center"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const CLIENT_ID = "{{ client_id }}";
+    const AGENT_SLUG = "{{ agent_slug }}";
+    const SUPABASE_URL = "{{ supabase_url }}";
+    const SUPABASE_ANON = "{{ supabase_anon_key }}";
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+    let session = null;
+    let manualToken = null; // token provided by parent preview via postMessage
+    const urlParams = new URLSearchParams(location.search);
+    const SOURCE = urlParams.get('source') || '';
+
+    async function ensureSession() {
+      if (manualToken) { return true; }
+      const { data } = await sb.auth.getSession();
+      session = data?.session || null;
+      return !!session;
+    }
+    function setAuthVisible(v) { document.getElementById('auth').classList.toggle('hidden', !v); }
+    function setChatVisible(v) { document.getElementById('chat').classList.toggle('hidden', !v); }
+
+    async function login() {
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const res = await sb.auth.signInWithPassword({ email, password });
+      if (res.error) { document.getElementById('auth-msg').innerText = res.error.message; return; }
+      await ensureSession(); setAuthVisible(false); setChatVisible(true);
+    }
+    async function signup() {
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const res = await sb.auth.signUp({ email, password });
+      if (res.error) { document.getElementById('auth-msg').innerText = res.error.message; return; }
+      document.getElementById('auth-msg').innerText = 'Check your email to confirm.';
+    }
+
+    function switchTab(t) {
+      const textBtn = document.getElementById('tab-text');
+      const voiceBtn = document.getElementById('tab-voice');
+      if (t==='text') {
+        textBtn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-brand-teal text-white';
+        voiceBtn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border';
+        document.getElementById('panel-text').classList.remove('hidden');
+        document.getElementById('panel-voice').classList.add('hidden');
+      } else {
+        voiceBtn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-brand-teal text-white';
+        textBtn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border';
+        document.getElementById('panel-voice').classList.remove('hidden');
+        document.getElementById('panel-text').classList.add('hidden');
+      }
+    }
+
+    function addUser(text) {
+      const wrap = document.createElement('div'); wrap.className='flex justify-end';
+      wrap.innerHTML = `<div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-brand-teal text-white">${text}</div>`;
+      document.getElementById('chatMessages').appendChild(wrap);
+      scrollBottom();
+    }
+    function addAsstHtml(html) {
+      const wrap = document.createElement('div'); wrap.className='flex justify-start';
+      const b = document.createElement('div'); b.className='max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap';
+      b.innerHTML = html; wrap.appendChild(b);
+      document.getElementById('chatMessages').appendChild(wrap);
+      scrollBottom();
+    }
+    function scrollBottom(){ const el = document.getElementById('chatMessages'); el.scrollTop = el.scrollHeight; }
+
+    async function sendMsg(evt){
+      if (evt && evt.preventDefault) evt.preventDefault();
+      const ok = await ensureSession(); if (!ok) { setAuthVisible(true); setChatVisible(false); return false; }
+      const input = document.getElementById('msg');
+      const text = input.value; if (!text) return false;
+      input.value = '';
+      addUser(text);
+      // Insert loading indicator like preview
+      const chatMessages = document.getElementById('chatMessages');
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'flex justify-start';
+      loadingDiv.id = 'tempLoadingIndicator';
+      loadingDiv.innerHTML = `<div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border"><div class="flex space-x-2"><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div></div></div>`;
+      chatMessages.appendChild(loadingDiv);
+      // stream (FormData to match server Form(...))
+      const fd = new FormData(); fd.append('client_id', CLIENT_ID); fd.append('agent_slug', AGENT_SLUG); fd.append('message', text);
+      const bearer = manualToken || (session && session.access_token) || '';
+      const res = await fetch('/api/embed/text/stream', { method: 'POST', body: fd, headers: { Authorization: `Bearer ${bearer}` } });
+      if (!res.ok || !res.body) {
+        const errDiv = document.createElement('div'); errDiv.className='flex justify-start';
+        errDiv.innerHTML = `<div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">Sorry, streaming failed.</div>`;
+        try { chatMessages.replaceChild(errDiv, loadingDiv); } catch { chatMessages.appendChild(errDiv); }
+        return false;
+      }
+      const reader = res.body.getReader(); const decoder = new TextDecoder(); let buf='';
+      let acc = '';
+      const asstDiv = document.createElement('div'); asstDiv.className='flex justify-start';
+      const asstBubble = document.createElement('div'); asstBubble.className='max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap'; asstBubble.textContent=''; asstDiv.appendChild(asstBubble);
+      let inserted = false;
+      while(true){
+        const {value, done} = await reader.read(); if (done) break;
+        buf += decoder.decode(value, {stream:true}); buf = buf.replace(/\r\n/g,'\n');
+        const parts = buf.split('\n\n'); buf = parts.pop();
+        for(const p of parts){ if(!p.startsWith('data: ')) continue; try{
+          const payload = JSON.parse(p.slice(6));
+          if (payload.error) {
+            if (!inserted){ chatMessages.replaceChild(asstDiv, loadingDiv); inserted = true; }
+            const msg = payload.error === 'unauthorized' ? 'Please sign in to chat.' : 'Sorry, streaming failed.';
+            asstBubble.textContent = msg;
+            if (payload.error === 'unauthorized') { setAuthVisible(true); setChatVisible(false); }
+          }
+          if(payload.delta){
+            if (!inserted){ chatMessages.replaceChild(asstDiv, loadingDiv); inserted = true; }
+            acc += String(payload.delta).replace(/\\n/g,'\n');
+            asstBubble.innerHTML = (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(acc)) : acc;
+          }
+          if(payload.done && payload.full_text){
+            if (!inserted){ chatMessages.replaceChild(asstDiv, loadingDiv); inserted = true; }
+            acc = String(payload.full_text).replace(/\\n/g,'\n');
+            asstBubble.innerHTML = (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(acc)) : acc;
+          }
+        }catch{}}
+      }
+      // If stream ended without any insertion, show a fallback message
+      if (!inserted) {
+        const errDiv = document.createElement('div'); errDiv.className='flex justify-start';
+        errDiv.innerHTML = `<div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">No response received.</div>`;
+        try { chatMessages.replaceChild(errDiv, loadingDiv); } catch { chatMessages.appendChild(errDiv); }
+      }
+      return false;
+    }
+
+    let __roomConn = null;
+    async function startVoice(){
+      const ok = await ensureSession(); if (!ok || !(session && session.user && session.user.id)) { setAuthVisible(true); setChatVisible(false); document.getElementById('voiceStatus').textContent = 'Please sign in to start voice.'; return; }
+      const room = `embed_${AGENT_SLUG}_${Date.now()}`;
+      const payload = {
+        agent_slug: AGENT_SLUG,
+        client_id: CLIENT_ID,
+        mode: 'voice',
+        room_name: room,
+        platform: 'livekit',
+        user_id: session.user.id
+      };
+      const bearer = manualToken || (session && session.access_token) || '';
+      const res = await fetch('/api/v1/trigger-agent', { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${bearer}` }, body: JSON.stringify(payload) });
+      const status = document.getElementById('voiceStatus');
+      const startBtn = document.getElementById('voiceStartBtn');
+      const endBtn = document.getElementById('voiceEndBtn');
+      if (!res.ok) { status.textContent = 'Voice start failed.'; return; }
+      const data = await res.json();
+      const info = data?.data?.livekit_config; const server = info?.server_url; const token = info?.user_token;
+      if (!server || !token) { status.textContent = 'Voice start response incomplete.'; return; }
+      status.textContent = 'Connecting…';
+      try {
+        const { Room, RoomEvent, createLocalAudioTrack, ParticipantKind } = window.LivekitClient || window.LiveKit || {};
+        if (!Room) { status.textContent = 'Voice SDK not available.'; return; }
+        const roomConn = new Room();
+        __roomConn = roomConn;
+        startBtn.classList.add('hidden');
+        endBtn.classList.remove('hidden');
+        await roomConn.connect(server, token, { autoSubscribe: true });
+        try { roomConn.on(RoomEvent.ConnectionStateChanged, (state) => { try { console.log('[voice] connection state', state); } catch {} }); } catch {}
+        // Create local mic track with constraints similar to admin preview
+        const mic = await createLocalAudioTrack({
+          echoCancellation: true,
+          noiseSuppression: false,
+          autoGainControl: true,
+        });
+        // Publish with DTX disabled to avoid initial silence
+        await roomConn.localParticipant.publishTrack(mic, {
+          dtx: false,
+          red: false,
+          simulcast: false,
+          maxBitrate: 64000,
+        });
+
+        // Diagnostics: local track published
+        try {
+          roomConn.on(RoomEvent.LocalTrackPublished, (pub) => {
+            try { console.log('[voice] LocalTrackPublished', { kind: pub.kind, trackSid: pub.trackSid }); } catch {}
+          });
+        } catch {}
+        try {
+          roomConn.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+            try { console.log('[voice] ActiveSpeakers', speakers?.map?.(s => ({ id: s.identity, lvl: s.audioLevel })) || speakers); } catch {}
+          });
+        } catch {}
+        roomConn.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+          try { console.log('[voice] TrackSubscribed', track.kind, participant.identity, participant.kind); } catch {}
+          if (track.kind === 'audio') {
+            const el = track.attach(); el.autoplay = true; el.playsInline = true; el.style.display = 'none'; document.body.appendChild(el);
+            try { el.play?.(); } catch {}
+            try { status.textContent = 'Agent audio connected.'; } catch {}
+          }
+        });
+        roomConn.on(RoomEvent.ParticipantConnected, (p) => {
+          try {
+            const agentKind = (ParticipantKind && ParticipantKind.AGENT) || 'agent';
+            if (p && (p.kind === agentKind || String(p.identity||'').toLowerCase().includes('agent'))) {
+              status.textContent = 'Agent connected. You can speak now.';
+            } else {
+              status.textContent = 'Connected. You can speak now.';
+            }
+          } catch {}
+        });
+        roomConn.on(RoomEvent.ParticipantDisconnected, () => { try { status.textContent = 'Participant left.'; } catch {} });
+        // Fallback: after 8s, if no agent or remote audio subscribed, notify user
+        setTimeout(() => {
+          try {
+            const participants = Array.from(roomConn.remoteParticipants.values());
+            const hasAgent = participants.some((rp) => String(rp.identity||'').toLowerCase().includes('agent'));
+            const hasRemoteAudio = participants.some((rp) => Array.from(rp.tracks.values()).some(t => t && t.track && t.track.kind === 'audio'));
+            if (!hasAgent) { status.textContent = 'Waiting for agent to join…'; }
+            else if (!hasRemoteAudio) { status.textContent = 'Agent joined but no audio yet…'; }
+          } catch {}
+        }, 8000);
+        status.textContent = 'Connected. You can speak now.';
+      } catch (e) {
+        status.textContent = 'Connection failed.';
+        startBtn.classList.remove('hidden');
+        endBtn.classList.add('hidden');
+      }
+    }
+
+    async function endVoice(){
+      const status = document.getElementById('voiceStatus');
+      const startBtn = document.getElementById('voiceStartBtn');
+      const endBtn = document.getElementById('voiceEndBtn');
+      try {
+        if (__roomConn) {
+          try {
+            const pubs = Array.from(__roomConn.localParticipant.tracks.values());
+            for (const pub of pubs) { try { await pub.unpublish?.(); } catch {} }
+          } catch {}
+          await __roomConn.disconnect();
+        }
+      } catch {}
+      __roomConn = null;
+      status.textContent = 'Call ended.';
+      endBtn.classList.add('hidden');
+      startBtn.classList.remove('hidden');
+    }
+
+    // Listen for admin preview postMessage with Supabase tokens
+    window.addEventListener('message', async (evt) => {
+      try {
+        const data = evt && evt.data ? evt.data : null;
+        if (!data || data.type !== 'supabase-session') return;
+        if (data.access_token) {
+          manualToken = data.access_token;
+          // If refresh_token is provided, set full Supabase session for a seamless experience
+          if (data.refresh_token && sb && sb.auth && sb.auth.setSession) {
+            try {
+              await sb.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token });
+              const { data: s } = await sb.auth.getSession();
+              session = (s && s.session) ? s.session : null;
+            } catch (e) { /* fallback to manual token only */ }
+          }
+          setAuthVisible(false); setChatVisible(true);
+          try { document.getElementById('voiceStartBtn').disabled = false; } catch {}
+        }
+      } catch {}
+    });
+
+    // If loaded inside admin modal, make subtle style tweaks
+    (function(){
+      if (SOURCE === 'admin') {
+        try { document.body.style.background = 'transparent'; } catch {}
+      }
+    })();
+
+    (async ()=>{ const ok = await ensureSession(); setAuthVisible(!ok); setChatVisible(ok); try { document.getElementById('voiceStartBtn').disabled = !ok; } catch {} })();
+  </script>
+</body>
+</html>
+
+

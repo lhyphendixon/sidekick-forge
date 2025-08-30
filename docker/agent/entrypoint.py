@@ -538,32 +538,8 @@ async def agent_job_handler(ctx: JobContext):
             # Create and configure the voice agent session with instructions
             # In LiveKit SDK v1.0+, AgentSession IS the agent - no separate Agent object is required
             logger.info("Creating voice agent session with system prompt...")
-            # Create session without duplicating plugins; Agent will own stt/llm/tts/vad
-            session = voice.AgentSession(
-                turn_detection="stt",
-                min_endpointing_delay=0.25,
-                max_endpointing_delay=3.0,
-            )
-            logger.info("✅ Voice agent session created (turn_detection='stt', Deepgram endpointing_ms=500)")
-            
-            # Minimal diagnostics; rely on AgentSession automatic conversation flow
-            logger.info(f"📊 DIAGNOSTIC: Session type: {type(session)}")
-            logger.info(f"📊 DIAGNOSTIC: Session attributes (sample): {[attr for attr in dir(session) if not attr.startswith('_')][:20]}")
-            
-            # Store references for event handlers
-            ctx.context_manager = context_manager
-            ctx.original_system_prompt = system_prompt
-            ctx.client_supabase = client_supabase if 'client_supabase' in locals() else None
-            ctx.conversation_id = metadata.get("conversation_id") or f"voice_{ctx.room.name}_{ctx.user_id}"
-            ctx.last_user_message = None  # Track last user message for turn storage
-            
-            # Conversation flow is automatic; avoid manual event-driven flow
-            logger.info("Using AgentSession automatic flow (v1.0 pattern)")
-            
-            # Optional: minimal participant/track logging can be reintroduced for diagnostics if needed
-            
-            # Start the session - LiveKit Agents v1.2.2 requires an Agent instance
-            logger.info("Starting agent session (v1.2.2 requires agent param)...")
+            # Create SidekickAgent directly - eliminate nested AgentSession + voice.Agent architecture
+            # This fixes duplicate event handling by using single layer architecture
             agent = SidekickAgent(
                 instructions=enhanced_prompt,
                 stt=stt_plugin,
@@ -573,166 +549,44 @@ async def agent_job_handler(ctx: JobContext):
                 context_manager=context_manager,
                 user_id=ctx.user_id,
             )
-            await session.start(agent=agent, room=ctx.room)
-
-            # Minimal diagnostic event logs for STT/LLM/TTS flow and reply triggering
-            try:
-                if hasattr(session, 'on'):
-                    # Plugin introspection
-                    try:
-                        llm_obj = getattr(session, 'llm', None)
-                        logger.info(f"🔎 session.llm type: {type(llm_obj)}")
-                        current_agent = getattr(session, 'current_agent', None)
-                        if current_agent is not None:
-                            stt_t = type(getattr(current_agent, 'stt', None))
-                            llm_t = type(getattr(current_agent, 'llm', None))
-                            tts_t = type(getattr(current_agent, 'tts', None))
-                            vad_t = type(getattr(current_agent, 'vad', None))
-                            logger.info(f"🔎 current_agent plugin types: stt={stt_t}, llm={llm_t}, tts={tts_t}, vad={vad_t}")
-                    except Exception as e:
-                        logger.warning(f"Plugin introspection failed: {type(e).__name__}: {e}")
-
-                    # Helper to register and log robustly
-                    def _safe_register(event_name, callback):
-                        try:
-                            session.on(event_name)(callback)
-                            logger.info(f"🔔 Registered session event handler for '{event_name}'")
-                        except Exception as err:
-                            logger.debug(f"Could not register handler for '{event_name}': {type(err).__name__}: {err}")
-
-                    # Capture latest transcript (multiple event names across SDKs)
-                    @session.on("transcription_final")
-                    def _capture_transcription_final(evt):
-                        try:
-                            text = getattr(evt, "text", None)
-                            if isinstance(text, str) and text.strip():
-                                setattr(session, "latest_user_text", text.strip())
-                                logger.info(f"🧾 final transcript captured: '{text[:120]}' (transcription_final)")
-                        except Exception:
-                            pass
-
-                    @session.on("transcription_finalized")
-                    def _capture_transcription_finalized(evt):
-                        try:
-                            text = getattr(evt, "text", None)
-                            if isinstance(text, str) and text.strip():
-                                setattr(session, "latest_user_text", text.strip())
-                                logger.info(f"🧾 final transcript captured: '{text[:120]}' (transcription_finalized)")
-                        except Exception:
-                            pass
-
-                    # Input-level STT finals for robustness
-                    if hasattr(session, "input") and hasattr(session.input, "on"):
-                        try:
-                            @session.input.on("transcription_final")
-                            def _input_transcription_final(evt):
-                                try:
-                                    text = getattr(evt, "text", None)
-                                    if isinstance(text, str) and text.strip():
-                                        setattr(session, "latest_user_text", text.strip())
-                                        logger.info(f"🧾 input final transcript: '{text[:120]}'")
-                                except Exception:
-                                    pass
-                        except Exception:
-                            logger.debug("Could not register input transcription_final handler")
-
-                    # Track and store complete turns
-                    turn_info = {"user_message": None, "agent_response": None}
-
-                    @session.on("user_speech_committed")
-                    def _log_user_turn(committed_msg):
-                        try:
-                            content = getattr(committed_msg, "content", None)
-                            preview = None
-                            captured = None
-                            if isinstance(content, str) and content.strip():
-                                preview = content
-                                captured = content.strip()
-                            elif isinstance(content, list):
-                                for part in content:
-                                    if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
-                                        preview = part.get("text")
-                                        captured = preview.strip()
-                                        break
-                            logger.info(f"📝 user_speech_committed: {str(preview)[:160] if preview else '[no content]'}")
-                            if captured:
-                                setattr(session, "latest_user_text", captured)
-                                turn_info["user_message"] = captured
-                            else:
-                                # As a fallback, if we captured a final transcript earlier, bind it now
-                                try:
-                                    if hasattr(session, "latest_user_text") and isinstance(session.latest_user_text, str) and session.latest_user_text.strip():
-                                        turn_info["user_message"] = session.latest_user_text.strip()
-                                        logger.info("🧾 user_speech_committed fallback used latest_user_text")
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-
-                    @session.on("agent_speech_committed")
-                    def _log_agent_turn(committed_msg):
-                        try:
-                            content = getattr(committed_msg, "content", None)
-                            preview = content if isinstance(content, str) else str(content)
-                            logger.info(f"🗣️ agent_speech_committed: {str(preview)[:160] if preview else '[no content]'}")
-                        except Exception:
-                            pass
-                        # Also extract and persist turn if we have both sides
-                        try:
-                            content = getattr(committed_msg, "content", None)
-                            captured = None
-                            if isinstance(content, str) and content.strip():
-                                captured = content.strip()
-                            elif isinstance(content, list):
-                                for part in content:
-                                    if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
-                                        captured = part.get("text").strip()
-                                        break
-                            if captured:
-                                turn_info["agent_response"] = captured
-                                if turn_info.get("user_message") and turn_info.get("agent_response") and getattr(ctx, 'client_supabase', None):
-                                    logger.info("✅ Turn complete. Storing in database...")
-                                    try:
-                                        asyncio.create_task(
-                                            _store_voice_turn(
-                                                supabase_client=ctx.client_supabase,
-                                                user_id=ctx.user_id,
-                                                agent_id=metadata.get("agent_id", "unknown"),
-                                                conversation_id=ctx.conversation_id,
-                                                user_message=turn_info["user_message"],
-                                                agent_response=turn_info["agent_response"],
-                                            )
-                                        )
-                                    except Exception as e:
-                                        logger.warning(f"Failed to schedule turn storage: {type(e).__name__}: {e}")
-                                    finally:
-                                        turn_info["user_message"] = None
-                                        turn_info["agent_response"] = None
-                        except Exception:
-                            pass
-
-                    # Simple logger for miscellaneous events
-                    def _generic_logger(event_label):
-                        def _inner(*args, **kwargs):
-                            logger.info(f"🔎 event '{event_label}' fired with args={len(args)} kwargs={len(kwargs)}")
-                        return _inner
-
-                    for ev in [
-                        "user_started_speaking",
-                        "user_stopped_speaking",
-                        "transcription_updated",
-                        "vad_event",
-                    ]:
-                        _safe_register(ev, _generic_logger(ev))
-            except Exception as e:
-                logger.warning(f"Could not register diagnostic event logs: {type(e).__name__}: {e}")
+            logger.info("✅ Voice agent created with single-layer architecture")
             
-            # Log session state after starting
-            logger.info("📊 Post-start session inspection:")
-            if hasattr(session, '_started'):
-                logger.info(f"   Session started: {getattr(session, '_started', True)}")
-            if hasattr(session, '_room'):
-                logger.info(f"   Session has room: {hasattr(session, '_room')}")
+            # Store references for event handlers in agent
+            agent._room = ctx.room  # Store room reference for agent use
+            agent._conversation_id = metadata.get("conversation_id") or f"voice_{ctx.room.name}_{ctx.user_id}"
+            agent._client_supabase = client_supabase if 'client_supabase' in locals() else None
+            
+            logger.info(f"📊 DIAGNOSTIC: Agent type: {type(agent)}")
+            logger.info(f"📊 DIAGNOSTIC: Agent inherits from: {type(agent).__bases__}")
+            
+            # Start agent directly with room - no nested AgentSession wrapper
+            logger.info("Starting agent directly (eliminating nested architecture)...")
+            await agent.start(ctx.room)
+
+            # Minimal diagnostic event logs for agent plugin configuration
+            try:
+                # Plugin introspection for the agent
+                try:
+                    stt_t = type(getattr(agent, 'stt', None))
+                    llm_t = type(getattr(agent, 'llm', None))
+                    tts_t = type(getattr(agent, 'tts', None))
+                    vad_t = type(getattr(agent, 'vad', None))
+                    logger.info(f"🔎 Agent plugin types: stt={stt_t}, llm={llm_t}, tts={tts_t}, vad={vad_t}")
+                except Exception as e:
+                    logger.warning(f"Plugin introspection failed: {type(e).__name__}: {e}")
+
+                # Event handling is now fully delegated to the SidekickAgent class
+                # This eliminates duplicate event processing that was causing double responses
+                logger.info("🔔 Event handling delegated to SidekickAgent - no duplicate session handlers")
+            except Exception as e:
+                logger.warning(f"Could not complete diagnostic inspection: {type(e).__name__}: {e}")
+            
+            # Log agent state after starting
+            logger.info("📊 Post-start agent inspection:")
+            if hasattr(agent, '_started'):
+                logger.info(f"   Agent started: {getattr(agent, '_started', True)}")
+            if hasattr(agent, '_room'):
+                logger.info(f"   Agent has room: {hasattr(agent, '_room')}")
             
             # Log successful start
             logger.info(f"✅ Agent session started successfully in room: {ctx.room.name}")
@@ -740,31 +594,27 @@ async def agent_job_handler(ctx: JobContext):
             logger.info(f"   - STT: {stt_provider}")
             logger.info(f"   - TTS: {tts_provider}")
             
-            # Store session reference for the job lifecycle
-            ctx.session = session
+            # Store agent reference for the job lifecycle
+            ctx.agent = agent
             
             # Optional proactive greeting after successful start
             if os.getenv("DISABLE_PROACTIVE_GREETING", "false").lower() != "true":
                 greeting_message = f"Hi {user_name}, how can I help you?"
                 async def _try_greet():
                     try:
-                        if hasattr(session, "say") and callable(getattr(session, "say")):
-                            await asyncio.wait_for(session.say(greeting_message), timeout=5.0)
-                            logger.info("✅ Proactive greeting delivered via session.say()")
-                        elif hasattr(session, "generate_reply") and callable(getattr(session, "generate_reply")):
-                            instr = f"Say exactly this greeting: '{greeting_message}'"
-                            await asyncio.wait_for(session.generate_reply(instructions=instr), timeout=5.0)
-                            logger.info("✅ Proactive greeting delivered via session.generate_reply()")
+                        if hasattr(agent, "say") and callable(getattr(agent, "say")):
+                            await asyncio.wait_for(agent.say(greeting_message), timeout=5.0)
+                            logger.info("✅ Proactive greeting delivered via agent.say()")
                         else:
-                            logger.info("⚠️ No greeting method available on session; skipping proactive greeting")
+                            logger.info("⚠️ No greeting method available on agent; skipping proactive greeting")
                     except Exception as e:
                         logger.warning(f"Proactive greeting failed or timed out: {type(e).__name__}: {e}")
                 asyncio.create_task(_try_greet())
             else:
                 logger.info("Proactive greeting disabled via DISABLE_PROACTIVE_GREETING=true")
 
-            # Conversation flow is automatic in AgentSession; no forced replies
-            logger.info("✅ Agent ready - automatic STT→LLM→TTS flow engaged (v1.0 pattern)")
+            # Conversation flow is automatic in SidekickAgent; no forced replies
+            logger.info("✅ Agent ready - automatic STT→LLM→TTS flow engaged (single-layer pattern)")
             
             # Remove deprecated commented greeting block (cleaned)
             
@@ -805,12 +655,12 @@ async def agent_job_handler(ctx: JobContext):
                 logger.warning(f"Could not check participants: {e}")
                 # Continue - the session will handle participant events
             
-            # Keep the agent alive by waiting for the session to complete
-            # The session will handle room events and manage its own lifecycle
-            logger.info("Agent session is running. Waiting for completion...")
+            # Keep the agent alive by waiting for the room to close
+            # The agent will handle room events and manage its own lifecycle
+            logger.info("Agent is running. Waiting for completion...")
             
-            # The session runs until the room closes or all participants disconnect
-            # We need to keep this coroutine alive while the session is active
+            # The agent runs until the room closes or all participants disconnect
+            # We need to keep this coroutine alive while the agent is active
             try:
                 # Wait for the room to disconnect or session to end
                 while ctx.room.isconnected() if hasattr(ctx.room, 'isconnected') else True:
@@ -821,23 +671,23 @@ async def agent_job_handler(ctx: JobContext):
                         participants_count = len(ctx.room.remote_participants) if hasattr(ctx.room, 'remote_participants') else 0
                         logger.info(f"💓 Agent heartbeat - Room: {ctx.room.name}, Participants: {participants_count}")
                 
-                logger.info("Room disconnected or session ended. Agent shutting down.")
+                logger.info("Room disconnected or agent ended. Agent shutting down.")
                 
             except Exception as e:
                 logger.error(f"Error in session wait loop: {e}")
                 # Continue to cleanup
             
             # Clean shutdown
-            if hasattr(ctx, 'session') and ctx.session:
-                logger.info("Cleaning up agent session...")
-                # Session cleanup happens automatically
+            if hasattr(ctx, 'agent') and ctx.agent:
+                logger.info("Cleaning up agent...")
+                # Agent cleanup happens automatically
             
         except ConfigurationError as e:
             # Configuration errors are fatal - don't try to recover
             logger.error(f"❌ Configuration error: {e}")
             raise
         except Exception as e:
-            logger.error(f"❌ Agent session failed: {e}", exc_info=True)
+            logger.error(f"❌ Agent failed: {e}", exc_info=True)
             # Log the type of error for better debugging
             logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Error details: {str(e)}")

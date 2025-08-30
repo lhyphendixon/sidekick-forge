@@ -654,6 +654,7 @@ async def handle_text_trigger(
         from app.shared.llm_factory import get_llm
         from livekit.agents import llm as lk_llm
         
+        
         llm_plugin = None
         llm_plugin = get_llm(llm_provider, llm_model, api_keys)
         logger.info(f"✅ Initialized {llm_provider} LLM with model: {llm_model}")

@@ -117,6 +117,16 @@
                     </svg>
                     Preview Sidekick
                 </button>
+                <button
+                    hx-get="/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/embed-code"
+                    hx-target="#modal-container"
+                    hx-swap="innerHTML"
+                    class="w-full mt-2 px-4 py-2 rounded text-sm font-medium transition-all flex items-center justify-center gap-2 border border-dark-border text-dark-text hover:bg-dark-elevated">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16h8M8 12h8m-9 8h10a2 2 0 002-2V6a2 2 0 00-2-2H9l-3 3v13a2 2 0 002 2z"/>
+                  </svg>
+                  Copy Embed
+                </button>
                 {% else %}
                 <button disabled
                         class="w-full bg-dark-elevated text-dark-text-secondary px-4 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 cursor-not-allowed opacity-50">

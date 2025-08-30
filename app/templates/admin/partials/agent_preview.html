@@ -76,11 +76,7 @@
                         
                         <!-- Input Area -->
                         <div class="border-t border-dark-border p-4">
-                            <form hx-post="/admin/agents/preview/{{ client_id }}/{{ agent.slug }}/send"
-                                  hx-target="#chatMessages"
-                                  hx-swap="innerHTML"
-                                  hx-on::before-request="window.addUserMessageToChat(this)"
-                                  hx-on::after-request="this.reset()"
+                            <form onsubmit="return window.startStreamingAndCancel(event, this)"
                                   class="flex gap-2">
                                 <input type="hidden" name="session_id" value="{{ session_id }}">
                                 <input type="text" 
@@ -94,6 +90,10 @@
                                         class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all">
                                     Send
                                 </button>
+                            </form>
+                            <form id="streamForm" class="hidden">
+                                <input type="hidden" name="session_id" value="{{ session_id }}">
+                                <input type="hidden" name="message" id="streamMessage">
                             </form>
                         </div>
                     </div>
@@ -136,11 +136,26 @@
         window.previewCurrentMode = 'text';
     }
     
-    // Function to add user message to chat immediately
-    window.addUserMessageToChat = function(form) {
+    // Load markdown + sanitizer if not already present
+    if (!window.marked) {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
+        document.head.appendChild(s);
+    }
+    if (!window.DOMPurify) {
+        const s2 = document.createElement('script');
+        s2.src = 'https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js';
+        document.head.appendChild(s2);
+    }
+
+    // Start streaming and cancel default submit
+    window.startStreamingAndCancel = function(evt, form) {
+        if (evt && typeof evt.preventDefault === 'function') {
+            evt.preventDefault();
+        }
         const messageInput = form.querySelector('#messageInput');
         const message = messageInput.value;
-        if (!message) return;
+        if (!message) return false;
         
         const chatMessages = document.getElementById('chatMessages');
         
@@ -179,6 +194,120 @@
         
         // Scroll to bottom
         chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        // Clear the input immediately
+        messageInput.value = '';
+
+        // Start streaming via EventSource-like fetch of SSE
+        const streamUrl = `/admin/agents/preview/${encodeURIComponent('{{ client_id }}')}/${encodeURIComponent('{{ agent.slug }}')}/stream`;
+        const formData = new FormData();
+        formData.append('session_id', '{{ session_id }}');
+        formData.append('message', message);
+
+        // HTMX submission already prevented via evt.preventDefault above
+
+        fetch(streamUrl, { method: 'POST', body: formData })
+          .then(async (res) => {
+            if (!res.ok || !res.body) {
+              asstBubble.textContent = 'Sorry, no stream available.';
+              chatMessages.scrollTop = chatMessages.scrollHeight;
+              return;
+            }
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            // Prepare assistant bubble but do NOT insert until first meaningful text
+            const asstDiv = document.createElement('div');
+            asstDiv.className = 'flex justify-start';
+            const asstBubble = document.createElement('div');
+            asstBubble.className = 'max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap';
+            asstBubble.textContent = '';
+            asstDiv.appendChild(asstBubble);
+            let inserted = false;
+
+            let gotDelta = false;
+            let aggText = '';
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              // normalize CRLF to LF for robust splitting
+              buffer = buffer.replace(/\r\n/g, '\n');
+              // Parse SSE lines
+              const parts = buffer.split('\n\n');
+              buffer = parts.pop();
+              for (const msg of parts) {
+                if (!msg.startsWith('data: ')) continue;
+                const payload = msg.slice(6);
+                try {
+                  const data = JSON.parse(payload);
+                  if (data.error) {
+                    if (!inserted) {
+                      chatMessages.replaceChild(asstDiv, loadingDiv);
+                      inserted = true;
+                    }
+                    asstBubble.textContent = 'Sorry, streaming failed. Please retry.';
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                    continue;
+                  }
+                  if (data.delta) {
+                    gotDelta = true;
+                    if (!inserted) {
+                      chatMessages.replaceChild(asstDiv, loadingDiv);
+                      inserted = true;
+                    }
+                    // Normalize literal \n to real newlines so paragraphs render
+                    const normalizedDelta = String(data.delta).replace(/\\n/g, '\n');
+                    aggText += normalizedDelta;
+                    try {
+                      if (window.marked && window.DOMPurify) {
+                        asstBubble.innerHTML = DOMPurify.sanitize(marked.parse(aggText));
+                      } else {
+                        asstBubble.textContent = aggText;
+                      }
+                    } catch {
+                      asstBubble.textContent = aggText;
+                    }
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                  }
+                  if (data.done) {
+                    if (!inserted && (data.full_text && data.full_text.length)) {
+                      chatMessages.replaceChild(asstDiv, loadingDiv);
+                      inserted = true;
+                    }
+                    if (data.full_text) {
+                      // Normalize literal \n to real newlines
+                      aggText = String(data.full_text).replace(/\\n/g, '\n');
+                      try {
+                        if (window.marked && window.DOMPurify) {
+                          asstBubble.innerHTML = DOMPurify.sanitize(marked.parse(aggText));
+                        } else {
+                          asstBubble.textContent = aggText;
+                        }
+                      } catch {
+                        asstBubble.textContent = aggText;
+                      }
+                    }
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                  }
+                } catch {}
+              }
+            }
+            // If stream ended without insertion but we have any buffered text in bubble, insert now
+            if (!inserted && asstBubble.textContent && asstBubble.textContent.length) {
+              chatMessages.replaceChild(asstDiv, loadingDiv);
+            }
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+          })
+          .catch(() => {
+            try {
+              const errDiv = document.createElement('div');
+              errDiv.className = 'flex justify-start';
+              errDiv.innerHTML = `<div class=\"max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border\">Sorry, streaming failed. Please retry.</div>`;
+              chatMessages.replaceChild(errDiv, loadingDiv);
+            } catch {}
+          });
+        return false;
     }
     
     // Function to update button styles

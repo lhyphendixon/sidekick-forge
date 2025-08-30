@@ -320,15 +320,22 @@ async def ensure_livekit_room_exists(
             "created_at": datetime.now().isoformat()
         })
         
-        # Create room
+        # Create room (without auto-dispatch to prevent dual dispatch)
         room_info = await livekit_manager.create_room(
             name=room_name,
             empty_timeout=1800,
             max_participants=10,
             metadata=json.dumps(room_metadata),
-            enable_agent_dispatch=True,
-            agent_name=agent_slug if agent_slug else "sidekick-agent"
+            enable_agent_dispatch=False  # Disable auto-dispatch to prevent dual dispatch
         )
+        
+        # Explicit agent dispatch (prevents dual dispatch issue)
+        dispatch_request = api.CreateAgentDispatchRequest(
+            room=room_name,
+            metadata=json.dumps(room_metadata),
+            agent_name="sidekick-agent"
+        )
+        dispatch_response = await livekit_manager.livekit_api.agent_dispatch.create_dispatch(dispatch_request)
         
         logger.info(f"✅ Created room {room_name} successfully")
         

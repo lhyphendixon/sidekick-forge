@@ -86,6 +86,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Agent configuration
       - AGENT_NAME=sidekick-agent
+      - DISABLE_PROACTIVE_GREETING=true
       # Supabase configuration for API key fallback
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}

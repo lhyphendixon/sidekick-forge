@@ -292,9 +292,11 @@
         }
         
         // Initialize Supabase client for logout
-        const supabaseUrl = 'https://yuowazxcxwhczywurmmw.supabase.co';
-        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODQ1NzMsImV4cCI6MjA1MTM2MDU3M30.SmqTIWrScKQWkJ2_PICWVJYpRSKfvqkRcjMMt0ApH1U';
+        const supabaseUrl = '{{ supabase_url }}';
+        const supabaseKey = '{{ supabase_anon_key }}';
         const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+        // Expose the admin Supabase client for child iframes (embed preview) to read session
+        try { window.__adminSupabaseClient = supabase; } catch (e) { }
         
         // Logout function
         async function logout() {

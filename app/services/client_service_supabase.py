@@ -392,13 +392,18 @@ class ClientService:
                     )
                     logger.info(f"[TIMING] fetch_settings_from_supabase took {time.time() - fetch_start:.2f}s")
                     
-                    # Update client settings with synced data
+                    # Update client settings with synced data - PRESERVE VALID PLATFORM KEYS
                     if synced_settings.get('api_keys'):
                         if not client.settings.api_keys:
                             client.settings.api_keys = APIKeys()
                         for key, value in synced_settings['api_keys'].items():
                             if value and hasattr(client.settings.api_keys, key):
-                                setattr(client.settings.api_keys, key, value)
+                                # Only overwrite if the platform key is missing or empty
+                                # This prevents auto-sync from overwriting valid platform keys with invalid client keys
+                                current_platform_value = getattr(client.settings.api_keys, key, None)
+                                if not current_platform_value:
+                                    setattr(client.settings.api_keys, key, value)
+                                # Otherwise, keep the valid platform key
                     
                     # Update the client in database with synced API keys
                     update_start = time.time()
