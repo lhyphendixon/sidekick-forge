@@ -3389,7 +3389,7 @@ async def embed_code_modal(request: Request, client_id: str, agent_slug: str, ad
     host = request.base_url.hostname
     iframe = f"""<iframe
 src=\"https://{host}/embed/{client_id}/{agent_slug}?theme=dark\"
-style=\"border:0;width:100%;max-width:420px;height:640px\"
+style=\"border:0;width:100%;max-width:800px;height:640px\"
 allow=\"microphone; camera\"
 referrerpolicy=\"strict-origin-when-cross-origin\"></iframe>"""
     return HTMLResponse("""

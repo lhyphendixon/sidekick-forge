@@ -33,9 +33,11 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/css/citations.css">
+  <script src="/static/js/citations.js"></script>
 </head>
 <body>
-  <div class="max-w-md mx-auto p-3 h-full">
+  <div class="mx-auto p-3 h-full" style="max-width: 800px;">
     <div class="bg-dark-surface border border-dark-border rounded-lg h-full flex flex-col">
       <div id="auth" class="p-4 space-y-2">
         <h3 class="text-lg text-dark-text">Sign in</h3>
@@ -96,6 +98,9 @@
     let manualToken = null; // token provided by parent preview via postMessage
     const urlParams = new URLSearchParams(location.search);
     const SOURCE = urlParams.get('source') || '';
+    
+    // Initialize citations component
+    const citationsComponent = new CitationsComponent();
 
     async function ensureSession() {
       if (manualToken) { return true; }
@@ -139,13 +144,13 @@
 
     function addUser(text) {
       const wrap = document.createElement('div'); wrap.className='flex justify-end';
-      wrap.innerHTML = `<div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-brand-teal text-white">${text}</div>`;
+      wrap.innerHTML = `<div class="w-3/4 px-4 py-2 rounded-lg bg-brand-teal text-white">${text}</div>`;
       document.getElementById('chatMessages').appendChild(wrap);
       scrollBottom();
     }
     function addAsstHtml(html) {
       const wrap = document.createElement('div'); wrap.className='flex justify-start';
-      const b = document.createElement('div'); b.className='max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap';
+      const b = document.createElement('div'); b.className='w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap';
       b.innerHTML = html; wrap.appendChild(b);
       document.getElementById('chatMessages').appendChild(wrap);
       scrollBottom();
@@ -164,7 +169,7 @@
       const loadingDiv = document.createElement('div');
       loadingDiv.className = 'flex justify-start';
       loadingDiv.id = 'tempLoadingIndicator';
-      loadingDiv.innerHTML = `<div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border"><div class="flex space-x-2"><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div></div></div>`;
+      loadingDiv.innerHTML = `<div class="w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border"><div class="flex space-x-2"><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div></div></div>`;
       chatMessages.appendChild(loadingDiv);
       // stream (FormData to match server Form(...))
       const fd = new FormData(); fd.append('client_id', CLIENT_ID); fd.append('agent_slug', AGENT_SLUG); fd.append('message', text);
@@ -172,14 +177,14 @@
       const res = await fetch('/api/embed/text/stream', { method: 'POST', body: fd, headers: { Authorization: `Bearer ${bearer}` } });
       if (!res.ok || !res.body) {
         const errDiv = document.createElement('div'); errDiv.className='flex justify-start';
-        errDiv.innerHTML = `<div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">Sorry, streaming failed.</div>`;
+        errDiv.innerHTML = `<div class="w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">Sorry, streaming failed.</div>`;
         try { chatMessages.replaceChild(errDiv, loadingDiv); } catch { chatMessages.appendChild(errDiv); }
         return false;
       }
       const reader = res.body.getReader(); const decoder = new TextDecoder(); let buf='';
       let acc = '';
-      const asstDiv = document.createElement('div'); asstDiv.className='flex justify-start';
-      const asstBubble = document.createElement('div'); asstBubble.className='max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap'; asstBubble.textContent=''; asstDiv.appendChild(asstBubble);
+      const asstDiv = document.createElement('div'); asstDiv.className='flex flex-col items-start';
+      const asstBubble = document.createElement('div'); asstBubble.className='w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap'; asstBubble.textContent=''; asstDiv.appendChild(asstBubble);
       let inserted = false;
       while(true){
         const {value, done} = await reader.read(); if (done) break;
@@ -202,13 +207,25 @@
             if (!inserted){ chatMessages.replaceChild(asstDiv, loadingDiv); inserted = true; }
             acc = String(payload.full_text).replace(/\\n/g,'\n');
             asstBubble.innerHTML = (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(acc)) : acc;
+            
+            // Handle citations if present
+            if (payload.citations && payload.citations.length > 0) {
+              const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+              const citationsElement = citationsComponent.render(payload.citations, messageId);
+              if (citationsElement) {
+                // Add compact class for embed context
+                citationsElement.classList.add('compact');
+                asstDiv.appendChild(citationsElement);
+                scrollBottom();
+              }
+            }
           }
         }catch{}}
       }
       // If stream ended without any insertion, show a fallback message
       if (!inserted) {
         const errDiv = document.createElement('div'); errDiv.className='flex justify-start';
-        errDiv.innerHTML = `<div class="max-w-xs lg:max-w-md px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">No response received.</div>`;
+        errDiv.innerHTML = `<div class="w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">No response received.</div>`;
         try { chatMessages.replaceChild(errDiv, loadingDiv); } catch { chatMessages.appendChild(errDiv); }
       }
       return false;

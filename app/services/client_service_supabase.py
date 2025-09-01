@@ -285,7 +285,7 @@ class ClientService:
                 "active": True,
                 "settings": {
                     "supabase": {
-                        "url": "https://yuowazxcxwhczywurmmw.supabase.co",
+                        "url": os.getenv("CLIENT_SUPABASE_URL", settings.supabase_url),
                         "anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODQ1NzMsImV4cCI6MjA1MTM2MDU3M30.SmqTIWrScKQWkJ2_PICWVJYpRSKfvqkRcjMMt0ApH1U",
                         "service_role_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY"
                     },
@@ -317,7 +317,7 @@ class ClientService:
                 "active": True,
                 "settings": {
                     "supabase": {
-                        "url": "https://pending.supabase.co",
+                        "url": settings.supabase_url,
                         "anon_key": "",
                         "service_role_key": ""
                     },

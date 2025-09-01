@@ -80,6 +80,9 @@ class Agent(BaseModel):
     # Tools configuration (stored as JSON)
     tools_config: Optional[Dict[str, Any]] = Field(None, description="Agent-specific tools configuration")
     
+    # Citations feature flag
+    show_citations: bool = Field(default=True, description="Whether to show RAG citations in responses")
+    
     class Config:
         json_encoders = {
             datetime: lambda v: v.isoformat()
@@ -98,6 +101,7 @@ class AgentCreate(BaseModel):
     webhooks: Optional[WebhookSettings] = None
     enabled: bool = True
     tools_config: Optional[Dict[str, Any]] = None
+    show_citations: Optional[bool] = None
 
 
 class AgentUpdate(BaseModel):
@@ -110,6 +114,7 @@ class AgentUpdate(BaseModel):
     webhooks: Optional[WebhookSettings] = None
     enabled: Optional[bool] = None
     tools_config: Optional[Dict[str, Any]] = None
+    show_citations: Optional[bool] = None
 
 
 class AgentInDB(Agent):
