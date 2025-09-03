@@ -142,6 +142,20 @@ app.add_middleware(LoggingMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AuthenticationMiddleware)
 
+# Force no-cache on admin pages to avoid CDN/browser serving stale admin HTML
+@app.middleware("http")
+async def _no_cache_admin_pages(request: Request, call_next):
+    response = await call_next(request)
+    try:
+        path = request.url.path or ""
+        if path.startswith("/admin"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["X-Admin-Cache"] = "bypassed"
+    except Exception:
+        pass
+    return response
+
 # Include API router
 app.include_router(api_router, prefix="/api")
 

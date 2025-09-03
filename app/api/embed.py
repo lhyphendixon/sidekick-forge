@@ -326,10 +326,12 @@ Remember to use this context appropriately in your responses while maintaining y
             # Include citations in the final response if available
             final_payload = {'done': True, 'full_text': full_text}
             
-            # Include citations from RAG search results
-            if rag_citations:
+            # Include citations from RAG search results if enabled for this agent
+            if rag_citations and getattr(agent, 'show_citations', True):
                 final_payload['citations'] = rag_citations
                 logger.info(f"[embed-stream] including {len(rag_citations)} citations in response")
+            elif rag_citations and not getattr(agent, 'show_citations', True):
+                logger.info(f"[embed-stream] citations disabled for agent {agent_slug}, not including {len(rag_citations)} citations")
             
             yield f"data: {json.dumps(final_payload)}\n\n"
         except Exception as e:

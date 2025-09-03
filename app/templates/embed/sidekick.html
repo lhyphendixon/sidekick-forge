@@ -25,20 +25,42 @@
   </script>
   <style>
     html, body { height: 100%; }
-    body { margin: 0; background:#000000; color:#e0e0e0; height:100%; }
+    html { background: #000000 !important; }
+    body { margin: 0; background: #000000 !important; color:#e0e0e0; height:100%; }
+    * { background-color: inherit; }
     .htmx-indicator { opacity: 0; transition: opacity 300ms ease; }
     .htmx-request .htmx-indicator { opacity: 1; }
+    /* Force black background on everything */
+    body, html, .video-background-body {
+      background: #000000 !important;
+      background-color: #000000 !important;
+    }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.47.10/dist/umd/supabase.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
   <link rel="stylesheet" href="/static/css/citations.css">
+  <link rel="stylesheet" href="/static/css/video-background.css">
   <script src="/static/js/citations.js"></script>
 </head>
-<body>
+<body class="video-background-body">
+  <!-- Video Background -->
+  <video class="embed-video-background" autoplay muted loop>
+    <source src="/static/videos/background2.mp4" type="video/mp4">
+  </video>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const video = document.querySelector('.embed-video-background');
+      if (video) {
+        video.playbackRate = 0.50;
+      }
+    });
+  </script>
+  <!-- 95% Opacity Overlay -->
+  <div class="embed-video-overlay"></div>
   <div class="mx-auto p-3 h-full" style="max-width: 800px;">
-    <div class="bg-dark-surface border border-dark-border rounded-lg h-full flex flex-col">
+    <div class="bg-dark-bg border border-dark-border rounded-lg h-full flex flex-col">
       <div id="auth" class="p-4 space-y-2">
         <h3 class="text-lg text-dark-text">Sign in</h3>
         <input id="email" class="w-full bg-dark-elevated text-dark-text border border-dark-border rounded p-2" placeholder="email" />

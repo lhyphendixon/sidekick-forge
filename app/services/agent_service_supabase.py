@@ -104,6 +104,7 @@ class AgentService:
             voice_settings=voice_settings,
             webhooks=webhooks,
             enabled=agent_data.get("enabled", True),
+            show_citations=agent_data.get("show_citations", True),
             created_at=created_at,
             updated_at=updated_at,
             tools_config=tools_config
@@ -329,10 +330,27 @@ class AgentService:
     
     async def update_agent(self, client_id: str, agent_slug: str, update_data: AgentUpdate) -> Optional[Agent]:
         """Update an agent in a client's Supabase"""
-        # Get client's Supabase instance
-        client_supabase = await self.client_service.get_client_supabase_client(client_id)
+        # Get client's Supabase instance (mirror get_agent special-casing for main instance)
+        from app.config import settings
+        from supabase import create_client
+        client_supabase = None
+        try:
+            client_config = await self.client_service.get_client_supabase_config(client_id, auto_sync=False)
+            if client_config and client_config.get("url") == settings.supabase_url:
+                logger.info(f"Client {client_id} uses main Supabase instance for update, using admin client")
+                try:
+                    client_supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+                    # quick ping
+                    client_supabase.table("agents").select("id").limit(1).execute()
+                except Exception as e:
+                    logger.error(f"Failed to create admin client for update: {e}")
+            else:
+                client_supabase = await self.client_service.get_client_supabase_client(client_id, auto_sync=False)
+        except Exception as e:
+            logger.error(f"Error getting Supabase client for update: {e}")
+
         if not client_supabase:
-            logger.error(f"No Supabase client found for {client_id}")
+            logger.error(f"No Supabase client found for {client_id} (update)")
             return None
         
         try:
@@ -344,39 +362,109 @@ class AgentService:
                 # Remove fields that might not exist in the table
                 update_dict.pop("tools_config", None)  # Remove if not in table schema
                 
-                # Convert voice_settings to JSON string if present
+                # Ensure voice_settings is a plain dict (let Supabase handle JSONB)
                 if "voice_settings" in update_dict and update_dict["voice_settings"]:
-                    update_dict["voice_settings"] = json.dumps(update_dict["voice_settings"])
+                    try:
+                        if hasattr(update_dict["voice_settings"], "dict"):
+                            update_dict["voice_settings"] = update_dict["voice_settings"].dict()
+                    except Exception:
+                        pass
                 
-                # Convert webhooks to individual fields
+                # Do not update legacy webhook columns here to avoid 400s on tenants
+                # where these columns may not exist. Skip mapping entirely.
                 if "webhooks" in update_dict:
-                    webhooks = update_dict.pop("webhooks")
-                    if webhooks:
-                        if hasattr(webhooks, "voice_context_webhook_url"):
-                            update_dict["n8n_text_webhook_url"] = webhooks.voice_context_webhook_url
-                        if hasattr(webhooks, "text_context_webhook_url"):
-                            update_dict["n8n_rag_webhook_url"] = webhooks.text_context_webhook_url
+                    update_dict.pop("webhooks", None)
                 
-                result = client_supabase.table("agents").update(update_dict).eq("slug", agent_slug).execute()
+                # Discover existing columns for this tenant's agents table and prune payload
+                try:
+                    cols_info = client_supabase.rpc("pg_table_cols", {"table_name": "agents"}).execute()
+                    # If RPC not available, fall back silently
+                    if getattr(cols_info, 'data', None):
+                        cols = {c.get('name') for c in cols_info.data if isinstance(c, dict)}
+                        if cols:
+                            update_dict = {k: v for k, v in update_dict.items() if k in cols}
+                except Exception:
+                    pass
+
+                # Debug: log update payload
+                try:
+                    logger.info(f"[agents.update] client={client_id} slug={agent_slug} payload_keys={list(update_dict.keys())}")
+                except Exception:
+                    pass
+
+                # Prefer updating by primary key id if available
+                agent_id = None
+                try:
+                    cur = (
+                        client_supabase
+                        .table("agents")
+                        .select("id")
+                        .eq("slug", agent_slug)
+                        .limit(1)
+                        .execute()
+                    )
+                    if cur.data:
+                        agent_id = cur.data[0].get("id")
+                except Exception:
+                    pass
+
+                update_query = (
+                    client_supabase
+                    .table("agents")
+                    .update(update_dict)
+                )
+                if agent_id:
+                    update_query = update_query.eq("id", agent_id)
+                else:
+                    update_query = update_query.eq("slug", agent_slug)
+                # Execute the update (sync client doesn't support chaining .select())
+                result = update_query.execute()
+                try:
+                    # Some clients expose result.error; log if present
+                    err = getattr(result, "error", None)
+                    if err:
+                        logger.error(f"[agents.update] supabase error: {err}")
+                except Exception:
+                    pass
                 
+                # If the update failed due to a non-existent column like show_citations,
+                # retry once without that field to avoid PostgREST 400s on tenants missing the column
+                if (not result.data) and ("show_citations" in update_dict):
+                    try:
+                        update_dict_retry = dict(update_dict)
+                        update_dict_retry.pop("show_citations", None)
+                        result = (
+                            client_supabase
+                            .table("agents")
+                            .update(update_dict_retry)
+                            .eq("slug", agent_slug)
+                            .execute()
+                        )
+                    except Exception as retry_err:
+                        logger.error(f"Retry without show_citations failed: {retry_err}")
+                        return None
+
                 if result.data:
                     agent_data = result.data[0]
-                    agent_data["client_id"] = client_id
-                    
-                    # Parse JSON fields if they're strings
-                    if isinstance(agent_data.get("voice_settings"), str):
-                        try:
-                            agent_data["voice_settings"] = json.loads(agent_data["voice_settings"])
-                        except:
-                            agent_data["voice_settings"] = {}
-                    
-                    if isinstance(agent_data.get("webhooks"), str):
-                        try:
-                            agent_data["webhooks"] = json.loads(agent_data["webhooks"])
-                        except:
-                            agent_data["webhooks"] = {}
-                    
-                    return Agent(**agent_data)
+                    return self._parse_agent_data(agent_data, client_id)
+
+                # Fallback: if update returned no rows (e.g., RLS prevents returning), try fetching the row
+                try:
+                    refetch_q = (
+                        client_supabase
+                        .table("agents")
+                        .select("*")
+                    )
+                    if agent_id:
+                        refetch_q = refetch_q.eq("id", agent_id)
+                    else:
+                        refetch_q = refetch_q.eq("slug", agent_slug)
+                    refetch = refetch_q.execute()
+                    if refetch.data:
+                        agent_data = refetch.data[0]
+                        return self._parse_agent_data(agent_data, client_id)
+                except Exception as _:
+                    pass
             
             return None
             

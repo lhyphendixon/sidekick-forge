@@ -27,8 +27,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY ../../../opt/autonomite-saas/app .
+# Copy application code (use current repo path)
+COPY ../app .
 
 # Change ownership
 RUN chown -R appuser:appuser $APP_HOME

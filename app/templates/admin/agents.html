@@ -85,6 +85,12 @@
                     <span>Temperature:</span>
                     <span class="font-medium text-dark-text">{{ agent.voice_settings.temperature }}</span>
                 </div>
+                <div class="flex justify-between">
+                    <span>Citations:</span>
+                    <span class="font-medium {% if agent.show_citations %}text-brand-teal{% else %}text-dark-text-secondary{% endif %}">
+                        {% if agent.show_citations %}Enabled{% else %}Disabled{% endif %}
+                    </span>
+                </div>
             </div>
             
             <div class="mt-4 pt-4 border-t border-dark-border">

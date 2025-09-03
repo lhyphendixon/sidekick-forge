@@ -12,25 +12,26 @@
     <!-- Page Header -->
     <div class="flex justify-between items-center mb-6">
         <div>
-            <h1 class="text-3xl font-bold text-gray-900 flex items-center">
-                <a href="/admin/agents" class="text-gray-400 hover:text-gray-600 mr-3">
+            <h1 class="text-3xl font-bold text-dark-text flex items-center">
+                <a href="/admin/agents" class="text-dark-text-secondary hover:text-brand-teal mr-3">
                     <i class="bi bi-arrow-left"></i>
                 </a>
                 {{ agent.name }}
             </h1>
-            <p class="text-gray-600 mt-1">
+            <p class="text-dark-text-secondary mt-1">
                 Agent ID: {{ agent.slug }} | Client: {{ agent.client_name }}
             </p>
         </div>
         <div class="flex items-center space-x-3">
-            <span class="px-3 py-1 rounded-full text-sm font-medium {% if agent.active %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
-                {% if agent.active %}Active{% else %}Inactive{% endif %}
+            <span class="px-3 py-1 rounded-full text-sm font-medium {% if agent.enabled %}bg-brand-teal/20 text-brand-teal{% else %}bg-dark-elevated text-dark-text-secondary{% endif %}">
+                {% if agent.enabled %}Enabled{% else %}Disabled{% endif %}
             </span>
-            <button onclick="saveAgent()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
-                <i class="bi bi-save mr-2"></i>Save Changes
+            <button id="saveButton" onclick="saveAgent()" class="btn-primary font-medium py-2 px-4 rounded-lg flex items-center transition-all">
+                <i id="saveIcon" class="bi bi-save mr-2"></i>
+                <span id="saveText">Save Changes</span>
             </button>
             {% if latest_config %}
-            <button onclick="syncFromConfig()" class="bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
+            <button onclick="syncFromConfig()" class="btn-secondary font-medium py-2 px-4 rounded-lg flex items-center transition-all">
                 <i class="bi bi-arrow-repeat mr-2"></i>Sync from Config
             </button>
             {% endif %}
@@ -39,315 +40,239 @@
 
     <form id="agentForm">
         <!-- Basic Information -->
-        <div class="bg-white rounded-lg shadow mb-6">
-            <div class="border-b border-gray-200 px-6 py-4">
-                <h5 class="text-lg font-semibold text-gray-900">Basic Information</h5>
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Basic Information</h5>
             </div>
             <div class="p-6">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Agent Name</label>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Agent Name</label>
                         <input type="text" id="agentName" value="{{ agent.name }}" required
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Slug (URL-friendly ID)</label>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Slug (URL-friendly ID)</label>
                         <input type="text" id="agentSlug" value="{{ agent.slug }}" readonly
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50">
+                               class="w-full px-3 py-2 bg-dark-elevated/50 border border-dark-border rounded-md text-dark-text-secondary">
                     </div>
                 </div>
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
                     <textarea id="agentDescription" rows="2"
-                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">{{ agent.description }}</textarea>
+                              class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">{{ agent.description }}</textarea>
                 </div>
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Agent Image URL</label>
-                    <input type="url" id="agentImage" value="{{ agent.agent_image }}"
-                           placeholder="https://example.com/agent-image.png"
-                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <div class="flex items-start space-x-4">
+                        <div class="flex-1">
+                            <input type="url" id="agentImage" value="{{ agent.agent_image }}"
+                                   placeholder="https://example.com/agent-image.png"
+                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text"
+                                   onchange="updateImagePreview()" oninput="updateImagePreview()">
+                        </div>
+                        <div class="flex-shrink-0">
+                            <img id="agentImagePreview" 
+                                 src="{{ agent.agent_image or '' }}" 
+                                 alt="Agent Image Preview"
+                                 class="w-48 h-48 rounded-lg border border-gray-300 object-cover {% if not agent.agent_image %}hidden{% endif %}"
+                                 onerror="hideImagePreview()">
+                            <div id="agentImagePlaceholder" class="w-48 h-48 rounded-lg border-2 border-dashed border-dark-border flex items-center justify-center {% if agent.agent_image %}hidden{% endif %}">
+                                <svg class="w-12 h-12 text-dark-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="flex items-center space-x-6">
-                    <div class="flex items-center">
-                        <input type="checkbox" id="agentActive" {% if agent.active %}checked{% endif %}
-                               class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
-                        <label for="agentActive" class="ml-2 text-sm text-gray-700">
-                            Agent is active
-                        </label>
-                    </div>
-                    <div class="flex items-center">
-                        <input type="checkbox" id="agentEnabled" {% if agent.enabled %}checked{% endif %}
-                               class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
-                        <label for="agentEnabled" class="ml-2 text-sm text-gray-700">
-                            Agent is enabled
-                        </label>
-                    </div>
+                <div class="flex items-center">
+                    <input type="checkbox" id="agentEnabled" {% if agent.enabled %}checked{% endif %}
+                           class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal bg-dark-elevated">
+                    <label for="agentEnabled" class="ml-2 text-sm text-dark-text">
+                        Agent is enabled
+                    </label>
                 </div>
             </div>
         </div>
 
         <!-- System Prompt -->
-        <div class="bg-white rounded-lg shadow mb-6">
-            <div class="border-b border-gray-200 px-6 py-4">
-                <h5 class="text-lg font-semibold text-gray-900">System Prompt</h5>
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">System Prompt</h5>
             </div>
             <div class="p-6">
                 <textarea id="systemPrompt" rows="8"
-                          class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm">{{ agent.system_prompt }}</textarea>
-                <p class="text-sm text-gray-600 mt-2">
+                          class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text font-mono text-sm">{{ agent.system_prompt }}</textarea>
+                <p class="text-sm text-dark-text-secondary mt-2">
                     This prompt defines the agent's personality, capabilities, and behavior.
                 </p>
             </div>
         </div>
 
-        <!-- Voice Settings -->
-        <div class="bg-white rounded-lg shadow mb-6">
-            <div class="border-b border-gray-200 px-6 py-4">
-                <h5 class="text-lg font-semibold text-gray-900">Voice Settings</h5>
+
+
+
+        <!-- LLM Settings -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">LLM Settings</h5>
             </div>
             <div class="p-6">
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Provider</label>
-                        <select id="voiceProvider" 
-                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                            <option value="livekit" {% if agent.voice_settings.provider == "livekit" %}selected{% endif %}>LiveKit</option>
-                            <option value="openai" {% if agent.voice_settings.provider == "openai" %}selected{% endif %}>OpenAI</option>
-                            <option value="elevenlabs" {% if agent.voice_settings.provider == "elevenlabs" %}selected{% endif %}>ElevenLabs</option>
+                        <label class="block text-sm font-medium text-dark-text mb-2">LLM Provider</label>
+                        <select id="config_llm_provider" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text" onchange="updateLLMModels()">
+                            <option value="openai" {% if latest_config.llm_provider == 'openai' %}selected{% endif %}>OpenAI</option>
+                            <option value="groq" {% if latest_config.llm_provider == 'groq' %}selected{% endif %}>Groq</option>
+                            <option value="deepinfra" {% if latest_config.llm_provider == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
+                            <option value="replicate" {% if latest_config.llm_provider == 'replicate' %}selected{% endif %}>Replicate</option>
                         </select>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Voice ID</label>
-                        <input type="text" id="voiceId" value="{{ agent.voice_settings.voice_id }}"
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <label class="block text-sm font-medium text-dark-text mb-2">Model</label>
+                        <select id="config_llm_model" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                            <!-- OpenAI Models -->
+                            <optgroup label="OpenAI" id="openai_models" {% if latest_config.llm_provider != 'openai' %}style="display:none"{% endif %}>
+                                <option value="gpt-4o" {% if latest_config.llm_model == 'gpt-4o' %}selected{% endif %}>GPT-4o (Latest, multimodal)</option>
+                                <option value="gpt-4o-mini" {% if latest_config.llm_model == 'gpt-4o-mini' %}selected{% endif %}>GPT-4o Mini (Fast & cost-effective)</option>
+                                <option value="gpt-4-turbo" {% if latest_config.llm_model == 'gpt-4-turbo' %}selected{% endif %}>GPT-4 Turbo</option>
+                                <option value="gpt-3.5-turbo" {% if latest_config.llm_model == 'gpt-3.5-turbo' %}selected{% endif %}>GPT-3.5 Turbo (Fastest)</option>
+                            </optgroup>
+                            <!-- Groq Models -->
+                            <optgroup label="Groq" id="groq_models" {% if latest_config.llm_provider != 'groq' %}style="display:none"{% endif %}>
+                                <option value="llama-3.3-70b-versatile" {% if latest_config.llm_model == 'llama-3.3-70b-versatile' %}selected{% endif %}>Llama 3.3 70B Versatile (Latest, Best)</option>
+                                <option value="qwen/qwen3-32b" {% if latest_config.llm_model == 'qwen/qwen3-32b' %}selected{% endif %}>Qwen3 32B (High Performance)</option>
+                                <option value="llama-3.1-70b-versatile" {% if latest_config.llm_model == 'llama-3.1-70b-versatile' %}selected{% endif %}>Llama 3.1 70B (Previous Gen)</option>
+                                <option value="llama3-70b-8192" {% if latest_config.llm_model == 'llama3-70b-8192' %}selected{% endif %}>Llama 3 70B (8K context)</option>
+                                <option value="mixtral-8x7b-32768" {% if latest_config.llm_model == 'mixtral-8x7b-32768' %}selected{% endif %}>Mixtral 8x7B (32K context)</option>
+                                <option value="llama-3.1-8b-instant" {% if latest_config.llm_model == 'llama-3.1-8b-instant' %}selected{% endif %}>Llama 3.1 8B (Fastest)</option>
+                                <option value="llama3-8b-8192" {% if latest_config.llm_model == 'llama3-8b-8192' %}selected{% endif %}>Llama 3 8B (Fast)</option>
+                                <option value="gemma2-9b-it" {% if latest_config.llm_model == 'gemma2-9b-it' %}selected{% endif %}>Gemma 2 9B (Efficient)</option>
+                            </optgroup>
+                        </select>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Temperature</label>
-                        <input type="number" id="voiceTemperature" value="{{ agent.voice_settings.temperature }}"
-                               min="0" max="2" step="0.1"
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <label class="block text-sm font-medium text-dark-text mb-2">Temperature</label>
+                        <input type="number" id="config_temperature" value="{{ latest_config.temperature or 0.7 }}" min="0" max="2" step="0.1"
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
                     </div>
-                </div>
-                <div class="mt-6">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Provider Configuration (JSON)</label>
-                    <textarea id="providerConfig" rows="4"
-                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm">{{ agent.voice_settings.provider_config | tojson(indent=2) }}</textarea>
                 </div>
             </div>
         </div>
 
-        <!-- Webhooks -->
-        <div class="bg-white rounded-lg shadow mb-6">
-            <div class="border-b border-gray-200 px-6 py-4">
-                <h5 class="text-lg font-semibold text-gray-900">Webhooks</h5>
+        <!-- Speech-to-Text Settings -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Speech-to-Text Settings</h5>
             </div>
             <div class="p-6">
-                <div class="mb-6">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Voice Context Webhook URL</label>
-                    <input type="url" id="voiceWebhook" value="{{ agent.webhooks.voice_context_webhook_url or '' }}"
-                           placeholder="https://n8n.example.com/webhook/voice-context"
-                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <p class="text-sm text-gray-600 mt-1">
-                        Called to get context for voice conversations
-                    </p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">STT Provider</label>
+                        <select id="config_stt_provider" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text" onchange="updateSTTModels()">
+                            <option value="deepgram" {% if latest_config.stt_provider == 'deepgram' %}selected{% endif %}>Deepgram</option>
+                            <option value="groq" {% if latest_config.stt_provider == 'groq' %}selected{% endif %}>Groq Whisper</option>
+                            <option value="openai" {% if latest_config.stt_provider == 'openai' %}selected{% endif %}>OpenAI Whisper</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Model</label>
+                        <select id="config_stt_model" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                            <option value="nova-2" {% if latest_config.stt_model == 'nova-2' %}selected{% endif %}>Nova 2 (Deepgram)</option>
+                            <option value="whisper-large-v3-turbo" {% if latest_config.stt_model == 'whisper-large-v3-turbo' %}selected{% endif %}>Whisper Large v3 Turbo (Groq)</option>
+                            <option value="whisper-1" {% if latest_config.stt_model == 'whisper-1' %}selected{% endif %}>Whisper 1 (OpenAI)</option>
+                        </select>
+                    </div>
                 </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Text Context Webhook URL</label>
-                    <input type="url" id="textWebhook" value="{{ agent.webhooks.text_context_webhook_url or '' }}"
-                           placeholder="https://n8n.example.com/webhook/text-context"
-                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <p class="text-sm text-gray-600 mt-1">
-                        Called to get context for text-based conversations
-                    </p>
+            </div>
+        </div>
+
+        <!-- Text-to-Speech Settings -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Text-to-Speech Settings</h5>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">TTS Provider</label>
+                        <select id="config_tts_provider" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text" onchange="updateTTSSettings()">
+                            <option value="openai" {% if latest_config.tts_provider == 'openai' %}selected{% endif %}>OpenAI</option>
+                            <option value="elevenlabs" {% if latest_config.tts_provider == 'elevenlabs' %}selected{% endif %}>ElevenLabs</option>
+                            <option value="cartesia" {% if latest_config.tts_provider == 'cartesia' %}selected{% endif %}>Cartesia</option>
+                            <option value="replicate" {% if latest_config.tts_provider == 'replicate' %}selected{% endif %}>Replicate</option>
+                            <option value="speechify" {% if latest_config.tts_provider == 'speechify' %}selected{% endif %}>Speechify</option>
+                        </select>
+                    </div>
+                    
+                    <!-- OpenAI Voice -->
+                    <div id="config_openai_voice_settings" {% if latest_config.tts_provider != 'openai' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Voice</label>
+                        <select id="config_openai_voice" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                            <option value="alloy" {% if latest_config.openai_voice == 'alloy' %}selected{% endif %}>Alloy (Neutral)</option>
+                            <option value="echo" {% if latest_config.openai_voice == 'echo' %}selected{% endif %}>Echo (Male)</option>
+                            <option value="fable" {% if latest_config.openai_voice == 'fable' %}selected{% endif %}>Fable (British)</option>
+                            <option value="onyx" {% if latest_config.openai_voice == 'onyx' %}selected{% endif %}>Onyx (Deep)</option>
+                            <option value="nova" {% if latest_config.openai_voice == 'nova' %}selected{% endif %}>Nova (Female)</option>
+                            <option value="shimmer" {% if latest_config.openai_voice == 'shimmer' %}selected{% endif %}>Shimmer (Soft)</option>
+                        </select>
+                    </div>
+                    
+                    <!-- ElevenLabs Voice -->
+                    <div id="config_elevenlabs_voice_settings" {% if latest_config.tts_provider != 'elevenlabs' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Voice ID</label>
+                        <input type="text" id="config_elevenlabs_voice_id" value="{{ latest_config.elevenlabs_voice_id or '' }}" 
+                               placeholder="Enter ElevenLabs Voice ID"
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                    </div>
+                    
+                    <!-- Cartesia Voice -->
+                    <div id="config_cartesia_voice_settings" {% if latest_config.tts_provider != 'cartesia' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Voice ID</label>
+                        <input type="text" id="config_cartesia_voice_id" value="{{ latest_config.cartesia_voice_id or 'a0e99841-438c-4a64-b679-ae501e7d6091' }}" 
+                               placeholder="Cartesia Voice ID"
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Additional Settings -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Additional Settings</h5>
+            </div>
+            <div class="p-6">
+                <div class="space-y-4">
+                    <div class="flex items-center">
+                        <input type="checkbox" id="showCitations" {% if agent.show_citations %}checked{% endif %}
+                               class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal bg-dark-elevated">
+                        <label for="showCitations" class="ml-2 text-sm text-dark-text">
+                            Show Knowledge Base Citations
+                        </label>
+                        <span class="ml-2 text-xs text-dark-text-secondary">
+                            (Display sources when retrieving information from the knowledge base)
+                        </span>
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- Tools Configuration -->
-        <div class="bg-white rounded-lg shadow mb-6">
-            <div class="border-b border-gray-200 px-6 py-4">
-                <h5 class="text-lg font-semibold text-gray-900">Tools Configuration</h5>
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Tools Configuration</h5>
             </div>
             <div class="p-6">
-                <label class="block text-sm font-medium text-gray-700 mb-2">Enabled Tools (JSON)</label>
+                <label class="block text-sm font-medium text-dark-text mb-2">Enabled Tools (JSON)</label>
                 <textarea id="toolsConfig" rows="6"
-                          class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm">{{ agent.tools_config | tojson(indent=2) }}</textarea>
-                <p class="text-sm text-gray-600 mt-2">
+                          class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text font-mono text-sm">{{ (agent.tools_config | default({})) | tojson(indent=2) }}</textarea>
+                <p class="text-sm text-dark-text-secondary mt-2">
                     Configure which tools and integrations are available to this agent.
                 </p>
             </div>
         </div>
 
-        {% if latest_config %}
-        <!-- Latest Configuration from agent_configurations -->
-        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-6 mb-6">
-            <h5 class="text-lg font-semibold text-gray-900 mb-4">
-                <i class="bi bi-info-circle text-yellow-600 mr-2"></i>
-                Latest Configuration from agent_configurations Table
-            </h5>
-            <p class="text-sm text-gray-700 mb-4">
-                Last updated: {{ latest_config.last_updated }}
-            </p>
-            
-            <!-- Configuration Form -->
-            <form id="configForm" class="space-y-6">
-                <!-- Provider Type -->
-                <div class="bg-white rounded-lg p-4 border border-gray-200">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Provider Type</label>
-                    <select id="config_provider_type" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" disabled>
-                        <option value="livekit" {% if latest_config.provider_type == 'livekit' %}selected{% endif %}>LiveKit</option>
-                        <option value="ultravox" {% if latest_config.provider_type == 'ultravox' %}selected{% endif %}>Ultravox (Legacy)</option>
-                    </select>
-                </div>
-
-                <!-- LLM Provider -->
-                <div class="bg-white rounded-lg p-4 border border-gray-200">
-                    <h6 class="text-md font-semibold text-gray-800 mb-3">LLM Settings</h6>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">LLM Provider</label>
-                            <select id="config_llm_provider" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" onchange="updateLLMModels()">
-                                <option value="openai" {% if latest_config.llm_provider == 'openai' %}selected{% endif %}>OpenAI</option>
-                                <option value="groq" {% if latest_config.llm_provider == 'groq' %}selected{% endif %}>Groq</option>
-                                <option value="deepinfra" {% if latest_config.llm_provider == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
-                                <option value="replicate" {% if latest_config.llm_provider == 'replicate' %}selected{% endif %}>Replicate</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Model</label>
-                            <select id="config_llm_model" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <!-- OpenAI Models -->
-                                <optgroup label="OpenAI" id="openai_models" {% if latest_config.llm_provider != 'openai' %}style="display:none"{% endif %}>
-                                    <option value="gpt-4o" {% if latest_config.llm_model == 'gpt-4o' %}selected{% endif %}>GPT-4o (Latest, multimodal)</option>
-                                    <option value="gpt-4o-mini" {% if latest_config.llm_model == 'gpt-4o-mini' %}selected{% endif %}>GPT-4o Mini (Fast & cost-effective)</option>
-                                    <option value="gpt-4-turbo" {% if latest_config.llm_model == 'gpt-4-turbo' %}selected{% endif %}>GPT-4 Turbo</option>
-                                    <option value="gpt-3.5-turbo" {% if latest_config.llm_model == 'gpt-3.5-turbo' %}selected{% endif %}>GPT-3.5 Turbo (Fastest)</option>
-                                </optgroup>
-                                <!-- Groq Models -->
-                                <optgroup label="Groq" id="groq_models" {% if latest_config.llm_provider != 'groq' %}style="display:none"{% endif %}>
-                                    <option value="llama-3.3-70b-versatile" {% if latest_config.llm_model == 'llama-3.3-70b-versatile' %}selected{% endif %}>Llama 3.3 70B Versatile (Latest, Best)</option>
-                                    <option value="qwen/qwen3-32b" {% if latest_config.llm_model == 'qwen/qwen3-32b' %}selected{% endif %}>Qwen3 32B (High Performance)</option>
-                                    <option value="llama-3.1-70b-versatile" {% if latest_config.llm_model == 'llama-3.1-70b-versatile' %}selected{% endif %}>Llama 3.1 70B (Previous Gen)</option>
-                                    <option value="llama3-70b-8192" {% if latest_config.llm_model == 'llama3-70b-8192' %}selected{% endif %}>Llama 3 70B (8K context)</option>
-                                    <option value="mixtral-8x7b-32768" {% if latest_config.llm_model == 'mixtral-8x7b-32768' %}selected{% endif %}>Mixtral 8x7B (32K context)</option>
-                                    <option value="llama-3.1-8b-instant" {% if latest_config.llm_model == 'llama-3.1-8b-instant' %}selected{% endif %}>Llama 3.1 8B (Fastest)</option>
-                                    <option value="llama3-8b-8192" {% if latest_config.llm_model == 'llama3-8b-8192' %}selected{% endif %}>Llama 3 8B (Fast)</option>
-                                    <option value="gemma2-9b-it" {% if latest_config.llm_model == 'gemma2-9b-it' %}selected{% endif %}>Gemma 2 9B (Efficient)</option>
-                                </optgroup>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Temperature</label>
-                            <input type="number" id="config_temperature" value="{{ latest_config.temperature or 0.7 }}" min="0" max="2" step="0.1"
-                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- STT Provider -->
-                <div class="bg-white rounded-lg p-4 border border-gray-200">
-                    <h6 class="text-md font-semibold text-gray-800 mb-3">Speech-to-Text Settings</h6>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">STT Provider</label>
-                            <select id="config_stt_provider" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" onchange="updateSTTModels()">
-                                <option value="deepgram" {% if latest_config.stt_provider == 'deepgram' %}selected{% endif %}>Deepgram</option>
-                                <option value="groq" {% if latest_config.stt_provider == 'groq' %}selected{% endif %}>Groq Whisper</option>
-                                <option value="openai" {% if latest_config.stt_provider == 'openai' %}selected{% endif %}>OpenAI Whisper</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Model</label>
-                            <select id="config_stt_model" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <option value="nova-2" {% if latest_config.stt_model == 'nova-2' %}selected{% endif %}>Nova 2 (Deepgram)</option>
-                                <option value="whisper-large-v3-turbo" {% if latest_config.stt_model == 'whisper-large-v3-turbo' %}selected{% endif %}>Whisper Large v3 Turbo (Groq)</option>
-                                <option value="whisper-1" {% if latest_config.stt_model == 'whisper-1' %}selected{% endif %}>Whisper 1 (OpenAI)</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- TTS Provider -->
-                <div class="bg-white rounded-lg p-4 border border-gray-200">
-                    <h6 class="text-md font-semibold text-gray-800 mb-3">Text-to-Speech Settings</h6>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">TTS Provider</label>
-                            <select id="config_tts_provider" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" onchange="updateTTSSettings()">
-                                <option value="openai" {% if latest_config.tts_provider == 'openai' %}selected{% endif %}>OpenAI</option>
-                                <option value="elevenlabs" {% if latest_config.tts_provider == 'elevenlabs' %}selected{% endif %}>ElevenLabs</option>
-                                <option value="cartesia" {% if latest_config.tts_provider == 'cartesia' %}selected{% endif %}>Cartesia</option>
-                                <option value="replicate" {% if latest_config.tts_provider == 'replicate' %}selected{% endif %}>Replicate</option>
-                                <option value="speechify" {% if latest_config.tts_provider == 'speechify' %}selected{% endif %}>Speechify</option>
-                            </select>
-                        </div>
-                        
-                        <!-- OpenAI Voice -->
-                        <div id="config_openai_voice_settings" {% if latest_config.tts_provider != 'openai' %}style="display:none"{% endif %}>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Voice</label>
-                            <select id="config_openai_voice" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <option value="alloy" {% if latest_config.openai_voice == 'alloy' %}selected{% endif %}>Alloy (Neutral)</option>
-                                <option value="echo" {% if latest_config.openai_voice == 'echo' %}selected{% endif %}>Echo (Male)</option>
-                                <option value="fable" {% if latest_config.openai_voice == 'fable' %}selected{% endif %}>Fable (British)</option>
-                                <option value="onyx" {% if latest_config.openai_voice == 'onyx' %}selected{% endif %}>Onyx (Deep)</option>
-                                <option value="nova" {% if latest_config.openai_voice == 'nova' %}selected{% endif %}>Nova (Female)</option>
-                                <option value="shimmer" {% if latest_config.openai_voice == 'shimmer' %}selected{% endif %}>Shimmer (Soft)</option>
-                            </select>
-                        </div>
-                        
-                        <!-- ElevenLabs Voice -->
-                        <div id="config_elevenlabs_voice_settings" {% if latest_config.tts_provider != 'elevenlabs' %}style="display:none"{% endif %}>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Voice ID</label>
-                            <input type="text" id="config_elevenlabs_voice_id" value="{{ latest_config.elevenlabs_voice_id or '' }}" 
-                                   placeholder="Enter ElevenLabs Voice ID"
-                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        </div>
-                        
-                        <!-- Cartesia Voice -->
-                        <div id="config_cartesia_voice_settings" {% if latest_config.tts_provider != 'cartesia' %}style="display:none"{% endif %}>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Voice ID</label>
-                            <input type="text" id="config_cartesia_voice_id" value="{{ latest_config.cartesia_voice_id or 'a0e99841-438c-4a64-b679-ae501e7d6091' }}" 
-                                   placeholder="Cartesia Voice ID"
-                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Webhooks -->
-                <div class="bg-white rounded-lg p-4 border border-gray-200">
-                    <h6 class="text-md font-semibold text-gray-800 mb-3">Webhooks</h6>
-                    <div class="space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Voice Context Webhook URL</label>
-                            <input type="url" id="config_voice_webhook" value="{{ latest_config.voice_context_webhook_url or '' }}" 
-                                   placeholder="https://example.com/webhook"
-                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Text Context Webhook URL</label>
-                            <input type="url" id="config_text_webhook" value="{{ latest_config.text_context_webhook_url or '' }}" 
-                                   placeholder="https://example.com/webhook"
-                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Raw JSON (collapsible) -->
-                <details class="bg-white rounded-lg p-4 border border-gray-200">
-                    <summary class="cursor-pointer text-sm font-medium text-gray-700">View Raw Configuration JSON</summary>
-                    <pre class="mt-4 text-xs font-mono overflow-auto bg-gray-50 p-4 rounded">{{ latest_config_json }}</pre>
-                </details>
-            </form>
-            
-            {% if has_config_updates %}
-            <button type="button" onclick="applyConfiguration()" 
-                    class="mt-4 bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 px-4 rounded-lg flex items-center">
-                <i class="bi bi-arrow-repeat mr-2"></i>
-                Apply Configuration Updates
-            </button>
-            {% endif %}
-        </div>
-        {% endif %}
     </form>
 </div>
 
@@ -368,42 +293,81 @@ function togglePassword(fieldId) {
     }
 }
 
+function resetSaveButtonState() {
+    const saveButton = document.getElementById('saveButton');
+    const saveIcon = document.getElementById('saveIcon');
+    const saveText = document.getElementById('saveText');
+    
+    saveButton.disabled = false;
+    saveButton.classList.remove('opacity-75', 'cursor-not-allowed');
+    saveIcon.className = 'bi bi-save mr-2';
+    saveIcon.innerHTML = '';
+    saveText.textContent = 'Save Changes';
+}
+
 async function saveAgent() {
+    console.log('saveAgent() function called');
+    
     const form = document.getElementById('agentForm');
+    console.log('Form found:', form);
+    
     if (!form.checkValidity()) {
+        console.log('Form validation failed');
         form.reportValidity();
         return;
     }
     
+    console.log('Form validation passed');
+    
+    // Set loading state
+    const saveButton = document.getElementById('saveButton');
+    const saveIcon = document.getElementById('saveIcon');
+    const saveText = document.getElementById('saveText');
+    
+    console.log('Setting loading state on button:', saveButton);
+    saveButton.disabled = true;
+    saveButton.classList.add('opacity-75', 'cursor-not-allowed');
+    saveIcon.className = 'animate-spin mr-2';
+    saveIcon.innerHTML = '&#9696;'; // Spinner character
+    saveText.textContent = 'Saving...';
+    console.log('Loading state set successfully');
+    
     // Parse JSON fields
-    let providerConfig, toolsConfig;
-    try {
-        providerConfig = JSON.parse(document.getElementById('providerConfig').value || '{}');
-    } catch (e) {
-        showNotification('error', 'Invalid JSON in Provider Configuration');
-        return;
-    }
+    let toolsConfig;
+    const providerConfig = {}; // No longer needed, set to empty object
     
     try {
         toolsConfig = JSON.parse(document.getElementById('toolsConfig').value || '{}');
     } catch (e) {
         showNotification('error', 'Invalid JSON in Tools Configuration');
+        resetSaveButtonState();
         return;
     }
     
-    // Extract provider information from provider config if available
+    // Extract provider information from current settings
     const voiceSettings = {
-        provider: document.getElementById('voiceProvider').value,
-        voice_id: document.getElementById('voiceId').value,
-        temperature: parseFloat(document.getElementById('voiceTemperature').value),
+        provider: 'livekit', // Default to LiveKit
+        voice_id: '', // Will be set below based on TTS provider
+        temperature: 0.7, // Default temperature
         provider_config: providerConfig
     };
+    
+    // Set voice_id based on TTS provider selection
+    const ttsProvider = document.getElementById('config_tts_provider')?.value;
+    if (ttsProvider === 'openai') {
+        voiceSettings.voice_id = document.getElementById('config_openai_voice')?.value || 'alloy';
+    } else if (ttsProvider === 'elevenlabs') {
+        voiceSettings.voice_id = document.getElementById('config_elevenlabs_voice_id')?.value || '';
+    } else if (ttsProvider === 'cartesia') {
+        voiceSettings.voice_id = document.getElementById('config_cartesia_voice_id')?.value || '';
+    }
     
     // First check if config form dropdowns exist and use their values directly
     // This ensures we capture the current selection even if "Apply Configuration" wasn't clicked
     if (document.getElementById('config_llm_provider')) {
         voiceSettings.llm_provider = document.getElementById('config_llm_provider').value;
         voiceSettings.llm_model = document.getElementById('config_llm_model').value;
+        voiceSettings.temperature = parseFloat(document.getElementById('config_temperature')?.value || '0.7');
     } else if (providerConfig && providerConfig.llm) {
         // Fall back to provider config if dropdowns don't exist
         voiceSettings.llm_provider = providerConfig.llm.provider;
@@ -412,12 +376,22 @@ async function saveAgent() {
     
     if (document.getElementById('config_stt_provider')) {
         voiceSettings.stt_provider = document.getElementById('config_stt_provider').value;
+        voiceSettings.stt_model = document.getElementById('config_stt_model')?.value;
     } else if (providerConfig && providerConfig.stt) {
         voiceSettings.stt_provider = providerConfig.stt.provider;
     }
     
     if (document.getElementById('config_tts_provider')) {
         voiceSettings.tts_provider = document.getElementById('config_tts_provider').value;
+        
+        // Add provider-specific voice settings
+        if (ttsProvider === 'openai') {
+            voiceSettings.openai_voice = document.getElementById('config_openai_voice')?.value || 'alloy';
+        } else if (ttsProvider === 'elevenlabs') {
+            voiceSettings.elevenlabs_voice_id = document.getElementById('config_elevenlabs_voice_id')?.value || '';
+        } else if (ttsProvider === 'cartesia') {
+            voiceSettings.cartesia_voice_id = document.getElementById('config_cartesia_voice_id')?.value || '';
+        }
     } else if (providerConfig && providerConfig.tts) {
         voiceSettings.tts_provider = providerConfig.tts.provider;
     }
@@ -428,10 +402,11 @@ async function saveAgent() {
         agent_image: document.getElementById('agentImage').value || null,
         system_prompt: document.getElementById('systemPrompt').value,
         enabled: document.getElementById('agentEnabled').checked,
+        show_citations: document.getElementById('showCitations').checked,
         voice_settings: voiceSettings,
         webhooks: {
-            voice_context_webhook_url: document.getElementById('voiceWebhook').value || null,
-            text_context_webhook_url: document.getElementById('textWebhook').value || null
+            voice_context_webhook_url: null,
+            text_context_webhook_url: null
         },
         tools_config: toolsConfig
     };
@@ -442,18 +417,54 @@ async function saveAgent() {
         stt: voiceSettings.stt_provider,
         tts: voiceSettings.tts_provider
     });
+    console.log('Full voice settings:', voiceSettings);
+    console.log('Full update data:', updateData);
+    
+    console.log('About to send fetch request to:', `/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/update`);
+    
+    // Get admin token from cookies
+    function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+        return null;
+    }
+    
+    const adminToken = getCookie('admin_token');
+    console.log('Admin token found:', adminToken ? 'yes' : 'no');
+    
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest'
+    };
+    
+    if (adminToken) {
+        headers['Authorization'] = `Bearer ${adminToken}`;
+    }
     
     try {
         const response = await fetch(`/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/update`, {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: headers,
+            credentials: 'include', // Include cookies for authentication
             body: JSON.stringify(updateData)
         });
         
-        const result = await response.json();
+        console.log('Fetch response received:', response.status, response.statusText);
+        
+        let result;
+        try {
+            result = await response.json();
+            console.log('Response JSON:', result);
+        } catch (jsonError) {
+            console.error('Failed to parse JSON response:', jsonError);
+            console.log('Raw response text:', await response.text());
+            throw new Error('Invalid JSON response from server');
+        }
         
         if (response.ok) {
             showNotification('success', 'Agent configuration saved successfully!');
+            resetSaveButtonState();
         } else {
             // Check for API key validation errors
             if (result.missing_keys && result.missing_keys.length > 0) {
@@ -461,9 +472,13 @@ async function saveAgent() {
             } else {
                 showNotification('error', 'Error saving agent: ' + (result.error || 'Unknown error'));
             }
+            resetSaveButtonState();
         }
     } catch (error) {
+        console.error('Error in saveAgent function:', error);
+        console.error('Error stack:', error.stack);
         showNotification('error', 'Error saving agent: ' + error.message);
+        resetSaveButtonState();
     }
 }
 
@@ -560,22 +575,8 @@ function applyConfiguration() {
     {% if latest_config.system_prompt %}
     document.getElementById('systemPrompt').value = {{ latest_config.system_prompt | tojson }};
     {% endif %}
-    document.getElementById('voiceProvider').value = 'livekit';
-    document.getElementById('voiceTemperature').value = temperature;
-    document.getElementById('providerConfig').value = JSON.stringify(providerConfig, null, 2);
-    
-    // Update voice ID based on TTS provider
-    if (ttsProvider === 'openai') {
-        document.getElementById('voiceId').value = document.getElementById('config_openai_voice').value;
-    } else if (ttsProvider === 'elevenlabs') {
-        document.getElementById('voiceId').value = document.getElementById('config_elevenlabs_voice_id').value;
-    } else if (ttsProvider === 'cartesia') {
-        document.getElementById('voiceId').value = document.getElementById('config_cartesia_voice_id').value;
-    }
-    
-    // Update webhooks
-    document.getElementById('voiceWebhook').value = document.getElementById('config_voice_webhook').value;
-    document.getElementById('textWebhook').value = document.getElementById('config_text_webhook').value;
+    // Voice settings are now handled directly through the new sections
+    // No need to update removed elements
     
     document.getElementById('agentEnabled').checked = {% if latest_config.enabled %}true{% else %}false{% endif %};
     
@@ -590,8 +591,8 @@ function syncFromConfig() {
 
 function showNotification(type, message) {
     const notification = document.createElement('div');
-    notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg transition-all duration-300 transform translate-x-0 ${
-        type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+    notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg transition-all duration-300 transform translate-x-0 border ${
+        type === 'success' ? 'bg-brand-teal/20 text-brand-teal border-brand-teal' : 'bg-brand-salmon/20 text-brand-salmon border-brand-salmon'
     }`;
     notification.innerHTML = `
         <div class="flex items-center">
@@ -623,37 +624,37 @@ function showApiKeyErrorModal(errorData) {
     errorData.missing_keys.forEach(key => {
         missingKeysHtml += `
             <li class="mb-2">
-                <span class="font-semibold">${key.provider_type} Provider:</span> 
-                <span class="text-gray-700">${key.provider}</span>
+                <span class="font-semibold text-brand-teal">${key.provider_type} Provider:</span> 
+                <span class="text-dark-text">${key.provider}</span>
                 <br>
-                <span class="text-sm text-gray-600">Required API key: <code class="bg-gray-100 px-1 py-0.5 rounded">${key.required_key}</code></span>
+                <span class="text-sm text-dark-text-secondary">Required API key: <code class="bg-dark-bg px-1 py-0.5 rounded text-brand-orange">${key.required_key}</code></span>
             </li>
         `;
     });
     
     // Create modal HTML
     const modalHtml = `
-        <div id="apiKeyErrorModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4">
-                <div class="bg-red-50 border-b border-red-200 px-6 py-4 rounded-t-lg">
-                    <h3 class="text-lg font-semibold text-red-800 flex items-center">
+        <div id="apiKeyErrorModal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+            <div class="bg-dark-surface rounded-lg shadow-xl max-w-2xl w-full mx-4 border border-dark-border">
+                <div class="bg-brand-salmon/20 border-b border-brand-salmon/30 px-6 py-4 rounded-t-lg">
+                    <h3 class="text-lg font-semibold text-brand-salmon flex items-center">
                         <i class="bi bi-exclamation-triangle-fill mr-2"></i>
                         Missing API Keys for Selected Providers
                     </h3>
                 </div>
                 <div class="px-6 py-4">
-                    <p class="text-gray-700 mb-4">
+                    <p class="text-dark-text mb-4">
                         The agent configuration cannot be saved because the client 
-                        <strong>${errorData.client_name}</strong> is missing API keys for the selected providers:
+                        <strong class="text-brand-teal">${errorData.client_name}</strong> is missing API keys for the selected providers:
                     </p>
-                    <ul class="list-disc list-inside bg-gray-50 rounded-lg p-4 mb-4">
+                    <ul class="list-disc list-inside bg-dark-elevated rounded-lg p-4 mb-4 text-dark-text">
                         ${missingKeysHtml}
                     </ul>
-                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                        <p class="text-sm text-blue-800">
-                            <strong>How to fix:</strong><br>
+                    <div class="bg-brand-teal/10 border border-brand-teal/30 rounded-lg p-4">
+                        <p class="text-sm text-dark-text">
+                            <strong class="text-brand-teal">How to fix:</strong><br>
                             1. Go to the <a href="/admin/clients/${errorData.client_id}/edit" 
-                               class="text-blue-600 hover:text-blue-800 underline"
+                               class="text-brand-teal hover:text-brand-teal/80 underline"
                                onclick="document.getElementById('apiKeyErrorModal').remove()">
                                Client Settings</a> page<br>
                             2. Add the missing API keys<br>
@@ -662,10 +663,10 @@ function showApiKeyErrorModal(errorData) {
                         </p>
                     </div>
                 </div>
-                <div class="px-6 py-4 border-t bg-gray-50 rounded-b-lg flex justify-end">
+                <div class="px-6 py-4 border-t border-dark-border rounded-b-lg flex justify-end">
                     <button type="button" 
                             onclick="document.getElementById('apiKeyErrorModal').remove()"
-                            class="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg">
+                            class="px-4 py-2 btn-primary rounded-lg transition-all">
                         Close
                     </button>
                 </div>
@@ -687,6 +688,28 @@ function showApiKeyErrorModal(errorData) {
         }
     };
     document.addEventListener('keydown', handleEscape);
+}
+
+function updateImagePreview() {
+    const imageUrl = document.getElementById('agentImage').value.trim();
+    const preview = document.getElementById('agentImagePreview');
+    const placeholder = document.getElementById('agentImagePlaceholder');
+    
+    if (imageUrl) {
+        preview.src = imageUrl;
+        preview.classList.remove('hidden');
+        placeholder.classList.add('hidden');
+    } else {
+        hideImagePreview();
+    }
+}
+
+function hideImagePreview() {
+    const preview = document.getElementById('agentImagePreview');
+    const placeholder = document.getElementById('agentImagePlaceholder');
+    
+    preview.classList.add('hidden');
+    placeholder.classList.remove('hidden');
 }
 </script>
 {% endblock %}
