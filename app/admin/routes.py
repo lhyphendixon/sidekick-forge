@@ -2511,8 +2511,83 @@ async def agent_preview_modal(
     """Return the agent preview modal that embeds the production embed UI in an iframe"""
     try:
         logger.info(f"Preview (embed) modal requested for client_id={client_id}, agent_slug={agent_slug}")
+        
+        # Call EnsureClientUser to get client JWT for admin preview
+        import httpx
+        async with httpx.AsyncClient() as client:
+            # Get platform session token for the API call
+            platform_token = request.headers.get("Authorization", "").replace("Bearer ", "")
+            if not platform_token and admin_user:
+                # Try to get from admin_user if available
+                platform_token = admin_user.get("access_token", "")
+            
+            ensure_response = await client.post(
+                f"{request.base_url}api/v2/admin/ensure-client-user",
+                json={
+                    "client_id": client_id,
+                    "platform_user_id": admin_user.get("id"),
+                    "user_email": admin_user.get("email")
+                },
+                headers={"Authorization": f"Bearer {platform_token}"} if platform_token else {}
+            )
+            
+            client_jwt = None
+            client_user_id = None
+            
+            if ensure_response.status_code == 200:
+                ensure_data = ensure_response.json()
+                client_jwt = ensure_data.get("client_jwt")
+                client_user_id = ensure_data.get("client_user_id")
+                logger.info(f"Got client JWT for preview: client_user_id={client_user_id}")
+            else:
+                logger.warning(f"Failed to get client JWT: {ensure_response.status_code}")
+        
         host = request.base_url.hostname
         iframe_src = f"https://{host}/embed/{client_id}/{agent_slug}?theme=dark&source=admin"
+        
+        # If we have a client JWT, pass it to the embed
+        jwt_script = ""
+        if client_jwt:
+            jwt_script = f"""
+                    // Send client JWT for admin preview (shadow user in client Supabase)
+                    iframe.contentWindow.postMessage({{ 
+                        type: 'supabase-session', 
+                        access_token: '{client_jwt}',
+                        // No refresh token for admin preview sessions
+                        refresh_token: null,
+                        is_admin_preview: true,
+                        client_user_id: '{client_user_id}'
+                    }}, '*');
+            """
+        else:
+            # Fallback to original behavior if EnsureClientUser fails
+            jwt_script = """
+                    // Use global Supabase client from admin base to get current session
+                    var sb = window.__adminSupabaseClient || null;
+                    if (!sb || !sb.auth || !sb.auth.getSession) return;
+                    var res = await sb.auth.getSession();
+                    var session = (res && res.data && res.data.session) ? res.data.session : null;
+                    if (session && session.access_token && session.refresh_token) {
+                      iframe.contentWindow.postMessage({ type: 'supabase-session', access_token: session.access_token, refresh_token: session.refresh_token }, '*');
+                    }
+            """
+        
+        # Add development banner if in dev mode
+        dev_banner = ""
+        import os
+        if os.getenv("ENVIRONMENT", "development") == "development" and client_user_id:
+            # Redact sensitive parts of IDs for display
+            client_id_display = f"{client_id[:8]}..."
+            client_user_display = f"{client_user_id[:8]}..."
+            dev_banner = f"""
+            <div class=\"bg-yellow-900/50 border border-yellow-700 p-2 text-xs text-yellow-200\">
+              <span class=\"font-semibold\">DEV MODE:</span> 
+              Preview as client_user: <code>{client_user_display}</code> | 
+              Client: <code>{client_id_display}</code> | 
+              JWT expires: 15 min
+            </div>
+            """
+        
         modal_html = f"""
         <div class=\"fixed inset-0 bg-black/80 flex items-center justify-center z-50\">
           <div class=\"bg-dark-surface border border-dark-border rounded-lg w-full max-w-3xl h-[80vh] flex flex-col\">
@@ -2520,6 +2595,7 @@ async def agent_preview_modal(
               <h3 class=\"text-dark-text text-sm\">Preview Sidekick</h3>
               <button class=\"px-3 py-1 text-sm border border-dark-border rounded\" hx-on:click=\"document.getElementById('modal-container').innerHTML=''\">Close</button>
             </div>
+            {dev_banner}
             <div class=\"flex-1\">
               <iframe id=\"embedFrame\" src=\"{iframe_src}\" allow=\"microphone; camera\" referrerpolicy=\"strict-origin-when-cross-origin\" style=\"border:0;width:100%;height:100%\"></iframe>
             </div>
@@ -2531,14 +2607,7 @@ async def agent_preview_modal(
                 if (!iframe) return;
                 iframe.addEventListener('load', async function() {{
                   try {{
-                    // Use global Supabase client from admin base to get current session
-                    var sb = window.__adminSupabaseClient || null;
-                    if (!sb || !sb.auth || !sb.auth.getSession) return;
-                    var res = await sb.auth.getSession();
-                    var session = (res && res.data && res.data.session) ? res.data.session : null;
-                    if (session && session.access_token && session.refresh_token) {{
-                      iframe.contentWindow.postMessage({{ type: 'supabase-session', access_token: session.access_token, refresh_token: session.refresh_token }}, '*');
-                    }}
+{jwt_script}
                   }} catch (e) {{ console.warn('[preview->embed] token post failed', e); }}
                 }});
               }} catch (e) {{ console.warn('[preview modal] init failed', e); }}
@@ -3297,8 +3366,9 @@ async def start_voice_preview(
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
         
-        # Generate unique room name for this session
+        # Generate unique room name and conversation ID for this session
         room_name = f"preview_{agent_slug}_{uuid.uuid4().hex[:8]}"
+        conversation_id = f"voice_{room_name}_{uuid.uuid4().hex[:8]}"
         
         # Create trigger request - always use the client_id provided
         trigger_request = TriggerAgentRequest(
@@ -3308,7 +3378,8 @@ async def start_voice_preview(
             room_name=room_name,
             # Use the actual user's UUID for proper context loading
             user_id=get_user_id_from_request(None, admin_user),
-            session_id=session_id
+            session_id=session_id,
+            conversation_id=conversation_id
         )
         
         # Always use the standard trigger flow for ALL agents
@@ -3337,15 +3408,24 @@ async def start_voice_preview(
         if room_name != actual_room_name:
             logger.warning(f"⚠️ Room name mismatch! Frontend will use: {actual_room_name}")
         
-        # Return voice interface with LiveKit client
+        # Get conversation_id from agent_context
+        agent_context = trigger_result.data.get('agent_context', {}) if trigger_result.data else {}
+        conversation_id = agent_context.get('conversation_id', f"voice_{actual_room_name}_{trigger_request.user_id}")
+        
+        logger.info(f"📝 Voice session started with conversation_id: {conversation_id}")
+        
+        # Return voice interface with LiveKit client and transcript support
         return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
             "request": request,
             "room_name": actual_room_name,  # Use the actual room name from trigger
             "server_url": server_url,
             "user_token": user_token,
             "agent": agent,
+            "agent_id": agent.id if hasattr(agent, 'id') else agent_slug,
+            "agent_slug": agent_slug,
             "client_id": client_id,
-            "session_id": session_id
+            "session_id": session_id,
+            "conversation_id": conversation_id
         })
         
     except Exception as e:

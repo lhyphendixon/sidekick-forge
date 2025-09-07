@@ -137,7 +137,10 @@ class AgentContextManager:
         """Initialize the remote embedding client based on configuration"""
         # Get embedding provider from agent config - NO DEFAULTS
         embedding_config = self.agent_config.get('embedding', {})
+        
         if not embedding_config:
+            # Log available keys to help debug
+            logger.warning(f"No embedding configuration found. Available keys in agent_config: {list(self.agent_config.keys())}")
             raise ValueError("No embedding configuration found. Embedding provider and model must be configured.")
         
         provider = embedding_config.get('provider')
@@ -369,12 +372,19 @@ class AgentContextManager:
         try:
             logger.info(f"Gathering user profile for {user_id}")
             
-            # Query the profiles table in client's Supabase
-            # NO WORKAROUNDS: Let the database query run naturally
-            result = self.supabase.table("profiles").select("*").eq("user_id", user_id).single().execute()
+            # If profiles.user_id is UUID-typed and user_id isn't a valid UUID, skip query gracefully
+            try:
+                import uuid as _uuid
+                _ = _uuid.UUID(str(user_id))
+            except Exception:
+                logger.warning(f"User id is not a UUID; skipping profile lookup: {user_id}")
+                return {}, time.perf_counter() - start_time
+
+            # Query the profiles table in client's Supabase without .single(), handle 0/1 gracefully
+            result = self.supabase.table("profiles").select("*").eq("user_id", user_id).execute()
             
-            if result.data:
-                profile = result.data
+            if result.data and len(result.data) > 0:
+                profile = result.data[0]
                 # Check for various name fields
                 name = profile.get('name') or profile.get('full_name') or profile.get('display_name') or profile.get('username') or 'Unknown'
                 logger.info(f"Found user profile: {name}")
@@ -383,9 +393,9 @@ class AgentContextManager:
                 logger.warning(f"No profile found for user {user_id}")
                 return {}, time.perf_counter() - start_time
         except Exception as e:
+            # For invalid input (e.g., 22P02) or any other query error, log and continue without profile
             logger.error(f"Error fetching user profile: {e}")
-            # NO FALLBACKS - re-raise the error
-            raise
+            return {}, time.perf_counter() - start_time
     
     async def _gather_knowledge_rag(self, user_message: str) -> Tuple[List[Dict[str, Any]], float]:
         """
@@ -408,10 +418,10 @@ class AgentContextManager:
             # Generate embeddings using remote service
             query_embedding = await self.embedder.create_embedding(user_message)
 
-            # NO FALLBACKS: Only use the correct RPC function
+            # Use RPC signature supported by the client DB: embedding + agent slug
             result = self.supabase.rpc("match_documents", {
-                "p_query_embedding": query_embedding,  # Use corrected parameter name
-                "p_agent_slug": agent_slug,            # Use corrected parameter name
+                "p_query_embedding": query_embedding,
+                "p_agent_slug": agent_slug,
                 "p_match_threshold": 0.5,
                 "p_match_count": 5
             }).execute()

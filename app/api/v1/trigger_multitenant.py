@@ -21,6 +21,7 @@ from app.services.client_connection_manager import ClientConfigurationError
 from app.integrations.livekit_client import LiveKitManager
 from livekit import api
 import os
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +193,7 @@ async def handle_voice_trigger(
     room_info = await ensure_livekit_room_exists(
         backend_livekit, 
         request.room_name,
-        agent_name=agent.name,
+        agent_name=settings.livekit_agent_name,
         agent_slug=agent.slug,
         user_id=request.user_id,
         agent_config=agent_context

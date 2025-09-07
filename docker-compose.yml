@@ -78,6 +78,7 @@ services:
       - ./docker/agent/context.py:/app/context.py:ro
       - ./docker/agent/config_validator.py:/app/config_validator.py:ro
       - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
+      - ./docker/agent/citations_service.py:/app/citations_service.py:ro
     environment:
       - LIVEKIT_URL=${LIVEKIT_URL:-wss://litebridge-hw6srhvi.livekit.cloud}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}

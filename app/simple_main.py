@@ -328,6 +328,7 @@ import app.api.v1.livekit_proxy as livekit_proxy_api
 import app.api.v1.conversations_proxy as conversations_proxy_api
 import app.api.v1.documents_proxy as documents_proxy_api
 import app.api.v1.text_chat_proxy as text_chat_proxy_api
+import app.api.v1.voice_transcripts as voice_transcripts_api
 from app.services.wordpress_site_service import WordPressSiteService
 
 # Initialize WordPress site service
@@ -349,6 +350,9 @@ documents_proxy_api.redis_client = redis_client
 text_chat_proxy_api.redis_client = redis_client
 text_chat_proxy_api.client_service = client_service
 text_chat_proxy_api.agent_service = agent_service
+
+# Initialize voice transcripts service
+voice_transcripts_api.client_service = client_service
 app.include_router(clients_api.router, prefix="/api/v1/clients", tags=["clients"])
 app.include_router(agents_api.router, prefix="/api/v1", tags=["agents"])
 app.include_router(trigger_api.router, prefix="", tags=["trigger"])
@@ -357,6 +361,7 @@ app.include_router(livekit_proxy_api.router, tags=["livekit-proxy"])
 app.include_router(conversations_proxy_api.router, tags=["conversations-proxy"])
 app.include_router(documents_proxy_api.router, tags=["documents-proxy"])
 app.include_router(text_chat_proxy_api.router, tags=["text-chat-proxy"])
+app.include_router(voice_transcripts_api.router, tags=["voice-transcripts"])
 
 # Initialize default clients on startup
 # @app.on_event("startup")

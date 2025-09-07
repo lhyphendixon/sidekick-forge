@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI):
     import app.api.v1.conversations_proxy as conversations_proxy_api
     import app.api.v1.documents_proxy as documents_proxy_api
     import app.api.v1.text_chat_proxy as text_chat_proxy_api
+    import app.api.v1.voice_transcripts as voice_transcripts_api
     import app.api.v1.wordpress_sites as wordpress_sites_api
     
     # Initialize proxy services
@@ -76,6 +77,8 @@ async def lifespan(app: FastAPI):
     text_chat_proxy_api.redis_client = redis_client
     text_chat_proxy_api.client_service = client_service
     text_chat_proxy_api.agent_service = agent_service
+    
+    voice_transcripts_api.client_service = client_service
     
     wordpress_sites_api.wordpress_service = wordpress_site_service
     
@@ -159,6 +162,17 @@ async def _no_cache_admin_pages(request: Request, call_next):
 # Include API router
 app.include_router(api_router, prefix="/api")
 
+# Add admin preview routes FIRST (critical for fixing RAG context)
+try:
+    logger.info("Attempting to load admin preview routes...")
+    from app.api.admin_preview_standalone import router as admin_preview_router
+    app.include_router(admin_preview_router)
+    logger.info("✅ Admin preview routes loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load admin preview routes: {e}")
+    import traceback
+    logger.error(traceback.format_exc())
+
 # Include multi-tenant routes (gradual migration)
 try:
     from app.api.v1.multitenant_routes import trigger_router, agents_router, clients_router
@@ -218,6 +232,18 @@ from app.api.embed import router as embed_router
 app.include_router(livekit_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(embed_router)
+
+# Lightweight debug endpoint to verify resolved LiveKit configuration quickly
+@app.get("/debug/livekit", tags=["health"])
+async def debug_livekit():
+    try:
+        url = getattr(livekit_manager, 'url', None)
+        api_key = getattr(livekit_manager, 'api_key', None)
+        initialized = getattr(livekit_manager, '_initialized', False)
+        masked_key = (api_key[:6] + "***") if api_key else None
+        return {"initialized": initialized, "url": url, "api_key_prefix": masked_key}
+    except Exception:
+        return {"initialized": False}
 
 # Root endpoint
 @app.get("/", tags=["health"])

@@ -69,7 +69,7 @@ async def _store_voice_turn(
             "content": user_message,
             "transcript": user_message,
             "created_at": ts,
-            "source": "voice",
+            # "source": "voice",  # Column doesn't exist yet
         }
         # Assistant row
         assistant_row = {
@@ -80,7 +80,7 @@ async def _store_voice_turn(
             "content": agent_response,
             "transcript": agent_response,
             "created_at": ts,
-            "source": "voice",
+            # "source": "voice",  # Column doesn't exist yet
         }
         await supabase_client.table("conversation_transcripts").insert(user_row).execute()
         await supabase_client.table("conversation_transcripts").insert(assistant_row).execute()
@@ -208,29 +208,28 @@ async def agent_job_handler(ctx: JobContext):
                     metadata = room_metadata
                     logger.info(f"Room metadata dict from attribute: {metadata}")
         
-        # Check job metadata first (explicit dispatch) or as fallback
+        # Merge job metadata (explicit dispatch) with room metadata, preferring job keys
         if hasattr(ctx, 'job') and ctx.job and hasattr(ctx.job, 'metadata'):
             logger.info(f"Checking job metadata: {ctx.job.metadata}")
-            if isinstance(ctx.job.metadata, str) and ctx.job.metadata:
-                try:
+            try:
+                job_metadata = None
+                if isinstance(ctx.job.metadata, str) and ctx.job.metadata:
                     job_metadata = json.loads(ctx.job.metadata)
                     logger.info(f"Successfully parsed job metadata with {len(job_metadata)} keys")
-                    # Prefer job metadata if it has more complete data (explicit dispatch)
-                    if not metadata or len(job_metadata.get('api_keys', {})) > len(metadata.get('api_keys', {})):
-                        metadata = job_metadata
-                        logger.info(f"Using job metadata (explicit dispatch)")
-                except json.JSONDecodeError as e:
-                    # Strict JSON parsing for job metadata too
-                    logger.error(f"Failed to parse job metadata as JSON: {e}")
-                    logger.error(f"Raw job metadata (first 500 chars): {ctx.job.metadata[:500]}")
-                    logger.error(f"Job metadata type: {type(ctx.job.metadata)}, length: {len(ctx.job.metadata)}")
-                    # Don't re-raise here since we might have room metadata as fallback
-                    logger.warning("Continuing with room metadata if available")
-            elif isinstance(ctx.job.metadata, dict):
-                job_metadata = ctx.job.metadata
-                if not metadata or len(job_metadata.get('api_keys', {})) > len(metadata.get('api_keys', {})):
-                    metadata = job_metadata
-                    logger.info(f"Using job metadata dict (explicit dispatch)")
+                elif isinstance(ctx.job.metadata, dict):
+                    job_metadata = ctx.job.metadata
+                
+                if isinstance(job_metadata, dict):
+                    base = metadata if isinstance(metadata, dict) else {}
+                    # Merge: room/previous metadata first, then override with job metadata
+                    merged = {**base, **job_metadata}
+                    metadata = merged
+                    logger.info("Merged room metadata with job metadata (job has priority)")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse job metadata as JSON: {e}")
+                logger.error(f"Raw job metadata (first 500 chars): {ctx.job.metadata[:500]}")
+                logger.error(f"Job metadata type: {type(ctx.job.metadata)}, length: {len(ctx.job.metadata)}")
+                logger.warning("Continuing with room metadata if available")
         
         if not metadata:
             logger.warning("No metadata found in room or job, using defaults")
@@ -406,18 +405,39 @@ async def agent_job_handler(ctx: JobContext):
             
             # Initialize context manager if we have Supabase credentials
             context_manager = None
+            client_id = metadata.get("client_id")  # Define at outer scope for use throughout
             start_context_manager = time.perf_counter()
             try:
                 # Check if we can connect to client's Supabase
                 logger.info("🔍 Checking for Supabase credentials in metadata...")
                 client_supabase_url = metadata.get("supabase_url")
-                client_supabase_key = metadata.get("supabase_service_key") or metadata.get("supabase_anon_key")
+                # Get service role key (required - no fallback)
+                client_supabase_key = metadata.get("supabase_service_key") or metadata.get("supabase_service_role_key")
+                
+                # If no service key, try to load from environment
+                if not client_supabase_key:
+                    if client_id:
+                        env_key = f"CLIENT_{client_id.replace('-', '_').upper()}_SUPABASE_SERVICE_KEY"
+                        client_supabase_key = os.getenv(env_key)
+                        if client_supabase_key:
+                            logger.info(f"📌 Using service key from environment: {env_key}")
+                
+                # NO FALLBACK POLICY: Fail fast if no service role key
+                if not client_supabase_key:
+                    logger.error("❌ No service role key found for client Supabase - cannot proceed")
+                    raise ValueError("Client Supabase service role key is required - no fallback to anon key allowed")
+                
                 logger.info(f"📌 Supabase URL found: {bool(client_supabase_url)}")
                 logger.info(f"📌 Supabase key found: {bool(client_supabase_key)}")
                 
                 if client_supabase_url and client_supabase_key:
                     from supabase import create_client
-                    client_supabase = create_client(client_supabase_url, client_supabase_key)
+                    try:
+                        client_supabase = create_client(client_supabase_url, client_supabase_key)
+                        logger.info("✅ Client Supabase connection created")
+                    except Exception as e:
+                        logger.error(f"Failed to create Supabase client: {e}")
+                        client_supabase = None
                     
                     # Create context manager
                     context_manager = AgentContextManager(
@@ -439,8 +459,9 @@ async def agent_job_handler(ctx: JobContext):
 
             # Connect to the room first
             start_connect = time.perf_counter()
-            logger.info("Connecting to room...")
-            await ctx.connect()
+            logger.info("Connecting to room with close_on_disconnect=False for stability...")
+            # Use close_on_disconnect=False to prevent session cancellation on brief disconnects
+            await ctx.connect(auto_subscribe="audio_only")  # Only subscribe to audio tracks for voice agents
             logger.info("✅ Connected to room successfully")
             perf_summary['room_connection'] = time.perf_counter() - start_connect
             
@@ -540,6 +561,13 @@ async def agent_job_handler(ctx: JobContext):
             logger.info("Creating voice agent session with system prompt...")
             # Create SidekickAgent directly - eliminate nested AgentSession + voice.Agent architecture
             # This fixes duplicate event handling by using single layer architecture
+            
+            # Get agent_id and config from metadata (prefer UUID)
+            agent_id = metadata.get("agent_id") or metadata.get("agent_slug") or "default"
+            agent_slug = metadata.get("agent_slug") or metadata.get("agent_id") or "default"
+            show_citations = metadata.get("show_citations", True)
+            dataset_ids = metadata.get("dataset_ids", [])
+            
             agent = SidekickAgent(
                 instructions=enhanced_prompt,
                 stt=stt_plugin,
@@ -548,20 +576,76 @@ async def agent_job_handler(ctx: JobContext):
                 vad=vad,
                 context_manager=context_manager,
                 user_id=ctx.user_id,
+                client_id=client_id,
+                agent_config={'id': agent_id, 'agent_slug': agent_slug, 'show_citations': show_citations, 'dataset_ids': dataset_ids},
             )
             logger.info("✅ Voice agent created with single-layer architecture")
             
             # Store references for event handlers in agent
             agent._room = ctx.room  # Store room reference for agent use
-            agent._conversation_id = metadata.get("conversation_id") or f"voice_{ctx.room.name}_{ctx.user_id}"
-            agent._client_supabase = client_supabase if 'client_supabase' in locals() else None
+            # Ensure conversation_id matches DB UUID type when absent: generate UUID
+            import uuid as _uuid
+            agent._conversation_id = metadata.get("conversation_id") or str(_uuid.uuid4())
+            # Pass the Supabase client that was created earlier
+            agent._supabase_client = client_supabase if 'client_supabase' in locals() else None
+            # Ensure transcript storage uses UUID when available
+            agent._agent_id = metadata.get("agent_id") or metadata.get("agent_slug")
+            agent._user_id = metadata.get("user_id") or ctx.user_id
+            
+            # Log what's available for transcript storage
+            logger.info(f"📝 Transcript storage setup:")
+            logger.info(f"   - Has Supabase: {agent._supabase_client is not None}")
+            logger.info(f"   - Conversation ID: {agent._conversation_id}")
+            logger.info(f"   - Agent ID: {agent._agent_id}")
+            logger.info(f"   - User ID: {agent._user_id}")
             
             logger.info(f"📊 DIAGNOSTIC: Agent type: {type(agent)}")
             logger.info(f"📊 DIAGNOSTIC: Agent inherits from: {type(agent).__bases__}")
             
-            # Start agent directly with room - no nested AgentSession wrapper
-            logger.info("Starting agent directly (eliminating nested architecture)...")
-            await agent.start(ctx.room)
+            # Set up transcript storage with room reference
+            agent.setup_transcript_storage(ctx.room)
+            
+            # Create AgentSession with the plugins - proper LiveKit v1.x pattern
+            logger.info("Creating AgentSession with plugins...")
+            session = voice.AgentSession(
+                vad=vad,
+                stt=stt_plugin,
+                llm=llm_plugin,
+                tts=tts_plugin
+            )
+            
+            # Add event handler to capture user speech text for RAG context
+            @session.on("user_speech_committed")
+            def on_user_speech(msg: llm.ChatMessage):
+                """Capture user speech text for RAG context injection"""
+                try:
+                    # Extract text content from the message
+                    user_text = None
+                    if hasattr(msg, 'content'):
+                        if isinstance(msg.content, str):
+                            user_text = msg.content
+                        elif isinstance(msg.content, list):
+                            # Handle structured content
+                            for part in msg.content:
+                                if isinstance(part, dict) and part.get("type") == "text":
+                                    user_text = part.get("text")
+                                    break
+                    
+                    if user_text:
+                        # Store on session for use in on_user_turn_completed
+                        session.latest_user_text = user_text
+                        # Also store on agent as fallback
+                        agent.latest_user_text = user_text
+                        logger.info(f"💬 Captured user speech: {user_text[:100]}...")
+                except Exception as e:
+                    logger.error(f"Failed to capture user speech: {e}")
+            
+            # Store session reference on agent for access in on_user_turn_completed
+            agent._agent_session = session
+            
+            # Start the session with the agent and room
+            logger.info("Starting AgentSession with agent and room...")
+            await session.start(room=ctx.room, agent=agent)
 
             # Minimal diagnostic event logs for agent plugin configuration
             try:
@@ -594,8 +678,7 @@ async def agent_job_handler(ctx: JobContext):
             logger.info(f"   - STT: {stt_provider}")
             logger.info(f"   - TTS: {tts_provider}")
             
-            # Store agent reference for the job lifecycle
-            ctx.agent = agent
+            # Note: ctx.agent is read-only property - agent is already managed by the framework
             
             # Optional proactive greeting after successful start
             if os.getenv("DISABLE_PROACTIVE_GREETING", "false").lower() != "true":
@@ -764,10 +847,14 @@ if __name__ == "__main__":
         logger.info(f"Agent name: {agent_name}")
 
         # Configure worker options with agent_name for EXPLICIT DISPATCH
+        # Use THREAD executor to avoid process forking issues
+        from livekit.agents import JobExecutorType
         worker_options = WorkerOptions(
             entrypoint_fnc=agent_job_handler,
             request_fnc=request_filter,
             agent_name=agent_name,  # EXPLICIT: Only receive jobs for this agent name
+            job_executor_type=JobExecutorType.THREAD,  # Use threads instead of processes
+            num_idle_processes=0,  # Disable pre-warming of processes
         )
 
         # Let the CLI handle the event loop

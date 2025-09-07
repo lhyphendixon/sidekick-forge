@@ -1,0 +1,70 @@
+# LiveKit Agent Container - With PyTorch CPU for inference executor
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    APP_HOME=/app \
+    HF_HOME=/app/.cache \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    ffmpeg \
+    libpq-dev \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR $APP_HOME
+
+# Create non-root user
+RUN groupadd -r agent && useradd -r -g agent agent
+
+# Copy requirements file
+COPY requirements-agent.txt .
+
+# Install Python dependencies first without PyTorch
+RUN pip install --no-cache-dir --upgrade pip && \
+    grep -v "torch\|transformers" requirements-agent.txt > requirements-temp.txt && \
+    pip install --no-cache-dir -r requirements-temp.txt
+
+# Install PyTorch CPU version and transformers separately
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir transformers
+
+# Copy the entire agent directory
+COPY . /app
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/temp /home/agent/.cache && \
+    chown -R agent:agent /app /home/agent
+
+# Make entrypoint executable
+RUN chmod +x /app/entrypoint.py
+
+# Set dummy environment variables for download-files command
+ENV LIVEKIT_URL="wss://dummy.livekit.cloud" \
+    LIVEKIT_API_KEY="dummy_key" \
+    LIVEKIT_API_SECRET="dummy_secret"
+
+# Switch to root for model downloads
+USER root
+
+# Download necessary model weights
+RUN python3 /app/entrypoint.py download-files || true
+
+# Ensure agent user owns all files
+RUN chown -R agent:agent /app /home/agent
+
+# Switch back to non-root user
+USER agent
+
+# Expose health check port
+EXPOSE 8080
+
+# Run the entrypoint
+CMD ["python", "/app/entrypoint.py"]

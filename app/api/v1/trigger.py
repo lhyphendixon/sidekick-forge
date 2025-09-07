@@ -20,6 +20,18 @@ from app.integrations.livekit_client import LiveKitManager
 from livekit import api
 import os
 from supabase import create_client, Client as SupabaseClient
+from app.config import settings
+
+# --- Helpers ---
+def _normalize_ws_url(url: Optional[str]) -> Optional[str]:
+    """Ensure browser receives proper ws/wss scheme for LiveKit server URLs."""
+    if not url or not isinstance(url, str):
+        return url
+    if url.startswith("https://"):
+        return url.replace("https://", "wss://", 1)
+    if url.startswith("http://"):
+        return url.replace("http://", "ws://", 1)
+    return url
 
 # --- Performance Logging Helper ---
 def log_perf(event: str, room_name: str, details: Dict[str, Any]):
@@ -248,7 +260,7 @@ async def create_livekit_room(
                 "created_at": room_info["created_at"].isoformat(),
                 "max_participants": room_info["max_participants"],
                 "metadata": room_metadata,
-                "server_url": backend_livekit.url
+                "server_url": _normalize_ws_url(backend_livekit.url)
             }
         )
         
@@ -309,9 +321,21 @@ async def handle_voice_trigger(
     if missing_vs:
         raise HTTPException(status_code=400, detail=f"Missing voice settings: {', '.join(missing_vs)}")
         
+    # Build embedding config with robust fallback to legacy settings
+    embedding_cfg = {}
+    if client.additional_settings and client.additional_settings.get("embedding"):
+        embedding_cfg = client.additional_settings.get("embedding", {})
+    elif client.settings and hasattr(client.settings, 'embedding') and client.settings.embedding:
+        # settings.embedding may be a pydantic model; normalize to dict
+        try:
+            embedding_cfg = client.settings.embedding.dict()
+        except Exception:
+            embedding_cfg = dict(client.settings.embedding) if isinstance(client.settings.embedding, dict) else {}
+
     agent_context = {
         "client_id": client.id,  # Add client_id for API key lookup
         "agent_slug": agent.slug,
+        "agent_id": agent.id,
         "agent_name": agent.name,
         "system_prompt": agent.system_prompt,
         "voice_settings": voice_settings,
@@ -320,11 +344,12 @@ async def handle_voice_trigger(
         "session_id": request.session_id,
         "conversation_id": request.conversation_id,
         "context": request.context or {},
-        # Include embedding configuration from client's additional_settings
-        "embedding": client.additional_settings.get("embedding", {}) if client.additional_settings else {},
+        # Include embedding configuration (prefer additional_settings, then settings.embedding)
+        "embedding": embedding_cfg,
         # Include client's Supabase credentials for context system
         "supabase_url": client.settings.supabase.url if client.settings and client.settings.supabase else None,
         "supabase_anon_key": client.settings.supabase.anon_key if client.settings and client.settings.supabase else None,
+        "supabase_service_role_key": client.settings.supabase.service_role_key if client.settings and client.settings.supabase else None,
         "api_keys": {
             # LLM Providers
             "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
@@ -346,16 +371,22 @@ async def handle_voice_trigger(
             "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None) if client.settings and client.settings.api_keys else None,
         } if client.settings and client.settings.api_keys else {}
     }
+
+    # Include dataset_ids for RAG/citations when known
+    if agent.slug == "clarence-coherence":
+        agent_context["dataset_ids"] = [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571]
+        logger.info(f"📚 Added dataset_ids to voice agent_context for {agent.slug}: {len(agent_context['dataset_ids'])} documents")
     
     # Ensure the room exists (create if it doesn't)
     room_start = time.time()
     room_info = await ensure_livekit_room_exists(
-        backend_livekit, 
+        backend_livekit,
         request.room_name,
-        agent_name=agent.name,
-        agent_slug=agent.slug,  # Pass the actual agent slug
+        agent_name=settings.livekit_agent_name,
+        agent_slug=agent.slug,
         user_id=request.user_id,
-        agent_config=agent_context
+        agent_config=agent_context,
+        enable_agent_dispatch=True
     )
     room_duration = time.time() - room_start
     logger.info(f"⏱️ Room ensure process took {room_duration:.2f}s")
@@ -402,19 +433,19 @@ async def handle_voice_trigger(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Provider key validation failed: {e}")
 
-    # EXPLICITLY DISPATCH THE AGENT
-    # Remove participant check and always dispatch
-    dispatch_start = time.time()
-    dispatch_info = await dispatch_agent_job(
-        livekit_manager=backend_livekit,
-        room_name=request.room_name,
-        agent=agent,
-        client=client,
-        user_id=request.user_id
-    )
-    dispatch_duration = time.time() - dispatch_start
-    logger.info(f"⏱️ Agent dispatch took {dispatch_duration:.2f}s")
-    logger.info(f"Agent dispatch completed with status: {dispatch_info.get('status')}")
+    # EXPLICITLY DISPATCH THE AGENT via LiveKit API to guarantee job delivery
+    try:
+        dispatch_info = await dispatch_agent_job(
+            livekit_manager=backend_livekit,
+            room_name=request.room_name,
+            agent=agent,
+            client=client,
+            user_id=request.user_id,
+        )
+    except Exception as e:
+        logger.error(f"❌ Explicit dispatch failed: {e}")
+        # Fail fast per no-fallback policy
+        raise HTTPException(status_code=502, detail=f"Explicit dispatch failed: {e}")
     
     # Add a small delay to ensure room is fully ready
     if room_info["status"] == "created":
@@ -443,14 +474,14 @@ async def handle_voice_trigger(
         "platform": request.platform,
         "agent_context": agent_context,
         "livekit_config": {
-            "server_url": backend_livekit.url,
+            "server_url": _normalize_ws_url(backend_livekit.url),
             "user_token": user_token,
             "configured": True
         },
         "room_info": room_info,
         "dispatch_info": dispatch_info,  # Use the actual dispatch_info from explicit dispatch
         "status": "voice_agent_triggered",
-        "message": f"Room {request.room_name} ready with explicit agent dispatch to 'sidekick-agent', user token provided.",
+        "message": f"Room {request.room_name} ready with explicit agent dispatch to '{settings.livekit_agent_name}', user token provided.",
         "total_duration_ms": int(voice_trigger_total * 1000)
     }
 
@@ -592,6 +623,12 @@ async def handle_text_trigger(
         "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
         "embedding": embedding_cfg
     }
+    
+    # Add document_ids (dataset_ids) for RAG context
+    # For clarence-coherence, these are the assigned document IDs
+    if agent.slug == "clarence-coherence":
+        metadata["dataset_ids"] = [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571]
+        logger.info(f"📚 Added dataset_ids for clarence-coherence: {len(metadata['dataset_ids'])} documents")
     
     # Get API keys from client configuration
     api_keys = {}
@@ -861,6 +898,7 @@ async def dispatch_agent_job(
         job_metadata = {
             "client_id": client.id,
             "agent_slug": agent.slug,
+            "agent_id": agent.id,
             "agent_name": agent.name,
             "system_prompt": agent.system_prompt,
             "voice_settings": voice_settings,
@@ -868,10 +906,13 @@ async def dispatch_agent_job(
             # Include client's Supabase credentials for context system
             "supabase_url": client.settings.supabase.url if client.settings and client.settings.supabase else None,
             "supabase_anon_key": client.settings.supabase.anon_key if client.settings and client.settings.supabase else None,
+            "supabase_service_role_key": client.settings.supabase.service_role_key if client.settings and client.settings.supabase else None,
             # Include user_id if provided
             "user_id": user_id,
             # Include embedding configuration from client's additional_settings
             "embedding": client.additional_settings.get("embedding", {}) if client.additional_settings else {},
+            # Include dataset_ids for RAG context (document IDs for this agent)
+            "dataset_ids": [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571] if agent.slug == "clarence-coherence" else [],
             "api_keys": {
                 # LLM Providers
                 "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
@@ -908,12 +949,12 @@ async def dispatch_agent_job(
         dispatch_request = api.CreateAgentDispatchRequest(
             room=room_name,
             metadata=json.dumps(job_metadata),  # Pass full config as job metadata
-            agent_name="sidekick-agent"  # Match the agent name the worker accepts
+            agent_name=settings.livekit_agent_name  # Match the agent name the worker accepts
         )
         
         logger.info(f"📤 Sending dispatch request:")
         logger.info(f"   - Room: {room_name}")
-        logger.info(f"   - Agent name: sidekick-agent")
+        logger.info(f"   - Agent name: {settings.livekit_agent_name}")
         logger.info(f"   - Metadata fields: {len(job_metadata)}")
         logger.info(f"   - Metadata size: {len(json.dumps(job_metadata))} bytes")
         
@@ -967,7 +1008,8 @@ async def ensure_livekit_room_exists(
     agent_name: str = None,
     agent_slug: str = None,
     user_id: str = None,
-    agent_config: Dict[str, Any] = None
+    agent_config: Dict[str, Any] = None,
+    enable_agent_dispatch: bool = False,
 ) -> Dict[str, Any]:
     """
     Ensure a LiveKit room exists, creating it if necessary
@@ -1025,7 +1067,8 @@ async def ensure_livekit_room_exists(
             empty_timeout=1800,  # 30 minutes - much longer timeout for agent rooms
             max_participants=10,  # Allow multiple participants
             metadata=metadata_json,
-            enable_agent_dispatch=False  # Disable automatic dispatch; rely on explicit API dispatch
+            enable_agent_dispatch=enable_agent_dispatch,
+            agent_name=agent_name if enable_agent_dispatch else None,
         )
         create_duration = time.time() - create_start
         logger.info(f"⏱️ Room creation took {create_duration:.2f}s")

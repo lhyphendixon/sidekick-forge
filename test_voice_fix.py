@@ -6,7 +6,8 @@ Test voice chat functionality after fixing relevance field mapping
 import asyncio
 import httpx
 import json
-from datetime import datetime, UTC
+from datetime import datetime, timezone
+UTC = timezone.utc
 
 API_BASE_URL = "http://localhost:8000"
 

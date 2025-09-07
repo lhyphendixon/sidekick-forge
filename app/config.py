@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     livekit_url: Optional[str] = Field(None, env="LIVEKIT_URL")
     livekit_api_key: Optional[str] = Field(None, env="LIVEKIT_API_KEY")
     livekit_api_secret: Optional[str] = Field(None, env="LIVEKIT_API_SECRET")
+    livekit_agent_name: str = Field(default="sidekick-agent", env=["LIVEKIT_AGENT_NAME", "AGENT_NAME"])
     
     # AI Provider API Keys
     openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")
