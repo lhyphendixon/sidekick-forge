@@ -54,6 +54,8 @@ class SidekickAgent(voice.Agent):
         self._supabase_client = None
         self._conversation_id = None
         self._agent_id = None
+        # Strategy: final-only assistant transcript writes (avoid chunk rows)
+        self._suppress_on_assistant_transcript = True
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
@@ -317,11 +319,21 @@ class SidekickAgent(voice.Agent):
         self,
         role: str,
         content: str,
-        citations: Optional[List[Dict[str, Any]]] = None
-    ) -> None:
+        citations: Optional[List[Dict[str, Any]]] = None,
+        *,
+        sequence: Optional[int] = None,
+        turn_id: Optional[str] = None
+    ) -> Optional[str]:
         """Store a transcript entry in the database."""
         if not self._supabase_client:
-            return
+            logger.warning(f"Cannot store transcript - No Supabase client. Conv ID: {self._conversation_id}")
+            return None
+        
+        if not self._conversation_id:
+            logger.warning(f"Cannot store transcript - No conversation_id set")
+            return None
+        
+        logger.debug(f"Storing {role} transcript for conversation {self._conversation_id}, seq={sequence}, turn={turn_id}")
         
         try:
             ts = datetime.utcnow().isoformat()
@@ -335,34 +347,98 @@ class SidekickAgent(voice.Agent):
                 "content": content,
                 "transcript": content,
                 "created_at": ts,
-                # "source": "voice",  # Column doesn't exist yet in client DB
+                "source": "voice",  # Mark as voice transcript for SSE filtering
             }
             
             # Add citations if available (for assistant role)
             if role == "assistant" and citations:
                 row["citations"] = citations
             
+            # Optional sequencing and turn grouping
+            if sequence is not None:
+                row["sequence"] = sequence
+            if turn_id is not None:
+                row["turn_id"] = turn_id
+            
             # Use asyncio.to_thread to properly await the sync operation
-            await asyncio.to_thread(
-                lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
-            )
+            def _insert():
+                return self._supabase_client.table("conversation_transcripts").insert(row).execute()
+            result = await asyncio.to_thread(_insert)
+            # Return inserted row id if available
+            try:
+                if result and getattr(result, 'data', None):
+                    inserted_id = result.data[0].get('id')
+                    return inserted_id
+            except Exception:
+                pass
+            return None
             
         except Exception as e:
             logger.error(f"Failed to store {role} transcript: {e}")
+            return None
     
-    async def llm_node(
-        self,
-        chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool],
-        model_settings: ModelSettings,
-    ) -> AsyncIterable[llm.ChatChunk]:
-        logger.info("📥 llm_node: invoked; delegating to default implementation")
-        async for chunk in CoreAgent.default.llm_node(self, chat_ctx, tools, model_settings):
-            yield chunk
     
     async def on_assistant_response(self, message: str) -> None:
         """Called when assistant generates a response - override this to capture transcripts"""
+        if getattr(self, "_suppress_on_assistant_transcript", False):
+            # llm_node will handle final transcript write
+            logger.debug("on_assistant_response suppressed (final-only mode)")
+            return
         logger.info(f"Assistant response captured for transcript: {message[:100]}...")
         await self._handle_assistant_transcript(message)
+    
+    async def llm_node(
+        self,
+        chat_ctx: "llm.ChatContext",
+        tools: "list[FunctionTool | RawFunctionTool]",
+        model_settings: "ModelSettings"
+    ) -> "AsyncIterable[llm.ChatChunk | str]":
+        """Override llm_node to capture assistant responses for transcripts"""
+        logger.info("llm_node: starting assistant generation stream")
+        # Call parent's llm_node to get the response stream (it's already an async generator)
+        response_stream = super().llm_node(chat_ctx, tools, model_settings)
+        
+        # Collect the full response for transcript storage; no chunk writes (final-only)
+        full_response: List[str] = []
+        
+        async for chunk in response_stream:
+            # Yield the chunk to maintain streaming behavior
+            yield chunk
+            
+            # Collect text chunks for transcript
+            text_part: Optional[str] = None
+            try:
+                if isinstance(chunk, str):
+                    text_part = chunk
+                elif hasattr(chunk, 'choices') and getattr(chunk, 'choices'):
+                    # OpenAI-style choices
+                    for choice in chunk.choices:
+                        if hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'content') and choice.delta.content:
+                            text_part = (text_part or "") + choice.delta.content
+                elif hasattr(chunk, 'delta') and getattr(chunk, 'delta') and hasattr(chunk.delta, 'content') and chunk.delta.content:
+                    text_part = chunk.delta.content
+                elif hasattr(chunk, 'content') and getattr(chunk, 'content'):
+                    text_part = chunk.content
+            except Exception as e:
+                logger.warning(f"llm_node: failed to parse chunk ({type(chunk).__name__}): {type(e).__name__}: {e}")
+            
+            if text_part:
+                full_response.append(text_part)
+        
+        # Store the complete assistant response as a transcript
+        if full_response:
+            complete_text = ''.join(full_response)
+            logger.info(f"🤖 LLM generated response: {complete_text[:100]}...")
+            # Store one final row with citations
+            citations = self._current_citations if self._citations_enabled else None
+            await self._store_transcript(
+                role="assistant",
+                content=complete_text,
+                citations=citations,
+                sequence=1,
+                turn_id=str(uuid.uuid4()),
+            )
+        else:
+            logger.warning("llm_node: stream ended with no textual content extracted")
 
 
