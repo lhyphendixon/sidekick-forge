@@ -31,6 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configured CORS properly
 - Added rate limiting via Nginx
 
+## [2.1.1] - 2025-09-15
+
+### Fixed
+- LiveKit voice embed hang by making audio start non-blocking under user gesture.
+- Voice button indefinite loading fixed by avoiding awaited audio start calls.
+
+### Changed
+- SSE transcript reliability: single EventSource connection with history prefetch and dedupe.
+- Added diagnostics for LiveKit connection, audio playback status, and subscriptions.
+- Enforced no-fallback: `conversation_id` must be present in trigger-agent voice response.
+
+### Removed
+- Unmute overlay; autoplay now primed via dedicated hidden audio element.
+
 ## [1.0.0] - TBD
 
 ### Added
