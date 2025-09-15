@@ -141,13 +141,20 @@ async def embed_text_stream(
                                     
                                 logger.info(f"[embed-stream] generated embedding (dim: {len(query_embedding)})")
                                 
+                                # Convert embedding to pgvector string format
+                                emb_vec = "[" + ",".join(map(str, query_embedding)) + "]"
+                                logger.info(f"[embed-stream] pgvector string length: {len(emb_vec)}, first 100 chars: {emb_vec[:100]}")
+                                logger.info(f"[embed-stream] calling match_documents with agent_slug: {agent_slug}, threshold: 0.3")
+                                
                                 # Search documents using RPC
                                 search_result = client_supabase.rpc("match_documents", {
-                                    "p_query_embedding": query_embedding,
+                                    "p_query_embedding": emb_vec,  # Pass as pgvector string
                                     "p_agent_slug": agent_slug,
-                                    "p_match_threshold": 0.5,
+                                    "p_match_threshold": 0.3,  # Lowered from 0.5 for better recall
                                     "p_match_count": 5
                                 }).execute()
+                                
+                                logger.info(f"[embed-stream] match_documents returned: {len(search_result.data) if search_result.data else 0} results")
                                 
                                 if search_result.data:
                                     logger.info(f"[embed-stream] RAG found {len(search_result.data)} relevant documents")

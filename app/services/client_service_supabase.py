@@ -392,49 +392,21 @@ class ClientService:
                     )
                     logger.info(f"[TIMING] fetch_settings_from_supabase took {time.time() - fetch_start:.2f}s")
                     
-                    # Update client settings with synced data - PRESERVE VALID PLATFORM KEYS
-                    if synced_settings.get('api_keys'):
-                        if not client.settings.api_keys:
-                            client.settings.api_keys = APIKeys()
-                        for key, value in synced_settings['api_keys'].items():
-                            if value and hasattr(client.settings.api_keys, key):
-                                # Only overwrite if the platform key is missing or empty
-                                # This prevents auto-sync from overwriting valid platform keys with invalid client keys
-                                current_platform_value = getattr(client.settings.api_keys, key, None)
-                                if not current_platform_value:
-                                    setattr(client.settings.api_keys, key, value)
-                                # Otherwise, keep the valid platform key
+                    # NEVER update API keys from client database - they come from platform only
+                    # Skip any api_keys in synced_settings to preserve platform keys
+                    # if synced_settings.get('api_keys'):
+                    #     # We intentionally ignore API keys from client databases
                     
-                    # Update the client in database with synced API keys
+                    # Update only the timestamp, NEVER update API keys from client database
                     update_start = time.time()
                     update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
                     
-                    # Update individual API key columns ONLY if they're missing in platform DB
-                    if synced_settings.get('api_keys'):
-                        # First get current platform values
-                        platform_result = self.supabase.table(self.table_name).select(
-                            'openai_api_key, groq_api_key, deepgram_api_key, elevenlabs_api_key, '
-                            'cartesia_api_key, speechify_api_key, deepinfra_api_key, replicate_api_key, '
-                            'novita_api_key, cohere_api_key, siliconflow_api_key, jina_api_key'
-                        ).eq('id', client_id).execute()
-                        
-                        platform_keys = platform_result.data[0] if platform_result.data else {}
-                        
-                        for key, value in synced_settings['api_keys'].items():
-                            # Only update if platform doesn't have this key or it's a placeholder
-                            platform_value = platform_keys.get(key)
-                            if value and key in ['openai_api_key', 'groq_api_key', 'deepgram_api_key', 
-                                               'elevenlabs_api_key', 'cartesia_api_key', 'speechify_api_key',
-                                               'deepinfra_api_key', 'replicate_api_key', 'novita_api_key',
-                                               'cohere_api_key', 'siliconflow_api_key', 'jina_api_key']:
-                                if not platform_value or platform_value == '<needs-actual-key>':
-                                    update_dict[key] = value
-                                    logger.info(f"Auto-sync: Adding missing {key} from client database")
-                                else:
-                                    logger.debug(f"Auto-sync: Keeping platform value for {key}")
+                    # IMPORTANT: API keys are NEVER synced from client databases
+                    # They must be managed in the platform database only for security
+                    # Skip any API key updates from synced_settings
                     
-                    if len(update_dict) > 1:  # More than just updated_at
-                        self.supabase.table(self.table_name).update(update_dict).eq("id", client_id).execute()
+                    # Only update timestamp
+                    self.supabase.table(self.table_name).update(update_dict).eq("id", client_id).execute()
                     logger.info(f"[TIMING] client update took {time.time() - update_start:.2f}s")
                     logger.info(f"[TIMING] Total auto-sync took {time.time() - sync_start:.2f}s")
                     
@@ -483,24 +455,12 @@ class ClientService:
                 config = data[0]
                 
                 # Extract relevant settings from the agent configuration
+                # IMPORTANT: We do NOT fetch API keys from client databases
+                # API keys should only come from the platform database for security
+                # The client database may have api_keys for their own use, but we ignore them
+                
                 settings = {
-                    "api_keys": {
-                        # LLM Providers
-                        "openai_api_key": config.get('openai_api_key', ''),
-                        "groq_api_key": config.get('groq_api_key', ''),
-                        "deepinfra_api_key": config.get('deepinfra_api_key', ''),
-                        "replicate_api_key": config.get('replicate_api_key', ''),
-                        # Voice/Speech Providers
-                        "deepgram_api_key": config.get('deepgram_api_key', ''),
-                        "elevenlabs_api_key": config.get('elevenlabs_api_key', ''),
-                        "cartesia_api_key": config.get('cartesia_api_key', ''),
-                        "speechify_api_key": config.get('speechify_api_key', ''),
-                        # Embedding/Reranking Providers
-                        "novita_api_key": config.get('novita_api_key', ''),
-                        "cohere_api_key": config.get('cohere_api_key', ''),
-                        "siliconflow_api_key": config.get('siliconflow_api_key', ''),
-                        "jina_api_key": config.get('jina_api_key', ''),
-                    },
+                    "api_keys": {},  # Always empty - API keys come from platform DB only
                     "livekit": {
                         "server_url": config.get('livekit_url', ''),
                         "api_key": config.get('livekit_api_key', ''),

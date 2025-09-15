@@ -14,19 +14,19 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 from app.config import settings
 from app.api.v1 import api_router
 from app.middleware.auth import AuthenticationMiddleware
-from app.middleware.rate_limiting import RateLimitMiddleware
 from app.middleware.logging import LoggingMiddleware
 from app.utils.exceptions import APIException
 from app.integrations.supabase_client import supabase_manager
 from app.integrations.livekit_client import livekit_manager
 # Container manager removed - using worker pool architecture
-import redis.asyncio as aioredis
+# Redis is deprecated; keep import removable
+import redis.asyncio as aioredis  # noqa: F401
 
 # Configure logging
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger("autonomite_saas")
 
-# Initialize Redis client
+# Redis client removed (deprecated)
 redis_client = None
 
 @asynccontextmanager
@@ -37,8 +37,8 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Autonomite SaaS Backend")
     
-    # Initialize Redis
-    redis_client = await aioredis.from_url(settings.redis_url)
+    # Redis disabled: do not initialize
+    redis_client = None
     
     # Initialize connections
     await supabase_manager.initialize()
@@ -53,9 +53,9 @@ async def lifespan(app: FastAPI):
     from app.services.agent_service_supabase import AgentService
     from app.services.wordpress_site_service import WordPressSiteService
     
-    client_service = ClientService(settings.supabase_url, settings.supabase_service_role_key, redis_client)
-    agent_service = AgentService(client_service, redis_client)
-    wordpress_site_service = WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key, redis_client)
+    client_service = ClientService(settings.supabase_url, settings.supabase_service_role_key, None)
+    agent_service = AgentService(client_service, None)
+    wordpress_site_service = WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key, None)
     
     # Inject services into proxy modules
     import app.api.v1.livekit_proxy as livekit_proxy_api
@@ -69,12 +69,12 @@ async def lifespan(app: FastAPI):
     livekit_proxy_api.client_service = client_service
     livekit_proxy_api.agent_service = agent_service
     
-    conversations_proxy_api.redis_client = redis_client
+    conversations_proxy_api.redis_client = None
     conversations_proxy_api.client_service = client_service
     
-    documents_proxy_api.redis_client = redis_client
+    documents_proxy_api.redis_client = None
     
-    text_chat_proxy_api.redis_client = redis_client
+    text_chat_proxy_api.redis_client = None
     text_chat_proxy_api.client_service = client_service
     text_chat_proxy_api.agent_service = agent_service
     
@@ -103,8 +103,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Autonomite SaaS Backend")
     await supabase_manager.close()
     await livekit_manager.close()
-    if redis_client:
-        await redis_client.close()
+    # No Redis to close
     # Workers are managed separately and don't need closing here
 
 # Create FastAPI app
@@ -140,9 +139,8 @@ app.add_middleware(
     expose_headers=["X-Total-Count", "X-Page", "X-Per-Page"]
 )
 
-# Add custom middleware
+# Add custom middleware (Redis rate limiting removed per policy)
 app.add_middleware(LoggingMiddleware)
-app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AuthenticationMiddleware)
 
 # Force no-cache on admin pages to avoid CDN/browser serving stale admin HTML

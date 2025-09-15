@@ -1,7 +1,7 @@
 """
 Agent trigger endpoint for WordPress plugin integration
 """
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -17,10 +17,12 @@ from app.services.agent_service_supabase import AgentService
 from app.services.client_service_supabase import ClientService
 from app.core.dependencies import get_client_service, get_agent_service
 from app.integrations.livekit_client import LiveKitManager
+from app.agent_modules.transcript_store import store_turn
 from livekit import api
 import os
 from supabase import create_client, Client as SupabaseClient
 from app.config import settings
+# Redis dedupe removed
 
 # --- Helpers ---
 def _normalize_ws_url(url: Optional[str]) -> Optional[str]:
@@ -46,6 +48,29 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["trigger"])
 
+# Simple in-process dedupe for dispatches to avoid dual agent sessions per room
+RECENT_DISPATCH_TTL_SEC = 10.0
+_recent_dispatches: Dict[str, float] = {}
+
+def _should_dispatch(room_name: str) -> bool:
+    """Return True if we should dispatch for this room now; False if a recent dispatch exists."""
+    try:
+        now = time.time()
+        # Drop expired entries
+        expired = [r for r, ts in _recent_dispatches.items() if now - ts > RECENT_DISPATCH_TTL_SEC]
+        for r in expired:
+            _recent_dispatches.pop(r, None)
+        ts = _recent_dispatches.get(room_name)
+        if ts and (now - ts) < RECENT_DISPATCH_TTL_SEC:
+            logger.info(f"🛑 Duplicate dispatch suppressed for room {room_name} (within {RECENT_DISPATCH_TTL_SEC}s)")
+            return False
+        _recent_dispatches[room_name] = now
+        return True
+    except Exception:
+        # Fail-open if dedupe cache access has an error
+        return True
+
+# Cross-process dedupe removed; relying on in-process dedupe only
 
 class CreateRoomRequest(BaseModel):
     """Request model for creating a LiveKit room"""
@@ -172,13 +197,23 @@ async def trigger_agent(
         # Process based on mode
         if request.mode == TriggerMode.VOICE:
             result = await handle_voice_trigger(request, agent, client)
+            # Enforce no-fallback: conversation_id must be present in result
+            try:
+                if not isinstance(result, dict) or not result.get("conversation_id"):
+                    logger.error("❌ voice result missing conversation_id; refusing to return success")
+                    raise HTTPException(status_code=500, detail="Missing conversation_id in voice trigger result")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Validation error for voice result: {e}")
+                raise HTTPException(status_code=500, detail="Invalid voice trigger result")
         else:  # TEXT mode
             result = await handle_text_trigger(request, agent, client)
         
         request_total = time.time() - request_start
         logger.info(f"✅ COMPLETED trigger-agent request in {request_total:.2f}s")
         
-        return TriggerAgentResponse(
+        resp = TriggerAgentResponse(
             success=True,
             message=f"Agent {request.agent_slug} triggered successfully in {request.mode} mode",
             data=result,
@@ -191,6 +226,13 @@ async def trigger_agent(
                 "voice_id": agent.voice_settings.voice_id if agent.voice_settings else "alloy"
             }
         )
+        try:
+            cd = resp.data or {}
+            logger.info(f"🔎 trigger-agent response data keys: {list(cd.keys())}")
+            logger.info(f"🔎 trigger-agent response conversation_id: {cd.get('conversation_id')}")
+        except Exception:
+            pass
+        return resp
         
     except HTTPException:
         raise
@@ -320,6 +362,19 @@ async def handle_voice_trigger(
         missing_vs.append("tts_provider")
     if missing_vs:
         raise HTTPException(status_code=400, detail=f"Missing voice settings: {', '.join(missing_vs)}")
+    
+    # Enforce Cartesia requires an explicit TTS model (no default/fallback)
+    if normalized_tts == "cartesia":
+        tts_model_provided = voice_settings.get("model") or voice_settings.get("tts_model")
+        if not tts_model_provided:
+            logger.error("Cartesia selected without TTS model. Rejecting trigger per no-fallback policy.")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cartesia TTS requires a model. Set voice_settings.model in the agent's voice settings "
+                    "(e.g., 'sonic-english' or 'sonic-2')."
+                ),
+            )
         
     # Build embedding config with robust fallback to legacy settings
     embedding_cfg = {}
@@ -332,6 +387,9 @@ async def handle_voice_trigger(
         except Exception:
             embedding_cfg = dict(client.settings.embedding) if isinstance(client.settings.embedding, dict) else {}
 
+    # Generate conversation_id if not provided
+    conversation_id = request.conversation_id or str(uuid.uuid4())
+    
     agent_context = {
         "client_id": client.id,  # Add client_id for API key lookup
         "agent_slug": agent.slug,
@@ -342,7 +400,7 @@ async def handle_voice_trigger(
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": request.user_id,
         "session_id": request.session_id,
-        "conversation_id": request.conversation_id,
+        "conversation_id": conversation_id,
         "context": request.context or {},
         # Include embedding configuration (prefer additional_settings, then settings.embedding)
         "embedding": embedding_cfg,
@@ -386,7 +444,7 @@ async def handle_voice_trigger(
         agent_slug=agent.slug,
         user_id=request.user_id,
         agent_config=agent_context,
-        enable_agent_dispatch=True
+        enable_agent_dispatch=False
     )
     room_duration = time.time() - room_start
     logger.info(f"⏱️ Room ensure process took {room_duration:.2f}s")
@@ -434,18 +492,25 @@ async def handle_voice_trigger(
         raise HTTPException(status_code=400, detail=f"Provider key validation failed: {e}")
 
     # EXPLICITLY DISPATCH THE AGENT via LiveKit API to guarantee job delivery
-    try:
-        dispatch_info = await dispatch_agent_job(
-            livekit_manager=backend_livekit,
-            room_name=request.room_name,
-            agent=agent,
-            client=client,
-            user_id=request.user_id,
-        )
-    except Exception as e:
-        logger.error(f"❌ Explicit dispatch failed: {e}")
-        # Fail fast per no-fallback policy
-        raise HTTPException(status_code=502, detail=f"Explicit dispatch failed: {e}")
+    # Skip explicit dispatch if we just dispatched for this room or auto-dispatch was used
+    dispatch_info = {"status": "skipped", "reason": "recent or auto-dispatch"}
+    if room_info and room_info.get("status") in ("existing", "created"):
+        # Use only local dedupe
+        local_ok = _should_dispatch(request.room_name)
+        if local_ok:
+            try:
+                dispatch_info = await dispatch_agent_job(
+                    livekit_manager=backend_livekit,
+                    room_name=request.room_name,
+                    agent=agent,
+                    client=client,
+                    user_id=request.user_id,
+                    conversation_id=conversation_id,
+                )
+            except Exception as e:
+                logger.error(f"❌ Explicit dispatch failed: {e}")
+                # Fail fast per no-fallback policy
+                raise HTTPException(status_code=502, detail=f"Explicit dispatch failed: {e}")
     
     # Add a small delay to ensure room is fully ready
     if room_info["status"] == "created":
@@ -467,11 +532,45 @@ async def handle_voice_trigger(
     
     voice_trigger_total = time.time() - voice_trigger_start
     logger.info(f"⏱️ TOTAL voice trigger process took {voice_trigger_total:.2f}s")
-    
+
+    # Enforce conversation_id presence before returning (no fallback policy)
+    try:
+        if not conversation_id:
+            conversation_id = str(uuid.uuid4())
+            agent_context["conversation_id"] = conversation_id
+        # Also ensure room_info metadata carries it
+        try:
+            meta = room_info.get("metadata") if isinstance(room_info, dict) else None
+            if isinstance(meta, dict):
+                meta["conversation_id"] = conversation_id
+            elif isinstance(meta, str):
+                import json as _json
+                try:
+                    m = _json.loads(meta)
+                    if isinstance(m, dict):
+                        m["conversation_id"] = conversation_id
+                        room_info["metadata"] = m
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    except Exception:
+        pass
+    # Log the conversation_id we are returning to the client (no PII)
+    try:
+        logger.info(f"📝 Returning voice trigger: room={request.room_name} conversation_id={conversation_id}")
+    except Exception:
+        pass
+
+    try:
+        logger.info(f"🧩 trigger-agent result keys: {list(result.keys())}")
+    except Exception:
+        pass
     return {
         "mode": "voice",
         "room_name": request.room_name,
         "platform": request.platform,
+        "conversation_id": conversation_id,
         "agent_context": agent_context,
         "livekit_config": {
             "server_url": _normalize_ws_url(backend_livekit.url),
@@ -494,80 +593,40 @@ async def _store_conversation_turn(
     user_message: str,
     agent_response: str,
     session_id: Optional[str] = None,
-    context_manager=None  # Optional context manager for embeddings
+    context_manager=None,  # Optional context manager for embeddings
+    citations: Optional[List[Dict[str, Any]]] = None,  # Optional citations from RAG
+    metadata: Optional[Dict[str, Any]] = None  # Optional metadata
 ) -> None:
     """
-    Store a conversation turn immediately in the client's Supabase.
-    This implements transactional turn-based storage for unified voice/text conversations.
+    Store a conversation turn using the unified transcript store.
     """
     try:
-        # Get current timestamp for both messages
-        ts = datetime.utcnow().isoformat()
-        
-        # Store user message row
-        user_row = {
-            "conversation_id": conversation_id,
-            "agent_id": agent_id,
-            "user_id": user_id,
-            "session_id": session_id,
-            "role": "user",
-            "content": user_message,
-            "transcript": user_message,  # Required field, same as content for text
-            "created_at": ts
+        # Prepare turn data for the transcript store
+        turn_data = {
+            'conversation_id': conversation_id,
+            'session_id': session_id,
+            'agent_id': agent_id,
+            'user_id': user_id,
+            'user_text': user_message,
+            'assistant_text': agent_response,
+            'citations': citations,
+            'metadata': metadata or {},
+            'embedder': context_manager.embedder if context_manager and hasattr(context_manager, 'embedder') else None
         }
-        user_result = supabase_client.table("conversation_transcripts").insert(user_row).execute()
         
-        # Store assistant message row
-        assistant_row = {
-            "conversation_id": conversation_id,
-            "agent_id": agent_id,
-            "user_id": user_id,
-            "session_id": session_id,
-            "role": "assistant",
-            "content": agent_response,
-            "transcript": agent_response,  # Required field, same as content for text
-            "created_at": ts
-        }
-        assistant_result = supabase_client.table("conversation_transcripts").insert(assistant_row).execute()
+        # Use the unified transcript store
+        result = await store_turn(turn_data, supabase_client)
         
-        logger.info(f"✅ Stored conversation turn: conversation_id={conversation_id} (2 rows: user + assistant)")
-        
-        # Best-effort embedding generation
-        if context_manager and hasattr(context_manager, 'embedder'):
-            try:
-                # Get row IDs from insert results
-                user_row_id = user_result.data[0]['id'] if user_result.data else None
-                assistant_row_id = assistant_result.data[0]['id'] if assistant_result.data else None
-                
-                # List of trivial messages to skip
-                trivial_messages = {'hey', 'hi', 'hello', 'ok', 'okay', 'thanks', 'thank you', 'bye', 'goodbye'}
-                
-                # Generate and update user message embedding
-                if user_row_id and len(user_message) >= 8 and user_message.lower() not in trivial_messages:
-                    try:
-                        user_embedding = await context_manager.embedder.create_embedding(user_message)
-                        supabase_client.table("conversation_transcripts").update({
-                            "embeddings": user_embedding
-                        }).eq("id", user_row_id).execute()
-                        logger.info(f"✅ Generated embedding for user message (id={user_row_id})")
-                    except Exception as embed_error:
-                        logger.warning(f"Failed to generate user message embedding: {embed_error}")
-                
-                # Generate and update assistant response embedding
-                if assistant_row_id and len(agent_response) >= 8 and agent_response.lower() not in trivial_messages:
-                    try:
-                        assistant_embedding = await context_manager.embedder.create_embedding(agent_response)
-                        supabase_client.table("conversation_transcripts").update({
-                            "embeddings": assistant_embedding
-                        }).eq("id", assistant_row_id).execute()
-                        logger.info(f"✅ Generated embedding for assistant response (id={assistant_row_id})")
-                    except Exception as embed_error:
-                        logger.warning(f"Failed to generate assistant response embedding: {embed_error}")
-                        
-            except Exception as e:
-                logger.warning(f"Failed during embedding generation process: {e}")
-                # Continue - embedding failure shouldn't break the conversation
-        
+        if result['success']:
+            logger.info(
+                f"✅ Stored conversation turn | "
+                f"turn_id={result['turn_id']} | "
+                f"conversation_id={conversation_id} | "
+                f"citations={len(citations) if citations else 0}"
+            )
+        else:
+            logger.error(f"❌ Failed to store conversation turn: {result.get('error')}")
+            
     except Exception as e:
         logger.error(f"❌ Failed to store conversation turn: {e}")
         logger.error(f"User message: {user_message[:100]}...")
@@ -629,6 +688,11 @@ async def handle_text_trigger(
     if agent.slug == "clarence-coherence":
         metadata["dataset_ids"] = [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571]
         logger.info(f"📚 Added dataset_ids for clarence-coherence: {len(metadata['dataset_ids'])} documents")
+    # For able in KCG, add the document IDs that have 'able' permissions
+    elif agent.slug == "able":
+        # These are the KCG document IDs with 'able' permissions
+        metadata["dataset_ids"] = list(range(7, 36))  # Documents 7-35 in KCG have 'able' permissions
+        logger.info(f"📚 Added dataset_ids for able: {len(metadata['dataset_ids'])} documents")
     
     # Get API keys from client configuration
     api_keys = {}
@@ -827,6 +891,28 @@ async def handle_text_trigger(
                 elif hasattr(chunk, 'content') and chunk.content:
                     response_text += chunk.content
         
+        # Try to retrieve citations if RAG was used
+        citations = None
+        if context_manager and hasattr(context_manager, '_last_rag_results'):
+            try:
+                # Check if context manager has stored citations from the last RAG query
+                last_results = getattr(context_manager, '_last_rag_results', None)
+                if last_results and hasattr(last_results, 'citations'):
+                    citations = [
+                        {
+                            "doc_id": getattr(c, 'doc_id', None),
+                            "dataset_id": getattr(c, 'dataset_id', None),
+                            "title": getattr(c, 'title', 'Unknown'),
+                            "source_url": getattr(c, 'source_url', None),
+                            "chunk_text": getattr(c, 'chunk_text', ''),
+                            "score": getattr(c, 'score', 0.0)
+                        }
+                        for c in last_results.citations
+                    ]
+                    logger.info(f"📚 Retrieved {len(citations)} citations from context manager")
+            except Exception as e:
+                logger.warning(f"Failed to extract citations from context manager: {e}")
+        
         # Store conversation turn if we have a response and Supabase client
         if response_text and client_supabase:
             try:
@@ -838,9 +924,11 @@ async def handle_text_trigger(
                     user_message=request.message,
                     agent_response=response_text,
                     session_id=request.session_id,
-                    context_manager=context_manager  # Pass context manager for embeddings
+                    context_manager=context_manager,  # Pass context manager for embeddings
+                    citations=citations,  # Include citations if available
+                    metadata={'agent_slug': agent.slug}  # Include agent metadata
                 )
-                logger.info(f"✅ Text conversation turn stored for conversation_id={conversation_id}")
+                logger.info(f"✅ Text conversation turn stored for conversation_id={conversation_id} with {len(citations) if citations else 0} citations")
             except Exception as e:
                 logger.error(f"❌ Failed to store text conversation turn: {e}")
                 # Continue - storage failure shouldn't break the response
@@ -869,7 +957,8 @@ async def dispatch_agent_job(
     room_name: str,
     agent,
     client,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    conversation_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Explicit dispatch mode - Directly dispatch agent to room with full configuration.
@@ -903,6 +992,8 @@ async def dispatch_agent_job(
             "system_prompt": agent.system_prompt,
             "voice_settings": voice_settings,
             "webhooks": agent.webhooks.dict() if agent.webhooks else {},
+            # Ensure worker stores transcripts under the same conversation
+            "conversation_id": conversation_id,
             # Include client's Supabase credentials for context system
             "supabase_url": client.settings.supabase.url if client.settings and client.settings.supabase else None,
             "supabase_anon_key": client.settings.supabase.anon_key if client.settings and client.settings.supabase else None,

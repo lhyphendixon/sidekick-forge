@@ -401,10 +401,9 @@ class KnowledgeBaseManager {
     async init() {
         await this.loadUserInfo();
         this.setupEventListeners();
-        await this.loadAgents();
-        await this.loadDocuments();
+        // Don't load agents or documents until a client is selected
         
-        // Auto-refresh every 60 seconds, but only if not actively uploading
+        // Auto-refresh every 60 seconds, but only if not actively uploading AND a client is selected
         this.refreshInterval = setInterval(() => {
             // Don't refresh if user is currently uploading or if upload controls are visible
             const uploadProgress = document.getElementById('upload-progress');
@@ -412,7 +411,7 @@ class KnowledgeBaseManager {
             const isUploading = uploadProgress && uploadProgress.style.display !== 'none';
             const hasSelectedFiles = uploadControls && uploadControls.style.display !== 'none';
             
-            if (!isUploading && !hasSelectedFiles) {
+            if (!isUploading && !hasSelectedFiles && this.currentClient) {
                 this.loadDocuments(true); // Silent refresh
             }
         }, 60000);
@@ -697,6 +696,13 @@ class KnowledgeBaseManager {
     }
 
     async loadAgents() {
+        // Don't load agents if no client is selected
+        if (!this.currentClient) {
+            console.log('No client selected, skipping agent load');
+            this.agents = [];
+            return;
+        }
+        
         try {
             const token = localStorage.getItem('admin_token');
             const headers = {
@@ -849,6 +855,19 @@ class KnowledgeBaseManager {
         const container = document.getElementById('documents-container');
         const loading = document.getElementById('documents-loading');
         const empty = document.getElementById('documents-empty');
+
+        // Check if a client is selected
+        if (!this.currentClient) {
+            loading.style.display = 'none';
+            container.style.display = 'none';
+            empty.style.display = 'block';
+            empty.innerHTML = `
+                <i class="fas fa-building text-dark-text-secondary text-4xl mb-4"></i>
+                <h3 class="text-lg font-medium text-dark-text mb-2">No Client Selected</h3>
+                <p class="text-dark-text-secondary">Please select a client from the dropdown above to view documents</p>
+            `;
+            return;
+        }
 
         // Only show loading indicator if not a silent refresh
         if (!silent) {

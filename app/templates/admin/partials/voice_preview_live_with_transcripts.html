@@ -212,7 +212,7 @@ function startTranscriptStream() {
         return;
     }
     
-    const url = `/api/v1/voice-transcripts/stream?conversation_id=${conversationId}&client_id=${clientId}&agent_id=${agentId}`;
+    const url = `/api/v1/voice-transcripts/stream?conversation_id=${conversationId}&client_id=${clientId}&agent_id=${agentId}&include_citations=true`;
     
     transcriptEventSource = new EventSource(url);
     

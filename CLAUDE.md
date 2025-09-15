@@ -19,6 +19,7 @@ Guidance for AI coding assistants working in this repo. Keep it tight, correct, 
 - No-fallback providers: if a configured STT/TTS/LLM fails, error out (no silent fallback).
 - Forbidden tech: `ChromaDB`, `sentence-transformers` (violates stateless/service-based design).
 - RAG no-fallback: if retrieval fails, surface an error rather than keyword search.
+ - Redis removed: do not reintroduce Redis for rate limiting, caching, or dedupe. If global limits or caches are needed later, use a DB-backed approach or explicit idempotency keys. In-process dedupe is sufficient for single-instance.
 
 ## Key paths
 - App entry: `/root/sidekick-forge/app/main.py`

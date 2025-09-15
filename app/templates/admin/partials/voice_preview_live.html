@@ -12,7 +12,7 @@
     <div class="flex flex-1 overflow-hidden">
         <!-- Left Side: Transcripts -->
         <div class="w-1/2 flex flex-col border-r border-dark-border">
-            <div class="p-3 border-b border-dark-border">
+            <div class="p-3 border-b border-dark-border flex items-center gap-2">
                 <h3 class="text-sm font-semibold text-dark-text flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z"></path>
@@ -25,6 +25,7 @@
                         </span>
                     </span>
                 </h3>
+                <button id="loadHistoryBtn" class="ml-auto px-2 py-1 text-xs border border-dark-border rounded hover:bg-dark-elevated" onclick="loadTranscriptHistory()" title="Fetch transcript history now">Load history</button>
             </div>
             
             <!-- Transcript Messages -->
@@ -207,12 +208,21 @@ function startTranscriptStream() {
     const clientId = '{{ client_id }}';
     const agentId = '{{ agent_id or agent.id }}';
     
+    try { if (transcriptEventSource) { transcriptEventSource.close(); } } catch (e) {}
+    transcriptEventSource = null;
+    
+    // Ensure only one SSE connection is active
+    try {
+        if (transcriptEventSource) { transcriptEventSource.close(); }
+    } catch (e) { /* ignore */ }
+    transcriptEventSource = null;
+
     if (!conversationId) {
         console.warn('No conversation ID available for transcript streaming');
         return;
     }
     
-    const url = `/api/v1/voice-transcripts/stream?conversation_id=${conversationId}&client_id=${clientId}&agent_id=${agentId}`;
+    const url = `/api/v1/voice-transcripts/stream?conversation_id=${conversationId}&client_id=${clientId}&agent_id=${agentId}&include_citations=true`;
     
     transcriptEventSource = new EventSource(url);
     
@@ -236,6 +246,21 @@ function startTranscriptStream() {
     };
     
     console.log('Started transcript streaming for conversation:', conversationId);
+}
+
+async function loadTranscriptHistory() {
+    try {
+        const conversationId = '{{ conversation_id or "" }}';
+        const clientId = '{{ client_id }}';
+        if (!conversationId || !clientId) { console.warn('Missing ids for history'); return; }
+        const url = `/api/v1/voice-transcripts/history?conversation_id=${conversationId}&client_id=${clientId}&limit=50&include_citations=true`;
+        const res = await fetch(url);
+        if (!res.ok) { console.warn('History fetch failed', res.status); return; }
+        const payload = await res.json();
+        if (payload && payload.success && Array.isArray(payload.data)) {
+            payload.data.forEach(addTranscript);
+        }
+    } catch (e) { console.warn('History fetch error', e); }
 }
 
 // Function to stop transcript streaming

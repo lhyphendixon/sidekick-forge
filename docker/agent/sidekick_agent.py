@@ -50,12 +50,15 @@ class SidekickAgent(voice.Agent):
         # Transcript tracking
         self._current_user_transcript = ""
         self._current_assistant_transcript = ""
+        self._assistant_buffer = ""
         self._transcript_enabled = True
         self._supabase_client = None
         self._conversation_id = None
         self._agent_id = None
         # Strategy: final-only assistant transcript writes (avoid chunk rows)
+        # We buffer partial chunks and persist once per turn via session events
         self._suppress_on_assistant_transcript = True
+        self._last_assistant_commit: str = ""
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
@@ -217,11 +220,21 @@ class SidekickAgent(voice.Agent):
                 logger.info("No agent_slug configured for citations")
                 return
             
+            # Collect dataset constraints if provided for this agent
+            dataset_ids = []
+            try:
+                if isinstance(self._agent_config, dict) and self._agent_config.get('dataset_ids'):
+                    if isinstance(self._agent_config['dataset_ids'], list):
+                        dataset_ids = self._agent_config['dataset_ids']
+            except Exception:
+                dataset_ids = []
+
             # Perform RAG retrieval with citations
             result = await rag_citations_service.retrieve_with_citations(
                 query=user_text,
                 client_id=self._client_id,
                 agent_slug=agent_slug,
+                dataset_ids=dataset_ids,
                 top_k=12,
                 similarity_threshold=0.5,
                 max_documents=4,
@@ -368,6 +381,7 @@ class SidekickAgent(voice.Agent):
             try:
                 if result and getattr(result, 'data', None):
                     inserted_id = result.data[0].get('id')
+                    logger.info(f"✅ Stored {role} transcript for conversation {self._conversation_id} (row_id={inserted_id})")
                     return inserted_id
             except Exception:
                 pass
@@ -377,15 +391,21 @@ class SidekickAgent(voice.Agent):
             logger.error(f"Failed to store {role} transcript: {e}")
             return None
     
+    async def store_transcript(self, role: str, content: str) -> None:
+        """Public wrapper used by session event handlers."""
+        try:
+            citations = self._current_citations if (role == "assistant" and self._citations_enabled) else None
+            await self._store_transcript(role=role, content=content, citations=citations)
+        except Exception as e:
+            logger.error(f"store_transcript failed: {e}")
     
     async def on_assistant_response(self, message: str) -> None:
-        """Called when assistant generates a response - override this to capture transcripts"""
-        if getattr(self, "_suppress_on_assistant_transcript", False):
-            # llm_node will handle final transcript write
-            logger.debug("on_assistant_response suppressed (final-only mode)")
+        """Accumulate assistant text during streaming; final commit happens on speech stop/commit."""
+        try:
+            if isinstance(message, str) and message:
+                self._assistant_buffer += message
+        except Exception:
             return
-        logger.info(f"Assistant response captured for transcript: {message[:100]}...")
-        await self._handle_assistant_transcript(message)
     
     async def llm_node(
         self,
@@ -393,52 +413,51 @@ class SidekickAgent(voice.Agent):
         tools: "list[FunctionTool | RawFunctionTool]",
         model_settings: "ModelSettings"
     ) -> "AsyncIterable[llm.ChatChunk | str]":
-        """Override llm_node to capture assistant responses for transcripts"""
-        logger.info("llm_node: starting assistant generation stream")
-        # Call parent's llm_node to get the response stream (it's already an async generator)
-        response_stream = super().llm_node(chat_ctx, tools, model_settings)
-        
-        # Collect the full response for transcript storage; no chunk writes (final-only)
-        full_response: List[str] = []
-        
-        async for chunk in response_stream:
-            # Yield the chunk to maintain streaming behavior
-            yield chunk
-            
-            # Collect text chunks for transcript
-            text_part: Optional[str] = None
+        # Delegate to base implementation so the session's TTS node receives chunks
+        # Buffer assistant text so entrypoint handlers can persist if needed
+        got_tokens = False
+        try:
+            self._assistant_buffer = ""
+        except Exception:
+            pass
+        async for chunk in super().llm_node(chat_ctx, tools, model_settings):
             try:
+                got_tokens = True
+                # Accumulate textual content from chunks when available
                 if isinstance(chunk, str):
-                    text_part = chunk
-                elif hasattr(chunk, 'choices') and getattr(chunk, 'choices'):
-                    # OpenAI-style choices
-                    for choice in chunk.choices:
-                        if hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'content') and choice.delta.content:
-                            text_part = (text_part or "") + choice.delta.content
-                elif hasattr(chunk, 'delta') and getattr(chunk, 'delta') and hasattr(chunk.delta, 'content') and chunk.delta.content:
-                    text_part = chunk.delta.content
-                elif hasattr(chunk, 'content') and getattr(chunk, 'content'):
-                    text_part = chunk.content
-            except Exception as e:
-                logger.warning(f"llm_node: failed to parse chunk ({type(chunk).__name__}): {type(e).__name__}: {e}")
-            
-            if text_part:
-                full_response.append(text_part)
-        
-        # Store the complete assistant response as a transcript
-        if full_response:
-            complete_text = ''.join(full_response)
-            logger.info(f"🤖 LLM generated response: {complete_text[:100]}...")
-            # Store one final row with citations
-            citations = self._current_citations if self._citations_enabled else None
-            await self._store_transcript(
-                role="assistant",
-                content=complete_text,
-                citations=citations,
-                sequence=1,
-                turn_id=str(uuid.uuid4()),
-            )
-        else:
-            logger.warning("llm_node: stream ended with no textual content extracted")
+                    self._assistant_buffer += chunk
+                else:
+                    # Try common shapes for streaming deltas
+                    delta = getattr(chunk, "delta", None)
+                    if isinstance(delta, str):
+                        self._assistant_buffer += delta
+                    else:
+                        content = getattr(chunk, "content", None)
+                        if isinstance(content, str):
+                            self._assistant_buffer += content
+            except Exception:
+                pass
+            yield chunk
+        # Deterministic finalize: commit assistant transcript exactly once at end of LLM stream
+        try:
+            await self.flush_assistant_buffer()
+        except Exception as e:
+            logger.error(f"Failed to finalize assistant transcript: {e}")
+        if not got_tokens:
+            logger.error("LLM produced no tokens for this turn; no agent speech expected")
+
+    async def flush_assistant_buffer(self) -> None:
+        """Flush buffered assistant text to storage once per turn with simple dedup guard."""
+        try:
+            text = getattr(self, "_assistant_buffer", "").strip()
+            if not text:
+                return
+            # Dedup: avoid writing the same final text multiple times across different events
+            if self._last_assistant_commit and text == self._last_assistant_commit:
+                return
+            self._last_assistant_commit = text
+            await self._handle_assistant_transcript(text)
+        except Exception as e:
+            logger.error(f"Failed to flush assistant buffer: {e}")
 
 

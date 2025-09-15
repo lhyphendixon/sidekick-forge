@@ -99,7 +99,7 @@ class AgentService:
             name=agent_data["name"],
             description=agent_data.get("description", ""),
             client_id=client_id,
-            agent_image=agent_data.get("agent_image"),
+            agent_image=agent_data.get("agent_image") or None,
             system_prompt=agent_data.get("system_prompt", ""),
             voice_settings=voice_settings,
             webhooks=webhooks,

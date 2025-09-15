@@ -1,6 +1,5 @@
-from fastapi.responses import RedirectResponse
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from typing import Dict, Any, List, Optional
 import redis.asyncio as aioredis
@@ -1205,7 +1204,7 @@ async def debug_agent_data(client_id: str, agent_slug: str):
                 "slug": agent.get("slug"),
                 "name": agent.get("name"),
                 "description": agent.get("description", ""),
-                "agent_image": agent.get("agent_image", ""),
+                "agent_image": agent.get("agent_image") or "",
                 "system_prompt": agent.get("system_prompt", ""),
                 "active": agent.get("active", agent.get("enabled", True)),
                 "enabled": agent.get("enabled", True),
@@ -1440,7 +1439,7 @@ async def agent_detail(
                 "slug": agent.get("slug"),
                 "name": agent.get("name"),
                 "description": agent.get("description", ""),
-                "agent_image": agent.get("agent_image", ""),
+                "agent_image": agent.get("agent_image") or "",
                 "system_prompt": agent.get("system_prompt", ""),
                 "active": agent.get("active", agent.get("enabled", True)),
                 "enabled": agent.get("enabled", True),
@@ -1511,7 +1510,7 @@ async def agent_detail(
             "tts_provider": voice_settings_data.get("tts_provider", "openai"),
             "openai_voice": voice_settings_data.get("openai_voice", "alloy"),
             "elevenlabs_voice_id": voice_settings_data.get("elevenlabs_voice_id", ""),
-            "cartesia_voice_id": voice_settings_data.get("cartesia_voice_id", "a0e99841-438c-4a64-b679-ae501e7d6091"),
+            "cartesia_voice_id": voice_settings_data.get("voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d") if voice_settings_data.get("tts_provider") == "cartesia" else voice_settings_data.get("provider_config", {}).get("cartesia_voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d"),
             "voice_context_webhook_url": "",
             "text_context_webhook_url": ""
         }
@@ -1671,14 +1670,14 @@ async def agent_detail(
                 agent_slug_raw = agent.get('slug', 'N/A')
                 system_prompt_raw = agent.get('system_prompt', 'N/A')
                 agent_description_raw = agent.get('description', '')
-                agent_image_url_raw = agent.get('agent_image', '')
+                agent_image_url_raw = agent.get('agent_image') or ''
             else:
                 is_enabled = getattr(agent, 'enabled', True)
                 agent_name_raw = getattr(agent, 'name', agent_slug)
                 agent_slug_raw = getattr(agent, 'slug', 'N/A')
                 system_prompt_raw = getattr(agent, 'system_prompt', 'N/A')
                 agent_description_raw = getattr(agent, 'description', '')
-                agent_image_url_raw = getattr(agent, 'agent_image', '')
+                agent_image_url_raw = getattr(agent, 'agent_image', '') or ''
             
             enabled_checked = 'checked' if is_enabled else ''
             
@@ -2022,7 +2021,7 @@ async def agent_detail(
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div>
                                             <label class="block text-sm font-medium text-gray-300 mb-2">Voice ID</label>
-                                            <input type="text" name="cartesia_voice_id" value="{cartesia_voice_id}" placeholder="a0e99841-438c-4a64-b679-ae501e7d6091" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <input type="text" name="cartesia_voice_id" value="{cartesia_voice_id}" placeholder="248be419-c632-4f23-adf1-5324ed7dbf1d" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
                                             <p class="text-xs text-gray-400 mt-1">Default is Barbershop Man voice</p>
                                         </div>
                                         <div>
@@ -3408,9 +3407,9 @@ async def start_voice_preview(
         if room_name != actual_room_name:
             logger.warning(f"⚠️ Room name mismatch! Frontend will use: {actual_room_name}")
         
-        # Get conversation_id from agent_context
+        # Get conversation_id from agent_context (now properly provided by trigger)
         agent_context = trigger_result.data.get('agent_context', {}) if trigger_result.data else {}
-        conversation_id = agent_context.get('conversation_id', f"voice_{actual_room_name}_{trigger_request.user_id}")
+        conversation_id = agent_context.get('conversation_id')
         
         logger.info(f"📝 Voice session started with conversation_id: {conversation_id}")
         
@@ -4150,6 +4149,14 @@ async def get_knowledge_base_documents(
 ):
     """Get documents for Knowledge Base admin interface"""
     try:
+        # Validate client_id
+        if not client_id or client_id == 'null' or client_id == 'undefined':
+            logger.warning(f"Invalid client_id received: {client_id}")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Client ID is required. Please select a client from the dropdown."}
+            )
+        
         from app.services.document_processor import document_processor
         
         # Get documents for the specified client

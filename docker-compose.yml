@@ -24,6 +24,9 @@ services:
       - LIVEKIT_URL=${LIVEKIT_URL}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      # Agent name for staging (must match agent-worker)
+      - AGENT_NAME=sidekick-agent-staging
+      - LIVEKIT_AGENT_NAME=sidekick-agent-staging
       # Remove duplicate DEVELOPMENT_MODE to avoid conflicting overrides
     volumes:
       - ./app:/app/app
@@ -86,7 +89,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Agent configuration
-      - AGENT_NAME=sidekick-agent
+      - AGENT_NAME=sidekick-agent-staging
       - DISABLE_PROACTIVE_GREETING=true
       # Supabase configuration for API key fallback
       - SUPABASE_URL=${SUPABASE_URL}

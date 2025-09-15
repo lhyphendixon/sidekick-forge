@@ -281,61 +281,75 @@ class AIProcessor:
     
     async def _generate_siliconflow_embeddings(self, text: str, model: str, api_keys: Dict) -> Optional[List[float]]:
         """Generate embeddings using SiliconFlow"""
-        try:
-            logger.info(f"[DEBUG] _generate_siliconflow_embeddings called with model={model}")
-            logger.info(f"[DEBUG] API keys passed: {list(api_keys.keys())}")
-            logger.info(f"[DEBUG] siliconflow_api_key in api_keys: {'siliconflow_api_key' in api_keys}")
-            
-            api_key = api_keys.get('siliconflow_api_key') or os.getenv('SILICONFLOW_API_KEY')
-            logger.info(f"[DEBUG] Initial api_key from dict/env: {api_key[:10] if api_key else 'None'}...")
-            
-            if not api_key:
-                # Try to get from settings
-                client_settings = {'api_keys': api_keys} if api_keys else None
-                api_key = await self._get_api_key_from_settings('siliconflow_api_key', client_settings)
-                logger.info(f"[DEBUG] api_key after _get_api_key_from_settings: {api_key[:10] if api_key else 'None'}...")
-            
-            if not api_key:
-                logger.error(f"No SiliconFlow API key available. API keys provided: {list(api_keys.keys())}")
-                # Try to fall back to OpenAI if available
-                if api_keys.get('openai_api_key'):
-                    logger.warning("Falling back to OpenAI embeddings due to missing SiliconFlow key")
-                    return await self._generate_openai_embeddings(text, 'text-embedding-3-small', api_keys)
+        # Create a fresh HTTP client with longer timeout for SiliconFlow which can be slow
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+            try:
+                logger.info(f"[DEBUG] _generate_siliconflow_embeddings called with model={model}")
+                logger.info(f"[DEBUG] API keys passed: {list(api_keys.keys())}")
+                logger.info(f"[DEBUG] siliconflow_api_key in api_keys: {'siliconflow_api_key' in api_keys}")
+                
+                api_key = api_keys.get('siliconflow_api_key') or os.getenv('SILICONFLOW_API_KEY')
+                logger.info(f"[DEBUG] Initial api_key from dict/env: {api_key[:10] if api_key else 'None'}...")
+                
+                if not api_key:
+                    # Try to get from settings
+                    client_settings = {'api_keys': api_keys} if api_keys else None
+                    api_key = await self._get_api_key_from_settings('siliconflow_api_key', client_settings)
+                    logger.info(f"[DEBUG] api_key after _get_api_key_from_settings: {api_key[:10] if api_key else 'None'}...")
+                
+                if not api_key:
+                    logger.error(f"No SiliconFlow API key available. API keys provided: {list(api_keys.keys())}")
+                    # Try to fall back to OpenAI if available
+                    if api_keys.get('openai_api_key'):
+                        logger.warning("Falling back to OpenAI embeddings due to missing SiliconFlow key")
+                        return await self._generate_openai_embeddings(text, 'text-embedding-3-small', api_keys)
+                    return None
+                
+                # Log the API key (masked for security)
+                logger.info(f"Using SiliconFlow API key: {api_key[:10]}...{api_key[-10:] if len(api_key) > 20 else '***'}")
+                
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                # SiliconFlow uses OpenAI-compatible API
+                data = {
+                    "model": model,
+                    "input": text,
+                    "encoding_format": "float",
+                    "dimensions": 1024  # Explicitly request 1024 dimensions for pgvector compatibility
+                }
+                
+                response = await client.post(
+                    "https://api.siliconflow.com/v1/embeddings",
+                    headers=headers,
+                    json=data
+                )
+                
+                logger.info(f"[DEBUG] SiliconFlow response status: {response.status_code}")
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info(f"[DEBUG] SiliconFlow response keys: {list(result.keys()) if result else 'None'}")
+                    if 'data' in result and len(result['data']) > 0:
+                        embedding = result['data'][0].get('embedding')
+                        if embedding:
+                            logger.info(f"[DEBUG] SiliconFlow embedding length: {len(embedding)}")
+                            return embedding
+                        else:
+                            logger.error(f"SiliconFlow response missing embedding field: {result}")
+                    else:
+                        logger.error(f"SiliconFlow response missing data: {result}")
+                else:
+                    logger.error(f"SiliconFlow API error: {response.status_code} - {response.text}")
+                
                 return None
-            
-            # Log the API key (masked for security)
-            logger.info(f"Using SiliconFlow API key: {api_key[:10]}...{api_key[-10:] if len(api_key) > 20 else '***'}")
-            
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # SiliconFlow uses OpenAI-compatible API
-            data = {
-                "model": model,
-                "input": text,
-                "encoding_format": "float"
-            }
-            
-            response = await self.http_client.post(
-                "https://api.siliconflow.com/v1/embeddings",
-                headers=headers,
-                json=data
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if 'data' in result and len(result['data']) > 0:
-                    return result['data'][0]['embedding']
-            else:
-                logger.error(f"SiliconFlow API error: {response.status_code} - {response.text}")
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"SiliconFlow embedding error: {e}")
-            return None
+                
+            except Exception as e:
+                import traceback
+                logger.error(f"SiliconFlow embedding error: {str(e)}")
+                logger.error(f"SiliconFlow traceback: {traceback.format_exc()}")
+                return None
     
     async def close(self):
         """Close HTTP client"""

@@ -1,5 +1,5 @@
 # LiveKit Agent Requirements
-livekit-agents[turn-detector]==1.2.2
+livekit-agents==1.2.2
 
 # LiveKit Plugins
 livekit-plugins-deepgram==1.2.1
@@ -31,9 +31,7 @@ redis==5.2.0
 # RAG/Embedding - Remote API services only
 # Note: Using httpx for API calls (already included above)
 
-# ML Libraries for inference executor
-torch==2.1.2
-transformers==4.47.1
+# Remove local ML inference deps to avoid supervised_proc crashes
 
 # HTTP and Async
 httpx==0.27.0

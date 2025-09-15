@@ -53,7 +53,7 @@ class AgentService:
             slug=agent_record["slug"],
             name=agent_record["name"],
             description=agent_record.get("description"),
-            agent_image=agent_record.get("agent_image"),
+            agent_image=agent_record.get("agent_image") or None,
             system_prompt=agent_record["system_prompt"],
             voice_settings={
                 "provider": agent_record.get("provider_type", "livekit"),
@@ -104,7 +104,7 @@ class AgentService:
             "slug": agent_data.slug,
             "name": agent_data.name,
             "description": agent_data.description,
-            "agent_image": agent_data.agent_image,
+            "agent_image": agent_data.agent_image or None,
             "system_prompt": agent_data.system_prompt,
             "voice_settings": json.dumps(agent_data.voice_settings.dict()) if agent_data.voice_settings else json.dumps({"provider": "openai", "voice_id": "alloy", "temperature": 0.7}),
             "n8n_text_webhook_url": agent_data.webhooks.voice_context_webhook_url if agent_data.webhooks else None,
@@ -344,7 +344,7 @@ class AgentService:
             if update_data.description is not None:
                 update_dict["description"] = update_data.description
             if update_data.agent_image is not None:
-                update_dict["agent_image"] = update_data.agent_image
+                update_dict["agent_image"] = update_data.agent_image or None
             if update_data.system_prompt is not None:
                 update_dict["system_prompt"] = update_data.system_prompt
             if update_data.enabled is not None:
@@ -394,7 +394,7 @@ class AgentService:
         if update_data.description is not None:
             agent_dict["description"] = update_data.description
         if update_data.agent_image is not None:
-            agent_dict["agent_image"] = update_data.agent_image
+            agent_dict["agent_image"] = update_data.agent_image or None
         if update_data.system_prompt is not None:
             agent_dict["system_prompt"] = update_data.system_prompt
         if update_data.enabled is not None:

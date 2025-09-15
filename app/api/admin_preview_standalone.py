@@ -101,19 +101,74 @@ async def ensure_client_user(request: EnsureClientUserRequest):
                         "created_for_preview": True
                     }
                 })
-                
-                if create_response and create_response.user:
+                if create_response and getattr(create_response, "user", None):
                     client_user_id = create_response.user.id
                     logger.info(f"Created shadow user {client_user_id} in client Supabase")
                 else:
-                    raise Exception("Failed to create shadow user")
-                    
+                    raise Exception("Failed to create shadow user (no user in response)")
             except Exception as e:
-                logger.error(f"Error creating shadow user: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to create shadow user: {str(e)}"
-                )
+                # If the email already exists, look up the user instead of failing
+                msg = str(e)
+                logger.warning(f"Shadow user creation failed, attempting lookup: {msg}")
+                try:
+                    users_page = client_sb.auth.admin.list_users(page=1, per_page=200)
+                    users = []
+                    if users_page:
+                        try:
+                            if hasattr(users_page, "users") and isinstance(users_page.users, list):
+                                users = users_page.users
+                            elif isinstance(users_page, dict):
+                                users = users_page.get("users") or users_page.get("data") or []
+                        except Exception:
+                            pass
+                    if not isinstance(users, list):
+                        users = list(users) if users else []
+                    match = None
+                    for u in users:
+                        try:
+                            email = u.get("email") if isinstance(u, dict) else getattr(u, "email", None)
+                            metadata = (u.get("user_metadata") if isinstance(u, dict) else getattr(u, "user_metadata", {})) or {}
+                            if email == shadow_email or (isinstance(metadata, dict) and metadata.get("platform_user_id") == platform_user_id):
+                                match = u
+                                break
+                        except Exception:
+                            continue
+                    user_id_val = None
+                    if match:
+                        user_id_val = match.get("id") if isinstance(match, dict) else getattr(match, "id", None)
+                    if user_id_val:
+                        client_user_id = user_id_val
+                        logger.info(f"Using existing shadow user {client_user_id} for preview")
+                    # If not found, fall through to profile/deterministic fallback below
+                except Exception as e_lookup:
+                    logger.warning(f"Shadow user lookup via auth.admin failed: {e_lookup}")
+                # If still not resolved, try profiles table by email
+                if not client_user_id:
+                    try:
+                        prof = client_sb.table("profiles").select("user_id").or_(
+                            f"email.eq.{user_email},email.eq.{shadow_email}"
+                        ).maybe_single().execute()
+                        if prof and prof.data and prof.data.get("user_id"):
+                            client_user_id = prof.data["user_id"]
+                            logger.info(f"Resolved client_user_id from profiles: {client_user_id}")
+                    except Exception as e_prof_lookup:
+                        logger.warning(f"Profiles email lookup failed: {e_prof_lookup}")
+                # If still not resolved, generate deterministic id and ensure profile
+                if not client_user_id:
+                    client_user_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"preview:{request.client_id}:{platform_user_id}"))
+                    logger.info(f"Generated deterministic preview user id: {client_user_id}")
+                    try:
+                        client_sb.table("profiles").upsert({
+                            "user_id": client_user_id,
+                            "email": user_email or shadow_email,
+                            "full_name": "Platform Admin (Preview)",
+                            "Tags": ["platform_admin", "preview_mode"],
+                            "goals": ["Admin preview session"],
+                            "created_at": datetime.utcnow().isoformat(),
+                            "updated_at": datetime.utcnow().isoformat()
+                        }, on_conflict="user_id").execute()
+                    except Exception as e_prof:
+                        logger.warning(f"Upsert profile for deterministic id failed (non-fatal): {e_prof}")
             
             # Store the mapping (skip if table doesn't exist)
             try:

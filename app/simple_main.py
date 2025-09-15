@@ -5,6 +5,7 @@ from fastapi.templating import Jinja2Templates
 import os
 from datetime import datetime
 import redis
+from app.config import settings
 
 # Import hybrid client service and agent service
 from app.services.client_service_hybrid import ClientService
@@ -25,11 +26,10 @@ redis_pool = redis.ConnectionPool(
 )
 redis_client = redis.Redis(connection_pool=redis_pool)
 
-# Initialize client service with master Supabase credentials and Redis
-# These should come from environment variables
-# Using a valid dummy URL to prevent connection errors during demo
-MASTER_SUPABASE_URL = os.getenv("MASTER_SUPABASE_URL", "https://xyzxyzxyzxyzxyzxyz.supabase.co")
-MASTER_SUPABASE_KEY = os.getenv("MASTER_SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh5enh5enh5enh5enh5enh5eiIsInJvbGUiOiJzZXJ2aWNlX3JvbGUiLCJpYXQiOjE2NDYyMzkwMjIsImV4cCI6MTk2MTgxNTAyMn0.dummy-key-for-testing")
+# Initialize client service with platform Supabase credentials and Redis
+# Use centralized configuration from settings (loaded from environment)
+MASTER_SUPABASE_URL = settings.supabase_url
+MASTER_SUPABASE_KEY = settings.supabase_service_role_key
 
 client_service = ClientService(MASTER_SUPABASE_URL, MASTER_SUPABASE_KEY, redis_client)
 agent_service = AgentService(client_service, redis_client)

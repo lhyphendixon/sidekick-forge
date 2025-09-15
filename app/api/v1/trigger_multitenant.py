@@ -13,6 +13,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
+import uuid
 import traceback
 
 from app.services.agent_service_multitenant import AgentService
@@ -171,6 +172,9 @@ async def handle_voice_trigger(
     from app.integrations.livekit_client import livekit_manager
     backend_livekit = livekit_manager
     
+    # Generate conversation_id if not provided (no-fallback policy)
+    conversation_id = request.conversation_id or str(uuid.uuid4())
+
     # Prepare agent context with all necessary configuration
     agent_context = {
         "client_id": client_info['id'],
@@ -184,7 +188,7 @@ async def handle_voice_trigger(
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": request.user_id,
         "session_id": request.session_id,
-        "conversation_id": request.conversation_id,
+        "conversation_id": conversation_id,
         "context": request.context or {},
         "api_keys": {k: v for k, v in api_keys.items() if v}  # Include all available API keys
     }
@@ -206,10 +210,19 @@ async def handle_voice_trigger(
         metadata={"user_id": request.user_id, "client_id": client_info['id']}
     )
     
+    # Ensure room_info carries conversation_id in metadata if possible
+    try:
+        meta = room_info.get("metadata") if isinstance(room_info, dict) else None
+        if isinstance(meta, dict):
+            meta["conversation_id"] = conversation_id
+    except Exception:
+        pass
+
     return {
         "mode": "voice",
         "room_name": request.room_name,
         "platform": request.platform,
+        "conversation_id": conversation_id,
         "agent_context": agent_context,
         "livekit_config": {
             "server_url": backend_livekit.url,

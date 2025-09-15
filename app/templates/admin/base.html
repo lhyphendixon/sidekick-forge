@@ -149,6 +149,29 @@
             display: inline-block;
         }
         
+        /* Button inline loading state */
+        button.loading, a.button.loading {
+            position: relative;
+            pointer-events: none;
+            opacity: 0.9;
+        }
+        button.loading > *, a.button.loading > * {
+            visibility: hidden;
+        }
+        button.loading::after, a.button.loading::after {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 16px;
+            height: 16px;
+            border: 2px solid #2a2a2a;
+            border-top-color: #01a4a6;
+            border-radius: 9999px;
+            animation: spin 0.9s linear infinite;
+        }
+        
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -414,6 +437,27 @@
         
         // Make logout function global
         window.logout = logout;
+        
+        // Reusable button loading helpers
+        window.setButtonLoading = function(btn, isLoading) {
+            try {
+                if (!btn) return;
+                if (isLoading) {
+                    btn.classList.add('loading');
+                    try { btn.disabled = true; } catch (e) {}
+                } else {
+                    btn.classList.remove('loading');
+                    try { btn.disabled = false; } catch (e) {}
+                }
+            } catch (e) { console.warn('setButtonLoading error', e); }
+        }
+        
+        window.withButtonLoading = async function(btn, fn) {
+            if (!fn || typeof fn !== 'function') return;
+            try { window.setButtonLoading(btn, true); } catch {}
+            try { return await fn(); }
+            finally { try { window.setButtonLoading(btn, false); } catch {} }
+        }
     </script>
 
     <!-- Load LiveKit Client SDK globally for HTMX modal use -->

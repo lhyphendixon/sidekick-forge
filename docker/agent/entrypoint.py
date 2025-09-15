@@ -16,7 +16,6 @@ from datetime import datetime
 from livekit import agents, rtc
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
 from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from api_key_loader import APIKeyLoader
 from config_validator import ConfigValidator, ConfigurationError
 from context import AgentContextManager
@@ -340,9 +339,9 @@ async def agent_job_handler(ctx: JobContext):
                     api_key=deepgram_key,
                     model="nova-3",
                     language="en-US",
-                    endpointing_ms=500       # Lower endpointing for faster turn commit
+                    endpointing_ms=1000
                 )
-                logger.info("📊 DIAGNOSTIC: Deepgram configured with model=nova-3, language=en-US, endpointing_ms=500")
+                logger.info("📊 DIAGNOSTIC: Deepgram configured with model=nova-3, language=en-US, endpointing_ms=1000")
             
             # Validate STT initialization
             ConfigValidator.validate_provider_initialization(f"{stt_provider} STT", stt_plugin)
@@ -373,8 +372,20 @@ async def agent_job_handler(ctx: JobContext):
                         f"Current TTS provider is set to '{tts_provider}' but the API key is a test key."
                     )
                 
+                # Enforce no-fallback: require explicit TTS model for Cartesia
+                # Accept both voice_settings.model and voice_settings.tts_model, and metadata.tts_model for compatibility
+                tts_model = (
+                    voice_settings.get("model")
+                    or voice_settings.get("tts_model")
+                    or metadata.get("tts_model")
+                )
+                if not tts_model:
+                    raise ConfigurationError(
+                        "Cartesia TTS requires an explicit 'model'. Set voice_settings.model or metadata.tts_model."
+                    )
                 tts_plugin = cartesia.TTS(
                     voice=voice_settings.get("voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d"),
+                    model=tts_model,
                     api_key=cartesia_key
                 )
             
@@ -385,23 +396,18 @@ async def agent_job_handler(ctx: JobContext):
             # VAD is crucial for turn detection - it determines when user stops speaking
             try:
                 vad = silero.VAD.load(
-                    min_speech_duration=0.12,  # slightly quicker start
-                    min_silence_duration=0.5,  # faster end detection
+                    min_speech_duration=0.15,
+                    min_silence_duration=0.5,
                 )
                 logger.info("✅ VAD loaded successfully with optimized parameters")
                 logger.info(f"📊 DIAGNOSTIC: VAD type: {type(vad)}")
-                logger.info("📊 DIAGNOSTIC: VAD params: min_speech=0.15s, min_silence=0.8s")
+                logger.info("📊 DIAGNOSTIC: VAD params: min_speech=0.15s, min_silence=0.5s")
             except Exception as e:
                 logger.error(f"❌ Failed to load VAD: {e}", exc_info=True)
                 raise
             
-            # Load multilingual turn detector (model-based) per docs
-            try:
-                turn_detect = MultilingualModel()
-                logger.info("✅ Turn detector (MultilingualModel) loaded successfully")
-            except Exception as e:
-                logger.error(f"❌ Failed to load turn detector: {e}", exc_info=True)
-                turn_detect = None
+            # Remove multilingual turn detector to avoid heavy HF model load/crash
+            turn_detect = None
             
             # Initialize context manager if we have Supabase credentials
             context_manager = None
@@ -460,7 +466,7 @@ async def agent_job_handler(ctx: JobContext):
             # Connect to the room first
             start_connect = time.perf_counter()
             logger.info("Connecting to room with close_on_disconnect=False for stability...")
-            # Use close_on_disconnect=False to prevent session cancellation on brief disconnects
+            # Connect; per SDK version, input options are applied on session.start below
             await ctx.connect(auto_subscribe="audio_only")  # Only subscribe to audio tracks for voice agents
             logger.info("✅ Connected to room successfully")
             perf_summary['room_connection'] = time.perf_counter() - start_connect
@@ -583,9 +589,13 @@ async def agent_job_handler(ctx: JobContext):
             
             # Store references for event handlers in agent
             agent._room = ctx.room  # Store room reference for agent use
-            # Ensure conversation_id matches DB UUID type when absent: generate UUID
-            import uuid as _uuid
-            agent._conversation_id = metadata.get("conversation_id") or str(_uuid.uuid4())
+            # Enforce conversation_id from metadata (no-fallback policy)
+            conv_id = metadata.get("conversation_id")
+            if not conv_id:
+                logger.critical("❌ Missing conversation_id in metadata - cannot proceed (no-fallback policy)")
+                raise ConfigurationError("conversation_id is required in room/job metadata")
+            agent._conversation_id = conv_id
+            logger.info(f"📌 Using conversation_id: {agent._conversation_id}")
             # Pass the Supabase client that was created earlier
             agent._supabase_client = client_supabase if 'client_supabase' in locals() else None
             # Ensure transcript storage uses UUID when available
@@ -611,41 +621,228 @@ async def agent_job_handler(ctx: JobContext):
                 vad=vad,
                 stt=stt_plugin,
                 llm=llm_plugin,
-                tts=tts_plugin
+                tts=tts_plugin,
+                turn_detection="stt"
             )
             
-            # Add event handler to capture user speech text for RAG context
+            # Log and capture STT transcripts; commit turn on finals
+            @session.on("user_input_transcribed")
+            def on_user_input_transcribed(ev):
+                try:
+                    txt = getattr(ev, 'transcript', '') or ''
+                    is_final = bool(getattr(ev, 'is_final', False))
+                    logger.info(f"📝 STT transcript: '{txt[:200]}' final={is_final}")
+                    if txt:
+                        session.latest_user_text = txt
+                        agent.latest_user_text = txt
+                    if is_final:
+                        try:
+                            session.commit_user_turn(transcript_timeout=0.0)
+                        except Exception as ce:
+                            logger.warning(f"commit_user_turn failed: {type(ce).__name__}: {ce}")
+                except Exception as e:
+                    logger.error(f"user_input_transcribed handler failed: {e}")
+
+            # Minimal capture of latest user text for RAG, without watchdog or transcript writes
             @session.on("user_speech_committed")
             def on_user_speech(msg: llm.ChatMessage):
-                """Capture user speech text for RAG context injection"""
                 try:
-                    # Extract text content from the message
                     user_text = None
                     if hasattr(msg, 'content'):
                         if isinstance(msg.content, str):
                             user_text = msg.content
                         elif isinstance(msg.content, list):
-                            # Handle structured content
                             for part in msg.content:
                                 if isinstance(part, dict) and part.get("type") == "text":
                                     user_text = part.get("text")
                                     break
-                    
                     if user_text:
-                        # Store on session for use in on_user_turn_completed
                         session.latest_user_text = user_text
-                        # Also store on agent as fallback
                         agent.latest_user_text = user_text
                         logger.info(f"💬 Captured user speech: {user_text[:100]}...")
                 except Exception as e:
                     logger.error(f"Failed to capture user speech: {e}")
+
+            # Deterministic finalize: commit assistant transcript on agent_speech_committed
+            @session.on("agent_speech_committed")
+            def on_agent_speech(msg: llm.ChatMessage):
+                try:
+                    agent_text = None
+                    if hasattr(msg, 'content'):
+                        if isinstance(msg.content, str):
+                            agent_text = msg.content
+                        elif isinstance(msg.content, list):
+                            for part in msg.content:
+                                if isinstance(part, dict) and part.get("type") == "text":
+                                    agent_text = part.get("text")
+                                    break
+                    if not agent_text:
+                        return
+                    # Set buffer so optional finalize paths can reuse it
+                    try:
+                        agent._assistant_buffer = agent_text
+                    except Exception:
+                        pass
+                    # Deduplicate by last commit
+                    if getattr(agent, "_last_assistant_commit", "") == agent_text:
+                        return
+                    try:
+                        agent._last_assistant_commit = agent_text
+                    except Exception:
+                        pass
+                    if hasattr(agent, 'store_transcript'):
+                        logger.info("📝 Committing assistant transcript on agent_speech_committed")
+                        asyncio.create_task(agent.store_transcript('assistant', agent_text))
+                except Exception as e:
+                    logger.error(f"Failed to commit assistant transcript: {e}")
             
             # Store session reference on agent for access in on_user_turn_completed
             agent._agent_session = session
             
             # Start the session with the agent and room
             logger.info("Starting AgentSession with agent and room...")
-            await session.start(room=ctx.room, agent=agent)
+            # Import room_io for input options
+            from livekit.agents.voice import room_io
+            
+            # Configure input options to prevent early disconnect
+            input_options = room_io.RoomInputOptions(
+                close_on_disconnect=False  # Keep agent running even if user disconnects briefly
+            )
+            
+            await session.start(
+                room=ctx.room, 
+                agent=agent,
+                room_input_options=input_options
+            )
+
+            # Additional diagnostics: speaking and error events
+            try:
+                # Keep minimal speaking diagnostics; no transcript writes here
+                @session.on("agent_started_speaking")
+                def _on_agent_started():
+                    logger.info("🔈 agent_started_speaking")
+                    try:
+                        agent._assistant_buffer = ""
+                    except Exception:
+                        pass
+
+                @session.on("agent_stopped_speaking")
+                def _on_agent_stopped():
+                    logger.info("🔇 agent_stopped_speaking")
+                    try:
+                        # Primary finalize: flush buffered assistant text once per turn
+                        if hasattr(agent, "flush_assistant_buffer"):
+                            asyncio.create_task(agent.flush_assistant_buffer())
+                        else:
+                            text = getattr(agent, "_assistant_buffer", "").strip()
+                            if text and hasattr(agent, 'store_transcript'):
+                                asyncio.create_task(agent.store_transcript('assistant', text))
+                                logger.info("📝 Stored assistant transcript on stop speaking (agent)")
+                            agent._assistant_buffer = ""
+                    except Exception as e:
+                        logger.error(f"Failed to finalize assistant transcript on stop speaking: {e}")
+
+                @session.on("error")
+                def _on_session_error(err: Exception):
+                    logger.error(f"🛑 session error: {type(err).__name__}: {err}")
+
+                # Mirror events for SDKs that emit 'assistant_*'
+                @session.on("assistant_started_speaking")
+                def _on_assistant_started():
+                    logger.info("🔈 assistant_started_speaking")
+                    try:
+                        agent._assistant_buffer = ""
+                    except Exception:
+                        pass
+
+                @session.on("assistant_stopped_speaking")
+                def _on_assistant_stopped():
+                    logger.info("🔇 assistant_stopped_speaking")
+                    try:
+                        if hasattr(agent, "flush_assistant_buffer"):
+                            asyncio.create_task(agent.flush_assistant_buffer())
+                        else:
+                            text = getattr(agent, "_assistant_buffer", "").strip()
+                            if text and hasattr(agent, 'store_transcript'):
+                                asyncio.create_task(agent.store_transcript('assistant', text))
+                                logger.info("📝 Stored assistant transcript on stop speaking (assistant)")
+                            agent._assistant_buffer = ""
+                    except Exception as e:
+                        logger.error(f"Failed to finalize buffer (assistant_*): {e}")
+
+                @session.on("metrics_collected")
+                def _on_metrics(metrics):
+                    try:
+                        logger.info(f"📈 metrics_collected: {metrics}")
+                    except Exception:
+                        logger.info("📈 metrics_collected (unserializable)")
+
+                @session.on("user_started_speaking")
+                def _on_user_started():
+                    logger.info("🎤 user_started_speaking")
+
+                @session.on("user_stopped_speaking")
+                def _on_user_stopped():
+                    logger.info("🛑 user_stopped_speaking")
+
+                # Primary commit: persist assistant transcript when conversation history updates
+                @session.on("conversation_item_added")
+                def _on_conversation_item_added(item):
+                    try:
+                        # Unwrap event container if needed
+                        raw = item.item if hasattr(item, "item") and item.item is not None else item
+                        role = getattr(raw, "role", None)
+                        # Observability
+                        try:
+                            tc = getattr(raw, 'text_content', None)
+                            has_tc = isinstance(tc, str) or (tc is not None)
+                            logger.info(f"🧩 conversation_item_added: role={role} has_text_content={has_tc} has_text={hasattr(raw, 'text')} content_type={type(getattr(raw, 'content', None))}")
+                        except Exception:
+                            pass
+                        # Only handle assistant items
+                        if role != "assistant":
+                            return
+                        # Extract text robustly (text_content is a property, not callable)
+                        text_value = getattr(raw, "text_content", None)
+                        if not text_value and hasattr(raw, "text") and isinstance(getattr(raw, "text"), str) and raw.text:
+                            text_value = raw.text
+                        if not text_value and hasattr(raw, "content"):
+                            content = raw.content
+                            if isinstance(content, str) and content:
+                                text_value = content
+                            elif isinstance(content, list):
+                                collected: list[str] = []
+                                for part in content:
+                                    if isinstance(part, str):
+                                        collected.append(part)
+                                    elif isinstance(part, dict):
+                                        ptype = part.get("type")
+                                        if ptype in ("text", "output_text", "response_text", "output_text_delta") and part.get("text"):
+                                            collected.append(part.get("text"))
+                                if collected:
+                                    text_value = "".join(collected)
+                        if not text_value:
+                            logger.info("ℹ️ conversation_item_added: assistant item had no extractable text")
+                            return
+                        try:
+                            logger.info(f"🧪 Extracted assistant text (len={len(text_value)}): {text_value[:120]}...")
+                        except Exception:
+                            pass
+                        # Dedup by last commit content
+                        if getattr(agent, "_last_assistant_commit", "") == text_value:
+                            return
+                        try:
+                            agent._last_assistant_commit = text_value
+                            agent._assistant_buffer = text_value
+                        except Exception:
+                            pass
+                        if hasattr(agent, "store_transcript"):
+                            logger.info("📝 Committing assistant transcript via conversation_item_added")
+                            asyncio.create_task(agent.store_transcript("assistant", text_value))
+                    except Exception as e:
+                        logger.error(f"conversation_item_added handler failed: {e}")
+            except Exception as e:
+                logger.warning(f"Could not add diagnostic handlers: {e}")
 
             # Minimal diagnostic event logs for agent plugin configuration
             try:
@@ -680,8 +877,9 @@ async def agent_job_handler(ctx: JobContext):
             
             # Note: ctx.agent is read-only property - agent is already managed by the framework
             
-            # Optional proactive greeting after successful start
-            if os.getenv("DISABLE_PROACTIVE_GREETING", "false").lower() != "true":
+            # Disable proactive greeting by default to avoid double responses
+            # Enable only when explicitly requested via env
+            if os.getenv("ENABLE_PROACTIVE_GREETING", "false").lower() == "true":
                 greeting_message = f"Hi {user_name}, how can I help you?"
                 async def _try_greet():
                     try:
@@ -694,7 +892,7 @@ async def agent_job_handler(ctx: JobContext):
                         logger.warning(f"Proactive greeting failed or timed out: {type(e).__name__}: {e}")
                 asyncio.create_task(_try_greet())
             else:
-                logger.info("Proactive greeting disabled via DISABLE_PROACTIVE_GREETING=true")
+                logger.info("Proactive greeting disabled (ENABLE_PROACTIVE_GREETING=false)")
 
             # Conversation flow is automatic in SidekickAgent; no forced replies
             logger.info("✅ Agent ready - automatic STT→LLM→TTS flow engaged (single-layer pattern)")

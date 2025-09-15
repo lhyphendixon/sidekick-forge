@@ -50,7 +50,7 @@ ENV LIVEKIT_URL="wss://dummy.livekit.cloud" \
 USER root
 
 # Download necessary model weights for plugins
-RUN python3 /app/entrypoint.py download-files
+# Skip model downloads; no local HF models used
 
 # Ensure agent user owns all downloaded files
 RUN chown -R agent:agent /app /home/agent

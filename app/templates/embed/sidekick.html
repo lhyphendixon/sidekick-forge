@@ -30,6 +30,11 @@
     * { background-color: inherit; }
     .htmx-indicator { opacity: 0; transition: opacity 300ms ease; }
     .htmx-request .htmx-indicator { opacity: 1; }
+    /* Button inline loading */
+    .btn-loading { position: relative; opacity: 0.9; pointer-events: none; }
+    .btn-loading > * { visibility: hidden; }
+    .btn-loading::after { content:""; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:16px; height:16px; border:2px solid #2a2a2a; border-top-color:#01a4a6; border-radius:9999px; animation: spin 0.9s linear infinite; }
+    @keyframes spin { 0%{transform:translate(-50%,-50%) rotate(0deg);} 100%{transform:translate(-50%,-50%) rotate(360deg);} }
     /* Force black background on everything */
     body, html, .video-background-body {
       background: #000000 !important;
@@ -92,25 +97,40 @@
             </div>
           </div>
         </div>
-        <div id="panel-voice" class="hidden p-4 flex-1 flex flex-col items-center justify-center">
+        <div id="panel-voice" class="hidden p-4 flex-1 flex flex-col items-center">
           <div class="text-dark-text-secondary mb-4 text-center">Start a voice chat with your sidekick.</div>
           <div class="flex items-center gap-2 mb-2">
-            <button id="voiceStartBtn" class="inline-flex items-center gap-2 px-4 py-2 bg-brand-teal text-white rounded-lg hover:bg-brand-teal/90 transition-all" onclick="startVoice()">
+            <button id="voiceStartBtn" class="inline-flex items-center gap-2 px-4 py-2 bg-brand-teal text-white rounded-lg hover:bg-brand-teal/90 transition-all" onclick="withBtnLoading(this, startVoice)">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 1a3 3 0 013 3v7a3 3 0 11-6 0V4a3 3 0 013-3zm7 10a7 7 0 01-14 0M5 21h14"/></svg>
               <span>Start Voice Chat</span>
             </button>
-            <button id="voiceEndBtn" class="hidden inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-all" onclick="endVoice()">
+          </div>
+          <div id="voiceTranscriptList" class="w-full max-w-xl mx-auto flex-1 overflow-y-auto space-y-3 mb-3"></div>
+          <div id="agentSpeakingIndicator" class="hidden mb-2">
+            <div class="flex items-center gap-2 text-dark-text-secondary text-sm">
+              <span>Agent speaking</span>
+              <div class="flex space-x-1">
+                <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
+                <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
+                <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
+              </div>
+            </div>
+          </div>
+          <div id="voiceStatus" class="text-xs text-dark-text-secondary text-center"></div>
+          <div class="flex items-center gap-2 mt-2">
+            <button id="voiceEndBtn" class="hidden inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-all" onclick="withBtnLoading(this, endVoice)">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
               <span>End Call</span>
             </button>
           </div>
-          <div id="voiceStatus" class="text-xs text-dark-text-secondary text-center"></div>
         </div>
       </div>
     </div>
   </div>
 
   <script>
+    function setBtnLoading(btn, isLoading){ try { if(!btn) return; btn.classList.toggle('btn-loading', !!isLoading); btn.disabled = !!isLoading; } catch{} }
+    async function withBtnLoading(btn, fn){ setBtnLoading(btn, true); try { return await fn(); } finally { setBtnLoading(btn, false); } }
     const CLIENT_ID = "{{ client_id }}";
     const AGENT_SLUG = "{{ agent_slug }}";
     const SUPABASE_URL = "{{ supabase_url }}";
@@ -120,6 +140,7 @@
     let manualToken = null; // token provided by parent preview via postMessage
     const urlParams = new URLSearchParams(location.search);
     const SOURCE = urlParams.get('source') || '';
+    let transcriptEventSource = null;
     
     // Initialize citations component
     const citationsComponent = new CitationsComponent();
@@ -254,8 +275,100 @@
     }
 
     let __roomConn = null;
+    let __seenTranscriptIds = new Set();
+    function appendVoiceTranscript(role, text, createdAt, citations, id){
+      try {
+        if (id && __seenTranscriptIds.has(id)) { return; }
+        const container = document.getElementById('voiceTranscriptList');
+        if (!container) return;
+        const wrap = document.createElement('div');
+        const isUser = role === 'user';
+        wrap.className = isUser ? 'flex justify-end' : 'flex justify-start';
+        const bubble = document.createElement('div');
+        bubble.className = (isUser
+          ? 'max-w-[80%] px-4 py-2 rounded-lg bg-brand-teal text-white'
+          : 'max-w-[80%] px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap');
+        bubble.textContent = text || '';
+        wrap.appendChild(bubble);
+        container.appendChild(wrap);
+        if (citations && Array.isArray(citations) && citations.length > 0) {
+          const citationsElement = citationsComponent.render(citations, `voice-${Date.now()}`);
+          if (citationsElement) {
+            citationsElement.classList.add('compact');
+            const citeWrap = document.createElement('div');
+            citeWrap.className = 'flex justify-start';
+            citeWrap.appendChild(citationsElement);
+            container.appendChild(citeWrap);
+          }
+        }
+        container.scrollTop = container.scrollHeight;
+        if (id) { __seenTranscriptIds.add(id); }
+      } catch {}
+    }
+
+    function startVoiceTranscriptStream(conversationId, clientId, agentId){
+      try {
+        // Guard: if already connected, don't start another SSE
+        if (transcriptEventSource && transcriptEventSource.readyState !== EventSource.CLOSED) {
+          try { console.log('[voice] SSE already active; skip reopening'); } catch {}
+          return;
+        }
+        if (transcriptEventSource) { try { transcriptEventSource.close(); } catch {} transcriptEventSource = null; }
+        if (!conversationId || !clientId) { try { console.warn('[voice] no conversationId or clientId; skipping SSE'); } catch {} return; }
+        const params = new URLSearchParams({
+          conversation_id: conversationId,
+          client_id: clientId,
+          agent_id: agentId || '' ,
+          include_citations: 'true'
+        });
+        const url = `/api/v1/voice-transcripts/stream?${params.toString()}`;
+        try { console.log('[voice] starting SSE', { url }); } catch {}
+        transcriptEventSource = new EventSource(url);
+        transcriptEventSource.onopen = async () => {
+          try { console.log('[voice] SSE connected'); } catch {}
+          // Prefetch recent history once on connect to avoid missing items if SSE attached late
+          try {
+            const historyUrl = `/api/v1/voice-transcripts/history?conversation_id=${encodeURIComponent(conversationId)}&client_id=${encodeURIComponent(clientId)}&agent_id=${encodeURIComponent(agentId||'')}&include_citations=true&limit=10`;
+            const resp = await fetch(historyUrl);
+            if (resp.ok) {
+              const obj = await resp.json();
+              if (obj && obj.success && Array.isArray(obj.data)) {
+                for (const t of obj.data) {
+                  const txt = t.content || t.transcript || '';
+                  if (txt) {
+                    appendVoiceTranscript(t.role, txt, t.created_at, t.citations, t.id);
+                  }
+                }
+              }
+            }
+          } catch (e) { try { console.warn('[voice] history fetch failed', e); } catch {} }
+        };
+        transcriptEventSource.onmessage = (evt) => {
+          try {
+            const data = JSON.parse(evt.data || '{}');
+            try { console.log('[voice] SSE event', { id: data?.id, role: data?.role, len: (data?.content || data?.transcript || '').length }); } catch {}
+            if (data && data.role && (data.content || data.transcript)) {
+              appendVoiceTranscript(data.role, data.content || data.transcript || '', data.created_at, data.citations, data.id);
+            }
+          } catch {}
+        };
+        transcriptEventSource.onerror = (e) => {
+          try { console.warn('[voice] SSE error', e); } catch {}
+          // Reset handle if closed so future calls can reconnect
+          try { if (transcriptEventSource && transcriptEventSource.readyState === EventSource.CLOSED) { transcriptEventSource = null; } } catch {}
+        };
+      } catch {}
+    }
+
+    // Removed overlay in favor of autoplay under user gesture
+
     async function startVoice(){
-      const ok = await ensureSession(); if (!ok || !(session && session.user && session.user.id)) { setAuthVisible(true); setChatVisible(false); document.getElementById('voiceStatus').textContent = 'Please sign in to start voice.'; return; }
+      // Allow either a Supabase session OR a manual token from admin preview
+      const ok = await ensureSession();
+      const injectedUserId = window.__client_user_id || null;
+      const hasSupabaseUser = !!(session && session.user && session.user.id);
+      const hasManualToken = !!manualToken;
+      if (!hasSupabaseUser && !hasManualToken) { setAuthVisible(true); setChatVisible(false); document.getElementById('voiceStatus').textContent = 'Please sign in to start voice.'; return; }
       const room = `embed_${AGENT_SLUG}_${Date.now()}`;
       const payload = {
         agent_slug: AGENT_SLUG,
@@ -263,40 +376,104 @@
         mode: 'voice',
         room_name: room,
         platform: 'livekit',
-        user_id: session.user.id
+        user_id: (hasSupabaseUser ? session.user.id : (injectedUserId || 'preview-user'))
       };
       const bearer = manualToken || (session && session.access_token) || '';
       const res = await fetch('/api/v1/trigger-agent', { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${bearer}` }, body: JSON.stringify(payload) });
       const status = document.getElementById('voiceStatus');
       const startBtn = document.getElementById('voiceStartBtn');
       const endBtn = document.getElementById('voiceEndBtn');
+      // Prime Web Audio on user gesture so playback can start without overlays
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) {
+          if (!window.__audioCtx) { window.__audioCtx = new AC(); }
+          await window.__audioCtx.resume();
+        }
+      } catch {}
+      // Prepare a dedicated audio element under the user's gesture for autoplay reliability
+      try {
+        if (!window.__lk_audio_el) {
+          const audio = document.createElement('audio');
+          audio.autoplay = true;
+          audio.playsInline = true;
+          audio.muted = false;
+          try { audio.volume = 1.0; } catch {}
+          audio.style.position = 'fixed';
+          audio.style.bottom = '8px';
+          audio.style.right = '8px';
+          audio.style.width = '0px';
+          audio.style.height = '0px';
+          audio.style.opacity = '0';
+          audio.style.pointerEvents = 'none';
+          document.body.appendChild(audio);
+          window.__lk_audio_el = audio;
+        }
+        try { window.__lk_audio_el.play?.().catch(() => {}); } catch {}
+      } catch {}
       if (!res.ok) { status.textContent = 'Voice start failed.'; return; }
       const data = await res.json();
-      const info = data?.data?.livekit_config; const server = info?.server_url; const token = info?.user_token;
+      try { console.log('[voice] trigger response', data); } catch {}
+      if (!data || !data.data) { status.textContent = 'Error: trigger-agent returned no data payload.'; console.log('[voice] trigger payload (raw)', data); return; }
+      const info = data.data.livekit_config; const server = info?.server_url; const token = info?.user_token;
+      const agentId = (data?.data?.agent_context?.agent_id || data?.agent_context?.agent_id || '');
+      // Enforce no-fallback: require top-level conversation_id only
+      const conversationId = data?.data?.conversation_id || null;
+      try { console.log('[voice] trigger keys', Object.keys(data||{})); } catch {}
+      try { console.log('[voice] conversationId', conversationId); } catch {}
+      if (!conversationId) { status.textContent = 'Error: missing conversation_id from trigger-agent.'; return; }
+      // Start transcript stream immediately when we have the conversationId
+      try { startVoiceTranscriptStream(conversationId, CLIENT_ID, agentId); } catch {}
       if (!server || !token) { status.textContent = 'Voice start response incomplete.'; return; }
       status.textContent = 'Connecting…';
       try {
         const { Room, RoomEvent, createLocalAudioTrack, ParticipantKind } = window.LivekitClient || window.LiveKit || {};
         if (!Room) { status.textContent = 'Voice SDK not available.'; return; }
         const roomConn = new Room();
+        // Prime audio playback under user gesture BEFORE connecting (non-blocking)
+        try { roomConn.startAudio?.().catch(() => {}); } catch {}
         __roomConn = roomConn;
         startBtn.classList.add('hidden');
         endBtn.classList.remove('hidden');
-        await roomConn.connect(server, token, { autoSubscribe: true });
+        // Register diagnostics BEFORE connecting so we see early failures
         try { roomConn.on(RoomEvent.ConnectionStateChanged, (state) => { try { console.log('[voice] connection state', state); } catch {} }); } catch {}
-        // Create local mic track with constraints similar to admin preview
-        const mic = await createLocalAudioTrack({
-          echoCancellation: true,
-          noiseSuppression: false,
-          autoGainControl: true,
-        });
-        // Publish with DTX disabled to avoid initial silence
-        await roomConn.localParticipant.publishTrack(mic, {
-          dtx: false,
-          red: false,
-          simulcast: false,
-          maxBitrate: 64000,
-        });
+        try { roomConn.on(RoomEvent.AudioPlaybackStatusChanged, () => { try { console.log('[voice] AudioPlaybackStatusChanged canPlaybackAudio=', roomConn.canPlaybackAudio); } catch {} }); } catch {}
+        try { roomConn.on(RoomEvent.TrackSubscriptionFailed, (sid, err) => { try { console.error('[voice] TrackSubscriptionFailed', sid, err); } catch {} }); } catch {}
+        try { roomConn.on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => { try { console.warn('[voice] TrackUnsubscribed', track?.kind, participant?.identity); } catch {} }); } catch {}
+        try { roomConn.on(RoomEvent.Disconnected, (reason) => { try { console.warn('[voice] Room disconnected', reason); } catch {} }); } catch {}
+        // Connect with a timeout to avoid indefinite spinner
+        const connectTimeoutMs = 15000;
+        try {
+          const connectPromise = roomConn.connect(server, token, { autoSubscribe: true });
+          await Promise.race([
+            connectPromise,
+            new Promise((_, rej) => setTimeout(() => rej(new Error('connect-timeout')), connectTimeoutMs))
+          ]);
+        } catch (err) {
+          try { console.error('[voice] connect failed or timed out', err); } catch {}
+          status.textContent = 'Connection failed. Please try again.';
+          startBtn.classList.remove('hidden');
+          endBtn.classList.add('hidden');
+          try { await roomConn.disconnect(); } catch {}
+          return;
+        }
+        try { roomConn.startAudio?.().catch(() => {}); } catch {}
+        // Create local mic track (non-blocking) – avoid hanging on permission prompts
+        try {
+          createLocalAudioTrack({
+            echoCancellation: true,
+            noiseSuppression: false,
+            autoGainControl: true,
+          })
+          .then((mic) => roomConn.localParticipant.publishTrack(mic, {
+            dtx: false,
+            red: false,
+            simulcast: false,
+            maxBitrate: 64000,
+          }))
+          .then(() => { try { console.log('[voice] Mic track published'); } catch {} })
+          .catch((e) => { try { console.warn('[voice] Mic setup/publish failed', e); } catch {} });
+        } catch {}
 
         // Diagnostics: local track published
         try {
@@ -312,8 +489,31 @@
         roomConn.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
           try { console.log('[voice] TrackSubscribed', track.kind, participant.identity, participant.kind); } catch {}
           if (track.kind === 'audio') {
-            const el = track.attach(); el.autoplay = true; el.playsInline = true; el.style.display = 'none'; document.body.appendChild(el);
-            try { el.play?.(); } catch {}
+            let el = window.__lk_audio_el;
+            try {
+              if (el) { track.attach(el); }
+              else {
+                el = track.attach();
+                el.autoplay = true;
+                el.playsInline = true;
+                el.muted = false;
+                try { el.volume = 1.0; } catch {}
+                // Avoid display:none to prevent autoplay restrictions in some browsers
+                el.style.position = 'fixed';
+                el.style.bottom = '8px';
+                el.style.right = '8px';
+                el.style.width = '0px';
+                el.style.height = '0px';
+                el.style.opacity = '0';
+                el.style.pointerEvents = 'none';
+                document.body.appendChild(el);
+                window.__lk_audio_el = el;
+              }
+            } catch {}
+            (async () => {
+              try { await roomConn.startAudio?.(); } catch {}
+              try { await el.play?.(); } catch (e) { try { console.warn('[voice] el.play failed', e); } catch {} }
+            })();
             try { status.textContent = 'Agent audio connected.'; } catch {}
           }
         });
@@ -327,6 +527,15 @@
             }
           } catch {}
         });
+        try {
+          roomConn.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+            try {
+              const indicator = document.getElementById('agentSpeakingIndicator');
+              const anyAgentSpeaking = (speakers||[]).some(s => String(s.identity||'').toLowerCase().includes('agent') && (s.audioLevel||0) > 0);
+              if (indicator){ indicator.classList.toggle('hidden', !anyAgentSpeaking); }
+            } catch {}
+          });
+        } catch {}
         roomConn.on(RoomEvent.ParticipantDisconnected, () => { try { status.textContent = 'Participant left.'; } catch {} });
         // Fallback: after 8s, if no agent or remote audio subscribed, notify user
         setTimeout(() => {
@@ -339,6 +548,7 @@
           } catch {}
         }, 8000);
         status.textContent = 'Connected. You can speak now.';
+        if (conversationId) { startVoiceTranscriptStream(conversationId, CLIENT_ID, agentId); }
       } catch (e) {
         status.textContent = 'Connection failed.';
         startBtn.classList.remove('hidden');
@@ -351,6 +561,8 @@
       const startBtn = document.getElementById('voiceStartBtn');
       const endBtn = document.getElementById('voiceEndBtn');
       try {
+        try { if (transcriptEventSource) { transcriptEventSource.close(); } } catch {}
+        transcriptEventSource = null;
         if (__roomConn) {
           try {
             const pubs = Array.from(__roomConn.localParticipant.tracks.values());
@@ -372,6 +584,7 @@
         if (!data || data.type !== 'supabase-session') return;
         if (data.access_token) {
           manualToken = data.access_token;
+          if (data.client_user_id) { window.__client_user_id = data.client_user_id; }
           // If refresh_token is provided, set full Supabase session for a seamless experience
           if (data.refresh_token && sb && sb.auth && sb.auth.setSession) {
             try {

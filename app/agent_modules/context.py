@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 import httpx
 import time
+from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
 
@@ -408,17 +409,33 @@ class AgentContextManager:
                 
             # Generate embeddings using remote service
             query_embedding = await self.embedder.create_embedding(user_message)
+            # Convert to pgvector string format
+            emb_vec = "[" + ",".join(map(str, query_embedding)) + "]"
 
             # NO FALLBACKS: Only use the correct RPC function
             result = self.supabase.rpc("match_documents", {
-                "p_query_embedding": query_embedding,  # Database function expects p_ prefix
+                "p_query_embedding": emb_vec,          # Pass as pgvector string
                 "p_agent_slug": agent_slug,            # Database function expects p_ prefix
-                "p_match_threshold": 0.5,
+                "p_match_threshold": 0.3,              # Lowered from 0.5 for better recall
                 "p_match_count": 5
             }).execute()
             
             if result.data:
                 logger.info(f"✅ match_documents returned {len(result.data)} results.")
+                # Expose citations for trigger.py (_last_rag_results.citations)
+                # match_documents returns: id, title, content, similarity
+                self._last_rag_results = SimpleNamespace(
+                    citations=[
+                        SimpleNamespace(
+                            doc_id=doc.get("id"),
+                            title=doc.get("title"),
+                            source_url=None,             # not available from this RPC
+                            chunk_text=doc.get("content"),
+                            score=doc.get("similarity", 0.0)
+                        )
+                        for doc in result.data
+                    ]
+                )
                 formatted_results = self._format_match_documents_results(result.data)
                 return formatted_results, time.perf_counter() - start_time
             
@@ -464,6 +481,8 @@ class AgentContextManager:
                 
             # Generate embeddings using remote service
             query_embedding = await self.embedder.create_embedding(user_message)
+            # Convert to pgvector string format
+            emb_vec = "[" + ",".join(map(str, query_embedding)) + "]"
 
             # NO FALLBACKS: Only use the correct RPC function
             # Cast user_id to UUID to disambiguate the overloaded function
@@ -475,7 +494,7 @@ class AgentContextManager:
                 raise ValueError(f"user_id must be a valid UUID, got: {user_id}")
                 
             result = self.supabase.rpc("match_conversation_transcripts_secure", {
-                "query_embeddings": query_embedding,
+                "query_embeddings": emb_vec,  # Pass as pgvector string
                 "match_count": 5,  # Put match_count before other params to match function signature
                 "agent_slug_param": self.agent_config.get("slug"),
                 "user_id_param": user_id_uuid  # Pass as UUID string
