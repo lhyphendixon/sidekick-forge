@@ -886,6 +886,13 @@ async def agent_job_handler(ctx: JobContext):
                         if hasattr(agent, "say") and callable(getattr(agent, "say")):
                             await asyncio.wait_for(agent.say(greeting_message), timeout=5.0)
                             logger.info("✅ Proactive greeting delivered via agent.say()")
+                            # Persist greeting transcript explicitly to ensure UI bubble
+                            try:
+                                if hasattr(agent, "store_transcript"):
+                                    asyncio.create_task(agent.store_transcript("assistant", greeting_message))
+                                    logger.info("📝 Stored proactive greeting transcript")
+                            except Exception as se:
+                                logger.warning(f"Failed to store proactive greeting transcript: {type(se).__name__}: {se}")
                         else:
                             logger.info("⚠️ No greeting method available on agent; skipping proactive greeting")
                     except Exception as e:
