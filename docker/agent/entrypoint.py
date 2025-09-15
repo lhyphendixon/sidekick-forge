@@ -877,16 +877,18 @@ async def agent_job_handler(ctx: JobContext):
             
             # Note: ctx.agent is read-only property - agent is already managed by the framework
             
-            # Disable proactive greeting by default to avoid double responses
-            # Enable only when explicitly requested via env
+            # Proactive greeting: trigger only when a user is present per LiveKit specs
             if os.getenv("ENABLE_PROACTIVE_GREETING", "false").lower() == "true":
                 greeting_message = f"Hi {user_name}, how can I help you?"
-                async def _try_greet():
+                greeted_flag = {"done": False}
+                async def greet_now():
+                    if greeted_flag["done"]:
+                        return
+                    greeted_flag["done"] = True
                     try:
-                        if hasattr(agent, "say") and callable(getattr(agent, "say")):
-                            await asyncio.wait_for(agent.say(greeting_message), timeout=5.0)
-                            logger.info("✅ Proactive greeting delivered via agent.say()")
-                            # Persist greeting transcript explicitly to ensure UI bubble
+                        if 'session' in locals() and hasattr(session, "say") and callable(getattr(session, "say")):
+                            await asyncio.wait_for(session.say(greeting_message), timeout=6.0)
+                            logger.info("✅ Proactive greeting delivered via session.say()")
                             try:
                                 if hasattr(agent, "store_transcript"):
                                     asyncio.create_task(agent.store_transcript("assistant", greeting_message))
@@ -894,10 +896,29 @@ async def agent_job_handler(ctx: JobContext):
                             except Exception as se:
                                 logger.warning(f"Failed to store proactive greeting transcript: {type(se).__name__}: {se}")
                         else:
-                            logger.info("⚠️ No greeting method available on agent; skipping proactive greeting")
+                            logger.info("⚠️ No greeting method available on session; skipping proactive greeting")
                     except Exception as e:
                         logger.warning(f"Proactive greeting failed or timed out: {type(e).__name__}: {e}")
-                asyncio.create_task(_try_greet())
+
+                # If a participant is already in the room, greet immediately
+                try:
+                    participants = []
+                    if hasattr(ctx.room, 'remote_participants'):
+                        participants = list(ctx.room.remote_participants.values())
+                    elif hasattr(ctx.room, 'participants'):
+                        participants = [p for p in ctx.room.participants.values() if getattr(p, 'is_local', False) is False]
+                    if participants:
+                        asyncio.create_task(greet_now())
+                    else:
+                        # Otherwise, greet on first participant_connected
+                        @ctx.room.on("participant_connected")
+                        def _on_participant_connected(_participant):
+                            try:
+                                asyncio.create_task(greet_now())
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.warning(f"Could not wire participant_connected for greeting: {type(e).__name__}: {e}")
             else:
                 logger.info("Proactive greeting disabled (ENABLE_PROACTIVE_GREETING=false)")
 
