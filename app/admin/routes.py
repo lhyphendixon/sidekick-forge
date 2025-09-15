@@ -1304,6 +1304,25 @@ async def knowledge_base_page(
     response.headers["Expires"] = "0"
     return response
 
+@router.get("/tools", response_class=HTMLResponse)
+async def tools_page(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Abilities (Tools) management page"""
+    try:
+        return templates.TemplateResponse("admin/tools.html", {
+            "request": request,
+            "user": admin_user
+        })
+    except Exception as e:
+        logger.error(f"Error loading tools page: {e}")
+        return templates.TemplateResponse("admin/tools.html", {
+            "request": request,
+            "user": admin_user,
+            "error": str(e)
+        })
+
 # # DUPLICATE - COMMENTED OUT - Using the version at line ~1528
 # # @router.get("/agents/preview/{client_id}/{agent_slug}", response_class=HTMLResponse)
 # # async def agent_preview_modal_old(

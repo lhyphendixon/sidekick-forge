@@ -1,0 +1,178 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Abilities{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-3xl font-bold text-dark-text">Abilities</h1>
+    <button class="btn-primary px-4 py-2 rounded" onclick="openCreateToolModal()">Add Ability</button>
+  </div>
+
+  <div class="mb-4 flex gap-2 items-center">
+    <input id="searchInput" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" placeholder="Search abilities..." oninput="refreshTools()" />
+    <select id="typeFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
+      <option value="">All types</option>
+      <option value="mcp">MCP</option>
+      <option value="n8n">n8n</option>
+      <option value="sidekick">Sidekick</option>
+      <option value="code">Code</option>
+    </select>
+    <select id="scopeFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
+      <option value="">All scopes</option>
+      <option value="global">Global</option>
+      <option value="client">Client</option>
+    </select>
+  </div>
+
+  <div id="toolsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+</div>
+
+<div id="createToolModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50">
+  <div class="bg-dark-surface rounded-lg border border-dark-border w-full max-w-2xl p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-xl text-dark-text">Create Ability</h2>
+      <button class="text-dark-text-secondary" onclick="closeCreateToolModal()">✕</button>
+    </div>
+    <div class="space-y-3">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-sm text-dark-text">Name</label>
+          <input id="ct_name" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Slug</label>
+          <input id="ct_slug" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+        </div>
+      </div>
+      <div>
+        <label class="text-sm text-dark-text">Description</label>
+        <textarea id="ct_desc" rows="2" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text"></textarea>
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <label class="text-sm text-dark-text">Type</label>
+          <select id="ct_type" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="toggleTypeFields()">
+            <option value="mcp">MCP</option>
+            <option value="n8n">n8n</option>
+            <option value="sidekick">Sidekick</option>
+            <option value="code">Code</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Scope</label>
+          <select id="ct_scope" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text">
+            <option value="client">Client</option>
+            <option value="global">Global</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Icon URL</label>
+          <input id="ct_icon" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+        </div>
+      </div>
+      <div id="typeFields" class="space-y-2">
+        <!-- Dynamic config inputs per type -->
+      </div>
+      <div class="flex justify-end gap-2">
+        <button class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="closeCreateToolModal()">Cancel</button>
+        <button class="btn-primary px-4 py-2 rounded" onclick="createTool()">Create</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
+<script>
+async function fetchJSON(url){
+  const r = await fetch(url);
+  if(!r.ok) throw new Error('request failed');
+  return r.json();
+}
+
+function openCreateToolModal(){ document.getElementById('createToolModal').classList.remove('hidden'); document.getElementById('createToolModal').classList.add('flex'); toggleTypeFields(); }
+function closeCreateToolModal(){ document.getElementById('createToolModal').classList.add('hidden'); document.getElementById('createToolModal').classList.remove('flex'); }
+
+function toggleTypeFields(){
+  const type = document.getElementById('ct_type').value;
+  const wrap = document.getElementById('typeFields');
+  wrap.innerHTML = '';
+  if(type === 'n8n'){
+    wrap.innerHTML = `
+    <div>
+      <label class="text-sm text-dark-text">Webhook URL</label>
+      <input id="ct_n8n_url" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+    </div>
+    <div>
+      <label class="text-sm text-dark-text">Method</label>
+      <input id="ct_n8n_method" value="POST" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+    </div>`;
+  } else if(type === 'sidekick'){
+    wrap.innerHTML = `
+    <div>
+      <label class="text-sm text-dark-text">Target Agent Slug</label>
+      <input id="ct_sidekick_agent" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+    </div>`;
+  } else if(type === 'mcp'){
+    wrap.innerHTML = `<div class="text-sm text-dark-text-secondary">MCP config will be added in a subsequent step.</div>`;
+  } else if(type === 'code'){
+    wrap.innerHTML = `<div class="text-sm text-dark-text-secondary">Select from predefined code abilities in a later iteration.</div>`;
+  }
+}
+
+async function refreshTools(){
+  const search = document.getElementById('searchInput').value.trim();
+  const type = document.getElementById('typeFilter').value;
+  const scope = document.getElementById('scopeFilter').value;
+  const qs = new URLSearchParams();
+  if(search) qs.set('search', search);
+  if(type) qs.set('type', type);
+  if(scope) qs.set('scope', scope);
+  const data = await fetchJSON(`/api/v1/tools?${qs.toString()}`);
+  const grid = document.getElementById('toolsGrid');
+  grid.innerHTML = '';
+  for(const t of data){
+    const card = document.createElement('div');
+    card.className = 'bg-dark-surface border border-dark-border rounded p-4 flex gap-3 items-start';
+    const icon = document.createElement('img');
+    icon.src = t.icon_url || '/static/images/ability-default.png';
+    icon.className = 'w-10 h-10 rounded';
+    const body = document.createElement('div');
+    body.className = 'flex-1';
+    body.innerHTML = `<div class="flex items-center gap-2"><span class="text-dark-text font-semibold">${t.name}</span><span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.type}</span><span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.scope}</span></div><div class="text-sm text-dark-text-secondary mt-1">${t.description||''}</div>`;
+    const actions = document.createElement('div');
+    actions.innerHTML = `<button class="text-sm text-brand-teal" onclick="deleteTool('${t.id}', '${t.scope}')">Remove</button>`;
+    card.appendChild(icon); card.appendChild(body); card.appendChild(actions);
+    grid.appendChild(card);
+  }
+}
+
+async function createTool(){
+  const name = document.getElementById('ct_name').value.trim();
+  const slug = document.getElementById('ct_slug').value.trim();
+  const description = document.getElementById('ct_desc').value.trim();
+  const type = document.getElementById('ct_type').value;
+  const scope = document.getElementById('ct_scope').value;
+  const icon_url = document.getElementById('ct_icon').value.trim();
+  const config = {};
+  if(type === 'n8n'){
+    config.webhook_url = document.getElementById('ct_n8n_url').value.trim();
+    config.method = document.getElementById('ct_n8n_method').value.trim();
+  } else if(type === 'sidekick'){
+    config.agent_slug = document.getElementById('ct_sidekick_agent').value.trim();
+  }
+  const body = { name, slug, description, type, scope, icon_url, config, enabled: true };
+  const r = await fetch('/api/v1/tools', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if(r.ok){ closeCreateToolModal(); await refreshTools(); }
+}
+
+async function deleteTool(id, scope){
+  const qs = scope === 'client' ? `?client_id=` : '';
+  const r = await fetch(`/api/v1/tools/${id}${qs}`, { method: 'DELETE' });
+  if(r.ok){ await refreshTools(); }
+}
+
+document.addEventListener('DOMContentLoaded', refreshTools);
+</script>
+{% endblock %}
+
+

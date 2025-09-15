@@ -250,6 +250,12 @@
                             </a>
                             {% endif %}
                             {% if user.role in ['superadmin','admin'] %}
+                            <a href="/admin/tools" 
+                               class="{% if '/admin/tools' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Abilities
+                            </a>
+                            {% endif %}
+                            {% if user.role in ['superadmin','admin'] %}
                             <a href="/admin/monitoring" 
                                class="{% if '/admin/monitoring' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Monitoring
