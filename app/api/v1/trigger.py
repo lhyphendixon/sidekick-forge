@@ -22,6 +22,9 @@ from livekit import api
 import os
 from supabase import create_client, Client as SupabaseClient
 from app.config import settings
+# Tools service for abilities
+from app.services.tools_service_supabase import ToolsService
+from app.services.client_service_supabase import ClientService
 # Redis dedupe removed
 
 # --- Helpers ---
@@ -429,6 +432,15 @@ async def handle_voice_trigger(
             "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None) if client.settings and client.settings.api_keys else None,
         } if client.settings and client.settings.api_keys else {}
     }
+
+    # Include assigned tools (Abilities) for this agent
+    try:
+        tools_service = ToolsService(agent_service.client_service)
+        assigned_tools = await tools_service.list_agent_tools(client.id, agent.id)
+        # Normalize to dicts for transport
+        agent_context["tools"] = [t.dict() for t in assigned_tools]
+    except Exception as e:
+        logger.warning(f"Failed to include tools for agent {agent.slug}: {e}")
 
     # Include dataset_ids for RAG/citations when known
     if agent.slug == "clarence-coherence":

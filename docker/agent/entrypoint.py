@@ -20,6 +20,7 @@ from api_key_loader import APIKeyLoader
 from config_validator import ConfigValidator, ConfigurationError
 from context import AgentContextManager
 from sidekick_agent import SidekickAgent
+from tool_registry import ToolRegistry
 
 # Enable SDK debug logging for better diagnostics
 os.environ["LIVEKIT_LOG_LEVEL"] = "debug"
@@ -624,6 +625,18 @@ async def agent_job_handler(ctx: JobContext):
                 tts=tts_plugin,
                 turn_detection="stt"
             )
+
+            # Register tools (Abilities) if provided in metadata
+            try:
+                tool_defs = metadata.get("tools") or []
+                if tool_defs:
+                    registry = ToolRegistry()
+                    tools = registry.build(tool_defs)
+                    if tools:
+                        session.add_tools(tools)
+                        logger.info(f"🧰 Registered {len(tools)} tools for this session")
+            except Exception as e:
+                logger.warning(f"Tool registration failed: {type(e).__name__}: {e}")
             
             # Log and capture STT transcripts; commit turn on finals
             @session.on("user_input_transcribed")
