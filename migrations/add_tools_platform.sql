@@ -61,11 +61,31 @@ END$$;
 
 -- Agent-to-Tool assignments (lives in platform DB)
 CREATE TABLE IF NOT EXISTS public.agent_tools (
-  agent_id UUID NOT NULL REFERENCES public.agents(id) ON DELETE CASCADE,
+  agent_id UUID NOT NULL,
   tool_id UUID NOT NULL REFERENCES public.tools(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (agent_id, tool_id)
 );
+
+-- Conditionally add foreign key to agents if the table exists
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'agents'
+  ) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.table_constraints
+      WHERE table_schema = 'public'
+        AND table_name = 'agent_tools'
+        AND constraint_name = 'agent_tools_agent_id_fkey'
+    ) THEN
+      ALTER TABLE public.agent_tools
+        ADD CONSTRAINT agent_tools_agent_id_fkey
+        FOREIGN KEY (agent_id) REFERENCES public.agents(id) ON DELETE CASCADE;
+    END IF;
+  END IF;
+END$$;
 
 CREATE INDEX IF NOT EXISTS idx_agent_tools_tool_id ON public.agent_tools (tool_id);
 
