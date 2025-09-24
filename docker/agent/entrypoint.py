@@ -10,7 +10,8 @@ import json
 import logging
 import inspect
 import time
-from typing import Optional, Dict, Any
+import types
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from livekit import agents, rtc
@@ -104,6 +105,96 @@ async def agent_job_handler(ctx: JobContext):
     # The context provides a connected room object
     room = ctx.room
 
+    # Attach detailed LiveKit room diagnostics for track lifecycle events
+    try:
+        def _on_local_track_published(publication, track):
+            try:
+                logger.info(
+                    "📡 local_track_published kind=%s track_sid=%s muted=%s",
+                    getattr(publication, "kind", None),
+                    getattr(publication, "track_sid", None) or getattr(publication, "sid", None),
+                    getattr(publication, "muted", None),
+                )
+            except Exception as log_err:
+                logger.debug(f"Failed to log local_track_published: {log_err}")
+
+        def _on_track_published(publication, participant):
+            try:
+                logger.info(
+                    "📡 track_published kind=%s track_sid=%s participant=%s muted=%s",
+                    getattr(publication, "kind", None),
+                    getattr(publication, "track_sid", None) or getattr(publication, "sid", None),
+                    getattr(participant, "identity", None),
+                    getattr(publication, "muted", None),
+                )
+            except Exception as log_err:
+                logger.debug(f"Failed to log track_published: {log_err}")
+
+        def _on_track_subscribed(track, publication, participant):
+            try:
+                logger.info(
+                    "📡 track_subscribed kind=%s track_sid=%s participant=%s muted=%s",
+                    getattr(track, "kind", None),
+                    getattr(publication, "track_sid", None) or getattr(publication, "sid", None),
+                    getattr(participant, "identity", None),
+                    getattr(publication, "muted", None),
+                )
+            except Exception as log_err:
+                logger.debug(f"Failed to log track_subscribed: {log_err}")
+
+        def _on_track_unsubscribed(track, publication, participant):
+            try:
+                logger.info(
+                    "📡 track_unsubscribed kind=%s track_sid=%s participant=%s",
+                    getattr(track, "kind", None),
+                    getattr(publication, "track_sid", None) or getattr(publication, "sid", None),
+                    getattr(participant, "identity", None),
+                )
+            except Exception as log_err:
+                logger.debug(f"Failed to log track_unsubscribed: {log_err}")
+
+        def _on_track_muted(participant, publication):
+            try:
+                logger.info(
+                    "📡 track_muted participant=%s track_sid=%s",
+                    getattr(participant, "identity", None),
+                    getattr(publication, "track_sid", None) or getattr(publication, "sid", None),
+                )
+            except Exception as log_err:
+                logger.debug(f"Failed to log track_muted: {log_err}")
+
+        def _on_track_unmuted(participant, publication):
+            try:
+                logger.info(
+                    "📡 track_unmuted participant=%s track_sid=%s",
+                    getattr(participant, "identity", None),
+                    getattr(publication, "track_sid", None) or getattr(publication, "sid", None),
+                )
+            except Exception as log_err:
+                logger.debug(f"Failed to log track_unmuted: {log_err}")
+
+        def _on_track_subscription_failed(participant, track_sid, error):
+            try:
+                logger.warning(
+                    "⚠️ track_subscription_failed participant=%s track_sid=%s error=%s",
+                    getattr(participant, "identity", None),
+                    track_sid,
+                    error,
+                )
+            except Exception as log_err:
+                logger.debug(f"Failed to log track_subscription_failed: {log_err}")
+
+        room.on("local_track_published", _on_local_track_published)
+        room.on("track_published", _on_track_published)
+        room.on("track_subscribed", _on_track_subscribed)
+        room.on("track_unsubscribed", _on_track_unsubscribed)
+        room.on("track_muted", _on_track_muted)
+        room.on("track_unmuted", _on_track_unmuted)
+        room.on("track_subscription_failed", _on_track_subscription_failed)
+        logger.info("🔍 LiveKit room diagnostics handlers attached")
+    except Exception as attach_err:
+        logger.warning(f"Unable to attach room diagnostics handlers: {attach_err}")
+
     job_received_time = time.perf_counter()
     perf_summary = {}
 
@@ -113,6 +204,7 @@ async def agent_job_handler(ctx: JobContext):
         
         # Log room information for debugging
         logger.info(f"Room name: {ctx.room.name}")
+
         logger.info(f"Room sid: {getattr(ctx.room, 'sid', 'No SID')}")
         logger.info(f"Job ID: {getattr(ctx, 'job_id', 'No Job ID')}")
         logger.info(f"Room object type: {type(ctx.room)}")
@@ -132,57 +224,65 @@ async def agent_job_handler(ctx: JobContext):
             
             if all([livekit_url, livekit_api_key, livekit_api_secret]):
                 # Create LiveKit API client
-                livekit_api = api.LiveKitAPI(
-                    url=livekit_url,
-                    api_key=livekit_api_key,
-                    api_secret=livekit_api_secret
-                )
-                
-                logger.info(f"Fetching room details from LiveKit API for room: {ctx.room.name}")
-                
-                # Fetch room details
-                rooms = await livekit_api.room.list_rooms(
-                    api.ListRoomsRequest(names=[ctx.room.name])
-                )
-                
-                logger.info(f"API response - found {len(rooms.rooms) if rooms.rooms else 0} rooms")
-                
-                if rooms.rooms:
-                    room_info = rooms.rooms[0]
-                    logger.info(f"Room found - SID: {room_info.sid}, Has metadata: {bool(room_info.metadata)}")
-                    
-                    if room_info.metadata:
-                        logger.info(f"Raw room metadata length: {len(room_info.metadata)} chars")
-                        logger.info(f"Room metadata from API: {room_info.metadata[:200]}..." if len(room_info.metadata) > 200 else f"Room metadata from API: {room_info.metadata}")
-                        try:
-                            metadata = json.loads(room_info.metadata)
-                            logger.info(f"Successfully parsed room metadata with {len(metadata)} keys")
-                            logger.info(f"Metadata keys: {list(metadata.keys())}")
-                            
-                            # Log more details about the metadata content
-                            if 'voice_settings' in metadata:
-                                logger.info(f"Voice settings found: {metadata['voice_settings']}")
-                            if 'system_prompt' in metadata:
-                                logger.info(f"System prompt length: {len(metadata['system_prompt'])} chars")
-                            if 'client_id' in metadata:
-                                logger.info(f"Client ID: {metadata['client_id']}")
-                            
-                            # Log if API keys are present
-                            if 'api_keys' in metadata:
-                                available_keys = [k for k, v in metadata['api_keys'].items() if v and str(v).lower() not in ['test_key', 'test', 'dummy']]
-                                logger.info(f"API keys in metadata: {len(available_keys)} real keys found")
-                        except json.JSONDecodeError as e:
-                            # Strict JSON parsing - fail loudly with detailed error info
-                            logger.error(f"Failed to parse room metadata as JSON: {e}")
-                            logger.error(f"JSON error position: line {e.lineno}, column {e.colno}")
-                            logger.error(f"Raw metadata (first 500 chars): {room_info.metadata[:500]}")
-                            logger.error(f"Metadata type: {type(room_info.metadata)}, length: {len(room_info.metadata)}")
-                            # Re-raise to ensure the error is visible
-                            raise ValueError(f"Room metadata must be valid JSON. Parse error: {e}")
+                livekit_api = None
+                try:
+                    livekit_api = api.LiveKitAPI(
+                        url=livekit_url,
+                        api_key=livekit_api_key,
+                        api_secret=livekit_api_secret
+                    )
+
+                    logger.info(f"Fetching room details from LiveKit API for room: {ctx.room.name}")
+
+                    # Fetch room details
+                    rooms = await livekit_api.room.list_rooms(
+                        api.ListRoomsRequest(names=[ctx.room.name])
+                    )
+
+                    logger.info(f"API response - found {len(rooms.rooms) if rooms.rooms else 0} rooms")
+
+                    if rooms.rooms:
+                        room_info = rooms.rooms[0]
+                        logger.info(f"Room found - SID: {room_info.sid}, Has metadata: {bool(room_info.metadata)}")
+                        
+                        if room_info.metadata:
+                            logger.info(f"Raw room metadata length: {len(room_info.metadata)} chars")
+                            logger.info(f"Room metadata from API: {room_info.metadata[:200]}..." if len(room_info.metadata) > 200 else f"Room metadata from API: {room_info.metadata}")
+                            try:
+                                metadata = json.loads(room_info.metadata)
+                                logger.info(f"Successfully parsed room metadata with {len(metadata)} keys")
+                                logger.info(f"Metadata keys: {list(metadata.keys())}")
+                                
+                                # Log more details about the metadata content
+                                if 'voice_settings' in metadata:
+                                    logger.info(f"Voice settings found: {metadata['voice_settings']}")
+                                if 'system_prompt' in metadata:
+                                    logger.info(f"System prompt length: {len(metadata['system_prompt'])} chars")
+                                if 'client_id' in metadata:
+                                    logger.info(f"Client ID: {metadata['client_id']}")
+                                
+                                # Log if API keys are present
+                                if 'api_keys' in metadata:
+                                    available_keys = [k for k, v in metadata['api_keys'].items() if v and str(v).lower() not in ['test_key', 'test', 'dummy']]
+                                    logger.info(f"API keys in metadata: {len(available_keys)} real keys found")
+                            except json.JSONDecodeError as e:
+                                # Strict JSON parsing - fail loudly with detailed error info
+                                logger.error(f"Failed to parse room metadata as JSON: {e}")
+                                logger.error(f"JSON error position: line {e.lineno}, column {e.colno}")
+                                logger.error(f"Raw metadata (first 500 chars): {room_info.metadata[:500]}")
+                                logger.error(f"Metadata type: {type(room_info.metadata)}, length: {len(room_info.metadata)}")
+                                # Re-raise to ensure the error is visible
+                                raise ValueError(f"Room metadata must be valid JSON. Parse error: {e}")
+                        else:
+                            logger.warning("Room has no metadata in API response")
                     else:
-                        logger.warning("Room has no metadata in API response")
-                else:
-                    logger.warning(f"Room {ctx.room.name} not found in API response")
+                        logger.warning(f"Room {ctx.room.name} not found in API response")
+                finally:
+                    if livekit_api:
+                        try:
+                            await livekit_api.aclose()
+                        except Exception as close_error:
+                            logger.warning(f"Failed to close LiveKitAPI session: {close_error}")
             else:
                 missing = []
                 if not livekit_url: missing.append("LIVEKIT_URL")
@@ -351,6 +451,9 @@ async def agent_job_handler(ctx: JobContext):
             tts_provider = voice_settings.get("tts_provider") or voice_settings.get("provider")
             if not tts_provider:
                 raise ConfigurationError("TTS provider required but not found (tts_provider or provider)")
+            provider_config = voice_settings.get("provider_config") or {}
+            if not isinstance(provider_config, dict):
+                provider_config = {}
             if tts_provider == "elevenlabs":
                 elevenlabs_key = api_keys.get("elevenlabs_api_key")
                 if not elevenlabs_key:
@@ -384,12 +487,31 @@ async def agent_job_handler(ctx: JobContext):
                     raise ConfigurationError(
                         "Cartesia TTS requires an explicit 'model'. Set voice_settings.model or metadata.tts_model."
                     )
+                cartesia_voice_id = (
+                    voice_settings.get("voice_id")
+                    or voice_settings.get("cartesia_voice_id")
+                    or provider_config.get("cartesia_voice_id")
+                )
+                if not cartesia_voice_id:
+                    raise ConfigurationError(
+                        "Cartesia TTS requires voice_settings.voice_id (or cartesia_voice_id) to be set"
+                    )
+                cartesia_voice_id = str(cartesia_voice_id).strip()
+                if len(cartesia_voice_id) < 8:
+                    raise ConfigurationError(
+                        "Cartesia voice_id appears invalid (too short); provide the full Cartesia UUID"
+                    )
+                # Normalize voice_id back into settings so downstream logs show the actual value
+                voice_settings["voice_id"] = cartesia_voice_id
                 tts_plugin = cartesia.TTS(
-                    voice=voice_settings.get("voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d"),
+                    voice=cartesia_voice_id,
                     model=tts_model,
                     api_key=cartesia_key
                 )
-            
+                logger.info(
+                    f"✅ Cartesia TTS configured with voice_id={cartesia_voice_id} model={tts_model}"
+                )
+
             # Validate TTS initialization
             ConfigValidator.validate_provider_initialization(f"{tts_provider} TTS", tts_plugin)
             
@@ -602,6 +724,36 @@ async def agent_job_handler(ctx: JobContext):
             # Ensure transcript storage uses UUID when available
             agent._agent_id = metadata.get("agent_id") or metadata.get("agent_slug")
             agent._user_id = metadata.get("user_id") or ctx.user_id
+
+            base_tool_context: Dict[str, Any] = {
+                "conversation_id": agent._conversation_id,
+                "user_id": agent._user_id,
+                "agent_slug": metadata.get("agent_slug") or metadata.get("agent_id"),
+                "client_id": metadata.get("client_id") or client_id,
+                "session_id": metadata.get("session_id")
+                or metadata.get("voice_session_id")
+                or metadata.get("room_session_id"),
+            }
+
+            registry: Optional[ToolRegistry] = None
+            tracked_tool_slugs: List[str] = []
+
+            def push_runtime_context(updates: Dict[str, Any]) -> None:
+                if not registry or not tracked_tool_slugs or not isinstance(updates, dict):
+                    return
+                sanitized = {k: v for k, v in updates.items() if v is not None}
+                if not sanitized:
+                    return
+                for slug in tracked_tool_slugs:
+                    registry.update_runtime_context(slug, sanitized)
+                try:
+                    logger.info(
+                        "🧰 Runtime context updated for %s with keys=%s",
+                        tracked_tool_slugs,
+                        list(sanitized.keys()),
+                    )
+                except Exception:
+                    pass
             
             # Log what's available for transcript storage
             logger.info(f"📝 Transcript storage setup:")
@@ -630,11 +782,55 @@ async def agent_job_handler(ctx: JobContext):
             try:
                 tool_defs = metadata.get("tools") or []
                 if tool_defs:
-                    registry = ToolRegistry()
+                    logger.info(f"🧰 Preparing to register tools: count={len(tool_defs)}")
+                    try:
+                        slugs = [t.get("slug") or t.get("name") or t.get("id") for t in tool_defs]
+                        logger.info(f"🧰 Tool defs slugs: {slugs}")
+                    except Exception:
+                        pass
+                    registry = ToolRegistry(
+                        tools_config=metadata.get("tools_config") or {},
+                        api_keys=metadata.get("api_keys") or {},
+                    )
                     tools = registry.build(tool_defs)
                     if tools:
-                        session.add_tools(tools)
-                        logger.info(f"🧰 Registered {len(tools)} tools for this session")
+                        tracked_tool_slugs = []
+                        for tool_def in tool_defs:
+                            if tool_def.get("type") != "n8n":
+                                continue
+                            slug_candidate = (
+                                tool_def.get("slug")
+                                or tool_def.get("name")
+                                or tool_def.get("id")
+                            )
+                            if slug_candidate:
+                                tracked_tool_slugs.append(slug_candidate)
+                        if tracked_tool_slugs:
+                            logger.info(
+                                "🧰 Tracking runtime context for n8n tools: %s",
+                                tracked_tool_slugs,
+                            )
+                            push_runtime_context(base_tool_context)
+                        combined_tools = list(agent.tools) + list(tools)
+                        update_fn = getattr(agent, "update_tools", None)
+                        if callable(update_fn):
+                            result = update_fn(combined_tools)
+                            if inspect.isawaitable(result):
+                                await result
+                            logger.info(
+                                "🧰 Registered %s tools via agent.update_tools",
+                                len(tools),
+                            )
+                        else:
+                            fallback = list(getattr(agent, "_injected_tools", []) or [])
+                            fallback.extend(tools)
+                            setattr(agent, "_injected_tools", fallback)
+                            logger.info(
+                                "🧰 Agent update_tools missing; stored %s tools on agent fallback",
+                                len(tools)
+                            )
+                    else:
+                        logger.warning("🧰 No tools were built from provided definitions")
             except Exception as e:
                 logger.warning(f"Tool registration failed: {type(e).__name__}: {e}")
             
@@ -648,6 +844,8 @@ async def agent_job_handler(ctx: JobContext):
                     if txt:
                         session.latest_user_text = txt
                         agent.latest_user_text = txt
+                        if is_final:
+                            push_runtime_context({"latest_user_text": txt})
                     if is_final:
                         try:
                             session.commit_user_turn(transcript_timeout=0.0)
@@ -673,6 +871,7 @@ async def agent_job_handler(ctx: JobContext):
                         session.latest_user_text = user_text
                         agent.latest_user_text = user_text
                         logger.info(f"💬 Captured user speech: {user_text[:100]}...")
+                        push_runtime_context({"latest_user_text": user_text})
                 except Exception as e:
                     logger.error(f"Failed to capture user speech: {e}")
 
@@ -691,11 +890,6 @@ async def agent_job_handler(ctx: JobContext):
                                     break
                     if not agent_text:
                         return
-                    # Set buffer so optional finalize paths can reuse it
-                    try:
-                        agent._assistant_buffer = agent_text
-                    except Exception:
-                        pass
                     # Deduplicate by last commit
                     if getattr(agent, "_last_assistant_commit", "") == agent_text:
                         return
@@ -721,12 +915,166 @@ async def agent_job_handler(ctx: JobContext):
             input_options = room_io.RoomInputOptions(
                 close_on_disconnect=False  # Keep agent running even if user disconnects briefly
             )
-            
-            await session.start(
-                room=ctx.room, 
-                agent=agent,
-                room_input_options=input_options
+
+            output_options = room_io.RoomOutputOptions(
+                audio_enabled=True,
+                transcription_enabled=True,
+                audio_track_name="agent_audio",
             )
+
+            logger.info("Priming RoomIO audio output before starting AgentSession...")
+            try:
+                session_room_io = room_io.RoomIO(
+                    agent_session=session,
+                    room=ctx.room,
+                    input_options=input_options,
+                    output_options=output_options,
+                )
+                await session_room_io.start()
+                logger.info(
+                    "✅ RoomIO primed | audio_attached=%s transcription_attached=%s",
+                    bool(session.output.audio),
+                    bool(session.output.transcription),
+                )
+            except Exception as room_io_err:
+                logger.error(f"❌ Failed to initialize RoomIO before session.start: {room_io_err}")
+                raise
+
+            await session.start(
+                room=ctx.room,
+                agent=agent,
+            )
+
+            try:
+                audio_output = session.output.audio
+                if audio_output is not None:
+                    try:
+                        await asyncio.wait_for(audio_output.subscribed, timeout=5.0)
+                        logger.info("🔊 audio output subscription confirmed")
+                    except Exception as sub_err:
+                        logger.warning(f"⚠️ audio output subscription check failed: {type(sub_err).__name__}: {sub_err}")
+                else:
+                    logger.warning("⚠️ session.output.audio is None after start")
+            except Exception as sub_check_err:
+                logger.warning(f"⚠️ audio output subscription instrumentation failed: {type(sub_check_err).__name__}: {sub_check_err}")
+
+            try:
+                # Log local and remote participants right after start
+                def describe_pub(pub):
+                    return {"track_sid": getattr(pub, 'track_sid', None) or getattr(pub, 'sid', None),
+                            "kind": getattr(pub, 'kind', None),
+                            "source": getattr(pub, 'source', None),
+                            "name": getattr(pub, 'track_name', None),
+                            "muted": getattr(pub, 'muted', None)}
+
+                local_pubs = []
+                try:
+                    tracks = getattr(ctx.room.local_participant, 'tracks', None)
+                    if tracks:
+                        for pub in tracks.values():
+                            local_pubs.append(describe_pub(pub))
+                except Exception:
+                    pass
+                remote_summary = []
+                try:
+                    participants = getattr(ctx.room, 'remote_participants', {})
+                    for identity, participant in participants.items():
+                        pubs = []
+                        try:
+                            track_map = getattr(participant, 'tracks', None)
+                            if track_map:
+                                for pub in track_map.values():
+                                    pubs.append(describe_pub(pub))
+                        except Exception:
+                            pass
+                        remote_summary.append({
+                            'identity': identity,
+                            'kind': getattr(participant, 'kind', None),
+                            'pubs': pubs
+                        })
+                except Exception:
+                    pass
+                logger.info(f"🔎 Local participant publications after start: {local_pubs}")
+                logger.info(f"🔎 Remote participants after start: {remote_summary}")
+            except Exception as diag_err:
+                logger.warning(f"Participant publication diagnostics failed: {type(diag_err).__name__}: {diag_err}")
+
+            # Instrument audio sink to confirm frames are forwarded to LiveKit
+            try:
+                audio_output = session.output.audio
+                if not audio_output and hasattr(session, "_room_io"):
+                    audio_output = getattr(session._room_io, "audio_output", None)
+                    if audio_output:
+                        session.output.audio = audio_output
+                        logger.info("🔧 Attached RoomIO audio output onto session.output.audio")
+
+                room_io_audio = getattr(session._room_io, "audio_output", None) if hasattr(session, "_room_io") else None
+                logger.info(
+                    "🔍 RoomIO diagnostics post-start | has_output=%s has_room_io=%s room_io_audio=%s",
+                    bool(session.output.audio),
+                    hasattr(session, "_room_io"),
+                    bool(room_io_audio),
+                )
+
+                if audio_output:
+                    chain_labels = []
+                    link = audio_output
+                    while link is not None and link not in chain_labels:
+                        chain_labels.append(type(link).__name__)
+                        link = getattr(link, "next_in_chain", None)
+                    logger.info("🔍 RoomIO audio chain: %s", " -> ".join(chain_labels) or "(empty)")
+
+                    current = audio_output
+                    visited = set()
+                    while current and current not in visited:
+                        visited.add(current)
+                        try:
+                            original_capture = current.capture_frame
+                        except AttributeError:
+                            original_capture = None
+
+                        if original_capture and not getattr(current, "_diag_capture_wrapped", False):
+                            async def capture_with_log(self, frame, *args, **kwargs):
+                                try:
+                                    import audioop
+
+                                    rms = audioop.rms(frame.data, 2) if hasattr(frame, "data") else None
+                                    logger.info(
+                                        "🎧 capture_frame label=%s sr=%s samples=%s duration_ms=%.2f rms=%s",
+                                        getattr(self, "label", None),
+                                        getattr(frame, "sample_rate", None),
+                                        getattr(frame, "samples_per_channel", None),
+                                        (getattr(frame, "duration", None) or 0) * 1000.0,
+                                        rms,
+                                    )
+                                except Exception:
+                                    logger.info(
+                                        "🎧 capture_frame label=%s (frame stats unavailable)",
+                                        getattr(self, "label", None),
+                                    )
+                                return await original_capture(frame, *args, **kwargs)
+
+                            current.capture_frame = types.MethodType(capture_with_log, current)
+                            current._diag_capture_wrapped = True
+
+                        try:
+                            original_flush = current.flush
+                        except AttributeError:
+                            original_flush = None
+
+                        if original_flush and not getattr(current, "_diag_flush_wrapped", False):
+                            def flush_with_log(self, *args, **kwargs):
+                                logger.info(
+                                    "🎧 audio_output.flush label=%s", getattr(self, "label", None)
+                                )
+                                return original_flush(*args, **kwargs)
+
+                            current.flush = types.MethodType(flush_with_log, current)
+                            current._diag_flush_wrapped = True
+
+                        current = getattr(current, "next_in_chain", None)
+            except Exception as audio_patch_err:
+                logger.warning(f"Audio output diagnostics attachment failed: {audio_patch_err}")
 
             # Additional diagnostics: speaking and error events
             try:
@@ -734,26 +1082,10 @@ async def agent_job_handler(ctx: JobContext):
                 @session.on("agent_started_speaking")
                 def _on_agent_started():
                     logger.info("🔈 agent_started_speaking")
-                    try:
-                        agent._assistant_buffer = ""
-                    except Exception:
-                        pass
 
                 @session.on("agent_stopped_speaking")
                 def _on_agent_stopped():
                     logger.info("🔇 agent_stopped_speaking")
-                    try:
-                        # Primary finalize: flush buffered assistant text once per turn
-                        if hasattr(agent, "flush_assistant_buffer"):
-                            asyncio.create_task(agent.flush_assistant_buffer())
-                        else:
-                            text = getattr(agent, "_assistant_buffer", "").strip()
-                            if text and hasattr(agent, 'store_transcript'):
-                                asyncio.create_task(agent.store_transcript('assistant', text))
-                                logger.info("📝 Stored assistant transcript on stop speaking (agent)")
-                            agent._assistant_buffer = ""
-                    except Exception as e:
-                        logger.error(f"Failed to finalize assistant transcript on stop speaking: {e}")
 
                 @session.on("error")
                 def _on_session_error(err: Exception):
@@ -763,25 +1095,10 @@ async def agent_job_handler(ctx: JobContext):
                 @session.on("assistant_started_speaking")
                 def _on_assistant_started():
                     logger.info("🔈 assistant_started_speaking")
-                    try:
-                        agent._assistant_buffer = ""
-                    except Exception:
-                        pass
 
                 @session.on("assistant_stopped_speaking")
                 def _on_assistant_stopped():
                     logger.info("🔇 assistant_stopped_speaking")
-                    try:
-                        if hasattr(agent, "flush_assistant_buffer"):
-                            asyncio.create_task(agent.flush_assistant_buffer())
-                        else:
-                            text = getattr(agent, "_assistant_buffer", "").strip()
-                            if text and hasattr(agent, 'store_transcript'):
-                                asyncio.create_task(agent.store_transcript('assistant', text))
-                                logger.info("📝 Stored assistant transcript on stop speaking (assistant)")
-                            agent._assistant_buffer = ""
-                    except Exception as e:
-                        logger.error(f"Failed to finalize buffer (assistant_*): {e}")
 
                 @session.on("metrics_collected")
                 def _on_metrics(metrics):
@@ -789,6 +1106,28 @@ async def agent_job_handler(ctx: JobContext):
                         logger.info(f"📈 metrics_collected: {metrics}")
                     except Exception:
                         logger.info("📈 metrics_collected (unserializable)")
+
+                @session.on("function_tools_executed")
+                def _on_tools_executed(ev):
+                    try:
+                        calls = [getattr(call, "name", None) for call in getattr(ev, "function_calls", [])]
+                        logger.info("🛠️ function_tools_executed: %s", calls)
+                    except Exception:
+                        logger.info("🛠️ function_tools_executed (unable to serialize event)")
+
+                @session.on("speech_created")
+                def _on_speech_created(ev):
+                    try:
+                        sh = getattr(ev, "speech_handle", None)
+                        handle_id = getattr(sh, "id", None)
+                        logger.info(
+                            "🔊 speech_created source=%s user_initiated=%s handle=%s",
+                            getattr(ev, "source", None),
+                            getattr(ev, "user_initiated", None),
+                            handle_id,
+                        )
+                    except Exception:
+                        logger.info("🔊 speech_created (unable to serialize event)")
 
                 @session.on("user_started_speaking")
                 def _on_user_started():
@@ -846,7 +1185,6 @@ async def agent_job_handler(ctx: JobContext):
                             return
                         try:
                             agent._last_assistant_commit = text_value
-                            agent._assistant_buffer = text_value
                         except Exception:
                             pass
                         if hasattr(agent, "store_transcript"):
@@ -902,12 +1240,7 @@ async def agent_job_handler(ctx: JobContext):
                         if 'session' in locals() and hasattr(session, "say") and callable(getattr(session, "say")):
                             await asyncio.wait_for(session.say(greeting_message), timeout=6.0)
                             logger.info("✅ Proactive greeting delivered via session.say()")
-                            try:
-                                if hasattr(agent, "store_transcript"):
-                                    asyncio.create_task(agent.store_transcript("assistant", greeting_message))
-                                    logger.info("📝 Stored proactive greeting transcript")
-                            except Exception as se:
-                                logger.warning(f"Failed to store proactive greeting transcript: {type(se).__name__}: {se}")
+                            # Conversation events will capture the greeting transcript; no manual store needed
                         else:
                             logger.info("⚠️ No greeting method available on session; skipping proactive greeting")
                     except Exception as e:
