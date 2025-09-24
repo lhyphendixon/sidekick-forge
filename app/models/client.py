@@ -45,7 +45,8 @@ class APIKeys(BaseModel):
     # Embedding Providers
     novita_api_key: Optional[str] = None
     cohere_api_key: Optional[str] = None
-    
+    perplexity_api_key: Optional[str] = None
+
     # Voice/Speech Providers
     deepgram_api_key: Optional[str] = None
     elevenlabs_api_key: Optional[str] = None
@@ -97,6 +98,7 @@ class Client(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     additional_settings: Dict[str, Any] = Field(default_factory=dict, description="Additional client-specific settings")
+    perplexity_api_key: Optional[str] = Field(None, description="Perplexity API key at the client level")
     
     class Config:
         json_encoders = {
@@ -112,6 +114,7 @@ class ClientCreate(BaseModel):
     description: Optional[str] = None
     domain: Optional[str] = None
     settings: ClientSettings
+    perplexity_api_key: Optional[str] = None
 
 
 class ClientUpdate(BaseModel):
@@ -122,6 +125,7 @@ class ClientUpdate(BaseModel):
     domain: Optional[str] = None
     settings: Optional[ClientSettings] = None
     active: Optional[bool] = None
+    perplexity_api_key: Optional[str] = None
 
 
 class ClientInDB(Client):

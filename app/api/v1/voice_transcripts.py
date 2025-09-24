@@ -112,13 +112,15 @@ async def stream_transcripts(
             try:
                 # Fetch new transcripts since last timestamp from client's DB
                 # Explicitly use public schema
-                query = client_supabase.table("conversation_transcripts") \
-                    .select("*") \
-                    .eq("conversation_id", conversation_id) \
-                    .gt("created_at", last_ts) \
-                    .order("created_at", desc=False)
-                
-                result = query.execute()
+                def _run_query():
+                    return client_supabase.table("conversation_transcripts") \
+                        .select("*") \
+                        .eq("conversation_id", conversation_id) \
+                        .gt("created_at", last_ts) \
+                        .order("created_at", desc=False) \
+                        .execute()
+
+                result = await asyncio.to_thread(_run_query)
                 error_count = 0  # Reset error count on success
                 
                 if result.data:

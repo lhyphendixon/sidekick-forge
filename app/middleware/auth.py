@@ -8,6 +8,8 @@ import logging
 from typing import Optional, Tuple
 from datetime import datetime
 
+import os
+
 from app.config import settings
 from app.models.user import AuthContext
 from app.integrations.supabase_client import supabase_manager
@@ -103,12 +105,12 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         api_key = self._extract_api_key(request)
         if api_key:
             return await self._authenticate_api_key(api_key)
-        
+
         # Check for Bearer token authentication (Supabase Auth)
         bearer_token = self._extract_bearer_token(request)
         if bearer_token:
             return await self._authenticate_bearer_token(bearer_token)
-        
+
         return None
     
     def _extract_api_key(self, request: Request) -> Optional[str]:
@@ -175,6 +177,14 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     permissions=["all"]  # Authenticated users have full access
                 )
             
+            # Development "dev-token" support for admin UI when explicitly enabled
+            if os.getenv("DEVELOPMENT_MODE", "false").lower() == "true" and token == "dev-token":
+                return AuthContext(
+                    type="dev",
+                    user_id="dev-admin",
+                    permissions=["all"],
+                )
+
             # If Supabase Auth fails, try custom JWT
             try:
                 payload = jwt.decode(

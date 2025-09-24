@@ -84,12 +84,31 @@ class Settings(BaseSettings):
     # Monitoring
     sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN")
     prometheus_enabled: bool = Field(default=False, env="PROMETHEUS_ENABLED")
-    
+
+    # Perplexity MCP container configuration
+    perplexity_mcp_image: str = Field(default="perplexity-mcp:latest", env="PERPLEXITY_MCP_IMAGE")
+    perplexity_mcp_container_name: str = Field(default="perplexity-mcp", env="PERPLEXITY_MCP_CONTAINER_NAME")
+    perplexity_mcp_port: int = Field(default=8081, env="PERPLEXITY_MCP_PORT")
+    perplexity_mcp_host: str = Field(default="perplexity-mcp", env="PERPLEXITY_MCP_HOST")
+    perplexity_mcp_network: Optional[str] = Field(default=None, env="PERPLEXITY_MCP_NETWORK")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         extra = "ignore"  # Ignore extra fields to prevent validation errors
         
+    @validator('app_name', pre=True, always=True)
+    def normalize_app_name(cls, v):
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        return "sidekick-forge"
+
+    @validator('perplexity_mcp_network', pre=True, always=True)
+    def normalize_perplexity_network(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     @validator('supabase_anon_key')
     def validate_supabase_anon_key(cls, v):
         if not v:
@@ -105,6 +124,16 @@ class Settings(BaseSettings):
     @property
     def redis_url(self) -> str:
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def perplexity_mcp_network_name(self) -> str:
+        if self.perplexity_mcp_network:
+            return self.perplexity_mcp_network
+        return f"{self.app_name}-network"
+
+    @property
+    def perplexity_mcp_server_url(self) -> str:
+        return f"http://{self.perplexity_mcp_host}:{self.perplexity_mcp_port}/mcp/sse"
 
 # Create settings instance
 settings = Settings()

@@ -79,6 +79,10 @@ class ConfigValidator:
         if not voice_settings:
             raise ConfigurationError("No voice_settings in metadata")
             
+        provider_config = voice_settings.get('provider_config') or {}
+        if not isinstance(provider_config, dict):
+            provider_config = {}
+
         # Apply defaults for null/missing providers
         if not voice_settings.get('llm_provider'):
             voice_settings['llm_provider'] = 'openai'
@@ -93,7 +97,7 @@ class ConfigValidator:
             logger.info("No tts_provider specified, defaulting to 'cartesia'")
             
         # Validate provider values
-        valid_llm_providers = ['openai', 'groq']
+        valid_llm_providers = ['openai', 'groq', 'cerebras', 'deepinfra']
         valid_stt_providers = ['deepgram', 'cartesia']
         valid_tts_providers = ['elevenlabs', 'cartesia']
         
@@ -108,7 +112,32 @@ class ConfigValidator:
         tts = voice_settings.get('tts_provider')
         if tts not in valid_tts_providers:
             raise ConfigurationError(f"Invalid TTS provider: {tts}. Must be one of: {valid_tts_providers}")
-    
+
+        if tts == 'cartesia':
+            cartesia_voice_id = (
+                voice_settings.get('voice_id')
+                or voice_settings.get('cartesia_voice_id')
+                or provider_config.get('cartesia_voice_id')
+            )
+            if not cartesia_voice_id:
+                raise ConfigurationError(
+                    "Cartesia TTS requires voice_settings.voice_id (or cartesia_voice_id) to be set"
+                )
+            if len(str(cartesia_voice_id)) < 8:
+                raise ConfigurationError(
+                    "Cartesia voice_id appears invalid (too short); use the full UUID from Cartesia"
+                )
+
+            cartesia_model = (
+                voice_settings.get('model')
+                or voice_settings.get('tts_model')
+                or provider_config.get('cartesia_model')
+            )
+            if not cartesia_model:
+                raise ConfigurationError(
+                    "Cartesia TTS requires an explicit model (voice_settings.model or voice_settings.tts_model)"
+                )
+
     @staticmethod
     def _validate_api_keys(api_keys: Dict[str, str], voice_settings: Dict[str, Any], metadata: Dict[str, Any]) -> None:
         """Validate API keys for configured providers"""
@@ -155,6 +184,10 @@ class ConfigValidator:
             required.append(('openai_api_key', 'OpenAI'))
         elif llm_provider == 'groq':
             required.append(('groq_api_key', 'Groq'))
+        elif llm_provider == 'cerebras':
+            required.append(('cerebras_api_key', 'Cerebras'))
+        elif llm_provider == 'deepinfra':
+            required.append(('deepinfra_api_key', 'DeepInfra'))
             
         # STT provider
         stt_provider = voice_settings.get('stt_provider', 'deepgram')

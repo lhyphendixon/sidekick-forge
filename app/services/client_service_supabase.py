@@ -94,7 +94,12 @@ class ClientService:
                 client_dict["jina_api_key"] = api_keys.jina_api_key
             if api_keys.cerebras_api_key:
                 client_dict["cerebras_api_key"] = api_keys.cerebras_api_key
+            if api_keys.perplexity_api_key:
+                client_dict["perplexity_api_key"] = api_keys.perplexity_api_key
             # Note: anthropic_api_key removed - not in APIKeys model
+
+        if client_data.perplexity_api_key and "perplexity_api_key" not in client_dict:
+            client_dict["perplexity_api_key"] = client_data.perplexity_api_key
         
         # Store in Supabase
         result = self.supabase.table(self.table_name).insert(client_dict).execute()
@@ -132,6 +137,9 @@ class ClientService:
             merged_additional = {**existing_additional, **{"slug": update_data.slug}}
             update_dict["additional_settings"] = merged_additional
             
+        if update_data.perplexity_api_key is not None:
+            update_dict["perplexity_api_key"] = update_data.perplexity_api_key
+
         # Fields that go in additional_settings JSONB
         additional_settings = {}
         if update_data.description is not None:
@@ -201,6 +209,8 @@ class ClientService:
                     update_dict["jina_api_key"] = api_keys.jina_api_key
                 if api_keys.cerebras_api_key is not None:
                     update_dict["cerebras_api_key"] = api_keys.cerebras_api_key
+                if api_keys.perplexity_api_key is not None:
+                    update_dict["perplexity_api_key"] = api_keys.perplexity_api_key
                 # Note: anthropic_api_key is not in the APIKeys model
             
             # Note: We don't have a settings column in the platform database
@@ -573,7 +583,8 @@ class ClientService:
         api_key_fields = [
             "openai_api_key", "groq_api_key", "deepgram_api_key", "elevenlabs_api_key",
             "cartesia_api_key", "replicate_api_key", "deepinfra_api_key", "cerebras_api_key",
-            "novita_api_key", "cohere_api_key", "siliconflow_api_key", "jina_api_key", "speechify_api_key"
+            "novita_api_key", "cohere_api_key", "siliconflow_api_key", "jina_api_key", "speechify_api_key",
+            "perplexity_api_key"
         ]
         for key_field in api_key_fields:
             if key_field in db_row and db_row[key_field]:
@@ -609,7 +620,8 @@ class ClientService:
             settings=ClientSettings(**settings_dict) if settings_dict else ClientSettings(),
             created_at=db_row.get("created_at"),
             updated_at=db_row.get("updated_at"),
-            additional_settings=additional  # Include the full additional_settings
+            additional_settings=additional,  # Include the full additional_settings
+            perplexity_api_key=db_row.get("perplexity_api_key")
         )
     
     def get_cache_stats(self) -> Dict[str, Any]:

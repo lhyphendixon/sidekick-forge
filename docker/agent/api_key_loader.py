@@ -113,6 +113,7 @@ class APIKeyLoader:
                 'cohere_api_key',
                 'siliconflow_api_key',
                 'jina_api_key',
+                'perplexity_api_key',
                 # Additional
                 'anthropic_api_key'
             ]

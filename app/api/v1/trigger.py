@@ -2,6 +2,7 @@
 Agent trigger endpoint for WordPress plugin integration
 """
 from typing import Optional, Dict, Any, List
+import copy
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -24,7 +25,7 @@ from supabase import create_client, Client as SupabaseClient
 from app.config import settings
 # Tools service for abilities
 from app.services.tools_service_supabase import ToolsService
-from app.services.client_service_supabase import ClientService
+from app.utils.tool_prompts import apply_tool_prompt_instructions
 # Redis dedupe removed
 
 # --- Helpers ---
@@ -199,7 +200,8 @@ async def trigger_agent(
         
         # Process based on mode
         if request.mode == TriggerMode.VOICE:
-            result = await handle_voice_trigger(request, agent, client)
+            tools_service = ToolsService(agent_service.client_service)
+            result = await handle_voice_trigger(request, agent, client, tools_service)
             # Enforce no-fallback: conversation_id must be present in result
             try:
                 if not isinstance(result, dict) or not result.get("conversation_id"):
@@ -323,7 +325,8 @@ async def create_livekit_room(
 async def handle_voice_trigger(
     request: TriggerAgentRequest, 
     agent, 
-    client
+    client,
+    tools_service: Optional[ToolsService] = None,
 ) -> Dict[str, Any]:
     """
     Handle voice mode agent triggering
@@ -393,6 +396,17 @@ async def handle_voice_trigger(
     # Generate conversation_id if not provided
     conversation_id = request.conversation_id or str(uuid.uuid4())
     
+    tools_config: Dict[str, Any] = {}
+    if getattr(agent, "tools_config", None):
+        if isinstance(agent.tools_config, str):
+            try:
+                tools_config = json.loads(agent.tools_config)
+            except Exception:
+                logger.warning("Failed to parse agent.tools_config string; defaulting to empty dict", exc_info=True)
+                tools_config = {}
+        elif isinstance(agent.tools_config, dict):
+            tools_config = agent.tools_config
+
     agent_context = {
         "client_id": client.id,  # Add client_id for API key lookup
         "agent_slug": agent.slug,
@@ -405,6 +419,7 @@ async def handle_voice_trigger(
         "session_id": request.session_id,
         "conversation_id": conversation_id,
         "context": request.context or {},
+        "tools_config": tools_config,
         # Include embedding configuration (prefer additional_settings, then settings.embedding)
         "embedding": embedding_cfg,
         # Include client's Supabase credentials for context system
@@ -430,17 +445,62 @@ async def handle_voice_trigger(
             "jina_api_key": client.settings.api_keys.jina_api_key if client.settings and client.settings.api_keys else None,
             # Additional providers
             "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None) if client.settings and client.settings.api_keys else None,
-        } if client.settings and client.settings.api_keys else {}
+            "perplexity_api_key": (
+                client.settings.api_keys.perplexity_api_key
+                if client.settings and client.settings.api_keys and getattr(client.settings.api_keys, 'perplexity_api_key', None)
+                else getattr(client, 'perplexity_api_key', None)
+            ),
+        } if client.settings and client.settings.api_keys else {
+            "perplexity_api_key": getattr(client, 'perplexity_api_key', None)
+        }
     }
 
     # Include assigned tools (Abilities) for this agent
+    tools_payload: List[Dict[str, Any]] = []
+    appended_sections: List[Dict[str, Any]] = []
+
     try:
-        tools_service = ToolsService(agent_service.client_service)
-        assigned_tools = await tools_service.list_agent_tools(client.id, agent.id)
-        # Normalize to dicts for transport
-        agent_context["tools"] = [t.dict() for t in assigned_tools]
+        if tools_service is not None:
+            assigned_tools = await tools_service.list_agent_tools(client.id, agent.id)
+            # Normalize to JSON-safe dicts for transport (datetimes -> ISO strings)
+            tools_payload: List[Dict[str, Any]] = []
+            for tool in assigned_tools:
+                tool_dict = tool.dict()
+                for ts_field in ("created_at", "updated_at"):
+                    if ts_field in tool_dict and hasattr(tool_dict[ts_field], "isoformat"):
+                        tool_dict[ts_field] = tool_dict[ts_field].isoformat()
+                tools_payload.append(tool_dict)
+            agent_context["tools"] = tools_payload
+            try:
+                slugs = [t.slug for t in assigned_tools]
+                logger.info(f"🧰 Including {len(assigned_tools)} tools for agent {agent.slug}: {slugs}")
+            except Exception:
+                pass
+        else:
+            logger.warning("No ToolsService provided; skipping tools inclusion")
     except Exception as e:
         logger.warning(f"Failed to include tools for agent {agent.slug}: {e}")
+
+    try:
+        updated_prompt, appended_sections = apply_tool_prompt_instructions(
+            agent_context.get("system_prompt"), tools_payload
+        )
+        agent_context["system_prompt"] = updated_prompt
+        if appended_sections:
+            agent_context["tool_prompt_sections"] = appended_sections
+            try:
+                slugs = [section.get("slug") or section.get("name") for section in appended_sections]
+                logger.info(
+                    "🧠 Appended hidden tool instructions",
+                    extra={
+                        "count": len(appended_sections),
+                        "abilities": slugs,
+                    },
+                )
+            except Exception:
+                pass
+    except Exception:
+        logger.warning("Failed to apply hidden tool instructions to system prompt", exc_info=True)
 
     # Include dataset_ids for RAG/citations when known
     if agent.slug == "clarence-coherence":
@@ -518,6 +578,11 @@ async def handle_voice_trigger(
                     client=client,
                     user_id=request.user_id,
                     conversation_id=conversation_id,
+                    session_id=request.session_id,
+                    tools=agent_context.get("tools"),
+                    tools_config=agent_context.get("tools_config"),
+                    api_keys=agent_context.get("api_keys"),
+                    agent_context=agent_context,
                 )
             except Exception as e:
                 logger.error(f"❌ Explicit dispatch failed: {e}")
@@ -970,7 +1035,12 @@ async def dispatch_agent_job(
     agent,
     client,
     user_id: Optional[str] = None,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tools_config: Optional[Dict[str, Any]] = None,
+    api_keys: Optional[Dict[str, Any]] = None,
+    agent_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Explicit dispatch mode - Directly dispatch agent to room with full configuration.
@@ -996,12 +1066,90 @@ async def dispatch_agent_job(
                 logger.info(f"Supabase URL: {client.settings.supabase.url[:50]}..." if client.settings.supabase.url else "No URL")
                 logger.info(f"Supabase anon_key exists: {bool(client.settings.supabase.anon_key)}")
         
+        api_keys_map: Dict[str, Any]
+        if api_keys is not None:
+            api_keys_map = dict(api_keys)
+            if api_keys_map.get("perplexity_api_key") is None and getattr(client, "perplexity_api_key", None):
+                api_keys_map["perplexity_api_key"] = getattr(client, "perplexity_api_key")
+        elif client.settings and client.settings.api_keys:
+            api_keys_map = {
+                # LLM Providers
+                "openai_api_key": client.settings.api_keys.openai_api_key,
+                "groq_api_key": client.settings.api_keys.groq_api_key,
+                "cerebras_api_key": getattr(client.settings.api_keys, 'cerebras_api_key', None),
+                "deepinfra_api_key": client.settings.api_keys.deepinfra_api_key,
+                "replicate_api_key": client.settings.api_keys.replicate_api_key,
+                # Voice/Speech Providers
+                "deepgram_api_key": client.settings.api_keys.deepgram_api_key,
+                "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key,
+                "cartesia_api_key": client.settings.api_keys.cartesia_api_key,
+                "speechify_api_key": client.settings.api_keys.speechify_api_key,
+                # Embedding/Reranking Providers
+                "novita_api_key": client.settings.api_keys.novita_api_key,
+                "cohere_api_key": client.settings.api_keys.cohere_api_key,
+                "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key,
+                "jina_api_key": client.settings.api_keys.jina_api_key,
+                # Additional providers
+                "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None),
+                "perplexity_api_key": (
+                    client.settings.api_keys.perplexity_api_key
+                    if getattr(client.settings.api_keys, 'perplexity_api_key', None)
+                    else getattr(client, 'perplexity_api_key', None)
+                ),
+            }
+        else:
+            api_keys_map = {}
+            if getattr(client, 'perplexity_api_key', None):
+                api_keys_map["perplexity_api_key"] = getattr(client, 'perplexity_api_key')
+
+        context_snapshot: Dict[str, Any] = agent_context or {}
+
+        runtime_tools_config: Dict[str, Any] = {}
+        if isinstance(tools_config, dict):
+            runtime_tools_config = copy.deepcopy(tools_config)
+
+        if tools:
+            for tool_def in tools:
+                try:
+                    slug = tool_def.get("slug") or tool_def.get("name") or tool_def.get("id")
+                except Exception:
+                    slug = None
+                if not slug:
+                    continue
+
+                existing_entry = runtime_tools_config.get(slug)
+                if not isinstance(existing_entry, dict):
+                    existing_entry = {}
+
+                if tool_def.get("type") == "n8n":
+                    context_defaults = {
+                        "user_id": user_id,
+                        "conversation_id": conversation_id,
+                        "session_id": session_id or conversation_id,
+                        "agent_slug": getattr(agent, "slug", None),
+                        "client_id": getattr(client, "id", None),
+                    }
+                    runtime_context = {k: v for k, v in context_defaults.items() if v is not None}
+                    user_defined_context = (
+                        existing_entry.get("context")
+                        if isinstance(existing_entry.get("context"), dict)
+                        else {}
+                    )
+                    runtime_context.update(user_defined_context)
+                    existing_entry["context"] = runtime_context
+                    if "include_context" not in existing_entry:
+                        existing_entry["include_context"] = True
+                    if "strip_nulls" not in existing_entry:
+                        existing_entry["strip_nulls"] = True
+
+                runtime_tools_config[slug] = existing_entry
+
         job_metadata = {
             "client_id": client.id,
             "agent_slug": agent.slug,
             "agent_id": agent.id,
             "agent_name": agent.name,
-            "system_prompt": agent.system_prompt,
+            "system_prompt": context_snapshot.get("system_prompt"),
             "voice_settings": voice_settings,
             "webhooks": agent.webhooks.dict() if agent.webhooks else {},
             # Ensure worker stores transcripts under the same conversation
@@ -1016,27 +1164,30 @@ async def dispatch_agent_job(
             "embedding": client.additional_settings.get("embedding", {}) if client.additional_settings else {},
             # Include dataset_ids for RAG context (document IDs for this agent)
             "dataset_ids": [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571] if agent.slug == "clarence-coherence" else [],
-            "api_keys": {
-                # LLM Providers
-                "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
-                "groq_api_key": client.settings.api_keys.groq_api_key if client.settings and client.settings.api_keys else None,
-                "cerebras_api_key": getattr(client.settings.api_keys, 'cerebras_api_key', None) if client.settings and client.settings.api_keys else None,
-                "deepinfra_api_key": client.settings.api_keys.deepinfra_api_key if client.settings and client.settings.api_keys else None,
-                "replicate_api_key": client.settings.api_keys.replicate_api_key if client.settings and client.settings.api_keys else None,
-                # Voice/Speech Providers
-                "deepgram_api_key": client.settings.api_keys.deepgram_api_key if client.settings and client.settings.api_keys else None,
-                "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key if client.settings and client.settings.api_keys else None,
-                "cartesia_api_key": client.settings.api_keys.cartesia_api_key if client.settings and client.settings.api_keys else None,
-                "speechify_api_key": client.settings.api_keys.speechify_api_key if client.settings and client.settings.api_keys else None,
-                # Embedding/Reranking Providers
-                "novita_api_key": client.settings.api_keys.novita_api_key if client.settings and client.settings.api_keys else None,
-                "cohere_api_key": client.settings.api_keys.cohere_api_key if client.settings and client.settings.api_keys else None,
-                "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key if client.settings and client.settings.api_keys else None,
-                "jina_api_key": client.settings.api_keys.jina_api_key if client.settings and client.settings.api_keys else None,
-                # Additional providers
-                "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None) if client.settings and client.settings.api_keys else None,
-            } if client.settings and client.settings.api_keys else {}
+            "api_keys": api_keys_map,
         }
+
+        tools_payload = tools if tools is not None else context_snapshot.get("tools") or []
+        tools_count = len(tools_payload)
+        if tools_count:
+            job_metadata["tools"] = tools_payload
+        if runtime_tools_config:
+            job_metadata["tools_config"] = runtime_tools_config
+        if context_snapshot.get("tool_prompt_sections"):
+            job_metadata["tool_prompt_sections"] = context_snapshot["tool_prompt_sections"]
+
+        try:
+            logger.info(
+                "🧰 Dispatch metadata summary",
+                extra={
+                    "tools_count": tools_count,
+                    "tools_keys": [t.get("slug") or t.get("name") for t in tools_payload] if tools_payload else [],
+                    "has_tools_config": bool(tools_config),
+                    "has_perplexity_key": bool(api_keys_map.get("perplexity_api_key")),
+                },
+            )
+        except Exception:
+            pass
         
         # Create LiveKit API client for explicit dispatch
         api_start = time.time()
@@ -1135,12 +1286,67 @@ async def ensure_livekit_room_exists(
         
         if existing_room:
             logger.info(f"✅ Room {room_name} already exists with {existing_room['num_participants']} participants")
+
+            merged_metadata: Dict[str, Any] = {}
+            existing_metadata_raw = existing_room.get("metadata")
+            if existing_metadata_raw:
+                try:
+                    merged_metadata = (
+                        json.loads(existing_metadata_raw)
+                        if isinstance(existing_metadata_raw, str)
+                        else dict(existing_metadata_raw)
+                    )
+                except Exception:
+                    logger.warning("Failed to parse existing room metadata; starting fresh", exc_info=True)
+                    merged_metadata = {}
+
+            if agent_config:
+                merged_metadata.update(agent_config)
+
+            merged_metadata.update(
+                {
+                    "agent_name": agent_name or merged_metadata.get("agent_name"),
+                    "agent_slug": agent_slug or merged_metadata.get("agent_slug"),
+                    "user_id": user_id or merged_metadata.get("user_id"),
+                    "created_by": merged_metadata.get("created_by", "sidekick_backend"),
+                }
+            )
+
+            def _json_safe(value: Any) -> Any:
+                if isinstance(value, datetime):
+                    return value.isoformat()
+                if isinstance(value, list):
+                    return [_json_safe(v) for v in value]
+                if isinstance(value, dict):
+                    return {k: _json_safe(v) for k, v in value.items()}
+                return value
+
+            safe_metadata = _json_safe(merged_metadata)
+
+            try:
+                updated = await livekit_manager.update_room_metadata(room_name, safe_metadata)
+                if updated:
+                    logger.info(
+                        "🛠️ Updated existing room metadata with latest agent context",
+                        extra={
+                            "has_tools": bool(safe_metadata.get("tools")),
+                            "has_tools_config": bool(safe_metadata.get("tools_config")),
+                            "has_api_keys": bool(safe_metadata.get("api_keys")),
+                        },
+                    )
+                    existing_room["metadata"] = safe_metadata
+                else:
+                    logger.warning("Failed to push updated metadata to LiveKit room")
+            except Exception:
+                logger.warning("Error while updating room metadata", exc_info=True)
+
             total_duration = time.time() - start_time
             return {
                 "room_name": room_name,
                 "status": "existing",
                 "participants": existing_room['num_participants'],
                 "created_at": existing_room.get('creation_time'),
+                "metadata": safe_metadata,
                 "message": f"Room {room_name} already exists and is ready",
                 "duration_ms": int(total_duration * 1000)
             }

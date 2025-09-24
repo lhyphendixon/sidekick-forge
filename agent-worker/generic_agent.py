@@ -8,10 +8,11 @@ import os
 import asyncio
 import logging
 import json
+from typing import Any, Dict, Optional
+
 from livekit import agents, rtc
 from livekit.agents import JobContext, WorkerOptions, cli, AutoSubscribe
-from livekit.plugins import openai, groq, elevenlabs, deepgram
-from typing import Optional
+from livekit.plugins import openai, groq, elevenlabs, deepgram, cartesia
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +28,46 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 
+def _as_dict(value: Any) -> Dict[str, Any]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return {}
+        try:
+            return json.loads(value)
+        except Exception:
+            logger.warning(f"[{AGENT_NAME}] Failed to parse JSON metadata", exc_info=True)
+            return {}
+    if hasattr(value, "dict"):
+        try:
+            return value.dict()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    try:
+        return dict(value)
+    except Exception:
+        return {}
+
+
+def _normalize_cartesia_encoding(value: Optional[str]) -> str:
+    if not value:
+        return "pcm_s16le"
+    mapping = {
+        "pcm": "pcm_s16le",
+        "pcm_s16le": "pcm_s16le",
+        "wav": "pcm_s16le",
+        "mp3": "mp3",
+        "ogg": "ogg_vorbis",
+        "ogg_vorbis": "ogg_vorbis",
+    }
+    normalized = value.strip().lower()
+    return mapping.get(normalized, normalized)
+
+
 async def entrypoint(ctx: JobContext):
     """Main entry point for LiveKit agent jobs with voice AI capabilities"""
     
@@ -34,23 +75,94 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"[{AGENT_NAME}] Starting voice AI job for room: {ctx.room.name}")
     
     # Extract metadata from room and job
-    metadata = {}
+    room_metadata = _as_dict(getattr(ctx.room, "metadata", None))
+    job_metadata = {}
     try:
-        if hasattr(ctx.room, 'metadata') and ctx.room.metadata:
-            metadata = json.loads(ctx.room.metadata) if isinstance(ctx.room.metadata, str) else ctx.room.metadata
-    except Exception as e:
-        logger.warning(f"Failed to parse room metadata: {e}")
-    
-    # Extract agent configuration from job metadata
-    agent_config = metadata.get("agent_config", {})
-    if not agent_config:
-        logger.error(f"[{AGENT_NAME}] No agent configuration found in metadata")
+        job_metadata = _as_dict(getattr(ctx.job, "metadata", None))
+    except Exception:
+        logger.warning(f"[{AGENT_NAME}] Failed to parse job metadata", exc_info=True)
+
+    combined_metadata: Dict[str, Any] = {}
+    combined_metadata.update(room_metadata)
+    combined_metadata.update(job_metadata)
+
+    for key in ("agent_config", "agent_context"):
+        nested = combined_metadata.get(key)
+        if isinstance(nested, (dict, str)):
+            combined_metadata.update(_as_dict(nested))
+
+    api_keys = _as_dict(combined_metadata.get("api_keys"))
+    voice_settings = _as_dict(combined_metadata.get("voice_settings"))
+    provider_config = _as_dict(voice_settings.get("provider_config"))
+    if provider_config:
+        voice_settings["provider_config"] = provider_config
+
+    agent_config: Dict[str, Any] = dict(combined_metadata)
+    agent_config.update(api_keys)
+    agent_config.update(voice_settings)
+    agent_config["api_keys"] = api_keys
+    agent_config["voice_settings"] = voice_settings
+
+    if "cartesia_voice_id" not in agent_config:
+        cartesia_voice = voice_settings.get("cartesia_voice_id") or provider_config.get("cartesia_voice_id")
+        if not cartesia_voice:
+            cartesia_voice = voice_settings.get("voice_id") or provider_config.get("voice_id")
+        if cartesia_voice:
+            agent_config["cartesia_voice_id"] = cartesia_voice
+
+    cartesia_voice_val = agent_config.get("cartesia_voice_id")
+    if cartesia_voice_val and len(str(cartesia_voice_val)) < 8:
+        message = (
+            f"[{AGENT_NAME}] Cartesia voice id '{cartesia_voice_val}' looks invalid;"
+            " refusing to continue per no-fallback policy"
+        )
+        logger.error(message)
+        raise ValueError("Invalid Cartesia voice_id supplied")
+
+    if "elevenlabs_voice_id" not in agent_config:
+        eleven_voice = voice_settings.get("elevenlabs_voice_id") or provider_config.get("elevenlabs_voice_id")
+        if eleven_voice:
+            agent_config["elevenlabs_voice_id"] = eleven_voice
+
+    if "voice_id" not in agent_config and voice_settings.get("voice_id"):
+        agent_config["voice_id"] = voice_settings["voice_id"]
+
+    if (
+        (agent_config.get("tts_provider") or voice_settings.get("tts_provider")) == "cartesia"
+        and len(str(agent_config.get("voice_id") or "")) < 8
+    ):
+        message = (
+            f"[{AGENT_NAME}] Cartesia voice_id '{agent_config.get('voice_id')}' invalid;"
+            " refusing to continue per no-fallback policy"
+        )
+        logger.error(message)
+        raise ValueError("Invalid Cartesia voice_id supplied")
+
+    if "model" not in agent_config and voice_settings.get("model"):
+        agent_config["model"] = voice_settings["model"]
+
+    if "tts_model" not in agent_config and voice_settings.get("tts_model"):
+        agent_config["tts_model"] = voice_settings["tts_model"]
+
+    if "cartesia_format" not in agent_config and provider_config.get("cartesia_format"):
+        agent_config["cartesia_format"] = provider_config["cartesia_format"]
+
+    if "temperature" not in agent_config and voice_settings.get("temperature") is not None:
+        agent_config["temperature"] = voice_settings["temperature"]
+
+    if not agent_config.get("api_keys"):
+        logger.error(f"[{AGENT_NAME}] No API keys available in metadata; cannot start voice assistant")
         return
-    
-    # Log job details
-    client_id = metadata.get("client_id", "unknown")
+
+    if not agent_config.get("voice_settings"):
+        logger.error(f"[{AGENT_NAME}] No voice settings supplied; cannot start voice assistant")
+        return
+
+    client_id = agent_config.get("client_id", "unknown")
     logger.info(f"[{AGENT_NAME}] Job metadata - Client: {client_id}")
-    logger.info(f"[{AGENT_NAME}] Agent config keys: {list(agent_config.keys())}")
+    logger.info(
+        f"[{AGENT_NAME}] Providers: llm={agent_config.get('llm_provider')} stt={agent_config.get('stt_provider')} tts={agent_config.get('tts_provider') or agent_config.get('provider')}"
+    )
     
     # Connect to room first
     logger.info(f"[{AGENT_NAME}] Connecting to room: {ctx.room.name}")
@@ -101,55 +213,135 @@ async def entrypoint(ctx: JobContext):
     
     logger.info(f"[{AGENT_NAME}] Job completed for room: {ctx.room.name}")
 
-def create_stt(config):
+def create_stt(config: Dict[str, Any]):
     """Create STT provider based on configuration"""
-    groq_key = config.get("groq_api_key")
-    deepgram_key = config.get("deepgram_api_key") 
-    openai_key = config.get("openai_api_key")
-    
-    if groq_key:
-        logger.info(f"[{AGENT_NAME}] Using Groq STT")
-        return groq.STT(api_key=groq_key, model="whisper-large-v3")
-    elif deepgram_key:
-        logger.info(f"[{AGENT_NAME}] Using Deepgram STT") 
-        return deepgram.STT(api_key=deepgram_key, model="nova-2")
-    elif openai_key:
-        logger.info(f"[{AGENT_NAME}] Using OpenAI STT")
-        return openai.STT(api_key=openai_key, model="whisper-1")
-    else:
-        raise ValueError("No valid STT API key found")
+    provider = str(config.get("stt_provider") or config.get("provider") or "").lower()
+    language = config.get("stt_language") or "en"
+    model_preferences = {
+        "groq": config.get("stt_model") or "whisper-large-v3",
+        "deepgram": config.get("stt_model") or "nova-2",
+        "openai": config.get("stt_model") or "whisper-1",
+        "cartesia": config.get("stt_model") or "ink-whisper",
+    }
 
-def create_tts(config):
+    stt_options = [
+        ("groq", "groq_api_key", lambda key: groq.STT(api_key=key, model=model_preferences["groq"])),
+        (
+            "deepgram",
+            "deepgram_api_key",
+            lambda key: deepgram.STT(api_key=key, model=model_preferences["deepgram"], language=language),
+        ),
+        ("openai", "openai_api_key", lambda key: openai.STT(api_key=key, model=model_preferences["openai"])),
+        (
+            "cartesia",
+            "cartesia_api_key",
+            lambda key: cartesia.STT(
+                api_key=key,
+                model=model_preferences["cartesia"],
+                language=language,
+                encoding=_normalize_cartesia_encoding(
+                    config.get("stt_format") or config.get("output_format")
+                ),
+            ),
+        ),
+    ]
+
+    for name, key, factory in stt_options:
+        if provider == name and config.get(key):
+            logger.info(f"[{AGENT_NAME}] Using {name.title()} STT")
+            return factory(config[key])
+
+    for name, key, factory in stt_options:
+        if config.get(key):
+            logger.info(f"[{AGENT_NAME}] Using {name.title()} STT (fallback)")
+            return factory(config[key])
+
+    raise ValueError("No valid STT API key found")
+
+def create_tts(config: Dict[str, Any]):
     """Create TTS provider based on configuration"""
     elevenlabs_key = config.get("elevenlabs_api_key")
     cartesia_key = config.get("cartesia_api_key")
     openai_key = config.get("openai_api_key")
-    voice_id = config.get("voice_id", "alloy")
-    
-    if elevenlabs_key:
-        logger.info(f"[{AGENT_NAME}] Using ElevenLabs TTS with voice: {voice_id}")
-        return elevenlabs.TTS(api_key=elevenlabs_key, voice=voice_id)
-    elif openai_key:
-        logger.info(f"[{AGENT_NAME}] Using OpenAI TTS with voice: {voice_id}")
-        return openai.TTS(api_key=openai_key, model="tts-1", voice=voice_id)
-    else:
-        raise ValueError("No valid TTS API key found")
+    tts_provider = str(config.get("tts_provider") or config.get("provider") or "").lower()
+    voice_id = (
+        config.get("voice_id")
+        or config.get("openai_voice")
+        or config.get("elevenlabs_voice_id")
+        or "alloy"
+    )
+    cartesia_voice = config.get("cartesia_voice_id") or voice_id or "sonic-english"
+    cartesia_model = config.get("model") or config.get("tts_model") or "sonic-2"
+    cartesia_encoding = _normalize_cartesia_encoding(config.get("output_format") or config.get("cartesia_format"))
 
-def create_llm(config):
+    if tts_provider == "elevenlabs" and elevenlabs_key:
+        logger.info(f"[{AGENT_NAME}] Using ElevenLabs TTS with voice: {voice_id}")
+        return elevenlabs.TTS(api_key=elevenlabs_key, voice_id=config.get("elevenlabs_voice_id") or voice_id, model=config.get("tts_model") or "eleven_turbo_v2_5")
+    if tts_provider == "cartesia" and cartesia_key:
+        logger.info(f"[{AGENT_NAME}] Using Cartesia TTS with voice: {cartesia_voice} and model: {cartesia_model}")
+        return cartesia.TTS(api_key=cartesia_key, model=cartesia_model, voice=cartesia_voice, encoding=cartesia_encoding)
+    if tts_provider == "openai" and openai_key:
+        logger.info(f"[{AGENT_NAME}] Using OpenAI TTS with voice: {voice_id}")
+        return openai.TTS(api_key=openai_key, model=config.get("tts_model") or "gpt-4o-mini-tts", voice=voice_id)
+
+    if elevenlabs_key:
+        logger.info(f"[{AGENT_NAME}] Using ElevenLabs TTS with voice: {voice_id} (fallback)")
+        return elevenlabs.TTS(api_key=elevenlabs_key, voice_id=config.get("elevenlabs_voice_id") or voice_id, model=config.get("tts_model") or "eleven_turbo_v2_5")
+    if cartesia_key:
+        logger.info(f"[{AGENT_NAME}] Using Cartesia TTS with voice: {cartesia_voice} and model: {cartesia_model} (fallback)")
+        return cartesia.TTS(api_key=cartesia_key, model=cartesia_model, voice=cartesia_voice, encoding=cartesia_encoding)
+    if openai_key:
+        logger.info(f"[{AGENT_NAME}] Using OpenAI TTS with voice: {voice_id} (fallback)")
+        return openai.TTS(api_key=openai_key, model=config.get("tts_model") or "gpt-4o-mini-tts", voice=voice_id)
+
+    raise ValueError("No valid TTS API key found")
+
+def create_llm(config: Dict[str, Any]):
     """Create LLM provider based on configuration"""
     groq_key = config.get("groq_api_key")
     openai_key = config.get("openai_api_key")
-    model = config.get("model", "gpt-4-turbo-preview")
-    system_prompt = config.get("system_prompt", "You are a helpful AI assistant.")
-    
-    if groq_key and ("llama" in model.lower() or "mixtral" in model.lower()):
-        logger.info(f"[{AGENT_NAME}] Using Groq LLM with model: {model}")
-        return groq.LLM(api_key=groq_key, model=model, temperature=0.7)
-    elif openai_key:
-        logger.info(f"[{AGENT_NAME}] Using OpenAI LLM with model: {model}")
-        return openai.LLM(api_key=openai_key, model=model, temperature=0.7)
-    else:
-        raise ValueError("No valid LLM API key found")
+    cerebras_key = config.get("cerebras_api_key")
+
+    # Prefer explicit llm_model; fall back to generic model field otherwise
+    llm_model = config.get("llm_model") or config.get("model")
+    if llm_model:
+        llm_model = str(llm_model)
+
+    # Avoid pulling in obvious TTS values (e.g. sonic-2) as the chat model
+    if not llm_model or llm_model.lower() in {"sonic-2", "sonic", "voice"}:
+        if cerebras_key:
+            llm_model = "llama3.1-8b"
+        elif groq_key:
+            llm_model = "llama-3.3-70b-versatile"
+        else:
+            llm_model = "gpt-4o"
+
+    llm_provider = str(config.get("llm_provider") or "").lower()
+
+    if cerebras_key and (llm_provider == "cerebras" or not llm_provider):
+        logger.info(f"[{AGENT_NAME}] Using Cerebras LLM with model: {llm_model}")
+        return openai.LLM.with_cerebras(
+            api_key=cerebras_key,
+            model=llm_model,
+        )
+
+    if groq_key and (llm_provider == "groq" or "llama" in llm_model.lower() or "mixtral" in llm_model.lower() or "qwen" in llm_model.lower()):
+        logger.info(f"[{AGENT_NAME}] Using Groq LLM with model: {llm_model}")
+        return groq.LLM(
+            api_key=groq_key,
+            model=llm_model,
+            temperature=0.7,
+        )
+
+    if openai_key:
+        logger.info(f"[{AGENT_NAME}] Using OpenAI LLM with model: {llm_model}")
+        return openai.LLM(
+            api_key=openai_key,
+            model=llm_model,
+            temperature=0.7,
+        )
+
+    raise ValueError("No valid LLM API key found")
 
 def main():
     """Main function to start the agent worker using CLI"""

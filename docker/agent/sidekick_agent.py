@@ -1,13 +1,11 @@
 import logging
-from typing import AsyncIterable, Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any
 import uuid
 import asyncio
 from datetime import datetime
 
 from livekit import rtc
 from livekit.agents import llm
-from livekit.agents import ModelSettings
-from livekit.agents import Agent as CoreAgent
 from livekit.agents import voice
 
 
@@ -50,13 +48,11 @@ class SidekickAgent(voice.Agent):
         # Transcript tracking
         self._current_user_transcript = ""
         self._current_assistant_transcript = ""
-        self._assistant_buffer = ""
         self._transcript_enabled = True
         self._supabase_client = None
         self._conversation_id = None
         self._agent_id = None
-        # Strategy: final-only assistant transcript writes (avoid chunk rows)
-        # We buffer partial chunks and persist once per turn via session events
+        # Strategy: store final assistant transcript once per turn via session events
         self._suppress_on_assistant_transcript = True
         self._last_assistant_commit: str = ""
 
@@ -398,66 +394,3 @@ class SidekickAgent(voice.Agent):
             await self._store_transcript(role=role, content=content, citations=citations)
         except Exception as e:
             logger.error(f"store_transcript failed: {e}")
-    
-    async def on_assistant_response(self, message: str) -> None:
-        """Accumulate assistant text during streaming; final commit happens on speech stop/commit."""
-        try:
-            if isinstance(message, str) and message:
-                self._assistant_buffer += message
-        except Exception:
-            return
-    
-    async def llm_node(
-        self,
-        chat_ctx: "llm.ChatContext",
-        tools: "list[FunctionTool | RawFunctionTool]",
-        model_settings: "ModelSettings"
-    ) -> "AsyncIterable[llm.ChatChunk | str]":
-        # Delegate to base implementation so the session's TTS node receives chunks
-        # Buffer assistant text so entrypoint handlers can persist if needed
-        got_tokens = False
-        try:
-            self._assistant_buffer = ""
-        except Exception:
-            pass
-        async for chunk in super().llm_node(chat_ctx, tools, model_settings):
-            try:
-                got_tokens = True
-                # Accumulate textual content from chunks when available
-                if isinstance(chunk, str):
-                    self._assistant_buffer += chunk
-                else:
-                    # Try common shapes for streaming deltas
-                    delta = getattr(chunk, "delta", None)
-                    if isinstance(delta, str):
-                        self._assistant_buffer += delta
-                    else:
-                        content = getattr(chunk, "content", None)
-                        if isinstance(content, str):
-                            self._assistant_buffer += content
-            except Exception:
-                pass
-            yield chunk
-        # Deterministic finalize: commit assistant transcript exactly once at end of LLM stream
-        try:
-            await self.flush_assistant_buffer()
-        except Exception as e:
-            logger.error(f"Failed to finalize assistant transcript: {e}")
-        if not got_tokens:
-            logger.error("LLM produced no tokens for this turn; no agent speech expected")
-
-    async def flush_assistant_buffer(self) -> None:
-        """Flush buffered assistant text to storage once per turn with simple dedup guard."""
-        try:
-            text = getattr(self, "_assistant_buffer", "").strip()
-            if not text:
-                return
-            # Dedup: avoid writing the same final text multiple times across different events
-            if self._last_assistant_commit and text == self._last_assistant_commit:
-                return
-            self._last_assistant_commit = text
-            await self._handle_assistant_transcript(text)
-        except Exception as e:
-            logger.error(f"Failed to flush assistant buffer: {e}")
-
-

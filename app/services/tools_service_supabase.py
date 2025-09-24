@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import time
-from typing import List, Optional, Dict, Any
-from supabase import create_client, Client as SupabaseClient
+from typing import List, Optional, Dict, Any, Tuple
+from supabase import Client as SupabaseClient
 from app.models.tools import ToolCreate, ToolUpdate, ToolOut
 from app.services.client_service_supabase import ClientService
+from app.services.perplexity_mcp_manager import get_perplexity_mcp_manager
 
 
 class ToolsService:
@@ -12,12 +12,57 @@ class ToolsService:
         self.client_service = client_service
 
     async def get_client_supabase(self, client_id: Optional[str]) -> SupabaseClient:
-        # Global tools live in the platform DB
         if not client_id:
             return self.client_service.supabase
-        # Client-scoped
-        sb = await self.client_service.get_client_supabase_client(client_id, auto_sync=False)
-        return sb
+        return await self.client_service.get_client_supabase_client(client_id, auto_sync=False)
+
+    @staticmethod
+    def _normalize_tool_row(row: Dict[str, Any], client_id: Optional[str] = None) -> Dict[str, Any]:
+        data = dict(row)
+        scope = data.get("scope") or ("client" if data.get("client_id") else "global")
+        data["scope"] = scope
+        if scope == "client" and not data.get("client_id"):
+            data["client_id"] = client_id
+        return data
+
+    @staticmethod
+    def _table_exists(sb: SupabaseClient, table_name: str) -> bool:
+        try:
+            sb.table(table_name).select("id").limit(1).execute()
+            return True
+        except Exception:
+            return False
+
+    async def _find_tool_record(
+        self,
+        tool_id: str,
+        client_id: Optional[str] = None,
+    ) -> Tuple[Optional[SupabaseClient], Optional[Dict[str, Any]], Optional[str], Optional[str]]:
+        platform_sb = self.client_service.supabase
+        if self._table_exists(platform_sb, "tools"):
+            pres = platform_sb.table("tools").select("*").eq("id", tool_id).limit(1).execute()
+            if pres.data:
+                row = self._normalize_tool_row(pres.data[0])
+                row_client_id = row.get("client_id")
+                if row["scope"] == "client":
+                    if row_client_id and client_id and row_client_id != client_id:
+                        raise ValueError("Tool does not belong to requested client")
+                    if not client_id:
+                        client_id = row_client_id
+                return platform_sb, row, row["scope"], client_id
+
+        if client_id:
+            csb = await self.get_client_supabase(client_id)
+            if self._table_exists(csb, "tools"):
+                cres = csb.table("tools").select("*").eq("id", tool_id).limit(1).execute()
+                if cres.data:
+                    row = self._normalize_tool_row(cres.data[0], client_id)
+                    return csb, row, row["scope"], client_id
+
+        return None, None, None, client_id
+
+    async def _platform_table_exists(self, table_name: str) -> bool:
+        return self._table_exists(self.client_service.supabase, table_name)
 
     async def list_tools(
         self,
@@ -26,75 +71,231 @@ class ToolsService:
         type: Optional[str] = None,
         search: Optional[str] = None,
     ) -> List[ToolOut]:
-        # Global + client-scoped union from appropriate DB
         platform_sb = self.client_service.supabase
-        parts: List[Dict[str, Any]] = []
-        # Global
-        q = platform_sb.table("tools").select("*")
-        if scope:
-            q = q.eq("scope", scope)
-        else:
-            q = q.in_("scope", ["global", "client"])  # allow both for platform view
-        if type:
-            q = q.eq("type", type)
-        if search:
-            q = q.ilike("name", f"%{search}%")
-        res = q.execute()
-        parts.extend(res.data or [])
-        # Client tools (if client_id provided)
-        if client_id:
-            csb = await self.get_client_supabase(client_id)
-            cq = csb.table("tools").select("*")
-            cq = cq.eq("scope", "client")
+        results: Dict[str, Dict[str, Any]] = {}
+
+        def apply_filters(query):
             if type:
-                cq = cq.eq("type", type)
+                query = query.eq("type", type)
             if search:
-                cq = cq.ilike("name", f"%{search}%")
-            cres = cq.execute()
-            parts.extend(cres.data or [])
-        return [ToolOut(**p) for p in parts]
+                query = query.ilike("name", f"%{search}%")
+            return query
+
+        platform_has_table = await self._platform_table_exists("tools")
+
+        if scope in (None, "global") and platform_has_table:
+            q = platform_sb.table("tools").select("*").eq("scope", "global")
+            q = apply_filters(q)
+            res = q.execute()
+            for row in res.data or []:
+                normalized = self._normalize_tool_row(row)
+                results[normalized["id"]] = normalized
+
+        if scope in (None, "client") and client_id:
+            # Include any platform-stored client tools for this tenant
+            if platform_has_table:
+                qp = platform_sb.table("tools").select("*").eq("scope", "client").eq("client_id", client_id)
+                qp = apply_filters(qp)
+                platform_client = qp.execute()
+                for row in platform_client.data or []:
+                    normalized = self._normalize_tool_row(row, client_id)
+                    results[normalized["id"]] = normalized
+
+            csb = await self.get_client_supabase(client_id)
+            qc = csb.table("tools").select("*")
+            qc = apply_filters(qc)
+            client_rows = qc.execute()
+            for row in client_rows.data or []:
+                normalized = self._normalize_tool_row(row, client_id)
+                results[normalized["id"]] = normalized
+
+        if scope == "client" and not client_id:
+            return []
+
+        return [ToolOut(**row) for row in results.values()]
 
     async def create_tool(self, payload: ToolCreate) -> ToolOut:
-        sb = await self.get_client_supabase(payload.client_id if payload.scope == "client" else None)
+        if payload.scope == "client" and not payload.client_id:
+            raise ValueError("client_id is required for client-scoped tools")
+        target_client_id = payload.client_id if payload.scope == "client" else None
+        sb = await self.get_client_supabase(target_client_id)
+        if payload.scope == "client":
+            if not self._table_exists(sb, "tools"):
+                raise ValueError("Client tools table is not provisioned for this tenant.")
+        else:
+            if not await self._platform_table_exists("tools"):
+                raise ValueError("Global tools are not available in this environment.")
         row = payload.dict()
-        res = sb.table("tools").insert(row).execute()
-        return ToolOut(**res.data[0])
+        if payload.scope != "client":
+            row["client_id"] = None
+        insert_row = dict(row)
+        if payload.scope == "client" and sb is not self.client_service.supabase:
+            insert_row.pop("client_id", None)
+            insert_row.pop("scope", None)
+        res = sb.table("tools").insert(insert_row).execute()
+        data = self._normalize_tool_row(res.data[0], target_client_id)
+        return ToolOut(**data)
 
     async def update_tool(self, client_id: Optional[str], tool_id: str, payload: ToolUpdate) -> ToolOut:
-        # Determine DB based on row location: if client_id provided, prefer client DB else platform
-        sb = await self.get_client_supabase(client_id)
+        target_sb, existing, scope, resolved_client_id = await self._find_tool_record(tool_id, client_id)
+        if not existing or not target_sb:
+            raise ValueError("Tool not found")
+        if not self._table_exists(target_sb, "tools"):
+            raise ValueError("Tools table is not available for this operation.")
+        if scope == "client" and not resolved_client_id:
+            raise ValueError("client_id is required to update client-scoped tools")
+
         update_dict = {k: v for k, v in payload.dict().items() if v is not None}
-        res = sb.table("tools").update(update_dict).eq("id", tool_id).execute()
-        return ToolOut(**res.data[0])
+        if scope != "client":
+            update_dict.pop("scope", None)
+            update_dict.pop("client_id", None)
+        else:
+            if target_sb is not self.client_service.supabase:
+                update_dict.pop("scope", None)
+                update_dict.pop("client_id", None)
+        res = target_sb.table("tools").update(update_dict).eq("id", tool_id).execute()
+        updated_rows = res.data or []
+        row = updated_rows[0] if updated_rows else {**existing, **update_dict}
+        normalized = self._normalize_tool_row(row, resolved_client_id)
+        return ToolOut(**normalized)
 
     async def delete_tool(self, client_id: Optional[str], tool_id: str) -> None:
-        sb = await self.get_client_supabase(client_id)
-        sb.table("tools").delete().eq("id", tool_id).execute()
+        target_sb, existing, scope, resolved_client_id = await self._find_tool_record(tool_id, client_id)
+        if not existing or not target_sb:
+            raise ValueError("Tool not found")
+        if scope == "client" and not resolved_client_id:
+            raise ValueError("client_id is required to delete client-scoped tools")
+        if not self._table_exists(target_sb, "tools"):
+            raise ValueError("Tools table is not available for this operation.")
+        target_sb.table("tools").delete().eq("id", tool_id).execute()
 
     async def list_agent_tools(self, client_id: str, agent_id: str) -> List[ToolOut]:
-        # agent_tools is stored in platform DB referencing tool ids across scopes
         sb = self.client_service.supabase
         at = sb.table("agent_tools").select("tool_id").eq("agent_id", agent_id).execute()
         tool_ids = [r["tool_id"] for r in (at.data or [])]
         if not tool_ids:
             return []
-        # Fetch from both platform and client DBs
+
         tools: Dict[str, Dict[str, Any]] = {}
-        pr = sb.table("tools").select("*").in_("id", tool_ids).execute()
-        for r in pr.data or []:
-            tools[r["id"]] = r
+        if await self._platform_table_exists("tools"):
+            pr = sb.table("tools").select("*").in_("id", tool_ids).execute()
+            for r in pr.data or []:
+                normalized = self._normalize_tool_row(r)
+                if normalized["scope"] == "client" and normalized.get("client_id") not in (None, client_id):
+                    continue
+                tools[normalized["id"]] = normalized
+
         csb = await self.get_client_supabase(client_id)
         cr = csb.table("tools").select("*").in_("id", tool_ids).execute()
         for r in cr.data or []:
-            tools[r["id"]] = r
-        return [ToolOut(**r) for r in tools.values()]
+            normalized = self._normalize_tool_row(r, client_id)
+            tools[normalized["id"]] = normalized
+
+        tool_models: List[ToolOut] = []
+        for row in tools.values():
+            tool = ToolOut(**row)
+            tool_models.append(await self._augment_tool_for_agent(tool, client_id))
+
+        return tool_models
 
     async def set_agent_tools(self, client_id: str, agent_id: str, tool_ids: List[str]) -> None:
-        sb = self.client_service.supabase
-        # Replace assignments atomically-ish
-        sb.table("agent_tools").delete().eq("agent_id", agent_id).execute()
+        platform_sb = self.client_service.supabase
+        if tool_ids:
+            allowed: Dict[str, Dict[str, Any]] = {}
+            if await self._platform_table_exists("tools"):
+                pr = platform_sb.table("tools").select("id", "scope", "client_id").in_("id", tool_ids).execute()
+                allowed = {row["id"]: row for row in pr.data or []}
+            missing = [tid for tid in tool_ids if tid not in allowed]
+            if missing:
+                csb = await self.get_client_supabase(client_id)
+                if self._table_exists(csb, "tools"):
+                    cr = csb.table("tools").select("id", "scope", "client_id").in_("id", missing).execute()
+                    for row in cr.data or []:
+                        row["scope"] = row.get("scope") or "client"
+                        row["client_id"] = row.get("client_id") or client_id
+                        allowed[row["id"]] = row
+                else:
+                    raise ValueError("Client tools table is not provisioned for this tenant.")
+            for tid in tool_ids:
+                row = allowed.get(tid)
+                if not row:
+                    raise ValueError(f"Tool {tid} not found for client")
+                if (row.get("scope") or "client") == "client" and (row.get("client_id") or client_id) != client_id:
+                    raise ValueError(f"Tool {tid} is not accessible for this client")
+
+        platform_sb.table("agent_tools").delete().eq("agent_id", agent_id).execute()
         rows = [{"agent_id": agent_id, "tool_id": tid} for tid in tool_ids]
         if rows:
-            sb.table("agent_tools").insert(rows).execute()
+            platform_sb.table("agent_tools").insert(rows).execute()
 
+    async def _augment_tool_for_agent(self, tool: ToolOut, client_id: str) -> ToolOut:
+        if (tool.slug or "") == "perplexity_ask" and tool.enabled:
+            client = await self.client_service.get_client(client_id, auto_sync=False)
+            if not client:
+                raise ValueError("Client not found")
 
+            api_key = None
+            if client.settings and client.settings.api_keys:
+                api_key = getattr(client.settings.api_keys, "perplexity_api_key", None)
+            if not api_key:
+                api_key = getattr(client, "perplexity_api_key", None)
+            if not api_key:
+                raise ValueError(
+                    "Perplexity API key is not configured for this client. "
+                    "Add it on the client record before assigning the Perplexity ability."
+                )
+
+            manager = get_perplexity_mcp_manager()
+            server_url = await manager.ensure_running()
+
+            config: Dict[str, Any] = dict(tool.config or {})
+            config.setdefault("provider", "perplexity")
+            config.setdefault("tool_name", tool.slug)
+            config["server_url"] = server_url
+            config.setdefault("transport", "sse")
+            config.setdefault("api_key_name", "perplexity_api_key")
+            config.setdefault("api_key_parameter", "api_key")
+            config.setdefault("model", config.get("model") or "sonar-pro")
+            config.setdefault("timeout", 60)
+            config.setdefault("parameters", self._perplexity_parameters_schema())
+
+            return tool.copy(update={"config": config})
+
+        return tool
+
+    @staticmethod
+    def _perplexity_parameters_schema() -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "messages": {
+                    "type": "array",
+                    "description": "Array of conversation messages",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role": {
+                                "type": "string",
+                                "description": "Message role (system, user, assistant)",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Plain text content of the message",
+                            },
+                        },
+                        "required": ["role", "content"],
+                        "additionalProperties": False,
+                    },
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Override the default Perplexity model",
+                },
+                "api_key": {
+                    "type": "string",
+                    "description": "Optional API key override for multi-tenant usage",
+                },
+            },
+            "required": ["messages"],
+            "additionalProperties": False,
+        }

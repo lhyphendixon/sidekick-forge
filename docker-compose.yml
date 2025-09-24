@@ -6,11 +6,12 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ${APP_NAME:-sidekick-forge}-fastapi
+    user: root
     ports:
       - "8000:8000"
     environment:
       - APP_ENV=production
-      - DEVELOPMENT_MODE=false
+      - DEVELOPMENT_MODE=true
       - REDIS_HOST=redis
       - DATABASE_URL=${DATABASE_URL}
       - DOMAIN_NAME=${DOMAIN_NAME}
@@ -27,11 +28,13 @@ services:
       # Agent name for staging (must match agent-worker)
       - AGENT_NAME=sidekick-agent-staging
       - LIVEKIT_AGENT_NAME=sidekick-agent-staging
+      - DOCKER_HOST=unix:///var/run/docker.sock
       # Remove duplicate DEVELOPMENT_MODE to avoid conflicting overrides
     volumes:
       - ./app:/app/app
       - ./logs:/app/logs
       - ./app/static:/app/static
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - redis
     restart: unless-stopped
@@ -82,6 +85,7 @@ services:
       - ./docker/agent/config_validator.py:/app/config_validator.py:ro
       - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
       - ./docker/agent/citations_service.py:/app/citations_service.py:ro
+      - ./docker/agent/tool_registry.py:/app/tool_registry.py:ro
     environment:
       - LIVEKIT_URL=${LIVEKIT_URL:-wss://litebridge-hw6srhvi.livekit.cloud}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}

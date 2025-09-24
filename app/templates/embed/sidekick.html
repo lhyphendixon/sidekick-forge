@@ -129,6 +129,19 @@
   </div>
 
   <script>
+    try { console.log('[voice] embed script initializing'); } catch {}
+    try {
+      window.addEventListener('error', (event) => {
+        try {
+          const { message, filename, lineno, colno } = event || {};
+          console.error('[voice] window error', message, filename, lineno, colno, event?.error);
+        } catch {}
+      });
+      window.addEventListener('unhandledrejection', (event) => {
+        try { console.error('[voice] unhandled rejection', event?.reason); } catch {}
+      });
+    } catch {}
+
     function setBtnLoading(btn, isLoading){ try { if(!btn) return; btn.classList.toggle('btn-loading', !!isLoading); btn.disabled = !!isLoading; } catch{} }
     async function withBtnLoading(btn, fn){ setBtnLoading(btn, true); try { return await fn(); } finally { setBtnLoading(btn, false); } }
     const CLIENT_ID = "{{ client_id }}";
@@ -138,12 +151,405 @@
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
     let session = null;
     let manualToken = null; // token provided by parent preview via postMessage
+    window.__lk_audio_elements = window.__lk_audio_elements || {};
+    window.__lk_transcript_seen = window.__lk_transcript_seen || {};
+
+    function iterateTrackPublications(participant, callback) {
+      if (!participant || typeof callback !== 'function') { return; }
+      const seen = new Set();
+      const visit = (label, collection) => {
+        if (!collection) { return; }
+        const handleValue = (value, key) => {
+          if (!value || seen.has(value)) { return; }
+          seen.add(value);
+          try { callback(value, label, key); } catch {}
+        };
+        if (typeof collection.forEach === 'function') {
+          collection.forEach((value, key) => handleValue(value, key));
+          return;
+        }
+        if (Array.isArray(collection)) {
+          collection.forEach((value, index) => handleValue(value, index));
+          return;
+        }
+        if (typeof collection === 'object' && typeof collection.values === 'function') {
+          try {
+            for (const value of collection.values()) {
+              handleValue(value, undefined);
+            }
+          } catch {}
+        }
+      };
+      try { visit('trackPublications', participant.trackPublications); } catch {}
+      try { visit('audioTrackPublications', participant.audioTrackPublications); } catch {}
+      try { visit('tracks', participant.tracks); } catch {}
+      try { visit('audioTracks', participant.audioTracks); } catch {}
+      try {
+        if (typeof participant.getTrackPublications === 'function') {
+          visit('getTrackPublications', participant.getTrackPublications());
+        }
+      } catch {}
+      try {
+        if (typeof participant.getAudioTrackPublications === 'function') {
+          visit('getAudioTrackPublications', participant.getAudioTrackPublications());
+        }
+      } catch {}
+    }
+
+    function collectAudioPublications(participant) {
+      const results = [];
+      iterateTrackPublications(participant, (pub, source, key) => {
+        const kind = String(pub?.kind || pub?.track?.kind || pub?.audioTrack?.kind || '').toLowerCase();
+        if (kind === 'audio') {
+          results.push({ pub, source, key });
+          return;
+        }
+        const sourceLabel = String(pub?.source || '').toLowerCase();
+        if (sourceLabel.includes('audio') || sourceLabel.includes('microphone') || sourceLabel.includes('speaker') || sourceLabel.includes('tts')) {
+          results.push({ pub, source, key });
+        }
+      });
+      return results;
+    }
+
+    function participantHasAudioTrack(participant) {
+      let hasAudio = false;
+      iterateTrackPublications(participant, (pub) => {
+        if (hasAudio) { return; }
+        const kind = String(pub?.kind || '').toLowerCase();
+        if (kind === 'audio') { hasAudio = true; return; }
+        const trackKind = String(pub?.track?.kind || pub?.audioTrack?.kind || '').toLowerCase();
+        if (trackKind === 'audio') { hasAudio = true; }
+      });
+      return hasAudio;
+    }
+
+    function ensureAudioSubscribed(publication, contextLabel, level) {
+      if (!publication) { return; }
+      const label = contextLabel || 'subscribe';
+      const useWarn = level === 'warn';
+      const logFailure = (suffix, err) => {
+        try {
+          if (useWarn && console?.warn) { console.warn(`[voice] ${label} ${suffix}`, err); }
+          else if (console?.error) { console.error(`[voice] ${label} ${suffix}`, err); }
+        } catch {}
+      };
+      try {
+        if (typeof publication.setSubscribed === 'function') {
+          const result = publication.setSubscribed(true);
+          if (result && typeof result.catch === 'function') {
+            result.catch((err) => { logFailure('setSubscribed(audio) failed', err); });
+          }
+        } else if (typeof publication.subscribe === 'function') {
+          const result = publication.subscribe();
+          if (result && typeof result.catch === 'function') {
+            result.catch((err) => { logFailure('subscribe(audio) failed', err); });
+          }
+        }
+      } catch (err) {
+        logFailure('setSubscribed(audio) threw', err);
+      }
+    }
+
+    function resolvePublicationTrack(publication) {
+      if (!publication) { return null; }
+      const track = publication.track || publication.audioTrack;
+      if (track && String(track.kind || '').toLowerCase() === 'audio') { return track; }
+      if (track && !track.kind) { return track; }
+      return null;
+    }
+
+    let voicePlaybackMuted = true;
+
+    function setVoiceAudioMuted(isMuted) {
+      voicePlaybackMuted = !!isMuted;
+
+      try {
+        const elementsMap = window.__lk_audio_elements || {};
+        Object.values(elementsMap).forEach((el) => {
+          try {
+            if (!el) return;
+            el.muted = voicePlaybackMuted;
+            if (!voicePlaybackMuted) {
+              const maybePlay = el.play?.();
+              if (maybePlay && typeof maybePlay.catch === 'function') {
+                maybePlay.catch((err) => {
+                  try { console.warn('[voice] audio replay blocked', err); } catch {}
+                  showVoicePlaybackPrompt();
+                });
+              }
+            }
+          } catch {}
+        });
+      } catch {}
+    }
+
+    function showVoicePlaybackPrompt(){
+      try {
+        const status = document.getElementById('voiceStatus');
+        if (status) status.textContent = 'Audio muted. Browser blocked autoplay — interact with the page to enable audio.';
+      } catch {}
+    }
+
+    function hideVoicePlaybackPrompt(){
+      try {
+        const status = document.getElementById('voiceStatus');
+        if (status && status.textContent.toLowerCase().includes('audio muted')) {
+          status.textContent = 'Audio enabled. Listening for agent.';
+        }
+      } catch {}
+    }
+
+    async function enableVoicePlayback(){
+      const room = window.__roomConn;
+      let audioEnabled = false;
+
+      try {
+        if (room?.startAudio) {
+          room.startAudio().then(() => {
+            try { console.log('[voice] room.startAudio resolved'); } catch {}
+          }).catch((err) => {
+            try { console.warn('[voice] startAudio blocked', err); } catch {}
+          });
+        }
+      } catch (err) {
+        try { console.warn('[voice] startAudio threw', err); } catch {}
+      }
+
+      try {
+        const elements = Object.values(window.__lk_audio_elements || {});
+        if (elements.length === 0) {
+          // Ensure at least one silent element exists so autoplay can unlock
+          const placeholder = document.createElement('audio');
+          placeholder.autoplay = true;
+          placeholder.playsInline = true;
+          placeholder.muted = voicePlaybackMuted;
+          placeholder.style.position = 'fixed';
+          placeholder.style.bottom = '8px';
+          placeholder.style.right = '8px';
+          placeholder.style.width = '0px';
+          placeholder.style.height = '0px';
+          placeholder.style.opacity = '0';
+          placeholder.style.pointerEvents = 'none';
+          document.body.appendChild(placeholder);
+          window.__lk_audio_elements.__placeholder = placeholder;
+        }
+
+        const toCheck = Object.values(window.__lk_audio_elements || {});
+        toCheck.forEach((el) => {
+          try {
+            if (!el) return;
+            el.autoplay = true;
+            el.playsInline = true;
+            el.muted = voicePlaybackMuted;
+            const maybePlay = el.play?.();
+            if (maybePlay && typeof maybePlay.catch === 'function') {
+              maybePlay.catch((err) => {
+                try { console.warn('[voice] audio play blocked', err); } catch {}
+              });
+            }
+          } catch (playErr) {
+            try { console.warn('[voice] audio play invocation failed', playErr); } catch {}
+          }
+        });
+        audioEnabled = true;
+      } catch (err) {
+        try { console.warn('[voice] audio enable failed', err); } catch {}
+      }
+
+      if (audioEnabled) {
+        window.__voicePlaybackPrimed = true;
+        hideVoicePlaybackPrompt();
+        setVoiceAudioMuted(false);
+      }
+      return audioEnabled;
+    }
+
+    function markTranscriptSeen(id){
+      if (!id) { return false; }
+      const seenMap = window.__lk_transcript_seen;
+      if (!seenMap) { return false; }
+      const key = String(id);
+      if ((__seenTranscriptIds && __seenTranscriptIds.has(key)) || seenMap[key]) { return true; }
+      seenMap[key] = true;
+      try { __seenTranscriptIds?.add(key); } catch {}
+      return false;
+    }
+
+    function ingestLivekitTranscript(payload, fallbackRole){
+      try {
+        if (!payload) { return; }
+        const role = payload.role || fallbackRole || 'assistant';
+        const createdAt = payload.createdAt || payload.created_at || new Date().toISOString();
+        const text = payload.text || payload.content || payload.transcript || '';
+        const citations = payload.citations || [];
+        const id = payload.id || `${role}-${createdAt}-${text.slice(0,20)}`;
+        if (!text) { return; }
+        if (markTranscriptSeen(id)) { return; }
+        appendVoiceTranscript(role, text, createdAt, citations, id);
+      } catch (err) {
+        try { console.warn('[voice] failed to ingest LiveKit transcript', err, payload); } catch {}
+      }
+    }
+
+    function handleRemoteAudioTrack(track, pub, participant){
+      if (!track || track.kind !== 'audio') { return; }
+      try { console.log('[voice] handleRemoteAudioTrack', { sid: track.sid, pubSid: pub?.trackSid, participant: participant?.identity }); } catch {}
+
+      try {
+        track.setEnabled?.(true);
+        track.setVolume?.(1.0);
+      } catch {}
+
+      const sidKey = pub?.trackSid || `audio-${track.sid || Date.now()}`;
+      try { console.log('[voice] audio sid key', sidKey); } catch {}
+
+      try {
+        const previous = track.detach?.() || [];
+        previous.forEach((node) => { try { node.remove?.(); } catch {} });
+      } catch {}
+
+      let el = window.__lk_audio_elements?.[sidKey];
+      try { console.log('[voice] existing audio element?', !!el); } catch {}
+      const needAttach = !el || !document.body.contains(el);
+      if (needAttach) {
+        try { el?.pause?.(); el?.remove?.(); } catch {}
+        el = document.createElement('audio');
+        el.autoplay = true;
+        el.playsInline = true;
+        el.muted = voicePlaybackMuted;
+        try { el.volume = 1.0; } catch {}
+        el.style.position = 'fixed';
+        el.style.bottom = '8px';
+        el.style.right = '8px';
+        el.style.width = '0px';
+        el.style.height = '0px';
+        el.style.opacity = '0';
+        el.style.pointerEvents = 'none';
+        document.body.appendChild(el);
+        window.__lk_audio_elements[sidKey] = el;
+        try { console.log('[voice] created new audio element', sidKey); } catch {}
+        if (window.__lk_audio_elements.__placeholder) {
+          try { window.__lk_audio_elements.__placeholder.remove?.(); } catch {}
+          delete window.__lk_audio_elements.__placeholder;
+        }
+      }
+
+      try { track.attach(el); } catch {}
+
+      try {
+        console.log('[voice] attempting el.play');
+        const playPromise = el.play?.();
+        if (playPromise && typeof playPromise.then === 'function') {
+          playPromise
+            .then(() => { try { console.log('[voice] el.play resolved'); } catch {}; })
+            .catch((err) => {
+              try { console.warn('[voice] audio play blocked', err); } catch {}
+              showVoicePlaybackPrompt();
+            });
+        }
+      } catch (err) {
+        try { console.warn('[voice] audio play failed', err); } catch {}
+        showVoicePlaybackPrompt();
+      }
+
+      if (!voicePlaybackMuted) {
+        hideVoicePlaybackPrompt();
+      }
+
+      try { document.getElementById('voiceStatus').textContent = 'Agent audio connected.'; } catch {}
+    }
+
+    function attachExistingRemoteAudio(roomConn){
+      try {
+        const mapLike = roomConn.remoteParticipants || roomConn.participants || new Map();
+        const participants = Array.from(mapLike.values());
+        try {
+          const debugInfo = participants.map((p) => {
+            const details = [];
+            iterateTrackPublications(p, (pub, source, key) => {
+              details.push({
+                from: source,
+                key,
+                trackSid: pub?.trackSid || pub?.sid,
+                source: pub?.source,
+                kind: pub?.kind,
+                isSubscribed: pub?.isSubscribed,
+                hasTrack: !!(pub?.track || pub?.audioTrack)
+              });
+            });
+            return {
+              id: p?.identity,
+              kind: p?.kind,
+              attributes: p?.attributes,
+              publications: details
+            };
+          });
+          console.log('[voice] attachExistingRemoteAudio participants', debugInfo);
+        } catch (err) {
+          console.warn('[voice] attachExistingRemoteAudio logging failed', err);
+        }
+        participants.forEach((participant) => {
+          try {
+            const audioPubs = collectAudioPublications(participant);
+            const seen = new Set();
+            audioPubs.forEach(({ pub, source, key }) => {
+              if (!pub) { return; }
+              const sid = pub.trackSid || pub.sid || pub.track?.sid;
+              if (sid && seen.has(sid)) { return; }
+              if (sid) { seen.add(sid); }
+              try {
+                console.log('[voice] inspect audio pub', {
+                  participant: participant?.identity,
+                  trackSid: sid,
+                  subscribed: pub?.isSubscribed,
+                  hasTrack: !!(pub?.track || pub?.audioTrack),
+                  kind: pub?.kind,
+                  source: pub?.source,
+                  via: source,
+                  key
+                });
+              } catch {}
+              ensureAudioSubscribed(pub, 'attachExistingRemoteAudio');
+              const track = resolvePublicationTrack(pub);
+              if (track && track.kind === 'audio') {
+                handleRemoteAudioTrack(track, pub, participant);
+              } else if (track && !track.kind) {
+                handleRemoteAudioTrack(track, pub, participant);
+              } else if (pub?.track && String(pub.track.kind || '').toLowerCase() === 'audio') {
+                handleRemoteAudioTrack(pub.track, pub, participant);
+              }
+              if (pub?.on && !pub.__voice_subscribe_hook) {
+                try {
+                  pub.__voice_subscribe_hook = true;
+                  pub.on('subscribed', (track) => {
+                    try { console.log('[voice] publication subscribed callback', { trackSid: track?.sid, pubSid: pub?.trackSid }); } catch {}
+                    handleRemoteAudioTrack(track, pub, participant);
+                  });
+                } catch {}
+              }
+            });
+          } catch (perr) {
+            try { console.warn('[voice] attachExisting participant failed', perr); } catch {}
+          }
+        });
+      } catch (err) {
+        try { console.warn('[voice] attachExistingRemoteAudio error', err); } catch {}
+      }
+    }
     const urlParams = new URLSearchParams(location.search);
     const SOURCE = urlParams.get('source') || '';
     let transcriptEventSource = null;
     
     // Initialize citations component
     const citationsComponent = new CitationsComponent();
+    let storedVoiceSession = null;
+    let connectionMonitor = null;
+    let monitorFailures = 0;
+    let reconnectLock = false;
+    let reconnectAttempts = 0;
+    let manualVoiceEnd = false;
+    let activeConversationId = null;
 
     async function ensureSession() {
       if (manualToken) { return true; }
@@ -278,7 +684,7 @@
     let __seenTranscriptIds = new Set();
     function appendVoiceTranscript(role, text, createdAt, citations, id){
       try {
-        if (id && __seenTranscriptIds.has(id)) { return; }
+        if (id && markTranscriptSeen(id)) { return; }
         const container = document.getElementById('voiceTranscriptList');
         if (!container) return;
         const wrap = document.createElement('div');
@@ -360,15 +766,124 @@
       } catch {}
     }
 
-    // Removed overlay in favor of autoplay under user gesture
+    function clearVoiceConnectionMonitor() {
+      if (connectionMonitor) {
+        clearInterval(connectionMonitor);
+        connectionMonitor = null;
+      }
+    }
 
+    function scheduleVoiceConnectionMonitor(roomConn) {
+      clearVoiceConnectionMonitor();
+      connectionMonitor = setInterval(() => {
+        try {
+          if (!roomConn || manualVoiceEnd) {
+            monitorFailures = 0;
+            return;
+          }
+          const state = roomConn.state;
+          const participantsMap = roomConn.remoteParticipants || roomConn.participants || new Map();
+          const participants = Array.from(participantsMap.values());
+          const agentPresent = participants.some((rp) => String(rp.identity || '').toLowerCase().includes('agent'));
+
+          const connectionIssue = state !== 'connected';
+          const agentMissing = !agentPresent;
+
+          if (connectionIssue || agentMissing) {
+            monitorFailures += 1;
+            console.warn('[voice] connection monitor detected issue', { state, agentPresent, monitorFailures });
+          } else {
+            monitorFailures = 0;
+          }
+
+          if (!manualVoiceEnd && connectionIssue && monitorFailures >= 3) {
+            monitorFailures = 0;
+            tryVoiceReconnect('monitor');
+          }
+        } catch (err) {
+          console.warn('[voice] monitor error', err);
+        }
+      }, 8000);
+    }
+
+    async function tryVoiceReconnect(reason) {
+      if (manualVoiceEnd) {
+        console.log('[voice] reconnect skipped (manual end)');
+        return;
+      }
+      if (!storedVoiceSession) {
+        console.log('[voice] reconnect skipped (no stored session)');
+        return;
+      }
+      if (reconnectLock) {
+        return;
+      }
+      reconnectLock = true;
+      reconnectAttempts += 1;
+      if (reconnectAttempts > 5) {
+        console.error('[voice] reconnect aborted after max attempts');
+        reconnectLock = false;
+        return;
+      }
+      console.log(`[voice] attempting reconnect (${reason}) attempt ${reconnectAttempts}`);
+      try {
+        const status = document.getElementById('voiceStatus');
+        if (status) status.textContent = 'Reconnecting voice…';
+        if (__roomConn) {
+          try { await __roomConn.disconnect(); } catch {}
+        }
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        await connectLivekit(storedVoiceSession, true);
+      } catch (err) {
+        console.error('[voice] reconnect failed', reason, err);
+        reconnectLock = false;
+        setTimeout(() => tryVoiceReconnect(reason), 2000);
+        return;
+      }
+      reconnectLock = false;
+    }
+
+    // Removed overlay in favor of autoplay under user gesture
+    
     async function startVoice(){
+      try { console.log('[voice] startVoice invoked'); } catch {}
+      const status = document.getElementById('voiceStatus');
+      setVoiceAudioMuted(true);
+      showVoicePlaybackPrompt();
+      try {
+        const existingEls = window.__lk_audio_elements || {};
+        Object.entries(existingEls).forEach(([key, el]) => {
+          try { el?.remove?.(); } catch {}
+          delete existingEls[key];
+        });
+        window.__lk_audio_elements = existingEls;
+      } catch {}
+      try {
+        window.__lk_transcript_seen = {};
+        __seenTranscriptIds = new Set();
+      } catch {}
+      let playbackPrimed = false;
+      try {
+        playbackPrimed = await enableVoicePlayback();
+        try { console.log('[voice] enableVoicePlayback result', playbackPrimed); } catch {}
+      } catch (err) {
+        try { console.warn('[voice] initial enableVoicePlayback failed', err); } catch {}
+      }
+
       // Allow either a Supabase session OR a manual token from admin preview
+      try { console.log('[voice] ensuring session'); } catch {}
       const ok = await ensureSession();
+      try { console.log('[voice] ensureSession complete', { ok, manualToken: !!manualToken, sessionUser: session?.user?.id }); } catch {}
       const injectedUserId = window.__client_user_id || null;
       const hasSupabaseUser = !!(session && session.user && session.user.id);
       const hasManualToken = !!manualToken;
-      if (!hasSupabaseUser && !hasManualToken) { setAuthVisible(true); setChatVisible(false); document.getElementById('voiceStatus').textContent = 'Please sign in to start voice.'; return; }
+      try { console.log('[voice] auth status', { hasSupabaseUser, hasManualToken, injectedUserId }); } catch {}
+      if (!hasSupabaseUser && !hasManualToken) {
+        setAuthVisible(true); setChatVisible(false);
+        document.getElementById('voiceStatus').textContent = 'Please sign in to start voice.';
+        try { console.warn('[voice] abort startVoice - no session or manual token'); } catch {}
+        return;
+      }
       const room = `embed_${AGENT_SLUG}_${Date.now()}`;
       const payload = {
         agent_slug: AGENT_SLUG,
@@ -379,38 +894,15 @@
         user_id: (hasSupabaseUser ? session.user.id : (injectedUserId || 'preview-user'))
       };
       const bearer = manualToken || (session && session.access_token) || '';
+      try { console.log('[voice] trigger payload prepared', { room, bearerPresent: !!bearer }); } catch {}
       const res = await fetch('/api/v1/trigger-agent', { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${bearer}` }, body: JSON.stringify(payload) });
-      const status = document.getElementById('voiceStatus');
+      try { console.log('[voice] trigger request sent', payload); } catch {}
       const startBtn = document.getElementById('voiceStartBtn');
       const endBtn = document.getElementById('voiceEndBtn');
-      // Prime Web Audio on user gesture so playback can start without overlays
-      try {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (AC) {
-          if (!window.__audioCtx) { window.__audioCtx = new AC(); }
-          await window.__audioCtx.resume();
-        }
-      } catch {}
-      // Prepare a dedicated audio element under the user's gesture for autoplay reliability
-      try {
-        if (!window.__lk_audio_el) {
-          const audio = document.createElement('audio');
-          audio.autoplay = true;
-          audio.playsInline = true;
-          audio.muted = false;
-          try { audio.volume = 1.0; } catch {}
-          audio.style.position = 'fixed';
-          audio.style.bottom = '8px';
-          audio.style.right = '8px';
-          audio.style.width = '0px';
-          audio.style.height = '0px';
-          audio.style.opacity = '0';
-          audio.style.pointerEvents = 'none';
-          document.body.appendChild(audio);
-          window.__lk_audio_el = audio;
-        }
-        try { window.__lk_audio_el.play?.().catch(() => {}); } catch {}
-      } catch {}
+      if (!playbackPrimed && !window.__voicePlaybackPrimed) {
+        if (status) status.textContent = 'Audio muted — browser blocked autoplay. Interact with the page to enable audio.';
+        try { await enableVoicePlayback(); } catch {}
+      }
       if (!res.ok) { status.textContent = 'Voice start failed.'; return; }
       const data = await res.json();
       try { console.log('[voice] trigger response', data); } catch {}
@@ -422,159 +914,458 @@
       try { console.log('[voice] trigger keys', Object.keys(data||{})); } catch {}
       try { console.log('[voice] conversationId', conversationId); } catch {}
       if (!conversationId) { status.textContent = 'Error: missing conversation_id from trigger-agent.'; return; }
-      // Start transcript stream immediately when we have the conversationId
-      try { startVoiceTranscriptStream(conversationId, CLIENT_ID, agentId); } catch {}
       if (!server || !token) { status.textContent = 'Voice start response incomplete.'; return; }
+      if (conversationId && conversationId !== activeConversationId) {
+        activeConversationId = conversationId;
+        startVoiceTranscriptStream(conversationId, CLIENT_ID, agentId);
+      }
+      storedVoiceSession = { server, token, conversationId, agentId };
+      reconnectAttempts = 0;
+      monitorFailures = 0;
+      manualVoiceEnd = false;
       status.textContent = 'Connecting…';
       try {
-        const { Room, RoomEvent, createLocalAudioTrack, ParticipantKind } = window.LivekitClient || window.LiveKit || {};
-        if (!Room) { status.textContent = 'Voice SDK not available.'; return; }
-        const roomConn = new Room();
-        // Prime audio playback under user gesture BEFORE connecting (non-blocking)
-        try { roomConn.startAudio?.().catch(() => {}); } catch {}
-        __roomConn = roomConn;
-        startBtn.classList.add('hidden');
-        endBtn.classList.remove('hidden');
-        // Register diagnostics BEFORE connecting so we see early failures
-        try { roomConn.on(RoomEvent.ConnectionStateChanged, (state) => { try { console.log('[voice] connection state', state); } catch {} }); } catch {}
-        try { roomConn.on(RoomEvent.AudioPlaybackStatusChanged, () => { try { console.log('[voice] AudioPlaybackStatusChanged canPlaybackAudio=', roomConn.canPlaybackAudio); } catch {} }); } catch {}
-        try { roomConn.on(RoomEvent.TrackSubscriptionFailed, (sid, err) => { try { console.error('[voice] TrackSubscriptionFailed', sid, err); } catch {} }); } catch {}
-        try { roomConn.on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => { try { console.warn('[voice] TrackUnsubscribed', track?.kind, participant?.identity); } catch {} }); } catch {}
-        try { roomConn.on(RoomEvent.Disconnected, (reason) => { try { console.warn('[voice] Room disconnected', reason); } catch {} }); } catch {}
-        // Connect with a timeout to avoid indefinite spinner
-        const connectTimeoutMs = 15000;
-        try {
-          const connectPromise = roomConn.connect(server, token, { autoSubscribe: true });
-          await Promise.race([
-            connectPromise,
-            new Promise((_, rej) => setTimeout(() => rej(new Error('connect-timeout')), connectTimeoutMs))
-          ]);
-        } catch (err) {
-          try { console.error('[voice] connect failed or timed out', err); } catch {}
-          status.textContent = 'Connection failed. Please try again.';
-          startBtn.classList.remove('hidden');
-          endBtn.classList.add('hidden');
-          try { await roomConn.disconnect(); } catch {}
-          return;
-        }
-        try { roomConn.startAudio?.().catch(() => {}); } catch {}
-        // Create local mic track (non-blocking) – avoid hanging on permission prompts
-        try {
-          createLocalAudioTrack({
-            echoCancellation: true,
-            noiseSuppression: false,
-            autoGainControl: true,
-          })
-          .then((mic) => roomConn.localParticipant.publishTrack(mic, {
-            dtx: false,
-            red: false,
-            simulcast: false,
-            maxBitrate: 64000,
-          }))
-          .then(() => { try { console.log('[voice] Mic track published'); } catch {} })
-          .catch((e) => { try { console.warn('[voice] Mic setup/publish failed', e); } catch {} });
-        } catch {}
-
-        // Diagnostics: local track published
-        try {
-          roomConn.on(RoomEvent.LocalTrackPublished, (pub) => {
-            try { console.log('[voice] LocalTrackPublished', { kind: pub.kind, trackSid: pub.trackSid }); } catch {}
-          });
-        } catch {}
-        try {
-          roomConn.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
-            try { console.log('[voice] ActiveSpeakers', speakers?.map?.(s => ({ id: s.identity, lvl: s.audioLevel })) || speakers); } catch {}
-          });
-        } catch {}
-        roomConn.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
-          try { console.log('[voice] TrackSubscribed', track.kind, participant.identity, participant.kind); } catch {}
-          if (track.kind === 'audio') {
-            let el = window.__lk_audio_el;
-            try {
-              if (el) { track.attach(el); }
-              else {
-                el = track.attach();
-                el.autoplay = true;
-                el.playsInline = true;
-                el.muted = false;
-                try { el.volume = 1.0; } catch {}
-                // Avoid display:none to prevent autoplay restrictions in some browsers
-                el.style.position = 'fixed';
-                el.style.bottom = '8px';
-                el.style.right = '8px';
-                el.style.width = '0px';
-                el.style.height = '0px';
-                el.style.opacity = '0';
-                el.style.pointerEvents = 'none';
-                document.body.appendChild(el);
-                window.__lk_audio_el = el;
-              }
-            } catch {}
-            (async () => {
-              try { await roomConn.startAudio?.(); } catch {}
-              try { await el.play?.(); } catch (e) { try { console.warn('[voice] el.play failed', e); } catch {} }
-            })();
-            try { status.textContent = 'Agent audio connected.'; } catch {}
-          }
-        });
-        roomConn.on(RoomEvent.ParticipantConnected, (p) => {
-          try {
-            const agentKind = (ParticipantKind && ParticipantKind.AGENT) || 'agent';
-            if (p && (p.kind === agentKind || String(p.identity||'').toLowerCase().includes('agent'))) {
-              status.textContent = 'Agent connected. You can speak now.';
-            } else {
-              status.textContent = 'Connected. You can speak now.';
-            }
-          } catch {}
-        });
-        try {
-          roomConn.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
-            try {
-              const indicator = document.getElementById('agentSpeakingIndicator');
-              const anyAgentSpeaking = (speakers||[]).some(s => String(s.identity||'').toLowerCase().includes('agent') && (s.audioLevel||0) > 0);
-              if (indicator){ indicator.classList.toggle('hidden', !anyAgentSpeaking); }
-            } catch {}
-          });
-        } catch {}
-        roomConn.on(RoomEvent.ParticipantDisconnected, () => { try { status.textContent = 'Participant left.'; } catch {} });
-        // Fallback: after 8s, if no agent or remote audio subscribed, notify user
-        setTimeout(() => {
-          try {
-            const participants = Array.from(roomConn.remoteParticipants.values());
-            const hasAgent = participants.some((rp) => String(rp.identity||'').toLowerCase().includes('agent'));
-            const hasRemoteAudio = participants.some((rp) => Array.from(rp.tracks.values()).some(t => t && t.track && t.track.kind === 'audio'));
-            if (!hasAgent) { status.textContent = 'Waiting for agent to join…'; }
-            else if (!hasRemoteAudio) { status.textContent = 'Agent joined but no audio yet…'; }
-          } catch {}
-        }, 8000);
-        status.textContent = 'Connected. You can speak now.';
-        if (conversationId) { startVoiceTranscriptStream(conversationId, CLIENT_ID, agentId); }
-      } catch (e) {
-        status.textContent = 'Connection failed.';
+        await connectLivekit(storedVoiceSession, false);
+      } catch (err) {
+        console.error('[voice] connection failed', err);
+        status.textContent = 'Connection failed. Please try again.';
         startBtn.classList.remove('hidden');
         endBtn.classList.add('hidden');
       }
+    }
+
+    async function connectLivekit(sessionInfo, isReconnect){
+      const status = document.getElementById('voiceStatus');
+      const startBtn = document.getElementById('voiceStartBtn');
+      const endBtn = document.getElementById('voiceEndBtn');
+      const indicator = document.getElementById('agentSpeakingIndicator');
+
+      if (!sessionInfo || !sessionInfo.server || !sessionInfo.token) {
+        throw new Error('connectLivekit missing session info');
+      }
+
+      const { server, token } = sessionInfo;
+      const { Room, RoomEvent, ParticipantKind } = window.LivekitClient || window.LiveKit || {};
+      try { console.log('[voice] RoomEvent keys', RoomEvent ? Object.keys(RoomEvent) : null); } catch {}
+      if (!Room) {
+        status.textContent = 'Voice SDK not available.';
+        throw new Error('LiveKit SDK missing');
+      }
+
+      const roomConn = new Room();
+      __roomConn = roomConn;
+      manualVoiceEnd = false;
+
+      if (!window.__voicePlaybackPrimed) {
+        try { await enableVoicePlayback(); } catch {}
+      } else {
+        hideVoicePlaybackPrompt();
+      }
+
+      try {
+        roomConn.startAudio?.().catch((err) => {
+          try { console.warn('[voice] startAudio deferred', err); } catch {}
+          showVoicePlaybackPrompt();
+        });
+      } catch (err) {
+        try { console.warn('[voice] startAudio threw', err); } catch {}
+        showVoicePlaybackPrompt();
+      }
+
+      startBtn.classList.add('hidden');
+      endBtn.classList.remove('hidden');
+
+      try { roomConn.on(RoomEvent.ConnectionStateChanged, (state) => { try { console.log('[voice] connection state', state); } catch {} }); } catch {}
+      try {
+        roomConn.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+          try { console.log('[voice] AudioPlaybackStatusChanged canPlaybackAudio=', roomConn.canPlaybackAudio); } catch {}
+          if (roomConn.canPlaybackAudio) {
+            hideVoicePlaybackPrompt();
+          } else {
+            showVoicePlaybackPrompt();
+          }
+        });
+      } catch {}
+      try {
+        if (RoomEvent?.RemoteTrackSubscribed) {
+          roomConn.on(RoomEvent.RemoteTrackSubscribed, (track, pub, participant) => {
+            try { console.log('[voice] RemoteTrackSubscribed event', { trackSid: track?.sid, pubSid: pub?.trackSid, participant: participant?.identity }); } catch {}
+            handleRemoteAudioTrack(track, pub, participant);
+          });
+        }
+        if (RoomEvent?.RemoteTrackUnsubscribed) {
+          roomConn.on(RoomEvent.RemoteTrackUnsubscribed, (track, pub, participant) => {
+            try { console.warn('[voice] RemoteTrackUnsubscribed event', { trackSid: track?.sid, pubSid: pub?.trackSid, participant: participant?.identity }); } catch {}
+          });
+        }
+      } catch {}
+      try {
+        roomConn.on(RoomEvent.MediaDevicesError, (error) => {
+          try { console.error('[voice] MediaDevicesError', error); } catch {}
+          if (status) {
+            status.textContent = 'Microphone error. Please check browser permissions and retry.';
+          }
+          showVoicePlaybackPrompt();
+        });
+      } catch {}
+      try {
+        roomConn.on(RoomEvent.TrackSubscriptionFailed, (sid, err) => {
+          try {
+            console.error('[voice] TrackSubscriptionFailed', {
+              trackSid: sid,
+              message: err?.message || String(err || ''),
+              code: err?.code,
+            });
+          } catch {}
+        });
+      } catch {}
+      try {
+        roomConn.on(RoomEvent.TrackPublished, (pub, participant) => {
+          try {
+            console.log('[voice] TrackPublished', {
+              kind: pub?.kind,
+              trackSid: pub?.trackSid,
+              muted: pub?.isMuted,
+              participant: participant?.identity,
+              subscribed: pub?.isSubscribed,
+            });
+          } catch {}
+
+          if (String(pub?.kind || '').toLowerCase() === 'audio') {
+            ensureAudioSubscribed(pub, 'TrackPublished');
+            try {
+              const track = resolvePublicationTrack(pub);
+              if (track) { handleRemoteAudioTrack(track, pub, participant); }
+            } catch {}
+            try {
+              if (pub?.on && !pub.__voice_track_published_hook) {
+                pub.__voice_track_published_hook = true;
+                pub.on('subscribed', (track) => {
+                  try { console.log('[voice] publication subscribed callback', { trackSid: track?.sid, pubSid: pub?.trackSid }); } catch {}
+                  handleRemoteAudioTrack(track, pub, participant);
+                });
+              }
+            } catch {}
+          }
+        });
+      } catch {}
+      try {
+        roomConn.on(RoomEvent.TrackUnpublished, (pub, participant) => {
+          try {
+            console.log('[voice] TrackUnpublished', {
+              kind: pub?.kind,
+              trackSid: pub?.trackSid,
+              participant: participant?.identity,
+            });
+          } catch {}
+        });
+      } catch {}
+      try {
+        roomConn.on(RoomEvent.TrackMuted, (participant, pub) => {
+          try {
+            console.warn('[voice] TrackMuted', {
+              participant: participant?.identity,
+              trackSid: pub?.trackSid,
+            });
+          } catch {}
+        });
+      } catch {}
+      try {
+        roomConn.on(RoomEvent.TrackUnmuted, (participant, pub) => {
+          try {
+            console.log('[voice] TrackUnmuted', {
+              participant: participant?.identity,
+              trackSid: pub?.trackSid,
+            });
+          } catch {}
+        });
+      } catch {}
+      try {
+        roomConn.on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+          try {
+            console.warn('[voice] TrackUnsubscribed', {
+              kind: track?.kind,
+              trackSid: pub?.trackSid,
+              participant: participant?.identity,
+            });
+          } catch {}
+
+          if (track?.kind === 'audio') {
+            try {
+              const nodes = track.detach?.() || [];
+              nodes.forEach((node) => { try { node.remove?.(); } catch {} });
+            } catch {}
+            try {
+              const sidKey = pub?.trackSid || `audio-${track.sid || Date.now()}`;
+              if (window.__lk_audio_elements && window.__lk_audio_elements[sidKey]) {
+                try {
+                  const el = window.__lk_audio_elements[sidKey];
+                  if (el) {
+                    el.pause?.();
+                    el.srcObject = null;
+                  }
+                } catch {}
+              }
+            } catch {}
+
+            if (!manualVoiceEnd) {
+              ensureAudioSubscribed(pub, 'TrackUnsubscribed-resubscribe', 'warn');
+              attachExistingRemoteAudio(roomConn);
+            }
+          }
+        });
+      } catch {}
+      try {
+        roomConn.on(RoomEvent.Disconnected, (reason) => {
+          try { console.warn('[voice] Room disconnected', reason); } catch {}
+          clearVoiceConnectionMonitor();
+          if (manualVoiceEnd) {
+            if (status) status.textContent = 'Call ended.';
+          } else {
+            if (status) {
+              const reasonText = (reason && reason.reason) || reason?.toString?.() || 'unknown';
+              status.textContent = `Connection lost (${reasonText}). Reconnecting…`;
+            }
+            tryVoiceReconnect('event-disconnected');
+          }
+        });
+      } catch {}
+
+      const connectTimeoutMs = 15000;
+      try {
+        const connectPromise = roomConn.connect(server, token, { autoSubscribe: true });
+        await Promise.race([
+          connectPromise,
+          new Promise((_, rej) => setTimeout(() => rej(new Error('connect-timeout')), connectTimeoutMs))
+        ]);
+      } catch (err) {
+        try { await roomConn.disconnect(); } catch {}
+        throw err;
+      }
+
+      scheduleVoiceConnectionMonitor(roomConn);
+      reconnectAttempts = 0;
+      attachExistingRemoteAudio(roomConn);
+      try {
+        let tries = 0;
+        const maxTries = 6;
+        const interval = setInterval(() => {
+          tries += 1;
+          attachExistingRemoteAudio(roomConn);
+          if (tries >= maxTries || !__roomConn || __roomConn !== roomConn) {
+            clearInterval(interval);
+          }
+        }, 1000);
+      } catch {}
+
+      try {
+        roomConn.startAudio?.().catch((err) => {
+          try { console.warn('[voice] startAudio deferred', err); } catch {}
+          showVoicePlaybackPrompt();
+        });
+      } catch (err) {
+        try { console.warn('[voice] startAudio threw', err); } catch {}
+        showVoicePlaybackPrompt();
+      }
+
+      try {
+        await roomConn.localParticipant.setMicrophoneEnabled(true, undefined, { preConnectBuffer: true });
+        try { console.log('[voice] Microphone enabled via setMicrophoneEnabled'); } catch {}
+        if (status) {
+          status.textContent = 'Microphone enabled. You can speak now.';
+        }
+      } catch (micErr) {
+        try { console.error('[voice] setMicrophoneEnabled failed', micErr); } catch {}
+        if (status) {
+          status.textContent = 'Microphone unavailable. Check browser permissions and retry.';
+        }
+        showVoicePlaybackPrompt();
+      }
+
+      try {
+        roomConn.on(RoomEvent.LocalTrackPublished, (pub) => {
+          try { console.log('[voice] LocalTrackPublished', { kind: pub.kind, trackSid: pub.trackSid }); } catch {}
+        });
+      } catch {}
+
+      try {
+        roomConn.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+          try { console.log('[voice] ActiveSpeakers', speakers?.map?.(s => ({ id: s.identity, lvl: s.audioLevel })) || speakers); } catch {}
+        });
+      } catch {}
+      try {
+        if (RoomEvent?.RemoteTrackPublished) {
+          roomConn.on(RoomEvent.RemoteTrackPublished, (pub, participant) => {
+            try {
+              console.log('[voice] RemoteTrackPublished', {
+                kind: pub?.kind,
+                trackSid: pub?.trackSid,
+                participant: participant?.identity,
+                subscribed: pub?.isSubscribed,
+              });
+            } catch {}
+
+            if (String(pub?.kind || '').toLowerCase() === 'audio') {
+              ensureAudioSubscribed(pub, 'RemoteTrackPublished');
+              try {
+                const maybeTrack = resolvePublicationTrack(pub);
+                if (maybeTrack) { handleRemoteAudioTrack(maybeTrack, pub, participant); }
+              } catch {}
+              try {
+                if (pub?.on && !pub.__voice_remote_published_hook) {
+                  pub.__voice_remote_published_hook = true;
+                  pub.on('subscribed', (track) => {
+                    try { console.log('[voice] pub subscribed event', { trackSid: track?.sid, pubSid: pub?.trackSid }); } catch {}
+                    handleRemoteAudioTrack(track, pub, participant);
+                  });
+                  pub.on('unsubscribed', () => {
+                    try {
+                      const sidKey = pub?.trackSid;
+                      if (sidKey && window.__lk_audio_elements?.[sidKey]) {
+                        const el = window.__lk_audio_elements[sidKey];
+                        el?.pause?.();
+                        el.srcObject = null;
+                      }
+                    } catch {}
+                  });
+                }
+              } catch {}
+            }
+          });
+        }
+      } catch {}
+      try {
+        roomConn.on(RoomEvent.DataReceived, (payload, participant, topic) => {
+          try {
+            const decoder = window.__lk_decoder || new TextDecoder();
+            window.__lk_decoder = decoder;
+            let textPayload = '';
+            if (typeof payload === 'string') {
+              textPayload = payload;
+            } else if (payload instanceof ArrayBuffer) {
+              textPayload = decoder.decode(payload);
+            } else if (ArrayBuffer.isView(payload)) {
+              textPayload = decoder.decode(payload.buffer);
+            }
+            if (!textPayload) { return; }
+            let parsed = null;
+            try { parsed = JSON.parse(textPayload); } catch {}
+            if (parsed && (parsed.content || parsed.transcript || parsed.text)) {
+              parsed.id = parsed.id || `${topic || 'data'}-${Date.now()}`;
+              const pIdentity = String(participant?.identity || '').toLowerCase();
+              const fallbackRole = parsed.role || (pIdentity.includes('agent') ? 'assistant' : 'user');
+              ingestLivekitTranscript(parsed, fallbackRole);
+            }
+          } catch (err) {
+            try { console.warn('[voice] failed to process LiveKit data payload', err); } catch {}
+          }
+        });
+      } catch {}
+      try {
+        const transcriptionEvent = RoomEvent.TranscriptionReceived;
+        if (transcriptionEvent) {
+          roomConn.on(transcriptionEvent, (evt) => {
+            ingestLivekitTranscript(evt, 'assistant');
+          });
+        }
+      } catch {}
+
+      roomConn.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+        try {
+          console.log('[voice] TrackSubscribed', {
+            kind: track?.kind,
+            trackSid: pub?.trackSid,
+            participant: participant?.identity,
+            participantKind: participant?.kind,
+            muted: pub?.isMuted,
+          });
+        } catch {}
+
+        if (track.kind === 'audio') {
+          handleRemoteAudioTrack(track, pub, participant);
+        }
+      });
+
+      roomConn.on(RoomEvent.ParticipantConnected, (p) => {
+        try {
+          const agentKind = (ParticipantKind && ParticipantKind.AGENT) || 'agent';
+          if (p && (p.kind === agentKind || String(p.identity||'').toLowerCase().includes('agent'))) {
+            status.textContent = 'Agent connected. You can speak now.';
+          } else {
+            status.textContent = 'Connected. You can speak now.';
+          }
+          attachExistingRemoteAudio(roomConn);
+        } catch {}
+      });
+
+      try {
+        roomConn.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+          try {
+            const anyAgentSpeaking = (speakers||[]).some(s => String(s.identity||'').toLowerCase().includes('agent') && (s.audioLevel||0) > 0);
+            if (indicator){ indicator.classList.toggle('hidden', !anyAgentSpeaking); }
+            if (anyAgentSpeaking) {
+              attachExistingRemoteAudio(roomConn);
+            }
+          } catch {}
+        });
+      } catch {}
+
+      roomConn.on(RoomEvent.ParticipantDisconnected, (participant) => {
+        try { console.log('[voice] Participant disconnected', participant?.identity); } catch {}
+        if (!manualVoiceEnd && participant && String(participant.identity || '').toLowerCase().includes('agent')) {
+          setTimeout(() => tryVoiceReconnect('agent-left'), 1200);
+        }
+      });
+
+      setTimeout(() => {
+        try {
+          const participants = Array.from(roomConn.remoteParticipants.values());
+          const hasAgent = participants.some((rp) => String(rp.identity||'').toLowerCase().includes('agent'));
+          const hasRemoteAudio = participants.some((rp) => participantHasAudioTrack(rp));
+          if (!hasAgent) { status.textContent = 'Waiting for agent to join…'; }
+          else if (!hasRemoteAudio) { status.textContent = 'Agent joined but no audio yet…'; }
+        } catch {}
+      }, 8000);
+
+      status.textContent = isReconnect ? 'Reconnected. You can speak now.' : 'Connected. You can speak now.';
     }
 
     async function endVoice(){
       const status = document.getElementById('voiceStatus');
       const startBtn = document.getElementById('voiceStartBtn');
       const endBtn = document.getElementById('voiceEndBtn');
+      manualVoiceEnd = true;
+      hideVoicePlaybackPrompt();
+      clearVoiceConnectionMonitor();
+      monitorFailures = 0;
+      reconnectAttempts = 0;
       try {
         try { if (transcriptEventSource) { transcriptEventSource.close(); } } catch {}
         transcriptEventSource = null;
         if (__roomConn) {
           try {
-            const pubs = Array.from(__roomConn.localParticipant.tracks.values());
-            for (const pub of pubs) { try { await pub.unpublish?.(); } catch {} }
+            const locals = [];
+            iterateTrackPublications(__roomConn.localParticipant, (pub) => { locals.push(pub); });
+            for (const pub of locals) { try { await pub.unpublish?.(); } catch {} }
           } catch {}
           await __roomConn.disconnect();
         }
       } catch {}
       __roomConn = null;
+      storedVoiceSession = null;
       status.textContent = 'Call ended.';
       endBtn.classList.add('hidden');
       startBtn.classList.remove('hidden');
+      setVoiceAudioMuted(true);
+      try {
+        const elementsMap = window.__lk_audio_elements || {};
+        Object.entries(elementsMap).forEach(([key, el]) => {
+          try { el?.remove?.(); } catch {}
+          delete elementsMap[key];
+        });
+      } catch {}
+      try { window.__lk_transcript_seen = {}; __seenTranscriptIds = new Set(); } catch {}
+      try { delete window.__voicePlaybackPrimed; } catch {}
     }
 
     // Listen for admin preview postMessage with Supabase tokens
@@ -610,5 +1401,3 @@
   </script>
 </body>
 </html>
-
-

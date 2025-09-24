@@ -9,7 +9,13 @@
     <button class="btn-primary px-4 py-2 rounded" onclick="openCreateToolModal()">Add Ability</button>
   </div>
 
-  <div class="mb-4 flex gap-2 items-center">
+  <div class="mb-4 flex gap-2 items-center flex-wrap">
+    <select id="clientFilter" data-default="{{ default_client_id or '' }}" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="onClientFilterChange()">
+      <option value="">All clients</option>
+      {% for client in clients or [] %}
+      <option value="{{ client.id }}">{{ client.name }}</option>
+      {% endfor %}
+    </select>
     <input id="searchInput" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" placeholder="Search abilities..." oninput="refreshTools()" />
     <select id="typeFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
       <option value="">All types</option>
@@ -29,7 +35,7 @@
 </div>
 
 <div id="createToolModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50">
-  <div class="bg-dark-surface rounded-lg border border-dark-border w-full max-w-2xl p-4">
+  <div class="bg-dark-surface rounded-lg border border-dark-border w-full max-w-2xl p-4 max-h-[88vh] overflow-y-auto mx-4">
     <div class="flex items-center justify-between mb-3">
       <h2 class="text-xl text-dark-text">Create Ability</h2>
       <button class="text-dark-text-secondary" onclick="closeCreateToolModal()">✕</button>
@@ -61,7 +67,7 @@
         </div>
         <div>
           <label class="text-sm text-dark-text">Scope</label>
-          <select id="ct_scope" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text">
+          <select id="ct_scope" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="handleScopeChange()">
             <option value="client">Client</option>
             <option value="global">Global</option>
           </select>
@@ -70,9 +76,21 @@
           <label class="text-sm text-dark-text">Icon URL</label>
           <input id="ct_icon" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
         </div>
+        <div id="ct_client_group" class="hidden">
+          <label class="text-sm text-dark-text">Client</label>
+          <select id="ct_client_id" data-default="{{ default_client_id or '' }}" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text">
+            <option value="">Select a client</option>
+            {% for client in clients or [] %}
+            <option value="{{ client.id }}">{{ client.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
       </div>
-      <div id="typeFields" class="space-y-2">
+      <div id="ct_typeFields" class="space-y-2">
         <!-- Dynamic config inputs per type -->
+      </div>
+      <div id="ct_perplexity_client_panel" class="hidden text-sm text-dark-text-secondary">
+        Client-specific Perplexity API keys can be managed from the Clients page after assigning this ability.
       </div>
       <div class="flex justify-end gap-2">
         <button class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="closeCreateToolModal()">Cancel</button>
@@ -82,55 +100,547 @@
   </div>
   </div>
 
+<div id="editToolModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50">
+  <div class="bg-dark-surface rounded-lg border border-dark-border w-full max-w-2xl p-4 max-h-[88vh] overflow-y-auto mx-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-xl text-dark-text">Edit Ability</h2>
+      <button class="text-dark-text-secondary" onclick="closeEditToolModal()">✕</button>
+    </div>
+    <div class="space-y-3">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-sm text-dark-text">Name</label>
+          <input id="et_name" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Slug</label>
+          <input id="et_slug" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" readonly />
+        </div>
+      </div>
+      <div>
+        <label class="text-sm text-dark-text">Description</label>
+        <textarea id="et_desc" rows="2" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text"></textarea>
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <label class="text-sm text-dark-text">Type</label>
+          <select id="et_type" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" disabled>
+            <option value="mcp">MCP</option>
+            <option value="n8n">n8n</option>
+            <option value="sidekick">Sidekick</option>
+            <option value="code">Code</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Scope</label>
+          <select id="et_scope" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" disabled>
+            <option value="client">Client</option>
+            <option value="global">Global</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Icon URL</label>
+          <input id="et_icon" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+        </div>
+      </div>
+      <div id="et_client_group" class="hidden">
+        <label class="text-sm text-dark-text">Client</label>
+        <select id="et_client_id" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" disabled>
+          <option value="">Select a client</option>
+          {% for client in clients or [] %}
+          <option value="{{ client.id }}">{{ client.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div id="et_typeFields" class="space-y-2"></div>
+      <div id="et_perplexity_client_panel" class="hidden space-y-2">
+        {% if clients %}
+        <div id="et_perplexity_client_selector" class="hidden">
+          <label class="text-sm text-dark-text">Client</label>
+          <select id="et_perplexity_client_select" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text">
+            <option value="">Select a client</option>
+            {% for client in clients or [] %}
+            <option value="{{ client.id }}">{{ client.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        <div>
+          <label class="text-sm text-dark-text">Client API Key</label>
+          <input id="et_mcp_client_api_key" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" placeholder="pplx-..." />
+          <p class="text-xs text-dark-text-secondary mt-1">Stored per client and used whenever this ability runs. Leave blank to clear the saved key for this client.</p>
+        </div>
+        <div id="et_perplexity_client_notice" class="text-xs text-brand-salmon hidden">Select a client using the page filter or the dropdown above to manage this Perplexity API key.</div>
+      </div>
+      <div class="flex items-center justify-between">
+        <label class="flex items-center gap-2 text-sm text-dark-text">
+          <input type="checkbox" id="et_enabled" class="w-4 h-4" /> Enabled
+        </label>
+        <div class="flex gap-2">
+          <button class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="closeEditToolModal()">Cancel</button>
+          <button class="btn-primary px-4 py-2 rounded" onclick="updateTool()">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
-async function fetchJSON(url){
-  const r = await fetch(url);
-  if(!r.ok) throw new Error('request failed');
-  return r.json();
+const ADMIN_TOOLS_BASE = '/admin/api/tools';
+const ADMIN_CLIENTS_BASE = '/admin/api/clients';
+const toolsCache = {};
+let editingToolId = null;
+
+async function fetchJSON(url, options){
+  const response = await fetch(url, Object.assign({ credentials: 'include' }, options));
+  if(!response.ok){
+    const text = await response.text();
+    throw new Error(text || 'request failed');
+  }
+  const contentType = response.headers.get('content-type') || '';
+  if(contentType.includes('application/json')){
+    return response.json();
+  }
+  return null;
 }
 
-function openCreateToolModal(){ document.getElementById('createToolModal').classList.remove('hidden'); document.getElementById('createToolModal').classList.add('flex'); toggleTypeFields(); }
-function closeCreateToolModal(){ document.getElementById('createToolModal').classList.add('hidden'); document.getElementById('createToolModal').classList.remove('flex'); }
+function openCreateToolModal(){
+  document.getElementById('ct_name').value = '';
+  document.getElementById('ct_slug').value = '';
+  document.getElementById('ct_desc').value = '';
+  document.getElementById('ct_icon').value = '';
+  document.getElementById('ct_type').value = 'mcp';
+  document.getElementById('ct_scope').value = 'client';
+  handleScopeChange('ct');
+  renderTypeFields('ct', 'mcp');
+  togglePerplexityClientPanel('ct', false);
+  document.getElementById('createToolModal').classList.remove('hidden');
+  document.getElementById('createToolModal').classList.add('flex');
+}
 
-function toggleTypeFields(){
-  const type = document.getElementById('ct_type').value;
-  const wrap = document.getElementById('typeFields');
-  wrap.innerHTML = '';
-  if(type === 'n8n'){
+function closeCreateToolModal(){
+  document.getElementById('createToolModal').classList.add('hidden');
+  document.getElementById('createToolModal').classList.remove('flex');
+}
+
+function closeEditToolModal(){
+  document.getElementById('editToolModal').classList.add('hidden');
+  document.getElementById('editToolModal').classList.remove('flex');
+  editingToolId = null;
+}
+
+function renderTypeFields(prefix, toolType, existingConfig = {}){
+  const wrap = document.getElementById(`${prefix}_typeFields`);
+  if(!wrap) return;
+  const safeConfig = existingConfig || {};
+  if(toolType === 'n8n'){
+    const headersJson = safeConfig.headers ? JSON.stringify(safeConfig.headers, null, 2) : '';
+    const payloadJson = safeConfig.default_payload ? JSON.stringify(safeConfig.default_payload, null, 2) : '';
+    const includeContext = safeConfig.include_context !== false;
+    const stripNulls = safeConfig.strip_nulls !== false;
+    const timeoutValue = safeConfig.timeout !== undefined ? safeConfig.timeout : 20;
+    const inquiryField = safeConfig.user_inquiry_field || 'userInquiry';
+
     wrap.innerHTML = `
-    <div>
-      <label class="text-sm text-dark-text">Webhook URL</label>
-      <input id="ct_n8n_url" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
-    </div>
-    <div>
-      <label class="text-sm text-dark-text">Method</label>
-      <input id="ct_n8n_method" value="POST" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+    <div class="space-y-3">
+      <div>
+        <label class="text-sm text-dark-text">Webhook URL</label>
+        <input id="${prefix}_n8n_url" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.webhook_url || ''}" placeholder="https://example.com/webhook/abc" />
+      </div>
+      <div>
+        <label class="text-sm text-dark-text">Method</label>
+        <input id="${prefix}_n8n_method" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.method || 'POST'}" />
+      </div>
+      <div>
+        <label class="text-sm text-dark-text">Request Headers (JSON)</label>
+        <textarea id="${prefix}_n8n_headers" rows="4" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder="{\n  \"Authorization\": \"Bearer ...\"\n}">${headersJson}</textarea>
+        <p class="text-xs text-dark-text-secondary mt-1">Optional object of HTTP headers to include with each webhook call.</p>
+      </div>
+      <div>
+        <label class="text-sm text-dark-text">Default Payload (JSON)</label>
+        <textarea id="${prefix}_n8n_payload" rows="5" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder="{\n  \"executionMode\": \"production\"\n}">${payloadJson}</textarea>
+        <p class="text-xs text-dark-text-secondary mt-1">This JSON object is merged into every webhook call before runtime context and tool parameters.</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label class="text-sm text-dark-text">Timeout (seconds)</label>
+          <input id="${prefix}_n8n_timeout" type="number" min="1" step="1" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${timeoutValue}" />
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">User Inquiry Field Name</label>
+          <input id="${prefix}_n8n_inquiry_field" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${inquiryField}" />
+          <p class="text-xs text-brand-salmon mt-1">The agent must provide this field when invoking the ability. No automatic fallback is performed.</p>
+        </div>
+      </div>
+      <div class="flex flex-col md:flex-row gap-4">
+        <label class="flex items-center gap-2 text-sm text-dark-text">
+          <input id="${prefix}_n8n_include_context" type="checkbox" class="rounded border-dark-border" ${includeContext ? 'checked' : ''} />
+          Include session context (user_id, conversation_id, session_id, agent_slug, client_id)
+        </label>
+        <label class="flex items-center gap-2 text-sm text-dark-text">
+          <input id="${prefix}_n8n_strip_nulls" type="checkbox" class="rounded border-dark-border" ${stripNulls ? 'checked' : ''} />
+          Strip <code>null</code> values before sending
+        </label>
+      </div>
+      <p class="text-xs text-dark-text-secondary">At runtime the tool also accepts a <code>metadata</code> object from the agent to add extra fields to the webhook payload.</p>
     </div>`;
-  } else if(type === 'sidekick'){
+    appendHiddenInstructions(prefix, wrap, safeConfig);
+    return;
+  }
+  if(toolType === 'sidekick'){
     wrap.innerHTML = `
     <div>
       <label class="text-sm text-dark-text">Target Agent Slug</label>
-      <input id="ct_sidekick_agent" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
+      <input id="${prefix}_sidekick_agent" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.agent_slug || ''}" />
     </div>`;
-  } else if(type === 'mcp'){
-    wrap.innerHTML = `<div class="text-sm text-dark-text-secondary">MCP config will be added in a subsequent step.</div>`;
-  } else if(type === 'code'){
-    wrap.innerHTML = `<div class="text-sm text-dark-text-secondary">Select from predefined code abilities in a later iteration.</div>`;
+    appendHiddenInstructions(prefix, wrap, safeConfig);
+    return;
   }
+  if(toolType === 'code'){
+    wrap.innerHTML = `<div class="text-sm text-dark-text-secondary">Provide implementation via managed code abilities.</div>`;
+    appendHiddenInstructions(prefix, wrap, safeConfig);
+    return;
+  }
+  if(toolType !== 'mcp'){
+    wrap.innerHTML = '';
+    appendHiddenInstructions(prefix, wrap, safeConfig);
+    return;
+  }
+
+  const provider = safeConfig.provider || 'generic';
+  const schema = JSON.stringify(safeConfig.parameters || {}, null, 2);
+
+  wrap.innerHTML = `
+    <div>
+      <label class="text-sm text-dark-text">Integration</label>
+      <select id="${prefix}_mcp_provider" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="updateMcpProvider('${prefix}')">
+        <option value="generic" ${provider === 'generic' ? 'selected' : ''}>External MCP server (HTTP/SSE)</option>
+        <option value="perplexity" ${provider === 'perplexity' ? 'selected' : ''}>Perplexity Ask (hosted)</option>
+      </select>
+    </div>
+    <div id="${prefix}_mcp_server_block" class="${provider === 'perplexity' ? 'hidden' : ''}">
+      <label class="text-sm text-dark-text">Server URL</label>
+      <input id="${prefix}_mcp_server_url" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.server_url || ''}" placeholder="https://example.com/mcp" />
+    </div>
+    <div>
+      <label class="text-sm text-dark-text">Auth Token (optional)</label>
+      <input id="${prefix}_mcp_api_key" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.api_key || ''}" placeholder="Bearer ..." />
+    </div>
+    <div>
+      <label class="text-sm text-dark-text">Client API Key Name</label>
+      <input id="${prefix}_mcp_api_key_name" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.api_key_name || 'perplexity_api_key'}" placeholder="perplexity_api_key" />
+      <p class="text-xs text-dark-text-secondary">Lookup order: ability override → agent tools configuration → client API keys (column name above) → optional environment variable.</p>
+    </div>
+    <div>
+      <label class="text-sm text-dark-text">Namespace (optional)</label>
+      <input id="${prefix}_mcp_namespace" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.namespace || ''}" placeholder="tools" />
+    </div>
+    <div id="${prefix}_mcp_toolname_block" class="${provider === 'perplexity' ? '' : 'hidden'}">
+      <label class="text-sm text-dark-text">Remote Tool Name</label>
+      <input id="${prefix}_mcp_tool_name" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.tool_name || 'perplexity_ask'}" placeholder="perplexity_ask" />
+    </div>
+    <div id="${prefix}_mcp_model_block" class="${provider === 'perplexity' ? '' : 'hidden'}">
+      <label class="text-sm text-dark-text">Model (optional)</label>
+      <input id="${prefix}_mcp_model" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.model || 'sonar-pro'}" placeholder="sonar-pro" />
+    </div>
+    <div>
+      <label class="text-sm text-dark-text">Parameters JSON Schema</label>
+      <textarea id="${prefix}_mcp_schema" rows="6" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs">${schema}</textarea>
+      <p class="text-xs text-dark-text-secondary">Provide the JSON schema for tool parameters as described in the LiveKit Agents documentation.</p>
+    </div>`;
+
+  appendHiddenInstructions(prefix, wrap, safeConfig);
+  updateMcpProvider(prefix);
+}
+
+function updateMcpProvider(prefix){
+  const provider = document.getElementById(`${prefix}_mcp_provider`);
+  if(!provider) return;
+  const mode = provider.value;
+  const serverBlock = document.getElementById(`${prefix}_mcp_server_block`);
+  const toolNameBlock = document.getElementById(`${prefix}_mcp_toolname_block`);
+  const modelBlock = document.getElementById(`${prefix}_mcp_model_block`);
+  if(serverBlock){
+    if(mode === 'perplexity') serverBlock.classList.add('hidden'); else serverBlock.classList.remove('hidden');
+  }
+  if(toolNameBlock){
+    if(mode === 'perplexity') toolNameBlock.classList.remove('hidden'); else toolNameBlock.classList.add('hidden');
+  }
+  if(modelBlock){
+    if(mode === 'perplexity') modelBlock.classList.remove('hidden'); else modelBlock.classList.add('hidden');
+  }
+  togglePerplexityClientPanel(prefix, mode === 'perplexity');
+}
+
+function togglePerplexityClientPanel(prefix, enabled) {
+  const panel = document.getElementById(`${prefix}_perplexity_client_panel`);
+  const notice = document.getElementById(`${prefix}_perplexity_client_notice`);
+  const inlineWrapper = document.getElementById(`${prefix}_perplexity_client_selector`);
+  const inlineSelect = document.getElementById(`${prefix}_perplexity_client_select`);
+  if (!panel) { return; }
+  if (prefix === 'ct') {
+    panel.classList.add('hidden');
+    if (inlineWrapper) { inlineWrapper.classList.add('hidden'); }
+    return;
+  }
+  const scopeEl = document.getElementById(`${prefix}_scope`);
+  const isGlobal = scopeEl ? scopeEl.value === 'global' : true;
+  if (!enabled || !isGlobal) {
+    panel.classList.add('hidden');
+    if (notice) { notice.classList.add('hidden'); }
+    if (inlineWrapper) { inlineWrapper.classList.add('hidden'); }
+    if (inlineSelect) { inlineSelect.value = ''; inlineSelect.disabled = true; }
+    const resetInput = document.getElementById(`${prefix}_mcp_client_api_key`);
+    if (resetInput) { resetInput.value = ''; resetInput.disabled = true; }
+    return;
+  }
+  panel.classList.remove('hidden');
+  const clientFilter = document.getElementById('clientFilter');
+  let clientId = clientFilter ? clientFilter.value : '';
+  if (!clientId && inlineSelect) {
+    if (inlineWrapper) { inlineWrapper.classList.remove('hidden'); }
+    inlineSelect.disabled = false;
+    if (!inlineSelect.dataset.bound) {
+      inlineSelect.addEventListener('change', () => togglePerplexityClientPanel(prefix, true));
+      inlineSelect.dataset.bound = '1';
+    }
+    clientId = inlineSelect.value;
+  } else if (inlineWrapper) {
+    inlineWrapper.classList.add('hidden');
+  }
+  const input = document.getElementById(`${prefix}_mcp_client_api_key`);
+  if (!input) { return; }
+  if (clientId) {
+    input.disabled = false;
+    input.placeholder = 'pplx-...';
+    if (notice) { notice.classList.add('hidden'); }
+    loadPerplexityClientKey(prefix);
+  } else {
+    input.disabled = true;
+    input.value = '';
+    input.placeholder = 'Select a client to manage this key';
+    if (notice) { notice.classList.remove('hidden'); }
+  }
+}
+
+async function loadPerplexityClientKey(prefix) {
+  const input = document.getElementById(`${prefix}_mcp_client_api_key`);
+  if (!input) { return; }
+  const clientSelect = document.getElementById('clientFilter');
+  const inlineSelect = document.getElementById(`${prefix}_perplexity_client_select`);
+  const clientId = (clientSelect && clientSelect.value) || (inlineSelect ? inlineSelect.value : '');
+  if (!clientId) { return; }
+  try {
+    const data = await fetchJSON(`${ADMIN_CLIENTS_BASE}/${clientId}/perplexity-key`);
+    input.value = data.api_key || '';
+  } catch (err) {
+    console.error('Failed to load Perplexity key', err);
+  }
+}
+
+async function savePerplexityClientKey(clientId, value) {
+  await fetch(`${ADMIN_CLIENTS_BASE}/${clientId}/perplexity-key`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ api_key: value })
+  });
+}
+
+function handleScopeChange(prefix){
+  const scopeSelect = document.getElementById(`${prefix}_scope`);
+  const group = document.getElementById(`${prefix}_client_group`);
+  if(!scopeSelect || !group) return;
+  const scope = scopeSelect.value;
+  if(scope === 'client'){
+    group.classList.remove('hidden');
+    const clientSelect = document.getElementById(`${prefix}_client_id`);
+    const filterSelect = document.getElementById('clientFilter');
+    if(clientSelect){
+      const defaultClient = clientSelect.dataset.default || '';
+      const selected = filterSelect && filterSelect.value ? filterSelect.value : defaultClient;
+      if(selected){ clientSelect.value = selected; }
+    }
+  } else {
+    group.classList.add('hidden');
+  }
+}
+
+function onClientFilterChange(){
+  refreshTools();
+}
+
+function escapeHtml(value){
+  if(value === undefined || value === null){
+    return '';
+  }
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function applyHiddenInstructions(prefix, config){
+  const instructionsEl = document.getElementById(`${prefix}_system_prompt_instructions`);
+  if(!instructionsEl){
+    return config;
+  }
+  const value = instructionsEl.value.trim();
+  if(value){
+    config.system_prompt_instructions = value;
+  } else {
+    delete config.system_prompt_instructions;
+  }
+  return config;
+}
+
+function appendHiddenInstructions(prefix, wrap, safeConfig){
+  if(!wrap) return;
+  const rawValue = (safeConfig && safeConfig.system_prompt_instructions) || '';
+  const value = escapeHtml(rawValue);
+  const container = document.createElement('div');
+  container.className = 'space-y-2 mt-4';
+  container.innerHTML = `
+    <label class="text-sm text-dark-text">Hidden System Prompt Instructions</label>
+    <textarea id="${prefix}_system_prompt_instructions" rows="5" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" placeholder="Explain exactly how the model should invoke this ability.">${value}</textarea>
+    <p class="text-xs text-dark-text-secondary">Appended to the agent's system prompt automatically whenever this ability is active. Operators never see this block in the UI.</p>
+  `;
+  wrap.appendChild(container);
+}
+
+function buildConfigFromForm(prefix, type){
+  if(type === 'n8n'){
+    const webhookUrl = document.getElementById(`${prefix}_n8n_url`).value.trim();
+    if(!webhookUrl){
+      throw new Error('Webhook URL is required for n8n abilities.');
+    }
+
+    const headersField = document.getElementById(`${prefix}_n8n_headers`);
+    const payloadField = document.getElementById(`${prefix}_n8n_payload`);
+    let headers = {};
+    if(headersField && headersField.value.trim()){
+      try {
+        headers = JSON.parse(headersField.value);
+      } catch(err){
+        throw new Error('Headers JSON is invalid.');
+      }
+      if(typeof headers !== 'object' || Array.isArray(headers)){
+        throw new Error('Headers JSON must be an object.');
+      }
+    }
+
+    let defaultPayload = {};
+    if(payloadField && payloadField.value.trim()){
+      try {
+        defaultPayload = JSON.parse(payloadField.value);
+      } catch(err){
+        throw new Error('Default payload JSON is invalid.');
+      }
+      if(typeof defaultPayload !== 'object' || Array.isArray(defaultPayload)){
+        throw new Error('Default payload JSON must be an object.');
+      }
+    }
+
+    const timeoutInput = document.getElementById(`${prefix}_n8n_timeout`);
+    const timeoutSeconds = timeoutInput ? parseFloat(timeoutInput.value) || 20 : 20;
+    const inquiryField = document.getElementById(`${prefix}_n8n_inquiry_field`).value.trim() || 'userInquiry';
+    const includeContextEl = document.getElementById(`${prefix}_n8n_include_context`);
+    const stripNullsEl = document.getElementById(`${prefix}_n8n_strip_nulls`);
+
+    const cfg = {
+      webhook_url: webhookUrl,
+      method: document.getElementById(`${prefix}_n8n_method`).value.trim() || 'POST',
+      headers,
+      default_payload: defaultPayload,
+      timeout: timeoutSeconds,
+      user_inquiry_field: inquiryField,
+      include_context: includeContextEl ? includeContextEl.checked : true,
+      strip_nulls: stripNullsEl ? stripNullsEl.checked : true,
+    };
+    return applyHiddenInstructions(prefix, cfg);
+  }
+  if(type === 'sidekick'){
+    const cfg = {
+      agent_slug: document.getElementById(`${prefix}_sidekick_agent`).value.trim(),
+    };
+    return applyHiddenInstructions(prefix, cfg);
+  }
+  if(type === 'mcp'){
+    const providerSelect = document.getElementById(`${prefix}_mcp_provider`);
+    const provider = providerSelect ? providerSelect.value : 'generic';
+    const serverUrlInput = document.getElementById(`${prefix}_mcp_server_url`);
+    const serverUrl = serverUrlInput ? serverUrlInput.value.trim() : '';
+    if(provider !== 'perplexity' && !serverUrl){
+      throw new Error('Server URL is required for MCP abilities.');
+    }
+    const apiKey = document.getElementById(`${prefix}_mcp_api_key`).value.trim();
+    const apiKeyName = document.getElementById(`${prefix}_mcp_api_key_name`).value.trim();
+    const namespace = document.getElementById(`${prefix}_mcp_namespace`).value.trim();
+    const toolNameInput = document.getElementById(`${prefix}_mcp_tool_name`);
+    const toolName = toolNameInput ? toolNameInput.value.trim() : '';
+    const modelInput = document.getElementById(`${prefix}_mcp_model`);
+    const model = modelInput ? modelInput.value.trim() : '';
+    const schemaText = document.getElementById(`${prefix}_mcp_schema`).value.trim();
+    let parameters = {};
+    if(schemaText){
+      try {
+        parameters = JSON.parse(schemaText);
+      } catch (err) {
+        throw new Error('Parameters JSON Schema is invalid JSON.');
+      }
+    }
+    const cfg = { provider, parameters };
+    if(serverUrl) cfg.server_url = serverUrl;
+    if(apiKey) cfg.api_key = apiKey;
+    if(apiKeyName) cfg.api_key_name = apiKeyName;
+    if(namespace) cfg.namespace = namespace;
+    if(toolName) cfg.tool_name = toolName;
+    if(model) cfg.model = model;
+    Object.keys(cfg).forEach(key => { if(cfg[key] === undefined || cfg[key] === '') delete cfg[key]; });
+    return applyHiddenInstructions(prefix, cfg);
+  }
+  return applyHiddenInstructions(prefix, {});
 }
 
 async function refreshTools(){
   const search = document.getElementById('searchInput').value.trim();
   const type = document.getElementById('typeFilter').value;
   const scope = document.getElementById('scopeFilter').value;
+  const clientSelect = document.getElementById('clientFilter');
+  const clientId = clientSelect ? clientSelect.value : '';
+  const grid = document.getElementById('toolsGrid');
+  grid.innerHTML = '';
+
+  if(scope === 'client' && !clientId){
+    grid.innerHTML = '<div class="col-span-full text-sm text-dark-text-secondary">Select a client to view client-scoped abilities.</div>';
+    return;
+  }
+
   const qs = new URLSearchParams();
   if(search) qs.set('search', search);
   if(type) qs.set('type', type);
   if(scope) qs.set('scope', scope);
-  const data = await fetchJSON(`/api/v1/tools?${qs.toString()}`);
-  const grid = document.getElementById('toolsGrid');
-  grid.innerHTML = '';
+  if(clientId) qs.set('client_id', clientId);
+
+  let data = [];
+  try{
+    const query = qs.toString();
+    const url = `${ADMIN_TOOLS_BASE}${query ? `?${query}` : ''}`;
+    data = await fetchJSON(url);
+  }catch(err){
+    grid.innerHTML = `<div class="col-span-full text-sm text-brand-salmon">Failed to load abilities: ${err.message}</div>`;
+    return;
+  }
+
+  if(!Array.isArray(data) || data.length === 0){
+    grid.innerHTML = '<div class="col-span-full text-sm text-dark-text-secondary">No abilities found for the current filters.</div>';
+    return;
+  }
+
+  Object.keys(toolsCache).forEach(k => delete toolsCache[k]);
+
   for(const t of data){
+    toolsCache[t.id] = t;
     const card = document.createElement('div');
     card.className = 'bg-dark-surface border border-dark-border rounded p-4 flex gap-3 items-start';
     const icon = document.createElement('img');
@@ -140,8 +650,14 @@ async function refreshTools(){
     body.className = 'flex-1';
     body.innerHTML = `<div class="flex items-center gap-2"><span class="text-dark-text font-semibold">${t.name}</span><span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.type}</span><span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.scope}</span></div><div class="text-sm text-dark-text-secondary mt-1">${t.description||''}</div>`;
     const actions = document.createElement('div');
-    actions.innerHTML = `<button class="text-sm text-brand-teal" onclick="deleteTool('${t.id}', '${t.scope}')">Remove</button>`;
-    card.appendChild(icon); card.appendChild(body); card.appendChild(actions);
+    actions.innerHTML = `
+      <div class="flex flex-col gap-2">
+        <button class="text-sm text-brand-teal" onclick="openEditToolModal('${t.id}')">Edit</button>
+        <button class="text-sm text-brand-salmon" onclick="deleteTool('${t.id}', '${t.scope}', '${t.client_id || ''}')">Remove</button>
+      </div>`;
+    card.appendChild(icon);
+    card.appendChild(body);
+    card.appendChild(actions);
     grid.appendChild(card);
   }
 }
@@ -153,26 +669,141 @@ async function createTool(){
   const type = document.getElementById('ct_type').value;
   const scope = document.getElementById('ct_scope').value;
   const icon_url = document.getElementById('ct_icon').value.trim();
-  const config = {};
-  if(type === 'n8n'){
-    config.webhook_url = document.getElementById('ct_n8n_url').value.trim();
-    config.method = document.getElementById('ct_n8n_method').value.trim();
-  } else if(type === 'sidekick'){
-    config.agent_slug = document.getElementById('ct_sidekick_agent').value.trim();
+  const clientSelect = document.getElementById('ct_client_id');
+  const clientId = clientSelect ? clientSelect.value : '';
+  let config = {};
+  try{
+    config = buildConfigFromForm('ct', type);
+  }catch(err){
+    alert(err.message);
+    return;
+  }
+  if(scope === 'client' && !clientId){
+    alert('Select a client for client-scoped abilities.');
+    return;
   }
   const body = { name, slug, description, type, scope, icon_url, config, enabled: true };
-  const r = await fetch('/api/v1/tools', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if(r.ok){ closeCreateToolModal(); await refreshTools(); }
+  if(scope === 'client'){
+    body.client_id = clientId;
+  }
+  const response = await fetch(ADMIN_TOOLS_BASE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body)
+  });
+  if(response.ok){
+    closeCreateToolModal();
+    await refreshTools();
+  } else {
+    const errText = await response.text();
+    alert(errText || 'Failed to create ability');
+  }
 }
 
-async function deleteTool(id, scope){
-  const qs = scope === 'client' ? `?client_id=` : '';
-  const r = await fetch(`/api/v1/tools/${id}${qs}`, { method: 'DELETE' });
-  if(r.ok){ await refreshTools(); }
+async function deleteTool(id, scope, clientId){
+  const qs = scope === 'client' && clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
+  const response = await fetch(`${ADMIN_TOOLS_BASE}/${id}${qs}`, { method: 'DELETE', credentials: 'include' });
+  if(response.ok){
+    await refreshTools();
+  } else {
+    const errText = await response.text();
+    alert(errText || 'Failed to delete ability');
+  }
 }
 
-document.addEventListener('DOMContentLoaded', refreshTools);
+function openEditToolModal(id){
+  const tool = toolsCache[id];
+  if(!tool){
+    alert('Unable to load ability details.');
+    return;
+  }
+  editingToolId = id;
+  document.getElementById('et_name').value = tool.name || '';
+  document.getElementById('et_slug').value = tool.slug || '';
+  document.getElementById('et_desc').value = tool.description || '';
+  document.getElementById('et_icon').value = tool.icon_url || '';
+  document.getElementById('et_type').value = tool.type || 'mcp';
+  document.getElementById('et_scope').value = tool.scope || 'client';
+  document.getElementById('et_enabled').checked = tool.enabled !== false;
+  const clientSelect = document.getElementById('et_client_id');
+  if(clientSelect){ clientSelect.value = tool.client_id || ''; }
+  handleScopeChange('et');
+  renderTypeFields('et', tool.type || 'mcp', tool.config || {});
+  const providerSelect = document.getElementById('et_mcp_provider');
+  if(providerSelect){ togglePerplexityClientPanel('et', providerSelect.value === 'perplexity'); }
+  const inlineClientSelect = document.getElementById('et_perplexity_client_select');
+  const filterSelect = document.getElementById('clientFilter');
+  if(inlineClientSelect && filterSelect && filterSelect.value){ inlineClientSelect.value = filterSelect.value; loadPerplexityClientKey('et'); }
+  document.getElementById('editToolModal').classList.remove('hidden');
+  document.getElementById('editToolModal').classList.add('flex');
+}
+
+async function updateTool(){
+  if(!editingToolId){
+    alert('No ability selected for update.');
+    return;
+  }
+  const tool = toolsCache[editingToolId];
+  const name = document.getElementById('et_name').value.trim();
+  const description = document.getElementById('et_desc').value.trim();
+  const icon_url = document.getElementById('et_icon').value.trim();
+  const enabled = document.getElementById('et_enabled').checked;
+  let config = {};
+  try{
+    config = buildConfigFromForm('et', tool.type);
+  }catch(err){
+    alert(err.message);
+    return;
+  }
+  const payload = { name, description, icon_url, config, enabled };
+  const clientFilter = document.getElementById('clientFilter');
+  const inlineClientSelect = document.getElementById('et_perplexity_client_select');
+  const selectedClientId = (clientFilter && clientFilter.value) ? clientFilter.value : (inlineClientSelect ? inlineClientSelect.value : '');
+  const clientId = tool.scope === 'client' ? (tool.client_id || selectedClientId || '') : selectedClientId || '';
+  const providerEl = document.getElementById('et_mcp_provider');
+  const provider = providerEl ? providerEl.value : (tool.config && tool.config.provider ? tool.config.provider : 'generic');
+  if(tool.type === 'mcp' && provider === 'perplexity' && clientId){
+    const keyInput = document.getElementById('et_mcp_client_api_key');
+    if(keyInput){
+      try {
+        await savePerplexityClientKey(clientId, keyInput.value.trim());
+      } catch (err) {
+        console.error('Failed to store Perplexity API key', err);
+        alert('Saved ability changes but failed to persist the Perplexity API key.');
+      }
+    }
+  } else if (tool.type === 'mcp' && provider === 'perplexity' && !clientId) {
+    alert('Ability updated. Reminder: select a client to store the Perplexity API key.');
+  }
+  const clientIdForPatch = tool.scope === 'client' ? (tool.client_id || selectedClientId || '') : '';
+  const qs = clientIdForPatch ? `?client_id=${encodeURIComponent(clientIdForPatch)}` : '';
+  const response = await fetch(`${ADMIN_TOOLS_BASE}/${editingToolId}${qs}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload)
+  });
+  if(response.ok){
+    closeEditToolModal();
+    await refreshTools();
+  } else {
+    const errText = await response.text();
+    alert(errText || 'Failed to update ability');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const clientSelect = document.getElementById('clientFilter');
+  if(clientSelect){
+    const defaultClient = clientSelect.dataset.default;
+    if(defaultClient && !clientSelect.value){
+      clientSelect.value = defaultClient;
+    }
+  }
+  handleScopeChange('ct');
+  renderTypeFields('ct', document.getElementById('ct_type').value);
+  refreshTools();
+});
 </script>
 {% endblock %}
-
-

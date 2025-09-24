@@ -124,6 +124,7 @@
                         <select id="config_llm_provider" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text" onchange="updateLLMModels()">
                             <option value="openai" {% if latest_config.llm_provider == 'openai' %}selected{% endif %}>OpenAI</option>
                             <option value="groq" {% if latest_config.llm_provider == 'groq' %}selected{% endif %}>Groq</option>
+                            <option value="cerebras" {% if latest_config.llm_provider == 'cerebras' %}selected{% endif %}>Cerebras</option>
                             <option value="deepinfra" {% if latest_config.llm_provider == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
                             <option value="replicate" {% if latest_config.llm_provider == 'replicate' %}selected{% endif %}>Replicate</option>
                         </select>
@@ -148,6 +149,18 @@
                                 <option value="llama-3.1-8b-instant" {% if latest_config.llm_model == 'llama-3.1-8b-instant' %}selected{% endif %}>Llama 3.1 8B (Fastest)</option>
                                 <option value="llama3-8b-8192" {% if latest_config.llm_model == 'llama3-8b-8192' %}selected{% endif %}>Llama 3 8B (Fast)</option>
                                 <option value="gemma2-9b-it" {% if latest_config.llm_model == 'gemma2-9b-it' %}selected{% endif %}>Gemma 2 9B (Efficient)</option>
+                            </optgroup>
+                            <!-- Cerebras Models -->
+                            <optgroup label="Cerebras" id="cerebras_models" {% if latest_config.llm_provider != 'cerebras' %}style="display:none"{% endif %}>
+                                <option value="llama3.1-8b" {% if latest_config.llm_model == 'llama3.1-8b' %}selected{% endif %}>Llama 3.1 8B (Cerebras)</option>
+                                <option value="llama-3.3-70b" {% if latest_config.llm_model == 'llama-3.3-70b' %}selected{% endif %}>Llama 3.3 70B (Cerebras)</option>
+                                <option value="llama-4-scout-17b-16e-instruct" {% if latest_config.llm_model == 'llama-4-scout-17b-16e-instruct' %}selected{% endif %}>Llama 4 Scout 17B Instruct (Cerebras)</option>
+                                <option value="llama-4-maverick-17b-128e-instruct" {% if latest_config.llm_model == 'llama-4-maverick-17b-128e-instruct' %}selected{% endif %}>Llama 4 Maverick 17B Instruct (Preview)</option>
+                                <option value="qwen-3-32b" {% if latest_config.llm_model == 'qwen-3-32b' %}selected{% endif %}>Qwen 3 32B (Cerebras)</option>
+                                <option value="qwen-3-235b-a22b-instruct-2507" {% if latest_config.llm_model == 'qwen-3-235b-a22b-instruct-2507' %}selected{% endif %}>Qwen 3 235B Instruct (Preview)</option>
+                                <option value="qwen-3-235b-a22b-thinking-2507" {% if latest_config.llm_model == 'qwen-3-235b-a22b-thinking-2507' %}selected{% endif %}>Qwen 3 235B Thinking (Preview)</option>
+                                <option value="qwen-3-coder-480b" {% if latest_config.llm_model == 'qwen-3-coder-480b' %}selected{% endif %}>Qwen 3 Coder 480B (Preview)</option>
+                                <option value="gpt-oss-120b" {% if latest_config.llm_model == 'gpt-oss-120b' %}selected{% endif %}>GPT-OSS 120B (Preview)</option>
                             </optgroup>
                         </select>
                     </div>
@@ -238,8 +251,8 @@
                     <div id="config_cartesia_model_settings" {% if latest_config.tts_provider != 'cartesia' %}style="display:none"{% endif %}>
                         <label class="block text-sm font-medium text-dark-text mb-2">TTS Model</label>
                         <select id="config_cartesia_model" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
-                            <option value="sonic-english" {% if (latest_config.tts_model or agent.voice_settings.model) == 'sonic-english' %}selected{% endif %}>sonic-english</option>
-                            <option value="sonic-2" {% if (latest_config.tts_model or agent.voice_settings.model) == 'sonic-2' %}selected{% endif %}>sonic-2</option>
+                            <option value="sonic-english" {% if (agent.voice_settings.model or latest_config.tts_model) == 'sonic-english' %}selected{% endif %}>sonic-english</option>
+                            <option value="sonic-2" {% if (agent.voice_settings.model or latest_config.tts_model) == 'sonic-2' %}selected{% endif %}>sonic-2</option>
                         </select>
                         <p class="text-xs text-dark-text-secondary mt-2">Cartesia requires an explicit model. Choose one to enable voice.</p>
                     </div>
@@ -316,6 +329,13 @@ function resetSaveButtonState() {
     saveText.textContent = 'Save Changes';
 }
 
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return null;
+}
+
 async function saveAgent() {
     console.log('saveAgent() function called');
     
@@ -344,15 +364,22 @@ async function saveAgent() {
     console.log('Loading state set successfully');
     
     // Parse JSON fields
-    let toolsConfig;
+    let toolsConfig = {};
     const providerConfig = {}; // No longer needed, set to empty object
-    
-    try {
-        toolsConfig = JSON.parse(document.getElementById('toolsConfig').value || '{}');
-    } catch (e) {
-        showNotification('error', 'Invalid JSON in Tools Configuration');
-        resetSaveButtonState();
-        return;
+
+    const toolsConfigInput = document.getElementById('toolsConfig');
+    if (toolsConfigInput) {
+        const rawConfig = toolsConfigInput.value?.trim();
+        if (rawConfig) {
+            try {
+                toolsConfig = JSON.parse(rawConfig);
+            } catch (e) {
+                console.error('Failed to parse toolsConfig JSON:', e);
+                showNotification('error', 'Invalid JSON in Tools Configuration');
+                resetSaveButtonState();
+                return;
+            }
+        }
     }
     
     // Extract provider information from current settings
@@ -444,14 +471,6 @@ async function saveAgent() {
     
     console.log('About to send fetch request to:', `/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/update`);
     
-    // Get admin token from cookies
-    function getCookie(name) {
-        const value = `; ${document.cookie}`;
-        const parts = value.split(`; ${name}=`);
-        if (parts.length === 2) return parts.pop().split(';').shift();
-        return null;
-    }
-    
     const adminToken = getCookie('admin_token');
     console.log('Admin token found:', adminToken ? 'yes' : 'no');
     
@@ -485,7 +504,20 @@ async function saveAgent() {
         }
         
         if (response.ok) {
-            showNotification('success', 'Agent configuration saved successfully!');
+            let abilitiesUpdated = false;
+            try {
+                await persistAgentTools(assignedToolIds, headers);
+                abilitiesUpdated = true;
+            } catch (toolsError) {
+                console.error('Failed to update abilities during saveAgent:', toolsError);
+                showNotification('warning', 'Agent saved, but updating abilities failed: ' + toolsError.message);
+            }
+
+            if (abilitiesUpdated) {
+                showNotification('success', 'Agent configuration and abilities saved successfully!');
+            } else {
+                showNotification('success', 'Agent configuration saved successfully!');
+            }
             resetSaveButtonState();
         } else {
             // Check for API key validation errors
@@ -504,12 +536,62 @@ async function saveAgent() {
     }
 }
 
+async function persistAgentTools(toolIds, baseHeaders) {
+    const url = `${ADMIN_AGENT_TOOLS_API}/{{ agent.id if agent.id else '' }}/tools?client_id={{ agent.client_id }}`;
+    const headers = { ...(baseHeaders || {}) };
+    headers['Content-Type'] = 'application/json';
+    if (!headers['X-Requested-With']) {
+        headers['X-Requested-With'] = 'XMLHttpRequest';
+    }
+    if (!headers['Authorization']) {
+        const adminToken = getCookie('admin_token');
+        if (adminToken) {
+            headers['Authorization'] = `Bearer ${adminToken}`;
+        }
+    }
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ tool_ids: toolIds })
+    });
+
+    if (!response.ok) {
+        let errorMessage = response.statusText || 'Failed to update abilities';
+        try {
+            const data = await response.json();
+            errorMessage = data?.error || data?.detail || errorMessage;
+        } catch (_) {
+            try {
+                const text = await response.text();
+                if (text) errorMessage = text;
+            } catch (_) {
+                // ignore secondary errors when reading body
+            }
+        }
+        throw new Error(errorMessage);
+    }
+}
+
 // Abilities selection logic
-async function fetchJSON(url){ const r = await fetch(url); if(!r.ok) throw new Error('request failed'); return r.json(); }
+const ADMIN_TOOLS_API = '/admin/api/tools';
+const ADMIN_AGENT_TOOLS_API = '/admin/api/agents';
+
+async function fetchJSON(url, options){
+    const response = await fetch(url, Object.assign({ credentials: 'include' }, options));
+    if(!response.ok) throw new Error('request failed');
+    const contentType = response.headers.get('content-type') || '';
+    if(contentType.includes('application/json')){
+        return response.json();
+    }
+    return null;
+}
 
 async function loadAssignedTools(){
     try{
-        const data = await fetchJSON(`/api/v1/agents/{{ agent.client_id }}/tools?agent_id={{ agent.id if agent.id else '' }}&client_id={{ agent.client_id }}`);
+        const url = `${ADMIN_AGENT_TOOLS_API}/{{ agent.id if agent.id else '' }}/tools?client_id={{ agent.client_id }}`;
+        const data = await fetchJSON(url);
         const grid = document.getElementById('assignedToolsGrid');
         grid.innerHTML = '';
         for(const t of data){
@@ -524,8 +606,10 @@ async function loadAssignedTools(){
 
 async function loadAvailableTools(){
     const search = document.getElementById('toolSearch').value.trim();
-    const qs = new URLSearchParams(); if(search) qs.set('search', search);
-    const data = await fetchJSON(`/api/v1/tools?${qs.toString()}`);
+    const qs = new URLSearchParams();
+    qs.set('client_id', '{{ agent.client_id }}');
+    if(search) qs.set('search', search);
+    const data = await fetchJSON(`${ADMIN_TOOLS_API}?${qs.toString()}`);
     const assignedIds = new Set(Array.from(document.querySelectorAll('.tool-card.assigned')).map(el => el.dataset.id));
     const grid = document.getElementById('availableToolsGrid');
     grid.innerHTML = '';
@@ -553,29 +637,48 @@ function unassignTool(id, btn){
 
 async function saveAssignedTools(){
     const ids = Array.from(document.querySelectorAll('.tool-card.assigned')).map(el => el.dataset.id);
-    const body = { tool_ids: ids };
-    await fetch(`/api/v1/agents/{{ agent.id if agent.id else '' }}/tools?client_id={{ agent.client_id }}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-    showNotification('success', 'Abilities saved for this sidekick.');
+    try {
+        await persistAgentTools(ids);
+        showNotification('success', 'Abilities saved for this sidekick.');
+    } catch (error) {
+        console.error('Error saving abilities:', error);
+        showNotification('error', 'Failed to save abilities: ' + error.message);
+    }
 }
 
-document.addEventListener('DOMContentLoaded', async () => { await loadAssignedTools(); await loadAvailableTools(); });
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadAssignedTools();
+    await loadAvailableTools();
+});
 
 function updateLLMModels() {
     const provider = document.getElementById('config_llm_provider').value;
     const modelSelect = document.getElementById('config_llm_model');
-    
-    // Hide all optgroups
-    document.getElementById('openai_models').style.display = 'none';
-    document.getElementById('groq_models').style.display = 'none';
-    
-    // Show the selected provider's models
-    if (provider === 'openai') {
-        document.getElementById('openai_models').style.display = '';
-        modelSelect.value = 'gpt-4o';
-    } else if (provider === 'groq') {
-        document.getElementById('groq_models').style.display = '';
-        modelSelect.value = 'llama-3.1-8b-instant';
-    }
+
+    const groups = [
+        { provider: 'openai', elementId: 'openai_models', defaultValue: 'gpt-4o' },
+        { provider: 'groq', elementId: 'groq_models', defaultValue: 'llama-3.1-8b-instant' },
+        { provider: 'cerebras', elementId: 'cerebras_models', defaultValue: 'llama3.1-8b' },
+    ];
+
+    groups.forEach(group => {
+        const groupEl = document.getElementById(group.elementId);
+        if (!groupEl) return;
+        const isTarget = provider === group.provider;
+        groupEl.style.display = isTarget ? '' : 'none';
+
+        if (isTarget) {
+            const options = Array.from(groupEl.querySelectorAll('option'));
+            const currentValue = modelSelect.value;
+            const hasCurrent = options.some(opt => opt.value === currentValue);
+            if (!hasCurrent) {
+                const defaultOption = options.find(opt => opt.value === group.defaultValue) || options[0];
+                if (defaultOption) {
+                    modelSelect.value = defaultOption.value;
+                }
+            }
+        }
+    });
 }
 
 function updateSTTModels() {
@@ -649,7 +752,8 @@ function applyConfiguration() {
         providerConfig.tts.model = 'eleven_multilingual_v2';
     } else if (ttsProvider === 'cartesia') {
         providerConfig.tts.cartesia_voice_id = document.getElementById('config_cartesia_voice_id').value;
-        providerConfig.tts.model = 'sonic-english';
+        const selectedCartesiaModel = document.getElementById('config_cartesia_model');
+        providerConfig.tts.model = selectedCartesiaModel ? selectedCartesiaModel.value || 'sonic-english' : 'sonic-english';
     }
     
     // Update main form fields

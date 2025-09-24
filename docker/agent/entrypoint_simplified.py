@@ -9,6 +9,7 @@ import os
 import json
 import logging
 import sys
+import types
 from typing import Dict, Any
 
 # Configure logging first
@@ -195,11 +196,130 @@ async def agent_job_handler(ctx: JobContext):
         def on_agent_started():
             logger.info("🔊 Agent started speaking")
         
-        # Start the session
+        # Start the session with RoomIO primed so audio frames forward immediately
+        from livekit.agents.voice import room_io
+
+        input_options = room_io.RoomInputOptions(
+            close_on_disconnect=False,
+        )
+
+        output_options = room_io.RoomOutputOptions(
+            audio_enabled=True,
+            transcription_enabled=True,
+            audio_track_name="agent_audio",
+        )
+
         logger.info("Starting agent session...")
+        logger.info("Priming RoomIO audio output before session start...")
+        try:
+            session_room_io = room_io.RoomIO(
+                agent_session=session,
+                room=ctx.room,
+                input_options=input_options,
+                output_options=output_options,
+            )
+            await session_room_io.start()
+            logger.info(
+                "✅ RoomIO primed | audio_attached=%s transcription_attached=%s",
+                bool(session.output.audio),
+                bool(session.output.transcription),
+            )
+        except Exception as room_io_err:
+            logger.error(
+                f"❌ Failed to initialize RoomIO before session.start: {room_io_err}",
+                exc_info=True,
+            )
+            raise
+
         await session.start(room=ctx.room, agent=agent)
         logger.info("✅ Agent session started successfully")
-        
+
+        # Instrument audio sink to confirm frames reach LiveKit
+        try:
+            audio_output = session.output.audio
+            if not audio_output and hasattr(session, "_room_io"):
+                audio_output = getattr(session._room_io, "audio_output", None)
+                if audio_output:
+                    session.output.audio = audio_output
+                    logger.info("🔧 Attached RoomIO audio output onto session.output.audio")
+
+            room_io_audio = (
+                getattr(session._room_io, "audio_output", None)
+                if hasattr(session, "_room_io")
+                else None
+            )
+            logger.info(
+                "🔍 RoomIO diagnostics post-start | has_output=%s has_room_io=%s room_io_audio=%s",
+                bool(session.output.audio),
+                hasattr(session, "_room_io"),
+                bool(room_io_audio),
+            )
+
+            if audio_output:
+                chain_labels = []
+                link = audio_output
+                while link is not None and link not in chain_labels:
+                    chain_labels.append(type(link).__name__)
+                    link = getattr(link, "next_in_chain", None)
+                logger.info("🔍 RoomIO audio chain: %s", " -> ".join(chain_labels) or "(empty)")
+
+                current = audio_output
+                visited = set()
+                while current and current not in visited:
+                    visited.add(current)
+                    try:
+                        original_capture = current.capture_frame
+                    except AttributeError:
+                        original_capture = None
+
+                    if original_capture and not getattr(current, "_diag_capture_wrapped", False):
+
+                        async def capture_with_log(self, frame, *args, **kwargs):
+                            try:
+                                import audioop
+
+                                rms = audioop.rms(frame.data, 2) if hasattr(frame, "data") else None
+                                logger.info(
+                                    "🎧 capture_frame label=%s sr=%s samples=%s duration_ms=%.2f rms=%s",
+                                    getattr(self, "label", None),
+                                    getattr(frame, "sample_rate", None),
+                                    getattr(frame, "samples_per_channel", None),
+                                    (getattr(frame, "duration", None) or 0) * 1000.0,
+                                    rms,
+                                )
+                            except Exception:
+                                logger.info(
+                                    "🎧 capture_frame label=%s (frame stats unavailable)",
+                                    getattr(self, "label", None),
+                                )
+                            return await original_capture(frame, *args, **kwargs)
+
+                        current.capture_frame = types.MethodType(capture_with_log, current)
+                        current._diag_capture_wrapped = True
+
+                    try:
+                        original_flush = current.flush
+                    except AttributeError:
+                        original_flush = None
+
+                    if original_flush and not getattr(current, "_diag_flush_wrapped", False):
+
+                        def flush_with_log(self, *args, **kwargs):
+                            logger.info(
+                                "🎧 audio_output.flush label=%s", getattr(self, "label", None)
+                            )
+                            return original_flush(*args, **kwargs)
+
+                        current.flush = types.MethodType(flush_with_log, current)
+                        current._diag_flush_wrapped = True
+
+                    current = getattr(current, "next_in_chain", None)
+        except Exception as audio_patch_err:
+            logger.warning(
+                f"Audio output diagnostics attachment failed: {audio_patch_err}",
+                exc_info=True,
+            )
+
         # Check for participants
         if hasattr(ctx.room, 'remote_participants'):
             participant_count = len(ctx.room.remote_participants)

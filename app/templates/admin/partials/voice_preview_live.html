@@ -80,6 +80,11 @@
             
             <!-- Controls -->
             <div class="border-t border-dark-border pt-4">
+                <div id="audioPermissionBanner" class="hidden mb-3 p-3 rounded border border-brand-teal/40 bg-brand-teal/10 text-sm text-dark-text">
+                    <p class="font-medium mb-1">Audio playback blocked</p>
+                    <p class="text-xs text-dark-text-secondary">Click below to enable audio so you can hear the assistant.</p>
+                    <button id="enableAudioBtn" class="mt-3 btn-primary px-3 py-2 rounded text-xs font-medium">Enable Audio</button>
+                </div>
                 <div class="flex justify-center gap-3">
                     <!-- Mute Button -->
                     <button id="muteBtn" 
@@ -318,6 +323,14 @@ function stopTranscriptStream() {
     window.LIVEKIT_URL = '{{ server_url }}';
     window.LIVEKIT_TOKEN = '{{ user_token }}';
     window.ROOM_NAME = '{{ room_name }}';
+    let audioUnlocked = false;
+    const audioBanner = document.getElementById('audioPermissionBanner');
+    const enableAudioBtn = document.getElementById('enableAudioBtn');
+    let connectionMonitor = null;
+    let monitorFailures = 0;
+    let reconnectLock = false;
+    let reconnectAttempts = 0;
+    let manualDisconnect = false;
 
     // Update UI status
     function updateStatus(state, message) {
@@ -376,25 +389,90 @@ function stopTranscriptStream() {
         }
     }
 
-    window.disconnectVoice = function() {
-        if (window.livekitRoom) {
-            console.log('👋 Disconnecting from voice room...');
-            try {
-                window.livekitRoom.disconnect();
-                updateStatus('disconnected', 'Disconnected');
-            } catch (e) {
-                console.error('Error disconnecting:', e);
-            }
+    function clearConnectionMonitor() {
+        if (connectionMonitor) {
+            clearInterval(connectionMonitor);
+            connectionMonitor = null;
         }
-        // Stop transcript streaming when disconnecting
+    }
+
+    function scheduleConnectionMonitor() {
+        clearConnectionMonitor();
+        connectionMonitor = setInterval(() => {
+            if (!window.livekitRoom || manualDisconnect) {
+                monitorFailures = 0;
+                return;
+            }
+
+            const room = window.livekitRoom;
+            const state = room.state;
+            const participantsMap = room.participants || room.remoteParticipants || new Map();
+            const participants = Array.from(participantsMap.values());
+            const agentPresent = participants.some(p => (p.identity || '').includes('agent'));
+
+            const connectionIssue = state !== 'connected';
+            const agentMissing = !agentPresent;
+
+            if (connectionIssue || agentMissing) {
+                monitorFailures += 1;
+                console.warn('LiveKit monitor detected degraded state', { state, agentPresent, monitorFailures });
+            } else {
+                monitorFailures = 0;
+            }
+
+            if (connectionIssue && monitorFailures >= 3) {
+                monitorFailures = 0;
+                reconnectToRoom('connection-monitor');
+            }
+        }, 8000);
+    }
+
+    async function reconnectToRoom(reason = 'unknown') {
+        if (manualDisconnect) {
+            console.log('Reconnect skipped due to manual disconnect.');
+            return;
+        }
+        if (reconnectLock) {
+            console.log('Reconnect already in progress; skipping parallel attempt.');
+            return;
+        }
+        reconnectLock = true;
+        reconnectAttempts += 1;
+        if (reconnectAttempts > 5) {
+            console.error('Max LiveKit reconnect attempts reached. Giving up until manual retry.');
+            reconnectLock = false;
+            return;
+        }
+        console.log(`🔄 Reconnecting to LiveKit (${reason}) - attempt ${reconnectAttempts}`);
+        try {
+            if (window.livekitRoom && window.livekitRoom.state !== 'disconnected') {
+                try {
+                    await window.livekitRoom.disconnect();
+                } catch (disconnectErr) {
+                    console.warn('Error disconnecting prior to reconnect:', disconnectErr);
+                }
+            }
+            await new Promise(resolve => setTimeout(resolve, 600));
+            connectToRoom(true);
+        } finally {
+            reconnectLock = false;
+        }
+    }
+
+    window.disconnectVoice = function() {
+        manualDisconnect = true;
+        clearConnectionMonitor();
+        // Keep the LiveKit room connected so audio can finish streaming.
+        updateStatus('disconnected', 'Disconnected');
         stopTranscriptStream();
     };
 
     // Main connect function
-    window.connectToRoom = async function() {
+    window.connectToRoom = async function(isReconnect = false) {
         console.log('🚀 Starting LiveKit connection...');
-        updateStatus('connecting', 'Connecting to voice room...');
-        
+        updateStatus('connecting', isReconnect ? 'Reconnecting to voice room...' : 'Connecting to voice room...');
+        manualDisconnect = false;
+
         // Wait for SDK to load
         let attempts = 0;
         while (!window.livekitSDKLoaded && attempts < 50) {
@@ -442,8 +520,10 @@ function stopTranscriptStream() {
                 
                 // Start transcript streaming when connected
                 startTranscriptStream();
+                scheduleConnectionMonitor();
+                reconnectAttempts = 0;
             });
-            
+
             room.on(LiveKit.RoomEvent.Disconnected, (reason) => {
                 console.log('🔌 Disconnected from room:', reason);
                 updateStatus('disconnected', 'Disconnected from voice room');
@@ -451,19 +531,26 @@ function stopTranscriptStream() {
                 
                 // Stop transcript streaming when disconnected
                 stopTranscriptStream();
+                clearConnectionMonitor();
+                if (!manualDisconnect) {
+                    setTimeout(() => reconnectToRoom('event-disconnected'), 1200);
+                }
             });
-            
+
             room.on(LiveKit.RoomEvent.ParticipantConnected, (participant) => {
                 console.log('👤 Participant connected:', participant.identity);
                 if (participant.identity.includes('agent')) {
                     document.getElementById('agentStatus').classList.remove('hidden');
                 }
             });
-            
+
             room.on(LiveKit.RoomEvent.ParticipantDisconnected, (participant) => {
                 console.log('👤 Participant disconnected:', participant.identity);
                 if (participant.identity.includes('agent')) {
                     document.getElementById('agentStatus').classList.add('hidden');
+                    if (!manualDisconnect) {
+                        setTimeout(() => reconnectToRoom('agent-left'), 1000);
+                    }
                 }
             });
             
@@ -471,23 +558,84 @@ function stopTranscriptStream() {
                 console.log('🎵 Track subscribed:', track.kind, 'from', participant.identity);
                 
                 if (track.kind === 'audio') {
-                    // Create an audio element and attach the track
-                    const audioElement = track.attach();
-                    audioElement.autoplay = true;
-                    audioElement.style.display = 'none';
-                    document.body.appendChild(audioElement);
-                    
-                    // Store reference for cleanup
-                    if (!window.audioElements) window.audioElements = [];
-                    window.audioElements.push(audioElement);
-                    
+                    try {
+                        track.setEnabled?.(true);
+                        track.setVolume?.(1.0);
+                    } catch {}
+
+                    let audioElement = window.__admin_lk_audio_el;
+                    if (!audioElement || !document.body.contains(audioElement)) {
+                        audioElement = document.createElement('audio');
+                        audioElement.autoplay = true;
+                        audioElement.playsInline = true;
+                        audioElement.muted = false;
+                        try { audioElement.volume = 1.0; } catch {}
+                        audioElement.style.position = 'fixed';
+                        audioElement.style.bottom = '8px';
+                        audioElement.style.right = '8px';
+                        audioElement.style.width = '0px';
+                        audioElement.style.height = '0px';
+                        audioElement.style.opacity = '0';
+                        audioElement.style.pointerEvents = 'none';
+                        document.body.appendChild(audioElement);
+                        window.__admin_lk_audio_el = audioElement;
+                    }
+
+                    try {
+                        const previous = track.detach?.() || [];
+                        previous.forEach((node) => { try { node.remove?.(); } catch {} });
+                    } catch {}
+
+                    try { track.attach(audioElement); } catch {}
+
+                    try {
+                        if (track.mediaStreamTrack) {
+                            const ms = new MediaStream();
+                            ms.addTrack(track.mediaStreamTrack);
+                            audioElement.srcObject = ms;
+                        }
+                    } catch {}
+
+                    const attemptPlay = async () => {
+                        try { await startAudioPlayback(true); } catch {}
+                        try {
+                            const playPromise = audioElement.play?.();
+                            if (playPromise && typeof playPromise.catch === 'function') {
+                                await playPromise.catch((err) => {
+                                    console.warn('🔇 Audio playback blocked:', err);
+                                    if (audioBanner) audioBanner.classList.remove('hidden');
+                                });
+                            } else {
+                                audioUnlocked = true;
+                                if (audioBanner) audioBanner.classList.add('hidden');
+                            }
+                        } catch (err) {
+                            console.warn('🔇 Audio playback failed:', err);
+                            if (audioBanner) audioBanner.classList.remove('hidden');
+                        }
+                    };
+                    attemptPlay();
+
+                    if (enableAudioBtn && !enableAudioBtn.dataset.bound) {
+                        enableAudioBtn.dataset.bound = 'true';
+                        enableAudioBtn.addEventListener('click', attemptPlay);
+                    }
+
                     console.log('🔊 Audio track attached and playing');
                 }
             });
             
             room.on(LiveKit.RoomEvent.TrackUnsubscribed, (track) => {
                 console.log('🔇 Track unsubscribed:', track.kind);
-                track.detach();
+                try {
+                    const nodes = track.detach?.() || [];
+                    nodes.forEach((node) => { try { node.remove?.(); } catch {} });
+                } catch {}
+                try {
+                    if (track?.kind === 'audio' && window.__admin_lk_audio_el) {
+                        window.__admin_lk_audio_el.srcObject = null;
+                    }
+                } catch {}
             });
             
             room.on(LiveKit.RoomEvent.LocalTrackPublished, (publication) => {
@@ -546,19 +694,35 @@ function stopTranscriptStream() {
                 document.getElementById('micStatus').textContent = 'Microphone: Failed to enable';
             }
             
-            // Start audio playback
             try {
-                await room.startAudio();
-                console.log('🔊 Audio playback started');
+                await startAudioPlayback();
             } catch (e) {
-                console.log('⚠️ Could not start audio playback automatically - user interaction required');
+                console.log('Audio playback requires user interaction.');
             }
-            
+
         } catch (error) {
             console.error('❌ Failed to connect:', error);
             updateStatus('error', 'Failed to connect to voice room');
+            clearConnectionMonitor();
+            if (!manualDisconnect) {
+                setTimeout(() => reconnectToRoom('connect-error'), 2000);
+            }
         }
     };
+
+    async function startAudioPlayback(manual = false) {
+        if (!window.livekitRoom) return;
+        try {
+            await window.livekitRoom.startAudio();
+            audioUnlocked = true;
+            if (audioBanner) audioBanner.classList.add('hidden');
+            console.log(manual ? '🔊 Audio playback enabled by user' : '🔊 Audio playback started');
+        } catch (e) {
+            console.log('⚠️ Could not start audio playback', e);
+            if (audioBanner) audioBanner.classList.remove('hidden');
+            throw e;
+        }
+    }
 
     // Auto-connect on load
     if (window.LIVEKIT_URL && window.LIVEKIT_TOKEN) {
@@ -570,6 +734,18 @@ function stopTranscriptStream() {
         console.error('Missing LiveKit configuration');
         updateStatus('error', 'Missing voice configuration');
     }
+
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && window.livekitRoom && window.livekitRoom.state === 'connected') {
+            startAudioPlayback(true).catch(err => console.warn('Failed to resume audio on visibility change', err));
+        }
+    });
+
+    window.addEventListener('focus', () => {
+        if (window.livekitRoom && window.livekitRoom.state === 'connected') {
+            startAudioPlayback(true).catch(err => console.warn('Failed to resume audio on window focus', err));
+        }
+    });
 })();
 
 // Handle cleanup when leaving page
@@ -595,16 +771,8 @@ document.addEventListener('visibilitychange', function() {
 });
 
 // Handle HTMX navigation away from this page
+// Keep the LiveKit connection active during HTMX swaps; transcripts can reconnect separately.
 document.body.addEventListener('htmx:beforeSwap', function(evt) {
-    if (window.livekitRoom && window.livekitRoom.state !== 'disconnected') {
-        console.log('🔄 HTMX navigation detected, disconnecting LiveKit...');
-        try {
-            window.livekitRoom.disconnect();
-        } catch (e) {
-            console.warn('Error during HTMX cleanup:', e);
-        }
-    }
-    // Stop transcript streaming
     stopTranscriptStream();
 });
 

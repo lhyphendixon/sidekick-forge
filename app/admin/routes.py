@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile
+from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from typing import Dict, Any, List, Optional
@@ -23,6 +23,8 @@ from app.models.wordpress_site import WordPressSite, WordPressSiteCreate, WordPr
 from app.utils.default_ids import get_default_client_id, get_user_id_from_request
 from app.permissions.rbac import get_platform_permissions
 from app.integrations.supabase_client import supabase_manager
+from app.models.tools import ToolCreate, ToolUpdate, ToolAssignmentRequest
+from app.services.tools_service_supabase import ToolsService
 
 logger = logging.getLogger(__name__)
 
@@ -1310,18 +1312,231 @@ async def tools_page(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Abilities (Tools) management page"""
+    visible_client_ids: List[str] = []
+    if admin_user.get("role") != "superadmin":
+        try:
+            from app.integrations.supabase_client import supabase_manager
+            if not getattr(supabase_manager, "_initialized", False):
+                await supabase_manager.initialize()
+            import httpx
+
+            headers = {
+                "apikey": supabase_manager.admin_client.supabase_key if hasattr(supabase_manager.admin_client, "supabase_key") else os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""),
+                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')}",
+            }
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/auth/v1/admin/users/{admin_user.get('user_id')}",
+                    headers=headers,
+                )
+            if resp.status_code == 200:
+                user_payload = resp.json()
+                meta = user_payload.get("user_metadata") or {}
+                assignments = meta.get("tenant_assignments") or {}
+                if admin_user.get("role") == "admin":
+                    visible_client_ids = assignments.get("admin_client_ids") or []
+                else:
+                    visible_client_ids = assignments.get("subscriber_client_ids") or []
+        except Exception as exc:
+            logger.warning(f"Failed to load tenant assignments for tools page: {exc}")
+            visible_client_ids = []
+
+    clients: List[Any] = []
+    default_client_id: str = ""
     try:
-        return templates.TemplateResponse("admin/tools.html", {
-            "request": request,
-            "user": admin_user
-        })
+        from app.core.dependencies import get_client_service
+        client_service = get_client_service()
+        all_clients = await client_service.get_all_clients()
+        if admin_user.get("role") == "superadmin":
+            clients = all_clients
+        else:
+            visible_set = set(visible_client_ids)
+            clients = [c for c in all_clients if c.id in visible_set]
+        if admin_user.get("role") != "superadmin" and clients:
+            default_client_id = clients[0].id
+    except Exception as exc:
+        logger.error(f"Error loading clients for tools page: {exc}")
+        clients = []
+        default_client_id = ""
+
+    try:
+        return templates.TemplateResponse(
+            "admin/tools.html",
+            {
+                "request": request,
+                "user": admin_user,
+                "clients": clients,
+                "default_client_id": default_client_id,
+            },
+        )
     except Exception as e:
         logger.error(f"Error loading tools page: {e}")
-        return templates.TemplateResponse("admin/tools.html", {
-            "request": request,
-            "user": admin_user,
-            "error": str(e)
-        })
+        return templates.TemplateResponse(
+            "admin/tools.html",
+            {
+                "request": request,
+                "user": admin_user,
+                "clients": clients,
+                "default_client_id": default_client_id,
+                "error": str(e),
+            },
+        )
+
+@router.get("/api/tools")
+async def admin_list_tools(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+    client_id: Optional[str] = Query(None),
+    scope: Optional[str] = Query(None),
+    type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+):
+    from app.core.dependencies import get_client_service
+
+    tools_service = ToolsService(get_client_service())
+    try:
+        tools = await tools_service.list_tools(client_id=client_id, scope=scope, type=type, search=search)
+        return JSONResponse([tool.dict() for tool in tools])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/tools")
+async def admin_create_tool(
+    payload: ToolCreate,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    from app.core.dependencies import get_client_service
+
+    tools_service = ToolsService(get_client_service())
+    try:
+        tool = await tools_service.create_tool(payload)
+        return JSONResponse(tool.dict())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/api/tools/{tool_id}")
+async def admin_delete_tool(
+    tool_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+    client_id: Optional[str] = Query(None),
+):
+    from app.core.dependencies import get_client_service
+
+    tools_service = ToolsService(get_client_service())
+    try:
+        await tools_service.delete_tool(client_id, tool_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse({"success": True})
+
+
+@router.patch("/api/tools/{tool_id}")
+async def admin_update_tool(
+    tool_id: str,
+    payload: ToolUpdate,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+    client_id: Optional[str] = Query(None),
+):
+    from app.core.dependencies import get_client_service
+
+    tools_service = ToolsService(get_client_service())
+    try:
+        tool = await tools_service.update_tool(client_id, tool_id, payload)
+        return JSONResponse(tool.dict())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/api/agents/{agent_id}/tools")
+async def admin_list_agent_tools(
+    agent_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+    client_id: str = Query(...),
+):
+    from app.core.dependencies import get_client_service
+
+    tools_service = ToolsService(get_client_service())
+    try:
+        tools = await tools_service.list_agent_tools(client_id, agent_id)
+        return JSONResponse([tool.dict() for tool in tools])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/agents/{agent_id}/tools")
+async def admin_set_agent_tools(
+    agent_id: str,
+    payload: ToolAssignmentRequest,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+    client_id: str = Query(...),
+):
+    from app.core.dependencies import get_client_service
+
+    tools_service = ToolsService(get_client_service())
+    try:
+        await tools_service.set_agent_tools(client_id, agent_id, payload.tool_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse({"success": True})
+
+
+
+@router.get("/api/clients/{client_id}/perplexity-key")
+async def admin_get_perplexity_key(
+    client_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    from app.core.dependencies import get_client_service
+
+    client_service = get_client_service()
+    client = await client_service.get_client(client_id, auto_sync=False)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    api_key_value: Optional[str] = None
+    try:
+        api_keys = getattr(client.settings, 'api_keys', None)
+        if api_keys is not None:
+            api_key_value = getattr(api_keys, 'perplexity_api_key', None)
+    except Exception:
+        pass
+    if api_key_value is None and hasattr(client, 'dict'):
+        api_key_value = client.dict().get('settings', {}).get('api_keys', {}).get('perplexity_api_key')
+    elif api_key_value is None and isinstance(client, dict):
+        api_key_value = client.get('settings', {}).get('api_keys', {}).get('perplexity_api_key')
+
+    return {"api_key": api_key_value or ""}
+
+
+@router.patch("/api/clients/{client_id}/perplexity-key")
+async def admin_update_perplexity_key(
+    client_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    from app.core.dependencies import get_client_service
+
+    payload = await request.json()
+    value = (payload.get("api_key") or "").strip()
+
+    try:
+        client_service = get_client_service()
+        client_service.supabase.table(client_service.table_name if hasattr(client_service, 'table_name') else 'clients').update({
+            'perplexity_api_key': value or None
+        }).eq('id', client_id).execute()
+        return {"success": True, "api_key": value}
+    except Exception as exc:
+        logger.error(f"Failed to update Perplexity API key for client {client_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to update Perplexity API key")
+
 
 # # DUPLICATE - COMMENTED OUT - Using the version at line ~1528
 # # @router.get("/agents/preview/{client_id}/{agent_slug}", response_class=HTMLResponse)
@@ -1497,14 +1712,19 @@ async def agent_detail(
         
         # Convert VoiceSettings object to dict if needed
         if hasattr(voice_settings_data, '__dict__'):
-            # It's an object, convert to dict
-            voice_settings_dict = {}
-            for key in ['llm_provider', 'llm_model', 'temperature', 'stt_provider', 'stt_model', 
-                       'tts_provider', 'openai_voice', 'elevenlabs_voice_id', 'cartesia_voice_id',
-                       'voice_id', 'provider', 'provider_config']:
-                if hasattr(voice_settings_data, key):
-                    voice_settings_dict[key] = getattr(voice_settings_data, key, None)
-            voice_settings_data = voice_settings_dict
+            # It's a Pydantic model/object – leverage its dict representation to avoid dropping fields like `model`
+            try:
+                voice_settings_data = voice_settings_data.dict()
+            except Exception:
+                voice_settings_dict = {}
+                for key in ['provider', 'voice_id', 'temperature', 'llm_provider', 'llm_model',
+                            'stt_provider', 'stt_model', 'stt_language', 'tts_provider', 'model',
+                            'output_format', 'stability', 'similarity_boost', 'loudness_normalization',
+                            'text_normalization', 'provider_config', 'openai_voice', 'elevenlabs_voice_id',
+                            'cartesia_voice_id']:
+                    if hasattr(voice_settings_data, key):
+                        voice_settings_dict[key] = getattr(voice_settings_data, key, None)
+                voice_settings_data = voice_settings_dict
         elif isinstance(voice_settings_data, str):
             # It's a JSON string, parse it
             try:
@@ -1527,6 +1747,7 @@ async def agent_detail(
             "stt_provider": voice_settings_data.get("stt_provider", "deepgram"),
             "stt_model": voice_settings_data.get("stt_model", "nova-2"),
             "tts_provider": voice_settings_data.get("tts_provider", "openai"),
+            "tts_model": voice_settings_data.get("model", "sonic-english"),
             "openai_voice": voice_settings_data.get("openai_voice", "alloy"),
             "elevenlabs_voice_id": voice_settings_data.get("elevenlabs_voice_id", ""),
             "cartesia_voice_id": voice_settings_data.get("voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d") if voice_settings_data.get("tts_provider") == "cartesia" else voice_settings_data.get("provider_config", {}).get("cartesia_voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d"),
@@ -2532,36 +2753,55 @@ async def agent_preview_modal(
         
         # Call EnsureClientUser to get client JWT for admin preview
         import httpx
-        async with httpx.AsyncClient() as client:
+        timeout = httpx.Timeout(20.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             # Get platform session token for the API call
             platform_token = request.headers.get("Authorization", "").replace("Bearer ", "")
             if not platform_token and admin_user:
                 # Try to get from admin_user if available
                 platform_token = admin_user.get("access_token", "")
             
-            ensure_response = await client.post(
-                f"{request.base_url}api/v2/admin/ensure-client-user",
-                json={
-                    "client_id": client_id,
-                    "platform_user_id": admin_user.get("id"),
-                    "user_email": admin_user.get("email")
-                },
-                headers={"Authorization": f"Bearer {platform_token}"} if platform_token else {}
-            )
+            ensure_response = None
+            try:
+                ensure_response = await client.post(
+                    f"{request.base_url}api/v2/admin/ensure-client-user",
+                    json={
+                        "client_id": client_id,
+                        "platform_user_id": admin_user.get("id"),
+                        "user_email": admin_user.get("email")
+                    },
+                    headers={"Authorization": f"Bearer {platform_token}"} if platform_token else {}
+                )
+            except httpx.TimeoutException:
+                logger.warning("ensure-client-user request timed out; continuing without client JWT fallback")
             
             client_jwt = None
             client_user_id = None
             
-            if ensure_response.status_code == 200:
+            if ensure_response and ensure_response.status_code == 200:
                 ensure_data = ensure_response.json()
                 client_jwt = ensure_data.get("client_jwt")
                 client_user_id = ensure_data.get("client_user_id")
                 logger.info(f"Got client JWT for preview: client_user_id={client_user_id}")
-            else:
+            elif ensure_response is not None:
                 logger.warning(f"Failed to get client JWT: {ensure_response.status_code}")
         
-        host = request.base_url.hostname
-        iframe_src = f"https://{host}/embed/{client_id}/{agent_slug}?theme=dark&source=admin"
+        # Respect the original request scheme/host (include port in dev) for the embed iframe
+        base_url = request.base_url
+        scheme = (
+            request.headers.get("x-forwarded-proto")
+            or base_url.scheme
+            or "https"
+        )
+        netloc = (
+            request.headers.get("x-forwarded-host")
+            or base_url.netloc
+            or base_url.hostname
+            or request.headers.get("host", "")
+        )
+        if not netloc:
+            netloc = "localhost"
+        iframe_src = f"{scheme}://{netloc}/embed/{client_id}/{agent_slug}?theme=dark&source=admin"
         
         # If we have a client JWT, pass it to the embed
         jwt_script = ""
@@ -2782,109 +3022,110 @@ async def send_preview_message(
                     'cerebras_api_key': os.getenv('CEREBRAS_API_KEY', ''),
                 }
             
-            # Process the message using AI
-            if api_keys.get('openai_api_key') or api_keys.get('groq_api_key') or api_keys.get('cerebras_api_key'):
-                # Use OpenAI or Groq to generate response
-                import httpx
-                
-                try:
-                    if api_keys.get('openai_api_key'):
-                        # Use OpenAI
-                        async with httpx.AsyncClient() as client:
-                            response = await client.post(
-                                "https://api.openai.com/v1/chat/completions",
-                                headers={"Authorization": f"Bearer {api_keys['openai_api_key']}"},
-                                json={
-                                    "model": "gpt-3.5-turbo",
-                                    "messages": [
-                                        {"role": "system", "content": agent.system_prompt},
-                                        {"role": "user", "content": message}
-                                    ],
-                                    "temperature": 0.7,
-                                    "max_tokens": 500
-                                }
-                            )
-                            if response.status_code == 200:
-                                result = response.json()
-                                ai_response = result['choices'][0]['message']['content']
-                            else:
-                                raise Exception(f"OpenAI API error: {response.status_code}")
-                    
-                    elif api_keys.get('groq_api_key'):
-                        # Use Groq as fallback
-                        logger.info(f"Using Groq API for agent {agent.name}")
-                    elif api_keys.get('cerebras_api_key'):
-                        # Minimal Cerebras test path for admin preview (text-only)
-                        import httpx
-                        logger.info(f"Using Cerebras API for agent {agent.name}")
-                        headers = {"Authorization": f"Bearer {api_keys['cerebras_api_key']}"}
-                        request_data = {
-                            "model": "llama3.1-8b",
-                            "messages": [
-                                {"role": "system", "content": agent.system_prompt or "You are a helpful assistant."},
-                                {"role": "user", "content": message}
-                            ],
-                            "stream": False
-                        }
-                        async with httpx.AsyncClient() as client:
-                            response = await client.post("https://api.cerebras.ai/v1/chat/completions", headers=headers, json=request_data, timeout=30.0)
-                            if response.status_code == 200:
-                                data = response.json()
-                                text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                                if text:
-                                    return JSONResponse({"success": True, "response": text})
-                            raise Exception(f"Cerebras API error: {response.status_code}")
-                        logger.debug(f"System prompt length: {len(agent.system_prompt) if agent.system_prompt else 0}")
-                        
-                        # Try multiple Groq models in case some are unavailable
-                        groq_models = ["llama-3.1-70b-versatile", "llama3-70b-8192", "llama3-8b-8192", "gemma2-9b-it"]
-                        
-                        for model in groq_models:
-                            try:
-                                async with httpx.AsyncClient() as client:
-                                    request_data = {
-                                        "model": model,
-                                        "messages": [
-                                            {"role": "system", "content": agent.system_prompt or "You are a helpful AI assistant."},
-                                            {"role": "user", "content": message}
-                                        ],
-                                        "temperature": 0.7,
-                                        "max_tokens": 500
-                                    }
-                                    
-                                    response = await client.post(
-                                        "https://api.groq.com/openai/v1/chat/completions",
-                                        headers={"Authorization": f"Bearer {api_keys['groq_api_key']}"},
-                                        json=request_data,
-                                        timeout=30.0
-                                    )
-                                    
-                                    if response.status_code == 200:
-                                        result = response.json()
-                                        ai_response = result['choices'][0]['message']['content']
-                                        logger.info(f"Successfully used Groq model: {model}")
-                                        break
-                                    elif response.status_code == 503:
-                                        logger.warning(f"Groq service unavailable for model {model}, trying next...")
-                                        continue
-                                    else:
-                                        error_detail = response.text
-                                        logger.warning(f"Groq API error {response.status_code} for model {model}: {error_detail[:100]}")
-                                        continue
-                            except Exception as model_error:
-                                logger.warning(f"Failed with model {model}: {str(model_error)}")
-                                continue
-                        else:
-                            # All models failed
-                            raise Exception("All Groq models failed. Service may be temporarily unavailable.")
-                    else:
-                        ai_response = f"I'm {agent.name}. I'd love to help, but I need API keys configured to provide live responses."
-                        
-                except Exception as e:
-                    logger.error(f"AI API call failed: {e}")
-                    ai_response = f"I'm {agent.name}. I encountered an error processing your request: {str(e)}"
-            else:
-                ai_response = f"I'm {agent.name}. Please configure API keys to enable live AI responses."
+            # Process the message using the agent's configured provider
+            voice_settings = getattr(agent, 'voice_settings', None)
+            llm_provider = (getattr(voice_settings, 'llm_provider', '') or '').lower()
+            llm_model = getattr(voice_settings, 'llm_model', None)
+
+            if not llm_provider:
+                raise ValueError("Agent preview requires an LLM provider in voice settings")
+
+            if not llm_model:
+                raise ValueError(f"Agent preview requires an LLM model for provider '{llm_provider}'")
+
+            import httpx
+
+            def require_key(key_name: str) -> str:
+                key = api_keys.get(key_name)
+                if not key:
+                    raise ValueError(f"Missing {key_name.replace('_', ' ')} for provider '{llm_provider}'")
+                return key
+
+            try:
+                if llm_provider == 'openai':
+                    openai_key = require_key('openai_api_key')
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            "https://api.openai.com/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {openai_key}"},
+                            json={
+                                "model": llm_model,
+                                "messages": [
+                                    {"role": "system", "content": agent.system_prompt},
+                                    {"role": "user", "content": message}
+                                ],
+                                "temperature": 0.7,
+                                "max_tokens": 500
+                            },
+                            timeout=30.0
+                        )
+                    if response.status_code != 200:
+                        raise RuntimeError(f"OpenAI API error: {response.status_code}")
+                    result = response.json()
+                    ai_response = result['choices'][0]['message']['content']
+
+                elif llm_provider == 'groq':
+                    groq_key = require_key('groq_api_key')
+                    model = llm_model
+                    if model in ('llama3-70b-8192', 'llama-3.1-70b-versatile'):
+                        model = 'llama-3.3-70b-versatile'
+                    logger.info(f"Using Groq API for agent {agent.name} with model {model}")
+                    request_data = {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": agent.system_prompt or "You are a helpful AI assistant."},
+                            {"role": "user", "content": message}
+                        ],
+                        "temperature": 0.7,
+                        "max_tokens": 500
+                    }
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {groq_key}"},
+                            json=request_data,
+                            timeout=30.0
+                        )
+                    if response.status_code != 200:
+                        error_detail = response.text[:200]
+                        raise RuntimeError(f"Groq API error {response.status_code}: {error_detail}")
+                    result = response.json()
+                    ai_response = result['choices'][0]['message']['content']
+
+                elif llm_provider == 'cerebras':
+                    cerebras_key = require_key('cerebras_api_key')
+                    logger.info(f"Using Cerebras API for agent {agent.name} with model {llm_model}")
+                    headers = {"Authorization": f"Bearer {cerebras_key}"}
+                    request_data = {
+                        "model": llm_model,
+                        "messages": [
+                            {"role": "system", "content": agent.system_prompt or "You are a helpful assistant."},
+                            {"role": "user", "content": message}
+                        ],
+                        "stream": False
+                    }
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            "https://api.cerebras.ai/v1/chat/completions",
+                            headers=headers,
+                            json=request_data,
+                            timeout=30.0
+                        )
+                    if response.status_code != 200:
+                        raise RuntimeError(f"Cerebras API error: {response.status_code}")
+                    data = response.json()
+                    ai_response = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    if not ai_response:
+                        raise RuntimeError("Cerebras response did not include assistant content")
+
+                else:
+                    raise ValueError(f"Unsupported LLM provider '{llm_provider}' for preview")
+
+                logger.debug(f"System prompt length: {len(agent.system_prompt) if agent.system_prompt else 0}")
+
+            except Exception as e:
+                logger.error(f"AI API call failed: {e}")
+                raise
                 
         else:
             # Get client info for non-global agents
@@ -3948,6 +4189,7 @@ async def admin_update_client(
                 cerebras_api_key=form.get("cerebras_api_key") or (current_api_keys.cerebras_api_key if hasattr(current_api_keys, 'cerebras_api_key') else current_api_keys.get('cerebras_api_key') if isinstance(current_api_keys, dict) else None),
                 deepinfra_api_key=form.get("deepinfra_api_key") or (current_api_keys.deepinfra_api_key if hasattr(current_api_keys, 'deepinfra_api_key') else current_api_keys.get('deepinfra_api_key') if isinstance(current_api_keys, dict) else None),
                 replicate_api_key=form.get("replicate_api_key") or (current_api_keys.replicate_api_key if hasattr(current_api_keys, 'replicate_api_key') else current_api_keys.get('replicate_api_key') if isinstance(current_api_keys, dict) else None),
+                perplexity_api_key=form.get("perplexity_api_key") or (current_api_keys.perplexity_api_key if hasattr(current_api_keys, 'perplexity_api_key') else current_api_keys.get('perplexity_api_key') if isinstance(current_api_keys, dict) else None),
                 deepgram_api_key=form.get("deepgram_api_key") or (current_api_keys.deepgram_api_key if hasattr(current_api_keys, 'deepgram_api_key') else current_api_keys.get('deepgram_api_key') if isinstance(current_api_keys, dict) else None),
                 elevenlabs_api_key=form.get("elevenlabs_api_key") or (current_api_keys.elevenlabs_api_key if hasattr(current_api_keys, 'elevenlabs_api_key') else current_api_keys.get('elevenlabs_api_key') if isinstance(current_api_keys, dict) else None),
                 cartesia_api_key=form.get("cartesia_api_key") or (current_api_keys.cartesia_api_key if hasattr(current_api_keys, 'cartesia_api_key') else current_api_keys.get('cartesia_api_key') if isinstance(current_api_keys, dict) else None),
