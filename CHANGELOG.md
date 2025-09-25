@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.2] - 2025-09-25
+
+### Added
+- Crypto Price Check ability exposed in the Abilities platform and wired into LiveKit tool dispatch.
+- Perplexity Search integration via hosted webhook (replacing legacy MCP path), with client-level API key support in admin.
+
+### Fixed
+- Intermittent audio start issues in voice sessions by priming playback and avoiding awaited start on user gesture.
+
+### Changed
+- Admin tools UI updates for MCP-style abilities, including Perplexity configuration and client overrides.
+- Updated platform versioning and health endpoints to report 2.1.2.
+
 ### Added
 - Initial repository setup
 - FastAPI backend with multi-tenant support

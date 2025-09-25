@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Sidekick Forge Platform API",
     description="Multi-tenant AI Agent management platform with LiveKit integration",
-    version="2.0.0",
+    version="2.1.2",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -174,7 +174,7 @@ app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
 async def root():
     return {
         "service": "Sidekick Forge Platform",
-        "version": "2.0.0",
+        "version": "2.1.2",
         "status": "operational",
         "timestamp": datetime.utcnow().isoformat()
     }
