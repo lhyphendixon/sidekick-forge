@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.1.2] - 2025-09-25
 
+## [2.1.3] - 2025-09-25
+
+### Added
+- Agent image upload feature in the admin (attach/update agent image from the editor) and expose image URL in agent metadata.
+
+### Fixed
+- Agent interruption handling in voice sessions to correctly cut off TTS and resume agent speech without overlaps.
+
 ### Added
 - Crypto Price Check ability exposed in the Abilities platform and wired into LiveKit tool dispatch.
 - Perplexity Search integration via hosted webhook (replacing legacy MCP path), with client-level API key support in admin.
