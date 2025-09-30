@@ -164,6 +164,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                     "user_id": "dev-admin",
                     "email": "admin@autonomite.ai",
                     "role": "superadmin",
+                    "first_name": "Dev",
+                    "full_name": "Dev Admin",
                     "auth_method": "development",
                     "authenticated_at": datetime.utcnow().isoformat()
                 }
@@ -181,6 +183,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             "user_id": "dev-admin",
             "email": "admin@autonomite.ai",
             "role": "superadmin",
+            "first_name": "Dev",
+            "full_name": "Dev Admin",
             "auth_method": "development",
             "authenticated_at": datetime.utcnow().isoformat()
         }
@@ -204,6 +208,26 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
         
         if user_response.user:
             user = user_response.user
+            meta = getattr(user, 'user_metadata', None) or {}
+            full_name = (
+                meta.get('full_name')
+                or meta.get('name')
+                or meta.get('display_name')
+                or (
+                    meta.get('custom_claims', {}).get('full_name')
+                    if isinstance(meta.get('custom_claims'), dict)
+                    else None
+                )
+            )
+            first_name = meta.get('first_name')
+            if not first_name and isinstance(full_name, str) and full_name.strip():
+                first_name = full_name.strip().split()[0]
+            if not first_name:
+                nickname = meta.get('nickname')
+                if isinstance(nickname, str) and nickname.strip():
+                    first_name = nickname.strip()
+            if not first_name and user.email:
+                first_name = user.email.split('@')[0]
             # Determine role using RBAC if available, else fallback to user_metadata
             role = "subscriber"
             try:
@@ -262,6 +286,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                 "user_id": user.id,
                 "email": user.email,
                 "role": role,
+                "first_name": first_name,
+                "full_name": full_name,
                 "auth_method": "supabase",
                 "authenticated_at": datetime.utcnow().isoformat()
             }
@@ -278,6 +304,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                 "user_id": "dev-admin",
                 "email": "dev@autonomite.ai",
                 "role": "superadmin",
+                "first_name": "Dev",
+                "full_name": "Dev Admin",
                 "auth_method": "development"
             }
         

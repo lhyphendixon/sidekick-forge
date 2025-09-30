@@ -3,6 +3,7 @@ Voice Assistant implementation for LiveKit Agent
 """
 
 import logging
+import os
 from typing import Optional
 from livekit import agents, rtc
 from livekit.agents import JobContext, AutoSubscribe
@@ -41,12 +42,15 @@ class VoiceAssistant:
             llm = self._create_llm()
             
             # Create the assistant
+            interrupt_duration = float(os.getenv("VOICE_INTERRUPT_DURATION", "0.9"))
+            interrupt_min_words = int(os.getenv("VOICE_INTERRUPT_MIN_WORDS", "4"))
+
             self.assistant = agents.VoiceAssistant(
                 stt=stt,
                 tts=tts,
                 llm=llm,
-                interrupt_speech_duration=0.5,
-                interrupt_min_words=2,
+                interrupt_speech_duration=interrupt_duration,
+                interrupt_min_words=interrupt_min_words,
             )
 
             # --- Add Event Handlers BEFORE starting the assistant ---

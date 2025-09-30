@@ -412,7 +412,7 @@ class AgentContextManager:
             result = self.supabase.rpc("match_documents", {
                 "p_query_embedding": query_embedding,  # Use corrected parameter name
                 "p_agent_slug": agent_slug,            # Use corrected parameter name
-                "p_match_threshold": 0.5,
+                "p_match_threshold": 0.4,
                 "p_match_count": 5
             }).execute()
             

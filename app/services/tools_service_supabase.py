@@ -102,12 +102,16 @@ class ToolsService:
                     results[normalized["id"]] = normalized
 
             csb = await self.get_client_supabase(client_id)
-            qc = csb.table("tools").select("*")
-            qc = apply_filters(qc)
-            client_rows = qc.execute()
-            for row in client_rows.data or []:
-                normalized = self._normalize_tool_row(row, client_id)
-                results[normalized["id"]] = normalized
+            try:
+                if self._table_exists(csb, "tools"):
+                    qc = csb.table("tools").select("*")
+                    qc = apply_filters(qc)
+                    client_rows = qc.execute()
+                    for row in client_rows.data or []:
+                        normalized = self._normalize_tool_row(row, client_id)
+                        results[normalized["id"]] = normalized
+            except Exception:
+                pass
 
         if scope == "client" and not client_id:
             return []
@@ -186,10 +190,14 @@ class ToolsService:
                 tools[normalized["id"]] = normalized
 
         csb = await self.get_client_supabase(client_id)
-        cr = csb.table("tools").select("*").in_("id", tool_ids).execute()
-        for r in cr.data or []:
-            normalized = self._normalize_tool_row(r, client_id)
-            tools[normalized["id"]] = normalized
+        try:
+            if self._table_exists(csb, "tools"):
+                cr = csb.table("tools").select("*").in_("id", tool_ids).execute()
+                for r in cr.data or []:
+                    normalized = self._normalize_tool_row(r, client_id)
+                    tools[normalized["id"]] = normalized
+        except Exception:
+            pass
 
         tool_models: List[ToolOut] = []
         for row in tools.values():

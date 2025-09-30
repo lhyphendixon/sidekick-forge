@@ -212,51 +212,62 @@
     <!-- 95% Opacity Overlay -->
     <div class="admin-video-overlay"></div>
     <!-- Navigation Header -->
-    <nav class="bg-white border-b border-gray-200">
+    <nav class="relative z-20 bg-white border-b border-gray-200">
         <div class="max-w-7xl mx-auto px-4">
-            <div class="flex justify-between h-16">
-                <div class="flex items-center">
-                    <div class="flex-shrink-0">
-                        <img src="/static/images/sidekick-forge-logo.png" alt="Sidekick Forge" class="h-10" />
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <button type="button"
+                    class="lg:hidden inline-flex items-center justify-center rounded-md border border-gray-300 p-2 text-gray-900 hover:text-brand-teal hover:border-brand-teal focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-teal focus:ring-offset-white"
+                            aria-controls="mobile-nav-menu"
+                            aria-expanded="false"
+                            id="mobile-nav-toggle"
+                            onclick="toggleMobileMenu()">
+                        <span class="sr-only">Open main menu</span>
+                        <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+                    </button>
+                    <div class="flex items-center">
+                        <img src="/static/images/sidekick-forge-logo.png" alt="Sidekick Forge" class="h-10 w-auto" />
                     </div>
-                    <div class="hidden md:block">
-                        <div class="ml-10 flex items-baseline space-x-2">
+                    <div class="hidden lg:block">
+                        <div class="ml-6 flex flex-wrap items-baseline gap-1 xl:gap-2">
                             {% if user.role in ['superadmin','admin'] %}
-                            <a href="/admin/" 
+                            <a href="/admin/" onclick="closeMobileMenu()"
                                class="{% if request.url.path == '/admin/' %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Dashboard
                             </a>
                             {% endif %}
                             {% if user.role in ['superadmin','admin'] %}
-                            <a href="/admin/clients" 
+                            <a href="/admin/clients" onclick="closeMobileMenu()"
                                class="{% if '/admin/clients' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Clients
                             </a>
                             {% endif %}
-                            <a href="/admin/agents" 
+                            <a href="/admin/agents" onclick="closeMobileMenu()"
                                class="{% if '/admin/agents' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Sidekicks
                             </a>
                             {% if user.role in ['superadmin','admin'] %}
-                            <a href="/admin/users" 
+                            <a href="/admin/users" onclick="closeMobileMenu()"
                                class="{% if '/admin/users' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Users
                             </a>
                             {% endif %}
                             {% if user.role in ['superadmin','admin'] %}
-                            <a href="/admin/knowledge-base" 
+                            <a href="/admin/knowledge-base" onclick="closeMobileMenu()"
                                class="{% if '/admin/knowledge-base' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Knowledge Base
                             </a>
                             {% endif %}
                             {% if user.role in ['superadmin','admin'] %}
-                            <a href="/admin/tools" 
+                            <a href="/admin/tools" onclick="closeMobileMenu()"
                                class="{% if '/admin/tools' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Abilities
                             </a>
                             {% endif %}
                             {% if user.role in ['superadmin','admin'] %}
-                            <a href="/admin/monitoring" 
+                            <a href="/admin/monitoring" onclick="closeMobileMenu()"
                                class="{% if '/admin/monitoring' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Monitoring
                             </a>
@@ -264,27 +275,86 @@
                         </div>
                     </div>
                 </div>
-                <div class="flex items-center space-x-4">
-                    <div class="text-sm text-gray-600">
-                        Welcome, <span id="current-user-display" class="text-gray-800">{{ user.email if user and user.email else user.username if user else 'Admin' }}</span>
+                <div class="flex items-center gap-3">
+                    <div class="hidden lg:block text-sm text-gray-600">
+                        Welcome, <span id="current-user-display" class="text-gray-900">{{
+                            user.first_name
+                            or (user.full_name.split(' ')[0] if user and user.full_name)
+                            or (user.email.split('@')[0] if user and user.email)
+                            or (user.username if user and user.username)
+                            or 'Admin'
+                        }}</span>
                     </div>
-                    
-                    <!-- Logout button -->
-                    <button 
-                        onclick="logout()" 
-                        class="text-sm text-gray-600 hover:text-brand-teal transition-all px-2 py-1 rounded border border-gray-300 hover:border-brand-teal"
-                    >
+                    <button onclick="logout()"
+                            class="hidden lg:inline-flex text-sm text-gray-700 hover:text-brand-teal transition-all px-3 py-1 rounded border border-gray-300 hover:border-brand-teal">
                         Logout
                     </button>
-                    
-                    <!-- Auto-refresh indicator -->
-                    <div>
-                        <div class="htmx-indicator spinner" id="global-indicator"></div>
-                    </div>
+                    <div class="htmx-indicator spinner" id="global-indicator"></div>
                 </div>
             </div>
         </div>
     </nav>
+
+    <!-- Mobile Navigation Menu -->
+    <div id="mobile-nav-menu" class="lg:hidden hidden border-b border-gray-200 bg-white shadow-lg">
+        <div class="px-4 pt-4 pb-6 space-y-4">
+            <div class="text-sm text-gray-600">
+                Welcome, <span id="current-user-display-mobile" class="text-gray-900">{{
+                    user.first_name
+                    or (user.full_name.split(' ')[0] if user and user.full_name)
+                    or (user.email.split('@')[0] if user and user.email)
+                    or (user.username if user and user.username)
+                    or 'Admin'
+                }}</span>
+            </div>
+            <div class="space-y-2">
+                {% if user.role in ['superadmin','admin'] %}
+                <a href="/admin/" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if request.url.path == '/admin/' %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Dashboard
+                </a>
+                {% endif %}
+                {% if user.role in ['superadmin','admin'] %}
+                <a href="/admin/clients" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/clients' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Clients
+                </a>
+                {% endif %}
+                <a href="/admin/agents" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/agents' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Sidekicks
+                </a>
+                {% if user.role in ['superadmin','admin'] %}
+                <a href="/admin/users" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/users' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Users
+                </a>
+                {% endif %}
+                {% if user.role in ['superadmin','admin'] %}
+                <a href="/admin/knowledge-base" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/knowledge-base' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Knowledge Base
+                </a>
+                {% endif %}
+                {% if user.role in ['superadmin','admin'] %}
+                <a href="/admin/tools" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/tools' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Abilities
+                </a>
+                {% endif %}
+                {% if user.role in ['superadmin','admin'] %}
+                <a href="/admin/monitoring" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/monitoring' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Monitoring
+                </a>
+                {% endif %}
+            </div>
+            <button onclick="logout()"
+                    class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:text-brand-teal hover:border-brand-teal hover:bg-gray-100 transition-all">
+                Logout
+            </button>
+        </div>
+    </div>
 
     <!-- Global Loading Overlay - Disabled -->
     <div id="globalLoading" class="hidden" style="display:none !important"></div>
@@ -387,9 +457,14 @@
             
             // In development mode with a token (including dev-token), skip Supabase check
             if (isDevelopment && hasAdminToken) {
+                const displayName = 'Dev';
                 const userDisplay = document.getElementById('current-user-display');
                 if (userDisplay) {
-                    userDisplay.textContent = 'Dev Admin';
+                    userDisplay.textContent = displayName;
+                }
+                const userDisplayMobile = document.getElementById('current-user-display-mobile');
+                if (userDisplayMobile) {
+                    userDisplayMobile.textContent = displayName;
                 }
                 return;
             }
@@ -419,9 +494,32 @@
             // Update user display if we have a session
             const { data: { session } } = await supabase.auth.getSession();
             if (session && session.user) {
+                const metadata = session.user.user_metadata || {};
+                const fullName = metadata.full_name || metadata.name || metadata.display_name;
+                let displayName = metadata.first_name;
+                if (!displayName && typeof fullName === 'string' && fullName.trim()) {
+                    displayName = fullName.trim().split(/\s+/)[0];
+                }
+                if (!displayName && typeof metadata.nickname === 'string' && metadata.nickname.trim()) {
+                    displayName = metadata.nickname.trim();
+                }
+                if (!displayName && session.user.email) {
+                    displayName = session.user.email.split('@')[0];
+                }
+                if (!displayName && metadata.username) {
+                    displayName = metadata.username;
+                }
+                if (!displayName) {
+                    displayName = 'Admin';
+                }
+
                 const userDisplay = document.getElementById('current-user-display');
                 if (userDisplay) {
-                    userDisplay.textContent = session.user.email || session.user.user_metadata?.username || 'Admin';
+                    userDisplay.textContent = displayName;
+                }
+                const userDisplayMobile = document.getElementById('current-user-display-mobile');
+                if (userDisplayMobile) {
+                    userDisplayMobile.textContent = displayName;
                 }
             }
             
@@ -443,6 +541,46 @@
         
         // Make logout function global
         window.logout = logout;
+        
+        window.toggleMobileMenu = function() {
+            const menu = document.getElementById('mobile-nav-menu');
+            const toggle = document.getElementById('mobile-nav-toggle');
+            if (!menu || !toggle) {
+                return;
+            }
+            const isOpen = !menu.classList.contains('hidden');
+            if (isOpen) {
+                menu.classList.add('hidden');
+                toggle.setAttribute('aria-expanded', 'false');
+            } else {
+                menu.classList.remove('hidden');
+                toggle.setAttribute('aria-expanded', 'true');
+            }
+        };
+
+        window.closeMobileMenu = function() {
+            const menu = document.getElementById('mobile-nav-menu');
+            const toggle = document.getElementById('mobile-nav-toggle');
+            if (!menu || !toggle) {
+                return;
+            }
+            if (!menu.classList.contains('hidden')) {
+                menu.classList.add('hidden');
+                toggle.setAttribute('aria-expanded', 'false');
+            }
+        };
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const toggle = document.getElementById('mobile-nav-toggle');
+            if (!toggle) {
+                return;
+            }
+            window.addEventListener('resize', function() {
+                if (window.innerWidth >= 1024) {
+                    closeMobileMenu();
+                }
+            });
+        });
         
         // Reusable button loading helpers
         window.setButtonLoading = function(btn, isLoading) {

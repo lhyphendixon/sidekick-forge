@@ -3,22 +3,94 @@ Enhanced Client management service using Supabase only (no Redis)
 """
 import json
 import os
+import socket
+import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
+from urllib.parse import urlparse
+
 from fastapi import HTTPException
 from supabase import create_client, Client as SupabaseClient
 import httpx
 
 from app.models.client import Client, ClientCreate, ClientUpdate, ClientInDB, APIKeys, ClientSettings
+from app.config import settings
 
 
 class ClientService:
     """Service for managing clients and their configurations in Supabase"""
-    
+
     def __init__(self, supabase_url: str, supabase_key: str, redis_client=None):
         # Ignore redis_client parameter for compatibility
         self.supabase: SupabaseClient = create_client(supabase_url, supabase_key)
         self.table_name = "clients"
+        self.logger = logging.getLogger(__name__)
+        self._platform_supabase_config = {
+            "url": settings.supabase_url,
+            "service_role_key": settings.supabase_service_role_key,
+            "anon_key": settings.supabase_anon_key,
+        }
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_hostname(url: str) -> Optional[str]:
+        if not url:
+            return None
+        try:
+            parsed = urlparse(url)
+            return parsed.hostname
+        except Exception:
+            return None
+
+    def _hostname_resolves(self, url: str) -> bool:
+        hostname = self._extract_hostname(url)
+        if not hostname:
+            return False
+        try:
+            socket.getaddrinfo(hostname, None)
+            return True
+        except socket.gaierror:
+            return False
+
+    def _platform_fallback_config(self, original_config: Dict[str, str]) -> Dict[str, str]:
+        fallback = dict(self._platform_supabase_config)
+        # Preserve anon key preference if caller supplied one (useful for client UI flows)
+        if original_config.get("anon_key"):
+            fallback["anon_key"] = original_config["anon_key"]
+        fallback["_fallback"] = True
+        return fallback
+
+    def _normalize_supabase_config(
+        self,
+        client_id: str,
+        config: Optional[Dict[str, str]]
+    ) -> Optional[Dict[str, str]]:
+        """Validate and, if necessary, fall back to the platform Supabase configuration."""
+        if not config:
+            return None
+
+        url = config.get("url")
+        service_key = config.get("service_role_key")
+
+        if not url or not service_key:
+            return None
+
+        # Already the platform project – nothing to normalize
+        if url == self._platform_supabase_config["url"]:
+            return config
+
+        if not self._hostname_resolves(url):
+            self.logger.warning(
+                "Supabase host %s for client %s is not resolvable – falling back to platform project",
+                url,
+                client_id,
+            )
+            return self._platform_fallback_config(config)
+
+        return config
         
     async def ensure_table_exists(self):
         """Ensure the clients table exists in Supabase"""
@@ -266,13 +338,15 @@ class ClientService:
         client = await self.get_client(client_id, auto_sync=auto_sync)
         if not client or not client.settings or not client.settings.supabase:
             return None
-            
-        return {
+
+        config = {
             "url": str(client.settings.supabase.url),
             "anon_key": client.settings.supabase.anon_key,
-            "service_role_key": client.settings.supabase.service_role_key
+            "service_role_key": client.settings.supabase.service_role_key,
         }
-    
+
+        return self._normalize_supabase_config(client_id, config)
+
     async def get_client_supabase_client(self, client_id: str, auto_sync: bool = False) -> Optional[SupabaseClient]:
         """Get a Supabase client instance for a specific client"""
         config = await self.get_client_supabase_config(client_id, auto_sync=auto_sync)
@@ -436,11 +510,18 @@ class ClientService:
         """
         # Clean up the URL
         supabase_url = supabase_url.rstrip('/')
-        
+
         # Skip if placeholder URL
         if "pending.supabase.co" in supabase_url:
             return {"api_keys": {}, "message": "Placeholder URL - skipping sync"}
-        
+
+        if not self._hostname_resolves(supabase_url):
+            self.logger.warning(
+                "Skipping settings sync for Supabase host %s – hostname is not resolvable",
+                supabase_url,
+            )
+            return {"api_keys": {}, "message": "Supabase host unreachable - skipped sync"}
+
         # Build the API URL to get the latest agent configuration
         api_url = f"{supabase_url}/rest/v1/agent_configurations?select=*&order=last_updated.desc&limit=1"
         

@@ -1,5 +1,6 @@
 import logging
-from typing import Optional, List, Dict, Any
+import re
+from typing import Optional, List, Dict, Any, AsyncIterable
 import uuid
 import asyncio
 from datetime import datetime
@@ -52,9 +53,11 @@ class SidekickAgent(voice.Agent):
         self._supabase_client = None
         self._conversation_id = None
         self._agent_id = None
+        self._current_turn_id: Optional[str] = None
         # Strategy: store final assistant transcript once per turn via session events
         self._suppress_on_assistant_transcript = True
         self._last_assistant_commit: str = ""
+        self._last_committed_text: str = ""
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
@@ -112,6 +115,29 @@ class SidekickAgent(voice.Agent):
                                     user_text = part.get("text")
                                     break
 
+            session_last = None
+            try:
+                if hasattr(self, "_agent_session"):
+                    session_last = getattr(self._agent_session, "_last_committed_text", None)
+            except Exception:
+                session_last = None
+
+            committed_candidates: List[str] = []
+            if session_last:
+                committed_candidates.append(session_last)
+            if self._last_committed_text:
+                committed_candidates.append(self._last_committed_text)
+
+            if committed_candidates:
+                best_candidate = max(committed_candidates, key=len)
+                if not user_text or len(best_candidate) > len(user_text):
+                    user_text = best_candidate
+                    try:
+                        if hasattr(new_message, "content") and isinstance(best_candidate, str):
+                            new_message.content = best_candidate
+                    except Exception:
+                        logger.debug("Unable to overwrite new_message.content with committed candidate")
+
             if not user_text:
                 # Try to read latest text captured on session or agent (populated by event handler)
                 try:
@@ -143,6 +169,17 @@ class SidekickAgent(voice.Agent):
                 return
             
             # Store user transcript
+            normalized_text = self._normalize_spelled_words(user_text)
+            if normalized_text != user_text:
+                logger.info(f"Normalized spelled sequence: '{user_text[:120]}' -> '{normalized_text[:120]}'")
+                user_text = normalized_text
+                try:
+                    if hasattr(new_message, "content"):
+                        new_message.content = normalized_text
+                except Exception:
+                    logger.debug("Failed to update new_message.content with normalized text")
+
+            self._last_committed_text = user_text
             self._current_user_transcript = user_text
             logger.info(f"Captured user text for transcript: {user_text[:100]}...")
             await self._handle_user_transcript(user_text)
@@ -274,6 +311,75 @@ class SidekickAgent(voice.Agent):
         """Get the current message ID"""
         return self._current_message_id
 
+    # ------------------------------------------------------------------
+    # Speech output sanitization
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sanitize_tts_text(text: str) -> str:
+        """Remove Markdown asterisks so TTS engines don't verbalize them."""
+        if not text:
+            return text
+
+        # Collapse Markdown emphasis markers while keeping the inner content
+        text = re.sub(r"\*\*(.+?)\*\*", r"\\1", text)
+        text = re.sub(r"\*(.+?)\*", r"\\1", text)
+
+        # Convert bullet markers to a hyphen separator that reads naturally
+        text = re.sub(r"(^|\n)\s*\*\s+", r"\1- ", text)
+
+        # Strip any other stray asterisks that might remain
+        text = text.replace("*", "")
+
+        return text
+
+    def tts_node(self, text: AsyncIterable[str], model_settings):
+        async def _apply_sanitizer():
+            async for chunk in text:
+                yield self._sanitize_tts_text(chunk)
+
+        return super().tts_node(_apply_sanitizer(), model_settings)
+
+    @staticmethod
+    def _normalize_spelled_words(text: str) -> str:
+        """Collapse sequences of single-letter tokens into contiguous strings for better search."""
+        if not text:
+            return text
+
+        pattern = re.compile(r"(?:(?<=^)|(?<=\s))(?:[A-Za-z](?:\s+|\s*[-]\s*)){2,}[A-Za-z](?=[\s,.;!?]|$)")
+
+        def replacer(match: re.Match) -> str:
+            chunk = match.group(0)
+            letters = re.findall(r"[A-Za-z]", chunk)
+            if len(letters) <= 1:
+                return chunk
+
+            joined = "".join(letters)
+            if len(letters) <= 4:
+                normalized = joined.upper()
+            else:
+                # Heuristic: split when the first letter repeats after at least two letters (spelled first/last name)
+                segments: List[str] = []
+                first_letter = letters[0]
+                buffer: List[str] = [first_letter]
+                for letter in letters[1:]:
+                    if letter == first_letter and len(buffer) >= 2 and not segments:
+                        segments.append("".join(buffer))
+                        buffer = [letter]
+                    else:
+                        buffer.append(letter)
+                if buffer:
+                    segments.append("".join(buffer))
+
+                if len(segments) > 1:
+                    normalized = " ".join(seg[0].upper() + "".join(ch.lower() for ch in seg[1:]) for seg in segments)
+                else:
+                    normalized = joined[0].upper() + "".join(ch.lower() for ch in joined[1:])
+
+            return normalized
+
+        return pattern.sub(replacer, text)
+
     def setup_transcript_storage(self, room: rtc.Room) -> None:
         """Set up room reference and metadata for transcript storage."""
         # Set up room reference for transcript storage
@@ -295,10 +401,13 @@ class SidekickAgent(voice.Agent):
             logger.info(f"   - Has agent_id: {self._agent_id is not None}")
             
             if self._supabase_client and self._conversation_id:
+                if not self._current_turn_id:
+                    self._current_turn_id = str(uuid.uuid4())
                 await self._store_transcript(
                     role="user",
                     content=text,
-                    citations=None
+                    citations=None,
+                    turn_id=self._current_turn_id
                 )
                 logger.info(f"✅ Stored user transcript to database")
             else:
@@ -315,12 +424,15 @@ class SidekickAgent(voice.Agent):
             citations = self._current_citations if self._citations_enabled else None
             
             if self._supabase_client and self._conversation_id:
+                turn_id = self._current_turn_id or str(uuid.uuid4())
                 await self._store_transcript(
                     role="assistant",
                     content=text,
-                    citations=citations
+                    citations=citations,
+                    turn_id=turn_id
                 )
                 logger.info(f"📝 Stored assistant transcript with {len(citations) if citations else 0} citations")
+                self._current_turn_id = None
         except Exception as e:
             logger.error(f"Failed to store assistant transcript: {e}")
     
@@ -370,9 +482,39 @@ class SidekickAgent(voice.Agent):
                 row["turn_id"] = turn_id
             
             # Use asyncio.to_thread to properly await the sync operation
-            def _insert():
-                return self._supabase_client.table("conversation_transcripts").insert(row).execute()
-            result = await asyncio.to_thread(_insert)
+            def _select_existing():
+                return (
+                    self._supabase_client
+                    .table("conversation_transcripts")
+                    .select("id")
+                    .eq("turn_id", turn_id)
+                    .eq("role", role)
+                    .limit(1)
+                    .execute()
+                )
+
+            existing = await asyncio.to_thread(_select_existing)
+
+            if existing and getattr(existing, "data", None):
+                update_payload = {k: v for k, v in row.items() if k != "created_at"}
+
+                def _update():
+                    return (
+                        self._supabase_client
+                        .table("conversation_transcripts")
+                        .update(update_payload)
+                        .eq("turn_id", turn_id)
+                        .eq("role", role)
+                        .execute()
+                    )
+
+                result = await asyncio.to_thread(_update)
+                logger.info(f"🔄 Updated existing {role} transcript for turn_id={turn_id}")
+            else:
+                def _insert():
+                    return self._supabase_client.table("conversation_transcripts").insert(row).execute()
+
+                result = await asyncio.to_thread(_insert)
             # Return inserted row id if available
             try:
                 if result and getattr(result, 'data', None):
@@ -391,6 +533,11 @@ class SidekickAgent(voice.Agent):
         """Public wrapper used by session event handlers."""
         try:
             citations = self._current_citations if (role == "assistant" and self._citations_enabled) else None
-            await self._store_transcript(role=role, content=content, citations=citations)
+            if role == "user" and not self._current_turn_id:
+                self._current_turn_id = str(uuid.uuid4())
+            turn_id = self._current_turn_id or str(uuid.uuid4())
+            await self._store_transcript(role=role, content=content, citations=citations, turn_id=turn_id)
+            if role == "assistant":
+                self._current_turn_id = None
         except Exception as e:
             logger.error(f"store_transcript failed: {e}")

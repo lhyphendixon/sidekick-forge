@@ -62,7 +62,7 @@ class RAGCitationsService:
         dataset_ids: List[int] = None,
         agent_slug: str = None,
         top_k: int = 12,
-        similarity_threshold: float = 0.5,
+        similarity_threshold: float = 0.4,
         max_documents: int = 4,
         max_chunks: int = 8
     ) -> RAGRetrievalResult:

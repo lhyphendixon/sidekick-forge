@@ -55,6 +55,8 @@ async def store_turn(
     assistant_text = turn_data.get('assistant_text', '')
     citations = turn_data.get('citations', [])
     metadata = turn_data.get('metadata', {})
+    if not isinstance(metadata, dict):
+        metadata = {}
     
     # Validate required fields
     if not conversation_id:
@@ -69,7 +71,25 @@ async def store_turn(
     
     try:
         timestamp = datetime.utcnow().isoformat()
-        
+
+        # Ensure a conversation record exists locally (tenant DB enforces FK)
+        if conversation_id:
+            try:
+                existing = supabase_client.table("conversations").select("id").eq("id", conversation_id).limit(1).execute()
+                if not existing.data:
+                    supabase_client.table("conversations").insert(
+                        {
+                            "id": conversation_id,
+                            "agent_id": agent_id,
+                            "user_id": user_id,
+                            "channel": metadata.get("channel", "voice"),
+                            "created_at": timestamp,
+                            "updated_at": timestamp,
+                        }
+                    ).execute()
+            except Exception as conversation_exc:
+                logger.warning(f"Failed to ensure conversation {conversation_id} exists: {conversation_exc}")
+
         # Prepare user message row
         user_row = {
             "conversation_id": conversation_id,

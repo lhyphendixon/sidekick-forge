@@ -29,6 +29,8 @@ services:
       - AGENT_NAME=sidekick-agent-staging
       - LIVEKIT_AGENT_NAME=sidekick-agent-staging
       - DOCKER_HOST=unix:///var/run/docker.sock
+      - DOCUMENT_PROCESSOR_MAX_CONCURRENCY=2
+      - DOCUMENT_PROCESSOR_MAX_CHUNKS=250
       # Remove duplicate DEVELOPMENT_MODE to avoid conflicting overrides
     volumes:
       - ./app:/app/app

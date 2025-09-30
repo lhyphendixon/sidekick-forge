@@ -176,12 +176,15 @@ async def entrypoint(ctx: JobContext):
         llm = create_llm(agent_config)
         
         # Create voice assistant
+        interrupt_duration = float(os.getenv("VOICE_INTERRUPT_DURATION", "0.9"))
+        interrupt_min_words = int(os.getenv("VOICE_INTERRUPT_MIN_WORDS", "4"))
+
         assistant = agents.VoiceAssistant(
             stt=stt,
             tts=tts,
             llm=llm,
-            interrupt_speech_duration=0.5,
-            interrupt_min_words=2,
+            interrupt_speech_duration=interrupt_duration,
+            interrupt_min_words=interrupt_min_words,
         )
         
         # Start the assistant
@@ -297,51 +300,72 @@ def create_tts(config: Dict[str, Any]):
     raise ValueError("No valid TTS API key found")
 
 def create_llm(config: Dict[str, Any]):
-    """Create LLM provider based on configuration"""
+    """Create LLM provider based on configuration (no silent fallbacks)."""
+
     groq_key = config.get("groq_api_key")
     openai_key = config.get("openai_api_key")
     cerebras_key = config.get("cerebras_api_key")
 
-    # Prefer explicit llm_model; fall back to generic model field otherwise
+    llm_provider = str(config.get("llm_provider") or "").strip().lower()
+
+    available_providers = {
+        "cerebras": bool(cerebras_key),
+        "groq": bool(groq_key),
+        "openai": bool(openai_key),
+    }
+
+    if not llm_provider:
+        candidates = [name for name, present in available_providers.items() if present]
+        if len(candidates) == 1:
+            llm_provider = candidates[0]
+        else:
+            raise ValueError(
+                "llm_provider must be specified explicitly when multiple or no provider keys are present"
+            )
+
+    if llm_provider not in available_providers:
+        raise ValueError(f"Unsupported llm_provider '{llm_provider}'.")
+
+    if not available_providers[llm_provider]:
+        raise ValueError(
+            f"API key for provider '{llm_provider}' is required but was not found."
+        )
+
     llm_model = config.get("llm_model") or config.get("model")
     if llm_model:
         llm_model = str(llm_model)
 
-    # Avoid pulling in obvious TTS values (e.g. sonic-2) as the chat model
     if not llm_model or llm_model.lower() in {"sonic-2", "sonic", "voice"}:
-        if cerebras_key:
+        if llm_provider == "cerebras":
             llm_model = "llama3.1-8b"
-        elif groq_key:
+        elif llm_provider == "groq":
             llm_model = "llama-3.3-70b-versatile"
-        else:
+        elif llm_provider == "openai":
             llm_model = "gpt-4o"
 
-    llm_provider = str(config.get("llm_provider") or "").lower()
+    logger.info(f"[{AGENT_NAME}] Using {llm_provider.title()} LLM with model: {llm_model}")
 
-    if cerebras_key and (llm_provider == "cerebras" or not llm_provider):
-        logger.info(f"[{AGENT_NAME}] Using Cerebras LLM with model: {llm_model}")
+    if llm_provider == "cerebras":
         return openai.LLM.with_cerebras(
             api_key=cerebras_key,
             model=llm_model,
         )
 
-    if groq_key and (llm_provider == "groq" or "llama" in llm_model.lower() or "mixtral" in llm_model.lower() or "qwen" in llm_model.lower()):
-        logger.info(f"[{AGENT_NAME}] Using Groq LLM with model: {llm_model}")
+    if llm_provider == "groq":
         return groq.LLM(
             api_key=groq_key,
             model=llm_model,
             temperature=0.7,
         )
 
-    if openai_key:
-        logger.info(f"[{AGENT_NAME}] Using OpenAI LLM with model: {llm_model}")
+    if llm_provider == "openai":
         return openai.LLM(
             api_key=openai_key,
             model=llm_model,
             temperature=0.7,
         )
 
-    raise ValueError("No valid LLM API key found")
+    raise ValueError(f"Unhandled llm_provider '{llm_provider}'")
 
 def main():
     """Main function to start the agent worker using CLI"""

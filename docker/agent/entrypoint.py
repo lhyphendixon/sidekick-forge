@@ -835,6 +835,50 @@ async def agent_job_handler(ctx: JobContext):
                 logger.warning(f"Tool registration failed: {type(e).__name__}: {e}")
             
             # Log and capture STT transcripts; commit turn on finals
+            commit_delay = float(os.getenv("VOICE_TURN_COMMIT_DELAY", "0.8"))
+            commit_timeout = float(os.getenv("VOICE_TRANSCRIPT_TIMEOUT", "0.5"))
+
+            if not hasattr(session, "_pending_commit_task"):
+                session._pending_commit_task = None
+            if not hasattr(session, "_current_turn_text"):
+                session._current_turn_text = ""
+            if not hasattr(agent, "_current_turn_text"):
+                agent._current_turn_text = ""
+            if not hasattr(session, "_last_committed_text"):
+                session._last_committed_text = ""
+            if not hasattr(agent, "_last_committed_text"):
+                agent._last_committed_text = ""
+
+            def _merge_transcript_text(existing: str, incoming: str) -> str:
+                """
+                Combine partial ASR chunks into a single utterance while avoiding obvious duplication.
+
+                The Deepgram stream we receive sometimes emits disjoint final chunks (e.g., "Hey" then
+                "is coming"), so we append when the new chunk does not already appear in the aggregate.
+                If the recognizer sends the entire sentence, we replace the aggregate to keep spacing right.
+                """
+
+                if not incoming:
+                    return existing
+
+                incoming = incoming.strip()
+                if not incoming:
+                    return existing
+
+                if not existing:
+                    return incoming
+
+                # If the incoming chunk already contains the existing text, prefer the richer version
+                if incoming.startswith(existing) or existing in incoming:
+                    return incoming
+
+                # If the existing text already includes this chunk (or a trimmed variant), keep existing
+                if incoming in existing:
+                    return existing
+
+                # Otherwise append with a space separator
+                return f"{existing.rstrip()} {incoming}".strip()
+
             @session.on("user_input_transcribed")
             def on_user_input_transcribed(ev):
                 try:
@@ -842,15 +886,16 @@ async def agent_job_handler(ctx: JobContext):
                     is_final = bool(getattr(ev, 'is_final', False))
                     logger.info(f"📝 STT transcript: '{txt[:200]}' final={is_final}")
                     if txt:
-                        session.latest_user_text = txt
-                        agent.latest_user_text = txt
+                        merged = _merge_transcript_text(
+                            getattr(session, "_current_turn_text", ""),
+                            txt,
+                        )
+                        session._current_turn_text = merged
+                        agent._current_turn_text = merged
+                        session.latest_user_text = merged
+                        agent.latest_user_text = merged
                         if is_final:
-                            push_runtime_context({"latest_user_text": txt})
-                    if is_final:
-                        try:
-                            session.commit_user_turn(transcript_timeout=0.0)
-                        except Exception as ce:
-                            logger.warning(f"commit_user_turn failed: {type(ce).__name__}: {ce}")
+                            push_runtime_context({"latest_user_text": merged})
                 except Exception as e:
                     logger.error(f"user_input_transcribed handler failed: {e}")
 
@@ -902,7 +947,7 @@ async def agent_job_handler(ctx: JobContext):
                         asyncio.create_task(agent.store_transcript('assistant', agent_text))
                 except Exception as e:
                     logger.error(f"Failed to commit assistant transcript: {e}")
-            
+
             # Store session reference on agent for access in on_user_turn_completed
             agent._agent_session = session
             
@@ -1132,10 +1177,71 @@ async def agent_job_handler(ctx: JobContext):
                 @session.on("user_started_speaking")
                 def _on_user_started():
                     logger.info("🎤 user_started_speaking")
+                    pending = getattr(session, "_pending_commit_task", None)
+                    if pending and not pending.done():
+                        pending.cancel()
+
+                    # Attempt to barge-in by interrupting any active assistant speech
+                    try:
+                        interrupt_future = session.interrupt(force=True)
+
+                        if interrupt_future:
+                            async def _log_interrupt_result(fut: asyncio.Future):
+                                try:
+                                    await fut
+                                    logger.info("⛔ Assistant speech interrupted due to user start")
+                                except Exception as interrupt_err:
+                                    logger.debug(
+                                        "Interrupt future raised %s: %s",
+                                        type(interrupt_err).__name__,
+                                        interrupt_err,
+                                    )
+
+                            asyncio.create_task(_log_interrupt_result(interrupt_future))
+                    except RuntimeError:
+                        logger.debug("Interrupt called while session inactive")
+                    except Exception as interrupt_call_err:
+                        logger.warning(
+                            "Failed to interrupt assistant speech: %s: %s",
+                            type(interrupt_call_err).__name__,
+                            interrupt_call_err,
+                        )
 
                 @session.on("user_stopped_speaking")
                 def _on_user_stopped():
                     logger.info("🛑 user_stopped_speaking")
+                    pending = getattr(session, "_pending_commit_task", None)
+                    if pending and not pending.done():
+                        pending.cancel()
+
+                    final_text = getattr(session, "_current_turn_text", "").strip()
+                    if not final_text:
+                        logger.info("🛑 user_stopped_speaking but no buffered transcript; skipping commit schedule")
+                        return
+
+                    async def _delayed_commit():
+                        try:
+                            await asyncio.sleep(commit_delay)
+                            buffered = getattr(session, "_current_turn_text", "").strip()
+                            if not buffered:
+                                logger.debug("Delayed commit skipped (buffer cleared before execution)")
+                                return
+                            session.latest_user_text = buffered
+                            agent.latest_user_text = buffered
+                            session._last_committed_text = buffered
+                            agent._last_committed_text = buffered
+                            push_runtime_context({"latest_user_text": buffered})
+                            session.commit_user_turn(transcript_timeout=commit_timeout)
+                            session._current_turn_text = ""
+                            agent._current_turn_text = ""
+                        except asyncio.CancelledError:
+                            logger.debug("Delayed commit cancelled before execution")
+                        except Exception as ce:
+                            logger.warning(f"commit_user_turn failed: {type(ce).__name__}: {ce}")
+                        finally:
+                            session._pending_commit_task = None
+
+                    session._pending_commit_task = asyncio.create_task(_delayed_commit())
 
                 # Primary commit: persist assistant transcript when conversation history updates
                 @session.on("conversation_item_added")

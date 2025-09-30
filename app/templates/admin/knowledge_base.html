@@ -895,12 +895,26 @@ class KnowledgeBaseManager {
             const response = await fetch(url, {
                 headers: headers
             });
-            
+
+            const contentType = response.headers.get('content-type') || '';
+            const bodyText = await response.text();
+
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                const statusText = response.statusText || bodyText.slice(0, 160);
+                throw new Error(`HTTP ${response.status}: ${statusText}`);
             }
-            
-            const documents = await response.json();
+
+            let documents = [];
+            if (contentType.includes('application/json')) {
+                try {
+                    documents = JSON.parse(bodyText);
+                } catch (parseError) {
+                    throw new Error('Server returned invalid JSON for documents list.');
+                }
+            } else {
+                throw new Error('Server returned an unexpected response format while loading documents.');
+            }
+
             const documentArray = Array.isArray(documents) ? documents : [];
 
             // Only hide loading if it was shown (not silent refresh)

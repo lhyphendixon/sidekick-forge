@@ -85,6 +85,12 @@
                     <p class="text-xs text-dark-text-secondary">Click below to enable audio so you can hear the assistant.</p>
                     <button id="enableAudioBtn" class="mt-3 btn-primary px-3 py-2 rounded text-xs font-medium">Enable Audio</button>
                 </div>
+                <div id="gestureHint" class="hidden mb-3 px-3 py-2 rounded border border-brand-teal/30 bg-brand-teal/10 text-xs text-dark-text text-center">
+                    Tap start to allow microphone access.
+                </div>
+                <button id="startVoiceBtn" class="hidden w-full mb-3 px-4 py-2 rounded-lg bg-brand-teal text-white text-sm font-medium hover:bg-brand-teal/90 transition-all">
+                    Start Voice Session
+                </button>
                 <div class="flex justify-center gap-3">
                     <!-- Mute Button -->
                     <button id="muteBtn" 
@@ -326,11 +332,60 @@ function stopTranscriptStream() {
     let audioUnlocked = false;
     const audioBanner = document.getElementById('audioPermissionBanner');
     const enableAudioBtn = document.getElementById('enableAudioBtn');
+    const startVoiceBtn = document.getElementById('startVoiceBtn');
+    const gestureHint = document.getElementById('gestureHint');
+    const ua = navigator.userAgent || '';
+    const isiPadOS = /iPad/.test(ua) || (ua.includes('Macintosh') && 'ontouchend' in document);
+    const isMobileTouch = window.matchMedia('(pointer: coarse)').matches && /Mobile|Tablet|Android|iP(ad|hone|od)/i.test(ua);
+    const requiresUserGesture = isiPadOS || isMobileTouch;
+    let userGestureSatisfied = !requiresUserGesture;
+    const showStartPrompt = () => {
+        if (!requiresUserGesture) return;
+        if (startVoiceBtn) {
+            startVoiceBtn.classList.remove('hidden');
+            startVoiceBtn.disabled = false;
+            startVoiceBtn.textContent = 'Start Voice Session';
+        }
+        if (gestureHint) {
+            gestureHint.classList.remove('hidden');
+        }
+    };
+    const hideStartPrompt = () => {
+        if (startVoiceBtn) {
+            startVoiceBtn.classList.add('hidden');
+        }
+        if (gestureHint) {
+            gestureHint.classList.add('hidden');
+        }
+    };
     let connectionMonitor = null;
     let monitorFailures = 0;
     let reconnectLock = false;
     let reconnectAttempts = 0;
     let manualDisconnect = false;
+
+    if (requiresUserGesture) {
+        showStartPrompt();
+    }
+
+    if (startVoiceBtn) {
+        startVoiceBtn.addEventListener('click', async () => {
+            userGestureSatisfied = true;
+            manualDisconnect = false;
+            hideStartPrompt();
+            startVoiceBtn.disabled = true;
+            startVoiceBtn.classList.add('opacity-70');
+            startVoiceBtn.textContent = 'Starting...';
+            try {
+                await connectToRoom();
+            } catch (err) {
+                console.warn('Voice start failed after user gesture', err);
+                showStartPrompt();
+            } finally {
+                startVoiceBtn.classList.remove('opacity-70');
+            }
+        });
+    }
 
     // Update UI status
     function updateStatus(state, message) {
@@ -453,7 +508,13 @@ function stopTranscriptStream() {
                 }
             }
             await new Promise(resolve => setTimeout(resolve, 600));
-            connectToRoom(true);
+            if (requiresUserGesture && !userGestureSatisfied) {
+                console.log('Reconnect awaiting fresh user gesture.');
+                updateStatus('disconnected', 'Tap Start Voice to reconnect');
+                showStartPrompt();
+            } else {
+                connectToRoom(true);
+            }
         } finally {
             reconnectLock = false;
         }
@@ -465,11 +526,20 @@ function stopTranscriptStream() {
         // Keep the LiveKit room connected so audio can finish streaming.
         updateStatus('disconnected', 'Disconnected');
         stopTranscriptStream();
+        if (requiresUserGesture) {
+            showStartPrompt();
+        }
     };
 
     // Main connect function
     window.connectToRoom = async function(isReconnect = false) {
         console.log('🚀 Starting LiveKit connection...');
+        if (requiresUserGesture && !userGestureSatisfied) {
+            console.warn('Voice connection blocked: awaiting user gesture');
+            showStartPrompt();
+            return;
+        }
+        hideStartPrompt();
         updateStatus('connecting', isReconnect ? 'Reconnecting to voice room...' : 'Connecting to voice room...');
         manualDisconnect = false;
 
@@ -516,6 +586,7 @@ function stopTranscriptStream() {
             room.on(LiveKit.RoomEvent.Connected, () => {
                 console.log('✅ Connected to room:', room.name);
                 updateStatus('connected', 'Connected to voice room');
+                hideStartPrompt();
                 document.getElementById('muteBtn').disabled = false;
                 
                 // Start transcript streaming when connected
@@ -532,6 +603,9 @@ function stopTranscriptStream() {
                 // Stop transcript streaming when disconnected
                 stopTranscriptStream();
                 clearConnectionMonitor();
+                if (manualDisconnect && requiresUserGesture) {
+                    showStartPrompt();
+                }
                 if (!manualDisconnect) {
                     setTimeout(() => reconnectToRoom('event-disconnected'), 1200);
                 }
@@ -662,6 +736,7 @@ function stopTranscriptStream() {
                 console.error('🎤 Media device error:', error);
                 updateStatus('error', 'Microphone access denied or unavailable');
                 document.getElementById('micStatus').textContent = 'Microphone: Error';
+                showStartPrompt();
             });
             
             room.on(LiveKit.RoomEvent.ConnectionQualityChanged, (quality, participant) => {
@@ -704,6 +779,9 @@ function stopTranscriptStream() {
             console.error('❌ Failed to connect:', error);
             updateStatus('error', 'Failed to connect to voice room');
             clearConnectionMonitor();
+            if (requiresUserGesture) {
+                showStartPrompt();
+            }
             if (!manualDisconnect) {
                 setTimeout(() => reconnectToRoom('connect-error'), 2000);
             }
@@ -726,10 +804,16 @@ function stopTranscriptStream() {
 
     // Auto-connect on load
     if (window.LIVEKIT_URL && window.LIVEKIT_TOKEN) {
-        console.log('🎬 Auto-connecting to room...');
-        setTimeout(() => {
-            connectToRoom();
-        }, 500);
+        if (requiresUserGesture) {
+            console.log('📱 Awaiting user gesture before connecting to LiveKit');
+            updateStatus('disconnected', 'Tap Start Voice to connect');
+            showStartPrompt();
+        } else {
+            console.log('🎬 Auto-connecting to room...');
+            setTimeout(() => {
+                connectToRoom();
+            }, 500);
+        }
     } else {
         console.error('Missing LiveKit configuration');
         updateStatus('error', 'Missing voice configuration');

@@ -7,6 +7,15 @@ server {
     listen 80;
     server_name ${DOMAIN_NAME} _;  # Accept both domain and catch-all
 
+    # Force HTTPS even when behind a reverse proxy / load balancer
+    if ($http_x_forwarded_proto = 'http') {
+        return 301 https://$host$request_uri;
+    }
+
+    if ($scheme = http) {
+        return 301 https://$host$request_uri;
+    }
+
     location / {
         proxy_pass http://fastapi;
         proxy_set_header Host $host;

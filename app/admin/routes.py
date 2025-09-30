@@ -10,6 +10,9 @@ import os
 import uuid
 from datetime import datetime, timedelta
 from livekit import api
+from pathlib import Path
+import mimetypes
+import re
 
 # These would be actual imports in the FastAPI app
 # from app.dependencies.admin_auth import get_admin_user
@@ -77,6 +80,20 @@ def get_wordpress_service() -> WordPressSiteService:
 
 # Initialize router
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+AGENT_IMAGE_MAX_BYTES = 5 * 1024 * 1024  # 5 MB limit
+ALLOWED_AGENT_IMAGE_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+}
+ALLOWED_AGENT_IMAGE_EXTENSIONS = {ext for ext in ALLOWED_AGENT_IMAGE_TYPES.values()} | {".jpeg"}
+AGENT_IMAGE_STORAGE_DIR = (
+    Path(__file__).resolve().parent.parent / "static" / "images" / "agents"
+)
 
 # Initialize template engine
 import os
@@ -3927,6 +3944,88 @@ async def metrics_dashboard(
 
 # Export router and utilities
 __all__ = ["router", "get_redis"]
+
+
+
+@router.post("/agents/{client_id}/{agent_slug}/upload-image")
+async def upload_agent_image(
+    client_id: str,
+    agent_slug: str,
+    file: UploadFile = File(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Persist an uploaded image to the static assets directory for an agent."""
+
+    if not file:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    content_type = (file.content_type or "").lower()
+    suffix = ""
+
+    if file.filename:
+        original_suffix = Path(file.filename).suffix.lower()
+        if original_suffix in ALLOWED_AGENT_IMAGE_EXTENSIONS:
+            suffix = original_suffix
+
+    if not suffix and content_type in ALLOWED_AGENT_IMAGE_TYPES:
+        suffix = ALLOWED_AGENT_IMAGE_TYPES[content_type]
+
+    if not suffix and content_type:
+        guessed_suffix = mimetypes.guess_extension(content_type)
+        if guessed_suffix in ALLOWED_AGENT_IMAGE_EXTENSIONS:
+            suffix = guessed_suffix
+
+    if not suffix:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported image type. Please upload PNG, JPG, WEBP, GIF, or SVG files.",
+        )
+
+    try:
+        contents = await file.read()
+    except Exception as exc:
+        logger.error("Failed to read uploaded agent image: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to read uploaded file") from exc
+
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    if len(contents) > AGENT_IMAGE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds 5 MB limit")
+
+    AGENT_IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    safe_slug = re.sub(r"[^a-z0-9_-]", "", agent_slug.lower()) or "agent"
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    unique = uuid.uuid4().hex[:8]
+    filename = f"{safe_slug}_{timestamp}_{unique}{suffix}"
+    destination = AGENT_IMAGE_STORAGE_DIR / filename
+
+    try:
+        with destination.open("wb") as buffer:
+            buffer.write(contents)
+    except Exception as exc:
+        logger.error("Failed to persist agent image '%s': %s", filename, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to save uploaded image") from exc
+
+    public_url = f"/static/images/agents/{filename}"
+    logger.info(
+        "Agent image uploaded",
+        extra={
+            "client_id": client_id,
+            "agent_slug": agent_slug,
+            "stored_filename": filename,
+            "size_bytes": len(contents),
+        },
+    )
+
+    return {
+        "success": True,
+        "url": public_url,
+        "filename": filename,
+        "content_type": content_type or mimetypes.guess_type(filename)[0],
+        "size": len(contents),
+    }
 
 
 

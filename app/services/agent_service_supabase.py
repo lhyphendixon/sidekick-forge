@@ -295,7 +295,11 @@ class AgentService:
             agent_dict = agent_data.dict()
             agent_dict["created_at"] = datetime.utcnow().isoformat()
             agent_dict["updated_at"] = datetime.utcnow().isoformat()
-            
+
+            # Ensure show_citations always has a boolean (Supabase default won't fire if we send NULL)
+            if agent_dict.get("show_citations") is None:
+                agent_dict["show_citations"] = True
+
             # Convert nested objects to JSON strings for Supabase
             if "voice_settings" in agent_dict and agent_dict["voice_settings"]:
                 agent_dict["voice_settings"] = json.dumps(agent_dict["voice_settings"])

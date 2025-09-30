@@ -7,8 +7,20 @@ Uses remote embedding services only - no local models or vector stores
 import asyncio
 import logging
 import json
+import os
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
+
+# ------------------------------------------------------------------
+# Context truncation defaults (override via ENV when needed)
+# ------------------------------------------------------------------
+
+MAX_KNOWLEDGE_RESULTS = int(os.getenv("CONTEXT_MAX_KNOWLEDGE_RESULTS", "3"))
+MAX_CONVERSATION_RESULTS = int(os.getenv("CONTEXT_MAX_CONVERSATION_RESULTS", "3"))
+MAX_PROFILE_FIELD_CHARS = int(os.getenv("CONTEXT_MAX_PROFILE_FIELD_CHARS", "500"))
+MAX_KNOWLEDGE_EXCERPT_CHARS = int(os.getenv("CONTEXT_MAX_KNOWLEDGE_EXCERPT_CHARS", "600"))
+MAX_CONVERSATION_SNIPPET_CHARS = int(os.getenv("CONTEXT_MAX_CONVERSATION_SNIPPET_CHARS", "450"))
+CONTEXT_MARKDOWN_CHAR_BUDGET = int(os.getenv("CONTEXT_MARKDOWN_CHAR_BUDGET", "20000"))
 import httpx
 import time
 
@@ -422,13 +434,14 @@ class AgentContextManager:
             result = self.supabase.rpc("match_documents", {
                 "p_query_embedding": query_embedding,
                 "p_agent_slug": agent_slug,
-                "p_match_threshold": 0.5,
-                "p_match_count": 5
+                "p_match_threshold": 0.4,
+                "p_match_count": MAX_KNOWLEDGE_RESULTS
             }).execute()
             
             if result.data:
                 logger.info(f"✅ match_documents returned {len(result.data)} results.")
                 formatted_results = self._format_match_documents_results(result.data)
+                formatted_results = formatted_results[:MAX_KNOWLEDGE_RESULTS]
                 return formatted_results, time.perf_counter() - start_time
             
             logger.info("No relevant knowledge found via RAG.")
@@ -482,14 +495,14 @@ class AgentContextManager:
                 "query_embeddings": query_embedding,
                 "agent_slug_param": agent_slug,
                 "user_id_param": user_id,  # Use the passed user_id, not self.user_id
-                "match_count": 5
+                "match_count": MAX_CONVERSATION_RESULTS
             }).execute()
 
             if result.data:
                 logger.info(f"✅ match_conversation_transcripts_secure returned {len(result.data)} results.")
                 # Format the RPC results
                 conversation_results = []
-                for match in result.data:
+                for match in result.data[:MAX_CONVERSATION_RESULTS]:
                     conversation_results.append({
                         "user_message": match.get("user_message", ""),
                         "agent_response": match.get("agent_response", ""),
@@ -504,7 +517,7 @@ class AgentContextManager:
         except Exception as e:
             logger.error(f"Conversation RAG error: {e}")
             raise
-    
+
     def _format_context_as_markdown(
         self,
         profile: Dict[str, Any],
@@ -538,10 +551,10 @@ class AgentContextManager:
             # Check for various name fields
             name = profile.get("name") or profile.get("full_name") or profile.get("display_name") or profile.get("username")
             if name:
-                sections.append(f"**Name:** {name}  ")
+                sections.append(f"**Name:** {self._truncate_text(name, MAX_PROFILE_FIELD_CHARS)}  ")
             
             if profile.get("email"):
-                sections.append(f"**Email:** {profile['email']}  ")
+                sections.append(f"**Email:** {self._truncate_text(profile['email'], MAX_PROFILE_FIELD_CHARS)}  ")
             
             # Check for both 'tags' and 'Tags' fields
             tags_data = profile.get("tags") or profile.get("Tags")
@@ -551,10 +564,10 @@ class AgentContextManager:
                 sections.append(f"**Tags:** {tags_str}  ")
             
             if profile.get("goals"):
-                sections.append(f"**Goals:** {profile['goals']}  ")
+                sections.append(f"**Goals:** {self._truncate_text(profile['goals'], MAX_PROFILE_FIELD_CHARS)}  ")
             
             if profile.get("preferences"):
-                sections.append(f"**Preferences:** {profile['preferences']}  ")
+                sections.append(f"**Preferences:** {self._truncate_text(profile['preferences'], MAX_PROFILE_FIELD_CHARS)}  ")
             
             sections.append("")  # Empty line
         
@@ -566,7 +579,8 @@ class AgentContextManager:
                 sections.append(f"### Document: \"{item['title']}\" (Relevance: {item['relevance']})")
                 
                 # Format excerpt with proper line breaks
-                excerpt = item['excerpt'].strip()
+                raw_excerpt = (item.get('excerpt') or '').strip()
+                excerpt = self._truncate_text(raw_excerpt, MAX_KNOWLEDGE_EXCERPT_CHARS)
                 if excerpt:
                     # Indent excerpt lines
                     excerpt_lines = excerpt.split('\n')
@@ -594,8 +608,12 @@ class AgentContextManager:
                 sections.append(f"### Previous Discussion ({formatted_date})")
                 
                 # Format the exchange
-                sections.append(f"**User:** \"{conv['user_message']}\"  ")
-                sections.append(f"**Agent:** \"{conv['agent_response']}\"  ")
+                sections.append(
+                    f"**User:** \"{self._truncate_text(conv.get('user_message', ''), MAX_CONVERSATION_SNIPPET_CHARS)}\"  "
+                )
+                sections.append(
+                    f"**Agent:** \"{self._truncate_text(conv.get('agent_response', ''), MAX_CONVERSATION_SNIPPET_CHARS)}\"  "
+                )
                 
                 # Add relevance if significant
                 if conv.get("relevance", 0) > 0.7:
@@ -614,7 +632,46 @@ class AgentContextManager:
         while "\n\n\n" in markdown:
             markdown = markdown.replace("\n\n\n", "\n\n")
         
-        return markdown.strip()
+        markdown = markdown.strip()
+
+        if len(markdown) > CONTEXT_MARKDOWN_CHAR_BUDGET:
+            logger.warning(
+                "Context markdown exceeds budget (%s > %s); trimming lower-priority sections",
+                len(markdown),
+                CONTEXT_MARKDOWN_CHAR_BUDGET,
+            )
+            markdown = self._trim_markdown(markdown, CONTEXT_MARKDOWN_CHAR_BUDGET)
+
+        return markdown
+
+    @staticmethod
+    def _truncate_text(value: Any, max_chars: int) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 1].rstrip() + "…"
+
+    def _trim_markdown(self, markdown: str, budget: int) -> str:
+        """Best-effort trimming that drops the lowest priority sections first."""
+        if len(markdown) <= budget:
+            return markdown
+
+        # Split into sections separated by headings
+        sections = markdown.split("\n## ")
+        if len(sections) == 1:
+            return markdown[:budget]
+
+        # Keep header (first entry) and iteratively add sections until limit
+        rebuilt = sections[0]
+        for section in sections[1:]:
+            candidate = rebuilt + "\n## " + section
+            if len(candidate) > budget:
+                break
+            rebuilt = candidate
+
+        return rebuilt[:budget]
     
     def _merge_system_prompts(self, original_prompt: str, context_markdown: str) -> str:
         """

@@ -5,6 +5,7 @@ Handles text extraction, chunking, and vectorization of uploaded documents
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import uuid
@@ -12,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
 import mimetypes
+import shutil
 
 # Text extraction libraries
 import PyPDF2
@@ -44,8 +46,11 @@ class DocumentProcessor:
         self.supabase = None  # Will be initialized on first use
         self.ai_processor = ai_processor
         # Cache client-specific Supabase connections with the credentials used to build them
-        # Structure: { client_id: { 'client': SupabaseClient, 'url': str, 'key': str } }
+        # Structure: { client_id: { 'client': SupabaseClient, 'url': str, 'key': str, 'settings': Dict, 'fetched_at': str } }
         self.client_supabase_connections = {}
+        # Limit concurrent document processing tasks to avoid CPU exhaustion
+        max_concurrency = int(os.getenv("DOCUMENT_PROCESSOR_MAX_CONCURRENCY", "2"))
+        self._processing_semaphore = asyncio.Semaphore(max(1, max_concurrency))
         self.supported_types = {
             'pdf': self._extract_pdf_text,
             'txt': self._extract_text_file,
@@ -56,6 +61,14 @@ class DocumentProcessor:
         self.max_file_size = 50 * 1024 * 1024  # 50MB
         self.chunk_size = 500  # words
         self.chunk_overlap = 50  # words
+
+        default_upload_root = Path(__file__).resolve().parents[2] / 'data' / 'uploads'
+        upload_root = os.getenv("DOCUMENT_UPLOAD_ROOT", str(default_upload_root))
+        self.upload_root = Path(upload_root)
+        try:
+            self.upload_root.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Unable to ensure upload root {self.upload_root}: {e}")
         
     def _ensure_supabase(self):
         """Ensure Supabase client is initialized"""
@@ -63,76 +76,200 @@ class DocumentProcessor:
             self.supabase = supabase_manager.admin_client
         return self.supabase
     
-    async def _get_client_supabase(self, client_id: str):
-        """Get client-specific Supabase connection, refreshing cache if credentials changed"""
+    async def _get_client_context(self, client_id: str):
+        """Get (supabase_client, client_settings) for a client, caching results."""
+        if not client_id:
+            return self._ensure_supabase(), None
+
         cached = self.client_supabase_connections.get(client_id)
-        
+        if cached and cached.get('client'):
+            # If we already cached settings, reuse them to avoid re-syncing on every chunk
+            if cached.get('settings') is not None:
+                return cached['client'], cached.get('settings')
+
         try:
-            logger.info(f"Creating new Supabase connection for client {client_id}")
             from app.core.dependencies import get_client_service
             from supabase import create_client
-            
-            # Get client details
+            from app.config import settings as app_settings
+
             client_service = get_client_service()
-            client = await client_service.get_client(client_id)
-            
+            # Avoid triggering auto-sync on every document access; we only need stored settings here.
+            client = await client_service.get_client(client_id, auto_sync=False)
+
             if not client:
                 logger.error(f"Client {client_id} not found in database")
-                return None
-            
-            # Get client's Supabase credentials
-            # Check if credentials are stored directly on client record (new structure)
+                return None, None
+
+            # Extract Supabase credentials using the shared client service helper so we inherit
+            # any normalization/fallback logic (e.g., when tenant-specific projects are offline).
+            supabase_config = await client_service.get_client_supabase_config(client_id, auto_sync=False)
             if isinstance(client, dict):
-                supabase_url = client.get('supabase_url', '')
-                service_key = client.get('supabase_service_role_key', '')
+                client_settings = client.get('settings', {})
             else:
-                supabase_url = getattr(client, 'supabase_url', '')
-                service_key = getattr(client, 'supabase_service_role_key', '')
-            
-            # Fall back to checking settings.supabase (old structure) if not found
-            if not supabase_url or not service_key:
-                client_settings = client.get('settings', {}) if isinstance(client, dict) else getattr(client, 'settings', {})
-                supabase_settings = client_settings.get('supabase', {}) if isinstance(client_settings, dict) else getattr(client_settings, 'supabase', {})
-                
-                if not supabase_url:
-                    supabase_url = supabase_settings.get('url', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'url', '')
-                if not service_key:
-                    service_key = supabase_settings.get('service_role_key', '') if isinstance(supabase_settings, dict) else getattr(supabase_settings, 'service_role_key', '')
-            
-            if not supabase_url or not service_key:
+                client_settings = getattr(client, 'settings', {})
+
+            if hasattr(client_settings, 'dict'):
+                client_settings = client_settings.dict()
+
+            if not supabase_config:
                 logger.warning(f"Client {client_id} missing Supabase credentials")
-                return None
-            
-            # Check if this client is using the main Supabase instance
-            from app.config import settings
-            if supabase_url == settings.supabase_url:
-                logger.info(f"Client {client_id} uses main Supabase instance, using admin client")
+                return None, client_settings or {}
+
+            # Re-use cached connection if credentials match
+            supabase_url = supabase_config["url"]
+            service_key = supabase_config["service_role_key"]
+
+            if supabase_config.get("_fallback"):
+                logger.warning(
+                    "Client %s Supabase configuration unreachable; using platform Supabase fallback",
+                    client_id,
+                )
+
+            if cached and cached.get('url') == supabase_url and cached.get('key') == service_key:
+                cached['settings'] = client_settings or {}
+                cached['fetched_at'] = datetime.now(timezone.utc).isoformat()
+                return cached.get('client'), cached.get('settings')
+
+            # Build Supabase client (or reuse admin) based on project
+            if supabase_url == app_settings.supabase_url:
                 client_supabase = self._ensure_supabase()
-                used_key = settings.supabase_service_role_key
+                used_key = app_settings.supabase_service_role_key
             else:
                 client_supabase = create_client(supabase_url, service_key)
                 used_key = service_key
 
-            # If we had a cached connection, ensure credentials match; if not, overwrite cache
-            if cached:
-                cached_url = cached.get('url')
-                cached_key = cached.get('key')
-                if cached_url == supabase_url and cached_key == used_key:
-                    # Keep existing cached client
-                    return cached.get('client')
-
-            # Store/refresh cache entry
             self.client_supabase_connections[client_id] = {
                 'client': client_supabase,
                 'url': supabase_url,
                 'key': used_key,
+                'settings': client_settings or {},
+                'fetched_at': datetime.now(timezone.utc).isoformat(),
             }
 
-            return client_supabase
-            
+            return client_supabase, client_settings or {}
+
         except Exception as e:
             logger.error(f"Error creating client Supabase connection for {client_id}: {e}")
-            return None
+            return None, None
+
+    async def _get_client_supabase(self, client_id: str):
+        """Compatibility helper that returns only the Supabase client."""
+        supabase, _ = await self._get_client_context(client_id)
+        return supabase
+
+    def _calculate_checksum(self, file_path: str) -> str:
+        """Calculate SHA256 checksum for deduplication."""
+        sha256 = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+
+    def _stage_file_for_processing(self, source_path: str, client_id: Optional[str] = None) -> str:
+        """Move uploaded file to a persistent staging area to survive queue delays."""
+        source = Path(source_path)
+        if not source.exists():
+            raise FileNotFoundError(f"Uploaded file missing at {source_path}")
+
+        date_prefix = datetime.now(timezone.utc).strftime("%Y/%m/%d")
+        dest_dir = self.upload_root / (client_id or "platform") / date_prefix
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.error(f"Failed to create staging directory {dest_dir}: {e}")
+            raise
+
+        dest_name = f"{uuid.uuid4().hex}{source.suffix}"
+        dest_path = dest_dir / dest_name
+
+        try:
+            shutil.move(str(source), str(dest_path))
+        except Exception as e:
+            logger.error(f"Failed to move uploaded file to staging area: {e}")
+            raise
+
+        # Attempt to remove empty temp folder
+        try:
+            parent = source.parent
+            if parent.exists() and parent != dest_dir and not any(parent.iterdir()):
+                parent.rmdir()
+        except Exception:
+            pass
+
+        return str(dest_path)
+
+    def _remove_temp_file(self, file_path: str):
+        """Remove temporary upload file created by the uploader."""
+        if not file_path:
+            return
+        try:
+            path_obj = Path(file_path)
+            if path_obj.exists():
+                path_obj.unlink()
+            parent = path_obj.parent
+            if parent.exists() and parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+        except Exception as e:
+            logger.warning(f"Failed to remove temporary upload {file_path}: {e}")
+
+    async def _find_existing_ready_document(
+        self,
+        supabase_client,
+        checksum: str,
+        title: str,
+        file_size: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Look for an existing ready document that matches upload (by checksum or title/size)."""
+        try:
+            # Prefer checksum match when available on stored metadata
+            if checksum:
+                try:
+                    result = supabase_client.table('documents') \
+                        .select('id,status,metadata,chunk_count') \
+                        .eq('status', 'ready') \
+                        .filter('metadata->>checksum', 'eq', checksum) \
+                        .limit(1) \
+                        .execute()
+                    if result.data:
+                        return result.data[0]
+                except Exception as e:
+                    logger.debug(f"Checksum lookup failed (falling back to title/size): {e}")
+
+            # Fallback to title + file size match
+            result = supabase_client.table('documents') \
+                .select('id,status,chunk_count') \
+                .eq('status', 'ready') \
+                .eq('title', title) \
+                .eq('file_size', file_size) \
+                .limit(1) \
+                .execute()
+            if result.data:
+                return result.data[0]
+
+        except Exception as e:
+            logger.error(f"Error checking for existing document: {e}")
+
+        return None
+
+    def _cleanup_staged_file(self, file_path: str):
+        """Remove staged file and prune empty directories back to the staging root."""
+        if not file_path:
+            return
+
+        path_obj = Path(file_path)
+        if path_obj.exists():
+            try:
+                path_obj.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to delete staged file {file_path}: {e}")
+
+        try:
+            current = path_obj.parent
+            while current != self.upload_root and self.upload_root in current.parents:
+                current.rmdir()
+                current = current.parent
+        except OSError:
+            pass
     
     async def process_uploaded_file(
         self, 
@@ -154,6 +291,61 @@ class DocumentProcessor:
                 }
             
             file_info = validation_result['file_info']
+            checksum = self._calculate_checksum(file_path)
+
+            # Prepare Supabase client early for dedupe checks/assignments
+            supabase_client = None
+            if client_id:
+                supabase_client = await self._get_client_supabase(client_id)
+                if not supabase_client:
+                    logger.error(f"Could not get Supabase connection for client {client_id}")
+                    return {
+                        'success': False,
+                        'error': 'Failed to get client Supabase connection'
+                    }
+            else:
+                supabase_client = self._ensure_supabase()
+
+            existing_document = await self._find_existing_ready_document(
+                supabase_client,
+                checksum,
+                title,
+                file_info['size'],
+            )
+
+            if existing_document:
+                logger.info(
+                    "Skipping upload for '%s' (duplicate ready document %s)",
+                    title,
+                    existing_document['id'],
+                )
+
+                if agent_ids:
+                    await self._assign_document_to_agents(
+                        str(existing_document['id']),
+                        agent_ids,
+                        client_id,
+                        supabase=supabase_client,
+                    )
+
+                self._remove_temp_file(file_path)
+
+                return {
+                    'success': True,
+                    'document_id': str(existing_document['id']),
+                    'status': existing_document.get('status', 'ready'),
+                    'duplicate': True,
+                    'message': 'Document already processed; reusing existing copy',
+                    'queued': False,
+                }
+
+            try:
+                file_path = self._stage_file_for_processing(file_path, client_id)
+            except Exception:
+                return {
+                    'success': False,
+                    'error': 'Failed to stage uploaded file for processing'
+                }
             
             # Create document record
             document_id = await self._create_document_record(
@@ -162,7 +354,9 @@ class DocumentProcessor:
                 description=description,
                 file_info=file_info,
                 user_id=user_id,
-                client_id=client_id
+                client_id=client_id,
+                checksum=checksum,
+                supabase=supabase_client,
             )
             
             if not document_id:
@@ -247,7 +441,9 @@ class DocumentProcessor:
         description: str,
         file_info: Dict,
         user_id: str = None,
-        client_id: str = None
+        client_id: str = None,
+        checksum: str = '',
+        supabase=None,
     ) -> str:
         """Create document record in client-specific Supabase"""
         try:
@@ -258,28 +454,31 @@ class DocumentProcessor:
                 'file_size': file_info['size'],
                 'user_id': user_id,
                 'status': 'processing',
+                'processing_status': 'processing',
                 'document_type': 'knowledge_base',
                 'metadata': {
                     'file_path': file_path,
                     'mime_type': file_info.get('mime_type'),
                     'upload_date': datetime.now(timezone.utc).isoformat(),
                     'processing_started': datetime.now(timezone.utc).isoformat(),
-                    'description': description if description else ''  # Store description in metadata
+                    'description': description if description else '',  # Store description in metadata
+                    'checksum': checksum,
                 }
             }
             
             # Use client-specific Supabase if client_id provided
-            if client_id:
-                supabase = await self._get_client_supabase(client_id)
-                if not supabase:
+            supabase_client = supabase
+            if client_id and supabase_client is None:
+                supabase_client = await self._get_client_supabase(client_id)
+                if not supabase_client:
                     logger.error(f"Could not get Supabase connection for client {client_id}")
                     return None
-            else:
-                supabase = self._ensure_supabase()
+            elif supabase_client is None:
+                supabase_client = self._ensure_supabase()
             
             # Don't include ID for clients using auto-incrementing bigint IDs
             # The database will auto-generate the ID
-            result = supabase.table('documents').insert(document_data).execute()
+            result = supabase_client.table('documents').insert(document_data).execute()
             
             if result.data:
                 # Handle both string and integer IDs
@@ -301,97 +500,117 @@ class DocumentProcessor:
         client_id: str = None
     ):
         """Async document processing pipeline"""
-        try:
-            logger.info(f"Starting async processing for document {document_id}")
-            
-            # Extract text
-            extracted_text = await self._extract_text(file_path)
-            if not extracted_text:
-                await self._update_document_status(document_id, 'error', 'Failed to extract text', client_id)
-                return
-            
-            # Clean and chunk text
-            cleaned_text = self._clean_text(extracted_text)
-            chunks = self._split_text_into_chunks(cleaned_text)
-            
-            logger.info(f"Created {len(chunks)} chunks for document {document_id}")
-            
-            # Get client settings for embedding generation
+        async with self._processing_semaphore:
+            supabase_client = None
             client_settings = None
-            if client_id:
-                try:
-                    from app.core.dependencies import get_client_service
-                    client_service = get_client_service()
-                    client = await client_service.get_client(client_id)
-                    if client:
-                        client_settings = client.get('settings', {}) if isinstance(client, dict) else getattr(client, 'settings', {})
-                        # Convert to dict if it's a model object
-                        if hasattr(client_settings, 'dict'):
-                            client_settings = client_settings.dict()
-                        
-                        logger.info(f"[DEBUG] Got client settings for {client_id}")
-                        logger.info(f"[DEBUG] Embedding provider: {client_settings.get('embedding', {}).get('provider')}")
-                        logger.info(f"[DEBUG] API keys available: {list(client_settings.get('api_keys', {}).keys())}")
-                        logger.info(f"[DEBUG] SiliconFlow key present: {'siliconflow_api_key' in client_settings.get('api_keys', {})}")
-                except Exception as e:
-                    logger.warning(f"Could not get client settings for embeddings: {e}")
-            
-            # Generate embeddings for document and chunks
-            document_embeddings = await self._generate_document_embeddings(cleaned_text[:2000], client_settings)  # Use first 2000 chars for doc-level embedding
-            
-            # Process chunks
-            processed_chunks = []
-            for i, chunk in enumerate(chunks):
-                try:
-                    chunk_embeddings = await self._generate_chunk_embeddings(chunk, client_settings)
-                    chunk_id = await self._store_document_chunk(
-                        document_id=document_id,
-                        chunk_text=chunk,
-                        chunk_index=i,
-                        embeddings=chunk_embeddings,
-                        client_id=client_id
+            truncated_chunks = False
+            total_chunks_before_truncation = 0
+            try:
+                logger.info(f"Starting async processing for document {document_id}")
+
+                if client_id:
+                    supabase_client, client_settings = await self._get_client_context(client_id)
+                    if not supabase_client:
+                        await self._update_document_status(
+                            document_id,
+                            'error',
+                            'Failed to initialize client Supabase connection',
+                            client_id,
+                            supabase=None,
+                        )
+                        return
+                else:
+                    supabase_client = self._ensure_supabase()
+
+                # Extract text
+                extracted_text = await self._extract_text(file_path)
+                if not extracted_text:
+                    await self._update_document_status(
+                        document_id,
+                        'error',
+                        'Failed to extract text',
+                        client_id,
+                        supabase=supabase_client,
                     )
-                    
-                    if chunk_id:
-                        processed_chunks.append({
-                            'id': chunk_id,
-                            'index': i,
-                            'text': chunk,
-                            'has_embeddings': bool(chunk_embeddings)
-                        })
-                except Exception as e:
-                    logger.warning(f"Failed to process chunk {i} for document {document_id}: {e}")
-            
-            # Update document with results
-            await self._finalize_document_processing(
-                document_id=document_id,
-                content=cleaned_text,
-                embeddings=document_embeddings,
-                chunk_count=len(processed_chunks),
-                agent_ids=agent_ids,
-                client_id=client_id
-            )
-            
-            logger.info(f"Completed processing for document {document_id}")
-            
-            # Clean up temporary file after processing
-            try:
-                if os.path.exists(file_path):
-                    os.unlink(file_path)
-                    logger.debug(f"Cleaned up temporary file: {file_path}")
-            except Exception as cleanup_error:
-                logger.warning(f"Failed to clean up temporary file {file_path}: {cleanup_error}")
-            
-        except Exception as e:
-            logger.error(f"Error in async document processing for {document_id}: {e}")
-            await self._update_document_status(document_id, 'error', str(e), client_id)
-            
-            # Clean up temporary file on error too
-            try:
-                if os.path.exists(file_path):
-                    os.unlink(file_path)
-            except:
-                pass
+                    return
+
+                # Clean and chunk text
+                cleaned_text = self._clean_text(extracted_text)
+                chunks = self._split_text_into_chunks(cleaned_text)
+                total_chunks_before_truncation = len(chunks)
+
+                max_chunks = int(os.getenv("DOCUMENT_PROCESSOR_MAX_CHUNKS", "250"))
+                if total_chunks_before_truncation > max_chunks:
+                    truncated_chunks = True
+                    logger.warning(
+                        f"Document {document_id} produced {total_chunks_before_truncation} chunks; truncating to {max_chunks}"
+                    )
+                    chunks = chunks[:max_chunks]
+
+                logger.info(f"Created {len(chunks)} chunks for document {document_id}")
+
+                # Generate embeddings for document and chunks
+                document_embeddings = await self._generate_document_embeddings(
+                    cleaned_text[:2000], client_settings
+                )
+
+                # Process chunks
+                processed_chunks = []
+                for i, chunk in enumerate(chunks):
+                    try:
+                        chunk_embeddings = await self._generate_chunk_embeddings(chunk, client_settings)
+                        chunk_id = await self._store_document_chunk(
+                            document_id=document_id,
+                            chunk_text=chunk,
+                            chunk_index=i,
+                            embeddings=chunk_embeddings,
+                            client_id=client_id,
+                            supabase=supabase_client,
+                        )
+
+                        if chunk_id:
+                            processed_chunks.append({
+                                'id': chunk_id,
+                                'index': i,
+                                'text': chunk,
+                                'has_embeddings': bool(chunk_embeddings)
+                            })
+                    except Exception as e:
+                        logger.warning(f"Failed to process chunk {i} for document {document_id}: {e}")
+
+                extra_metadata = {
+                    'truncated_chunks': truncated_chunks,
+                    'original_chunk_count': total_chunks_before_truncation,
+                }
+
+                # Update document with results
+                await self._finalize_document_processing(
+                    document_id=document_id,
+                    content=cleaned_text,
+                    embeddings=document_embeddings,
+                    chunk_count=len(processed_chunks),
+                    agent_ids=agent_ids,
+                    client_id=client_id,
+                    supabase=supabase_client,
+                    extra_metadata=extra_metadata,
+                )
+
+                logger.info(f"Completed processing for document {document_id}")
+
+            except Exception as e:
+                logger.error(f"Error in async document processing for {document_id}: {e}")
+                await self._update_document_status(
+                    document_id,
+                    'error',
+                    str(e),
+                    client_id,
+                    supabase=supabase_client,
+                )
+            finally:
+                try:
+                    self._cleanup_staged_file(file_path)
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up staged file {file_path}: {cleanup_error}")
     
     async def _extract_text(self, file_path: str) -> str:
         """Extract text from file based on type"""
@@ -549,7 +768,8 @@ class DocumentProcessor:
         chunk_text: str,
         chunk_index: int,
         embeddings: Optional[List[float]] = None,
-        client_id: str = None
+        client_id: str = None,
+        supabase=None
     ) -> Optional[str]:
         """Store a document chunk in Supabase"""
         try:
@@ -574,15 +794,16 @@ class DocumentProcessor:
             }
             
             # Use client-specific Supabase if client_id provided
-            if client_id:
-                supabase = await self._get_client_supabase(client_id)
-                if not supabase:
+            supabase_client = supabase
+            if client_id and supabase_client is None:
+                supabase_client, _ = await self._get_client_context(client_id)
+                if not supabase_client:
                     logger.error(f"Could not get Supabase connection for client {client_id}")
                     return None
-            else:
-                supabase = self._ensure_supabase()
+            elif supabase_client is None:
+                supabase_client = self._ensure_supabase()
             
-            result = supabase.table('document_chunks').insert(chunk_data).execute()
+            result = supabase_client.table('document_chunks').insert(chunk_data).execute()
             
             if result.data:
                 return result.data[0]['id']
@@ -601,32 +822,40 @@ class DocumentProcessor:
         embeddings: Optional[List[float]],
         chunk_count: int,
         agent_ids: List[str] = None,
-        client_id: str = None
+        client_id: str = None,
+        supabase=None,
+        extra_metadata: Optional[Dict[str, Any]] = None,
     ):
         """Finalize document processing and update status"""
         try:
+            metadata = {
+                'processed_at': datetime.now(timezone.utc).isoformat(),
+                'text_length': len(content),
+                'chunk_count': chunk_count,
+                'has_document_embeddings': bool(embeddings)
+            }
+
+            if extra_metadata:
+                metadata.update(extra_metadata)
+
             update_data = {
                 'content': content,
                 'status': 'ready',
+                'processing_status': 'completed',
                 'chunk_count': chunk_count,
-                'processing_metadata': {
-                    'processed_at': datetime.now(timezone.utc).isoformat(),
-                    'text_length': len(content),
-                    'chunk_count': chunk_count,
-                    'has_document_embeddings': bool(embeddings)
-                }
+                'processing_metadata': metadata
             }
             
             if embeddings:
                 update_data['embeddings'] = embeddings
             
             # Update document using appropriate Supabase connection
-            if client_id:
-                supabase = await self._get_client_supabase(client_id)
+            if client_id and supabase is None:
+                supabase, _ = await self._get_client_context(client_id)
                 if not supabase:
                     logger.error(f"Could not get Supabase connection for client {client_id}")
                     raise Exception("Failed to get client Supabase connection")
-            else:
+            elif supabase is None:
                 supabase = self._ensure_supabase()
             
             # Convert document_id to int if it's numeric
@@ -642,13 +871,30 @@ class DocumentProcessor:
             
             # Handle agent permissions
             if agent_ids:
-                await self._assign_document_to_agents(document_id, agent_ids, client_id)
+                await self._assign_document_to_agents(
+                    document_id,
+                    agent_ids,
+                    client_id,
+                    supabase=supabase,
+                )
             
         except Exception as e:
             logger.error(f"Error finalizing document processing: {e}")
-            await self._update_document_status(document_id, 'error', str(e), client_id)
+            await self._update_document_status(
+                document_id,
+                'error',
+                str(e),
+                client_id,
+                supabase=supabase,
+            )
     
-    async def _assign_document_to_agents(self, document_id: str, agent_ids: List[str], client_id: str = None):
+    async def _assign_document_to_agents(
+        self,
+        document_id: str,
+        agent_ids: List[str],
+        client_id: str = None,
+        supabase=None,
+    ):
         """Assign document to specific agents"""
         try:
             for agent_id in agent_ids:
@@ -660,23 +906,51 @@ class DocumentProcessor:
                 }
                 
                 # Use client-specific Supabase if client_id provided
-                if client_id:
-                    supabase = await self._get_client_supabase(client_id)
-                    if not supabase:
+                supabase_client = supabase
+                if client_id and supabase_client is None:
+                    supabase_client, _ = await self._get_client_context(client_id)
+                    if not supabase_client:
                         logger.error(f"Could not get Supabase connection for client {client_id}")
                         continue
-                else:
-                    supabase = self._ensure_supabase()
-                
-                supabase.table('agent_documents').insert(agent_doc_data).execute()
+                elif supabase_client is None:
+                    supabase_client = self._ensure_supabase()
+
+                # Skip duplicate assignments
+                try:
+                    existing = supabase_client.table('agent_documents') \
+                        .select('id') \
+                        .eq('agent_id', agent_id) \
+                        .eq('document_id', document_id) \
+                        .limit(1) \
+                        .execute()
+                    if existing.data:
+                        continue
+                except Exception as e:
+                    logger.debug(f"Assignment lookup failed for agent {agent_id}, doc {document_id}: {e}")
+
+                supabase_client.table('agent_documents').insert(agent_doc_data).execute()
                 
         except Exception as e:
             logger.error(f"Error assigning document to agents: {e}")
     
-    async def _update_document_status(self, document_id: str, status: str, error_message: str = None, client_id: str = None):
+    async def _update_document_status(
+        self,
+        document_id: str,
+        status: str,
+        error_message: str = None,
+        client_id: str = None,
+        supabase=None,
+    ):
         """Update document status"""
         try:
             update_data = {'status': status}
+
+            if status == 'ready':
+                update_data['processing_status'] = 'completed'
+            elif status == 'error':
+                update_data['processing_status'] = 'failed'
+            elif status == 'processing':
+                update_data['processing_status'] = 'processing'
             
             if error_message:
                 update_data['processing_metadata'] = {
@@ -685,13 +959,14 @@ class DocumentProcessor:
                 }
             
             # Use client-specific Supabase if client_id provided
-            if client_id:
-                supabase = await self._get_client_supabase(client_id)
-                if not supabase:
+            supabase_client = supabase
+            if client_id and supabase_client is None:
+                supabase_client, _ = await self._get_client_context(client_id)
+                if not supabase_client:
                     logger.error(f"Could not get Supabase connection for client {client_id}")
                     return
-            else:
-                supabase = self._ensure_supabase()
+            elif supabase_client is None:
+                supabase_client = self._ensure_supabase()
             
             # Convert document_id to int if it's numeric
             try:
@@ -699,8 +974,8 @@ class DocumentProcessor:
             except ValueError:
                 doc_id_for_update = document_id
             
-            supabase.table('documents').update(update_data).eq('id', doc_id_for_update).execute()
-            
+            supabase_client.table('documents').update(update_data).eq('id', doc_id_for_update).execute()
+
         except Exception as e:
             logger.error(f"Error updating document status: {e}")
     
@@ -713,17 +988,17 @@ class DocumentProcessor:
     ) -> List[Dict[str, Any]]:
         """Get documents with optional filtering"""
         try:
-            # Use client-specific Supabase if client_id provided
+            supabase = None
             if client_id:
                 logger.info(f"Fetching documents for client {client_id}")
-                supabase = await self._get_client_supabase(client_id)
+                supabase, _ = await self._get_client_context(client_id)
                 if not supabase:
-                    logger.error(f"Could not get Supabase connection for client {client_id}, falling back to master")
+                    logger.warning(
+                        f"Client {client_id} Supabase connection unavailable; falling back to platform instance"
+                    )
                     supabase = self._ensure_supabase()
-                else:
-                    logger.info(f"Using client-specific Supabase for client {client_id}")
             else:
-                logger.info("No client_id provided, using master Supabase")
+                logger.info("No client_id provided, using platform Supabase")
                 supabase = self._ensure_supabase()
             
             query = supabase.table('documents').select('*')
@@ -800,12 +1075,11 @@ class DocumentProcessor:
             # Delete physical file if it exists
             metadata = document.get('metadata', {})
             file_path = metadata.get('file_path')
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    logger.info(f"Deleted physical file: {file_path}")
-                except Exception as e:
-                    logger.warning(f"Could not delete physical file {file_path}: {e}")
+            if file_path:
+                existed = os.path.exists(file_path)
+                self._cleanup_staged_file(file_path)
+                if existed:
+                    logger.info(f"Deleted staged file: {file_path}")
             
             # Delete from database (cascades to chunks due to foreign key)
             delete_result = supabase.table('documents').delete().eq('id', document_id).execute()
