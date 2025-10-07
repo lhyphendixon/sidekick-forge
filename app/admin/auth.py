@@ -152,14 +152,23 @@ async def get_admin_user_from_session(request: Request) -> Optional[Dict[str, An
 async def get_admin_user(request: Request) -> Dict[str, Any]:
     """Get admin user using Supabase authentication"""
     
+    def _dev_bypass_allowed(req: Request) -> bool:
+        if os.getenv("DEVELOPMENT_MODE", "false").lower() != "true":
+            return False
+        client = getattr(req, "client", None)
+        host = getattr(client, "host", None)
+        allowed_hosts = {h.strip() for h in os.getenv("DEV_BYPASS_ALLOWED_HOSTS", "127.0.0.1,::1,localhost").split(',') if h.strip()}
+        if host and host in allowed_hosts:
+            return True
+        return False
+
     # Try to get token from Authorization header or cookie first
     auth_header = request.headers.get("authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         # Try to get from cookies (for browser-based auth)
         token = request.cookies.get("admin_token")
         if not token:
-            # Only allow development bypass if explicitly enabled
-            if os.getenv("DEVELOPMENT_MODE", "false").lower() == "true":
+            if _dev_bypass_allowed(request):
                 return {
                     "user_id": "dev-admin",
                     "email": "admin@autonomite.ai",
@@ -176,9 +185,15 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             )
     else:
         token = auth_header.split(" ")[1]
-    
+
     # Check for development token
-    if token == "dev-token" and os.getenv("DEVELOPMENT_MODE", "false").lower() == "true":
+    if token == "dev-token":
+        if not _dev_bypass_allowed(request):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Development token is not permitted from this host",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return {
             "user_id": "dev-admin",
             "email": "admin@autonomite.ai",
@@ -282,6 +297,33 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                     else:
                         role = 'subscriber'
 
+            def _normalize_ids(raw_ids: Any) -> list:
+                if isinstance(raw_ids, (list, tuple, set)):
+                    return [str(i) for i in raw_ids if i]
+                if isinstance(raw_ids, str) and raw_ids.strip():
+                    return [raw_ids.strip()]
+                return []
+
+            meta_dict = meta if isinstance(meta, dict) else {}
+            tenant_assignments_raw = meta_dict.get('tenant_assignments') if isinstance(meta_dict, dict) else {}
+            tenant_assignments: Dict[str, Any] = {}
+            if isinstance(tenant_assignments_raw, dict):
+                tenant_assignments = {
+                    'admin_client_ids': _normalize_ids(tenant_assignments_raw.get('admin_client_ids')),
+                    'subscriber_client_ids': _normalize_ids(tenant_assignments_raw.get('subscriber_client_ids')),
+                }
+
+            if 'admin_client_ids' not in tenant_assignments:
+                tenant_assignments['admin_client_ids'] = []
+            if 'subscriber_client_ids' not in tenant_assignments:
+                tenant_assignments['subscriber_client_ids'] = []
+
+            visible_client_ids = []
+            if role == 'admin':
+                visible_client_ids = tenant_assignments.get('admin_client_ids', [])
+            elif role != 'superadmin':
+                visible_client_ids = tenant_assignments.get('subscriber_client_ids', [])
+
             return {
                 "user_id": user.id,
                 "email": user.email,
@@ -289,7 +331,10 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                 "first_name": first_name,
                 "full_name": full_name,
                 "auth_method": "supabase",
-                "authenticated_at": datetime.utcnow().isoformat()
+                "authenticated_at": datetime.utcnow().isoformat(),
+                "tenant_assignments": tenant_assignments,
+                "visible_client_ids": visible_client_ids,
+                "is_super_admin": role == 'superadmin'
             }
         else:
             raise HTTPException(
@@ -298,8 +343,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             )
             
     except Exception as e:
-        # For development, allow bypass only if explicitly enabled and no valid token flow
-        if os.getenv("DEVELOPMENT_MODE", "false").lower() == "true":
+        # For development, allow bypass only from explicitly trusted hosts
+        if _dev_bypass_allowed(request):
             return {
                 "user_id": "dev-admin",
                 "email": "dev@autonomite.ai",

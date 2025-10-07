@@ -51,7 +51,22 @@ This guide documents the architectural transformation from a single-tenant "Auto
 ### Phase 1: Database Setup (Manual)
 1. Execute `create_clients_table.sql` in Sidekick Forge Supabase dashboard
 2. Execute `insert_autonomite_client.sql` to add Autonomite as first client
-3. Verify with `python3 scripts/migrate_autonomite_client.py`
+3. Apply `migrations/20241005_add_client_provisioning.sql` to both the platform database and each tenant project so provisioning metadata and the job ledger exist.
+   - Run in Supabase SQL editor or via the CLI: `supabase db push --file migrations/20241005_add_client_provisioning.sql`.
+   - Confirm existing clients now show `provisioning_status = 'ready'`.
+4. Verify with `python3 scripts/migrate_autonomite_client.py`
+
+### Provisioning Automation Requirements
+- Set Supabase management credentials in the environment before launching the API:
+  - `SUPABASE_ACCESS_TOKEN` – personal access token with org project-management rights.
+  - `SUPABASE_ORG_ID` – identifier of the Supabase organization that will own tenant projects.
+  - Optional defaults:
+    - `SUPABASE_DEFAULT_REGION` (e.g. `us-east-1`)
+    - `SUPABASE_DEFAULT_PLAN` (e.g. `free`, `pro`)
+- The provisioning worker auto-creates projects when `auto_provision=true` on client creation and stages schema sync automatically.
+- Monitoring helpers:
+  - API: `GET /clients/provisioning/jobs` returns the current queue; `POST /clients/{client_id}/provisioning/retry` resets a failed job.
+  - CLI: `python scripts/list_provisioning_jobs.py` prints the queue for local debugging.
 
 ### Phase 2: Code Integration (Remaining Work)
 

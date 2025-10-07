@@ -35,7 +35,7 @@ redis==5.2.0
 # Remove local ML inference deps to avoid supervised_proc crashes
 
 # HTTP and Async
-httpx==0.27.0
+httpx==0.27.2
 aiohttp~=3.10
 websockets>=12.0,<16
 asyncio-mqtt==0.16.2

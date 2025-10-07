@@ -1262,6 +1262,12 @@ async def agent_job_handler(ctx: JobContext):
                             return
                         # Extract text robustly (text_content is a property, not callable)
                         text_value = getattr(raw, "text_content", None)
+                        if callable(text_value):
+                            try:
+                                text_value = text_value()
+                            except Exception as call_exc:
+                                logger.debug(f"text_content callable failed: {call_exc}")
+                                text_value = None
                         if not text_value and hasattr(raw, "text") and isinstance(getattr(raw, "text"), str) and raw.text:
                             text_value = raw.text
                         if not text_value and hasattr(raw, "content"):

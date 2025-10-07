@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 from datetime import datetime
 import os
@@ -33,78 +34,97 @@ redis_client = None
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     global redis_client
-    
-    # Startup
-    logger.info("Starting Autonomite SaaS Backend")
-    
-    # Redis disabled: do not initialize
-    redis_client = None
-    
-    # Initialize connections
-    await supabase_manager.initialize()
+
+    worker = None
+    worker_task = None
+
     try:
-        await livekit_manager.initialize()
-    except Exception as e:
-        logger.warning(f"LiveKit initialization failed (non-critical): {e}")
-    # Container manager removed - workers are managed separately
-    
-    # Initialize services for proxy endpoints
-    from app.services.client_service_supabase_enhanced import ClientService
-    from app.services.agent_service_supabase import AgentService
-    from app.services.wordpress_site_service import WordPressSiteService
-    
-    client_service = ClientService(settings.supabase_url, settings.supabase_service_role_key, None)
-    agent_service = AgentService(client_service, None)
-    wordpress_site_service = WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key, None)
-    
-    # Inject services into proxy modules
-    import app.api.v1.livekit_proxy as livekit_proxy_api
-    import app.api.v1.conversations_proxy as conversations_proxy_api
-    import app.api.v1.documents_proxy as documents_proxy_api
-    import app.api.v1.text_chat_proxy as text_chat_proxy_api
-    import app.api.v1.voice_transcripts as voice_transcripts_api
-    import app.api.v1.wordpress_sites as wordpress_sites_api
-    
-    # Initialize proxy services
-    livekit_proxy_api.client_service = client_service
-    livekit_proxy_api.agent_service = agent_service
-    
-    conversations_proxy_api.redis_client = None
-    conversations_proxy_api.client_service = client_service
-    
-    documents_proxy_api.redis_client = None
-    
-    text_chat_proxy_api.redis_client = None
-    text_chat_proxy_api.client_service = client_service
-    text_chat_proxy_api.agent_service = agent_service
-    
-    voice_transcripts_api.client_service = client_service
-    
-    wordpress_sites_api.wordpress_service = wordpress_site_service
-    
-    logger.info("All services initialized successfully")
-    
-    # Verify platform has valid LiveKit credentials
-    try:
-        from app.services.platform_credential_sync import PlatformCredentialSync
-        logger.info("Verifying platform LiveKit credentials...")
-        valid = await PlatformCredentialSync.verify_platform_credentials()
-        if valid:
-            logger.info("✅ Platform LiveKit credentials are valid")
-        else:
-            logger.warning("⚠️ Platform LiveKit credentials are invalid or missing")
-            logger.warning("   Please update LIVEKIT_* variables in .env")
-    except Exception as e:
-        logger.error(f"Error verifying platform credentials: {e}")
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down Autonomite SaaS Backend")
-    await supabase_manager.close()
-    await livekit_manager.close()
-    # No Redis to close
-    # Workers are managed separately and don't need closing here
+        # Startup
+        logger.info("Starting Autonomite SaaS Backend")
+
+        # Redis disabled: do not initialize
+        redis_client = None
+
+        # Initialize connections
+        await supabase_manager.initialize()
+        try:
+            await livekit_manager.initialize()
+        except Exception as e:
+            logger.warning(f"LiveKit initialization failed (non-critical): {e}")
+        # Container manager removed - workers are managed separately
+
+        # Initialize services for proxy endpoints
+        from app.services.client_service_supabase_enhanced import ClientService
+        from app.services.agent_service_supabase import AgentService
+        from app.services.wordpress_site_service import WordPressSiteService
+
+        client_service = ClientService(settings.supabase_url, settings.supabase_service_role_key, None)
+        agent_service = AgentService(client_service, None)
+        wordpress_site_service = WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key, None)
+
+        # Inject services into proxy modules
+        import app.api.v1.livekit_proxy as livekit_proxy_api
+        import app.api.v1.conversations_proxy as conversations_proxy_api
+        import app.api.v1.documents_proxy as documents_proxy_api
+        import app.api.v1.text_chat_proxy as text_chat_proxy_api
+        import app.api.v1.voice_transcripts as voice_transcripts_api
+        import app.api.v1.wordpress_sites as wordpress_sites_api
+
+        # Initialize proxy services
+        livekit_proxy_api.client_service = client_service
+        livekit_proxy_api.agent_service = agent_service
+
+        conversations_proxy_api.redis_client = None
+        conversations_proxy_api.client_service = client_service
+
+        documents_proxy_api.redis_client = None
+
+        text_chat_proxy_api.redis_client = None
+        text_chat_proxy_api.client_service = client_service
+        text_chat_proxy_api.agent_service = agent_service
+
+        voice_transcripts_api.client_service = client_service
+
+        wordpress_sites_api.wordpress_service = wordpress_site_service
+
+        logger.info("All services initialized successfully")
+
+        # Verify platform has valid LiveKit credentials
+        try:
+            from app.services.platform_credential_sync import PlatformCredentialSync
+            logger.info("Verifying platform LiveKit credentials...")
+            valid = await PlatformCredentialSync.verify_platform_credentials()
+            if valid:
+                logger.info("✅ Platform LiveKit credentials are valid")
+            else:
+                logger.warning("⚠️ Platform LiveKit credentials are invalid or missing")
+                logger.warning("   Please update LIVEKIT_* variables in .env")
+        except Exception as e:
+            logger.error(f"Error verifying platform credentials: {e}")
+
+        # Start provisioning worker if credentials allow
+        try:
+            from app.services.onboarding.provisioning_worker import ProvisioningWorker
+
+            worker = ProvisioningWorker()
+            worker_task = asyncio.create_task(worker.run())
+            logger.info("Provisioning worker task started")
+        except RuntimeError as e:
+            logger.warning(f"Provisioning worker disabled: {e}")
+
+        yield
+    finally:
+        if worker:
+            worker.stop()
+        if worker_task:
+            await worker_task
+
+        # Shutdown
+        logger.info("Shutting down Autonomite SaaS Backend")
+        await supabase_manager.close()
+        await livekit_manager.close()
+        # No Redis to close
+        # Workers managed above
 
 # Create FastAPI app
 app = FastAPI(

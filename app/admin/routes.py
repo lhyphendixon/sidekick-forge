@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile, Query
+from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile, Query, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 import redis.asyncio as aioredis
 import redis
 import json
@@ -77,6 +77,124 @@ def get_wordpress_service() -> WordPressSiteService:
     # Use platform credentials from config (no defaults)
     from app.config import settings
     return WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key)
+
+
+def admin_is_super(admin_user: Dict[str, Any]) -> bool:
+    """Return True if the admin user has platform-wide access."""
+    if not admin_user:
+        return False
+    if admin_user.get("is_super_admin") is True:
+        return True
+    return (admin_user.get("role") or "").lower() == "superadmin"
+
+
+def get_scoped_client_ids(admin_user: Dict[str, Any]) -> Optional[Set[str]]:
+    """Return the set of client IDs the admin can access, or None for full access."""
+    if not admin_user:
+        return None
+    if admin_is_super(admin_user):
+        return None
+
+    assignments = admin_user.get("tenant_assignments") or {}
+    visible_ids = admin_user.get("visible_client_ids") or []
+
+    if (admin_user.get("role") or "").lower() == "admin":
+        scoped = assignments.get("admin_client_ids") or visible_ids
+    else:
+        scoped = assignments.get("subscriber_client_ids") or visible_ids
+
+    if isinstance(scoped, str):
+        scoped = [scoped]
+
+    return {str(cid) for cid in scoped if cid}
+
+
+def ensure_client_access(client_id: str, admin_user: Dict[str, Any]) -> None:
+    """Raise 403 if the admin user does not have access to the given client."""
+    scoped_ids = get_scoped_client_ids(admin_user)
+    if scoped_ids is None or client_id in scoped_ids:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Insufficient permissions for requested client",
+    )
+
+
+def ensure_client_or_global_access(client_id: str, admin_user: Dict[str, Any]) -> None:
+    """Allow global access for super admins otherwise enforce per-client permissions."""
+    if client_id == "global":
+        if not admin_is_super(admin_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Global resources require super admin privileges",
+            )
+        return
+    ensure_client_access(client_id, admin_user)
+
+
+async def resolve_document_client(document_id: str, admin_user: Dict[str, Any]) -> Optional[str]:
+    """Return the client_id for a document if accessible, enforcing tenant scope."""
+    scoped_ids = get_scoped_client_ids(admin_user)
+    if scoped_ids is None:
+        return None  # super admins can operate across all clients
+
+    if not scoped_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No client assignments associated with this admin user",
+        )
+
+    from app.services.document_processor import document_processor
+
+    for cid in scoped_ids:
+        try:
+            supabase = await document_processor._get_client_supabase(cid)
+            if not supabase:
+                continue
+            result = (
+                supabase
+                .table('documents')
+                .select('id')
+                .eq('id', document_id)
+                .limit(1)
+                .execute()
+            )
+            data = getattr(result, 'data', None)
+            if data:
+                return str(cid)
+        except Exception as exc:
+            logger.debug(f"Document lookup failed for client {cid}: {exc}")
+            continue
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Document not found for accessible clients",
+    )
+
+
+async def ensure_tool_access(
+    tool_id: str,
+    admin_user: Dict[str, Any],
+    tools_service: ToolsService,
+    client_id: Optional[str] = None,
+) -> Optional[str]:
+    """Validate tool access within tenant scope and return resolved client_id."""
+    scoped_ids = get_scoped_client_ids(admin_user)
+    target_sb, existing, scope, resolved_client_id = await tools_service._find_tool_record(tool_id, client_id)
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found")
+
+    resolved_client_str = str(resolved_client_id) if resolved_client_id else None
+
+    if scoped_ids is None:
+        return resolved_client_str
+
+    if scope == "client":
+        if not resolved_client_str:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to determine tool tenant")
+        ensure_client_access(resolved_client_str, admin_user)
+
+    return resolved_client_str
 
 # Initialize router
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -184,6 +302,33 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
                 users = data.get('users', [])
     except Exception:
         users = []
+
+    scoped_ids = get_scoped_client_ids(user)
+    allowed_ids: Set[str] = set()
+    if scoped_ids is not None:
+        allowed_ids = {str(cid) for cid in scoped_ids}
+
+        def extract_assignment_ids(meta: Dict[str, Any], keys: List[str]) -> List[str]:
+            collected: List[str] = []
+            assignments = meta.get('tenant_assignments') or {}
+            if isinstance(assignments, dict):
+                for key in keys:
+                    raw = assignments.get(key)
+                    if isinstance(raw, str) and raw.strip():
+                        collected.append(raw.strip())
+                    elif isinstance(raw, (list, tuple, set)):
+                        collected.extend([str(v) for v in raw if v])
+            return collected
+
+        filtered_users: List[Dict[str, Any]] = []
+        for record in users:
+            metadata = record.get('user_metadata') or {}
+            admin_ids = extract_assignment_ids(metadata, ['admin_client_ids'])
+            subscriber_ids = extract_assignment_ids(metadata, ['subscriber_client_ids'])
+            combined = {str(cid) for cid in admin_ids + subscriber_ids}
+            if combined & allowed_ids:
+                filtered_users.append(record)
+        users = filtered_users
     # Prepare role id cache for RBAC if available
     role_id_map: Dict[str, Optional[str]] = {"super_admin": None, "admin": None, "subscriber": None}
     try:
@@ -243,6 +388,8 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
                 ) or []
             except Exception:
                 tm_rows = []
+            if allowed_ids:
+                tm_rows = [row for row in tm_rows if str(row.get('client_id')) in allowed_ids]
             if tm_rows:
                 admin_count = sum(1 for r in tm_rows if r.get('role_id') == admin_id)
                 sub_count = sum(1 for r in tm_rows if r.get('role_id') == sub_id)
@@ -277,6 +424,8 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
     try:
         from app.core.dependencies import get_client_service
         clients = await get_client_service().get_all_clients()
+        if allowed_ids:
+            clients = [c for c in clients if str(getattr(c, 'id', '')) in allowed_ids]
         clients_ctx = [{"id": c.id, "name": c.name} for c in clients]
     except Exception:
         clients_ctx = []
@@ -291,12 +440,21 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
         full_name = (data.get('full_name') or '').strip()
         email = (data.get('email') or '').strip()
         role_key = (data.get('role_key') or 'subscriber').strip()  # expected: super_admin | admin | subscriber
-        client_ids = data.get('client_ids') or []
-        if isinstance(client_ids, str):
-            client_ids = [client_ids]
-        client_ids = [cid for cid in client_ids if cid]
+        client_ids_raw = data.get('client_ids') or []
+        if isinstance(client_ids_raw, str):
+            client_ids_raw = [client_ids_raw]
+        client_ids = [str(cid) for cid in client_ids_raw if cid]
         if not full_name or not email:
             raise HTTPException(status_code=400, detail="Email is required")
+
+        scoped_ids = get_scoped_client_ids(admin)
+        if scoped_ids is not None:
+            allowed_ids = {str(cid) for cid in scoped_ids}
+            if role_key == 'super_admin':
+                raise HTTPException(status_code=403, detail="Insufficient permissions to assign super admin role")
+            invalid_ids = [cid for cid in client_ids if cid not in allowed_ids]
+            if invalid_ids:
+                raise HTTPException(status_code=403, detail="One or more client IDs are not accessible to this admin")
 
         import httpx
         from app.config import settings
@@ -447,6 +605,9 @@ async def get_user_assignments(user_id: str, admin: Dict[str, Any] = Depends(get
         await supabase_manager.initialize()
         admin_client = supabase_manager.admin_client
 
+        scoped_ids = get_scoped_client_ids(admin)
+        allowed_ids: Optional[Set[str]] = None if scoped_ids is None else {str(cid) for cid in scoped_ids}
+
         # Resolve role ids
         def get_role_id(role_key: str) -> Optional[str]:
             try:
@@ -501,11 +662,17 @@ async def get_user_assignments(user_id: str, admin: Dict[str, Any] = Depends(get
 
         admin_clients = get_client_ids_for_role(admin_role_id)
         if admin_clients:
-            return {"role_key": "admin", "client_ids": admin_clients}
+            if allowed_ids is not None:
+                admin_clients = [cid for cid in admin_clients if str(cid) in allowed_ids]
+            if admin_clients:
+                return {"role_key": "admin", "client_ids": admin_clients}
 
         subscriber_clients = get_client_ids_for_role(subscriber_role_id)
         if subscriber_clients:
-            return {"role_key": "subscriber", "client_ids": subscriber_clients}
+            if allowed_ids is not None:
+                subscriber_clients = [cid for cid in subscriber_clients if str(cid) in allowed_ids]
+            if subscriber_clients:
+                return {"role_key": "subscriber", "client_ids": subscriber_clients}
 
         # Fallback: read from Supabase Auth user_metadata if RBAC tables not configured
         try:
@@ -527,9 +694,15 @@ async def get_user_assignments(user_id: str, admin: Dict[str, Any] = Depends(get
                 admin_ids = ta.get('admin_client_ids') or []
                 subscriber_ids = ta.get('subscriber_client_ids') or []
                 if admin_ids:
-                    return {"role_key": "admin", "client_ids": admin_ids}
+                    if allowed_ids is not None:
+                        admin_ids = [cid for cid in admin_ids if str(cid) in allowed_ids]
+                    if admin_ids:
+                        return {"role_key": "admin", "client_ids": admin_ids}
                 if subscriber_ids:
-                    return {"role_key": "subscriber", "client_ids": subscriber_ids}
+                    if allowed_ids is not None:
+                        subscriber_ids = [cid for cid in subscriber_ids if str(cid) in allowed_ids]
+                    if subscriber_ids:
+                        return {"role_key": "subscriber", "client_ids": subscriber_ids}
         except Exception:
             pass
 
@@ -547,15 +720,24 @@ async def update_user_roles(request: Request, admin: Dict[str, Any] = Depends(ge
         data = await request.json()
         user_id = (data.get("user_id") or "").strip()
         role_key = (data.get("role_key") or "").strip()
-        client_ids = data.get("client_ids") or []
-        if isinstance(client_ids, str):
-            client_ids = [client_ids]
-        client_ids = [cid for cid in client_ids if cid]
+        client_ids_raw = data.get("client_ids") or []
+        if isinstance(client_ids_raw, str):
+            client_ids_raw = [client_ids_raw]
+        client_ids = [str(cid) for cid in client_ids_raw if cid]
 
         if not user_id or role_key not in ("super_admin", "admin", "subscriber"):
             raise HTTPException(status_code=400, detail="Invalid payload")
         if role_key in ("admin","subscriber") and not client_ids:
             raise HTTPException(status_code=400, detail="At least one client_id is required for this role")
+
+        scoped_ids = get_scoped_client_ids(admin)
+        if scoped_ids is not None:
+            allowed_ids = {str(cid) for cid in scoped_ids}
+            if role_key == "super_admin":
+                raise HTTPException(status_code=403, detail="Insufficient permissions to assign super admin role")
+            invalid_ids = [cid for cid in client_ids if cid not in allowed_ids]
+            if invalid_ids:
+                raise HTTPException(status_code=403, detail="One or more client IDs are not accessible to this admin")
 
         await supabase_manager.initialize()
         admin_client = supabase_manager.admin_client
@@ -731,15 +913,19 @@ async def set_user_password(request: Request, admin: Dict[str, Any] = Depends(ge
     except Exception as e:
         return HTMLResponse(status_code=500, content="Error updating password")
 
-async def get_system_summary() -> Dict[str, Any]:
-    """Get system-wide summary statistics"""
+async def get_system_summary(admin_user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Get system-wide summary statistics scoped to the current admin."""
     # Get all clients from Supabase
-    from app.core.dependencies import get_client_service
     from app.integrations.livekit_client import livekit_manager
-    client_service = get_client_service()
+    from app.services.client_service_multitenant import ClientService as PlatformClientService
+    client_service = PlatformClientService()
     
     try:
-        clients = await client_service.get_all_clients()
+        clients = await client_service.get_clients()
+        scoped_ids = get_scoped_client_ids(admin_user)
+        if scoped_ids is not None:
+            scoped_strs = {str(cid) for cid in scoped_ids}
+            clients = [c for c in clients if str(getattr(c, 'id', '')) in scoped_strs]
         total_clients = len(clients)
     except Exception as e:
         logger.warning(f"Failed to get clients: {e}")
@@ -806,19 +992,27 @@ async def get_system_summary() -> Dict[str, Any]:
         "timestamp": datetime.now().isoformat()
     }
 
-async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
+async def get_all_clients_with_containers(admin_user: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Get all clients with their container status"""
     # Use the existing client service
-    from app.core.dependencies import get_client_service
     from app.integrations.livekit_client import livekit_manager
-    client_service = get_client_service()
-    
+    from app.services.client_service_multitenant import ClientService as PlatformClientService
+
+    client_service = PlatformClientService()
+    scoped_ids = get_scoped_client_ids(admin_user)
+
     try:
         # Get all clients from platform database
         logger.info("Fetching all clients from platform database...")
-        clients = await client_service.get_all_clients()
+        clients = await client_service.get_clients()
         logger.info(f"✅ Successfully fetched {len(clients)} clients from platform database")
-        
+
+        if scoped_ids is not None:
+            clients = [
+                client for client in clients
+                if getattr(client, 'id', None) and str(getattr(client, 'id')) in scoped_ids
+            ]
+
         # Get LiveKit room data for session counting
         room_sessions = {}
         try:
@@ -843,21 +1037,41 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
         clients_data = []
         for client in clients:
             try:
+                additional_settings = {}
+                if hasattr(client, 'settings') and getattr(client.settings, 'additional_settings', None):
+                    additional_settings = dict(client.settings.additional_settings)
+
+                livekit_config = None
+                if hasattr(client, 'settings') and getattr(client.settings, 'livekit_config', None):
+                    livekit_config = dict(client.settings.livekit_config)
+
+                provisioning_status = getattr(client, 'provisioning_status', 'unknown') or 'unknown'
+                supabase_url = getattr(client, 'supabase_project_url', None)
+
                 client_dict = {
                     "id": client.id,
                     "name": client.name,
-                    "domain": getattr(client, 'domain', ''),
-                    "status": "running" if getattr(client, 'active', True) else "stopped",
-                    "active": getattr(client, 'active', True),
+                    "slug": additional_settings.get('slug'),
+                    "domain": additional_settings.get('domain', ''),
+                    "description": additional_settings.get('description'),
+                    "status": provisioning_status,
+                    "active": provisioning_status == 'ready',
                     "created_at": client.created_at.isoformat() if hasattr(client, 'created_at') and client.created_at else None,
-                    "client_id": client.id,  # For compatibility with templates
+                    "client_id": client.id,
                     "client_name": client.name,
-                    "cpu_usage": 15.5,  # Mock CPU usage
-                    "memory_usage": 512,  # Mock memory usage in MB
+                    "cpu_usage": 15.5,
+                    "memory_usage": 512,
                     "active_sessions": room_sessions.get(client.id, 0),  # Real session count from LiveKit
+                    "supabase_project_url": supabase_url,
+                    "supabase_project_ref": getattr(client, 'supabase_project_ref', None),
+                    "supabase_ready": bool(supabase_url),
+                    "livekit_ready": bool(livekit_config and livekit_config.get('url') and livekit_config.get('api_key')),
+                    "provisioning_status": provisioning_status,
+                    "provisioning_error": getattr(client, 'provisioning_error', None),
+                    "auto_provision": bool(getattr(client, 'auto_provision', False)),
                     "settings": {
-                        "supabase": client.settings.supabase if hasattr(client, 'settings') and client.settings else None,
-                        "livekit": client.settings.livekit if hasattr(client, 'settings') and client.settings else None
+                        "livekit": livekit_config,
+                        "additional_settings": additional_settings
                     }
                 }
                 logger.debug(f"Processed client: {client.name} (ID: {client.id})")
@@ -867,7 +1081,9 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
                 client_dict = {
                     "id": getattr(client, 'id', 'unknown'),
                     "name": getattr(client, 'name', 'Unknown Client'),
+                    "slug": None,
                     "domain": '',
+                    "description": None,
                     "status": "error",
                     "active": False,
                     "created_at": None,
@@ -877,9 +1093,16 @@ async def get_all_clients_with_containers() -> List[Dict[str, Any]]:
                     "memory_usage": 0,
                     "active_sessions": 0,
                     "settings": {
-                        "supabase": getattr(client, 'settings', {}).get('supabase', None) if hasattr(client, 'settings') else None,
-                        "livekit": getattr(client, 'settings', {}).get('livekit', None) if hasattr(client, 'settings') else None
-                    }
+                        "livekit": None,
+                        "additional_settings": {}
+                    },
+                    "supabase_project_url": None,
+                    "supabase_project_ref": None,
+                    "supabase_ready": False,
+                    "livekit_ready": False,
+                    "provisioning_status": "error",
+                    "provisioning_error": str(e),
+                    "auto_provision": False
                 }
             
             clients_data.append(client_dict)
@@ -907,83 +1130,45 @@ async def get_container_detail(client_id: str) -> Dict[str, Any]:
 async def get_all_agents() -> List[Dict[str, Any]]:
     """Get all agents from all clients"""
     try:
-        # Try project-based discovery first (if access token is available)
-        access_token = os.getenv("SUPABASE_ACCESS_TOKEN")
-        if access_token:
-            try:
-                from app.core.dependencies_project_based import get_project_service
-                project_service = get_project_service()
-                
-                # Get all agents across all projects
-                agents = await project_service.get_all_agents()
-                
-                # Convert to template format
-                agents_data = []
-                for agent in agents:
-                    # Handle both dict and object format agents
-                    if isinstance(agent, dict):
-                        agent_dict = {
-                            "id": agent.get("id"),
-                            "slug": agent.get("slug"),
-                            "name": agent.get("name"),
-                            "description": agent.get("description", ""),
-                            "client_id": agent.get("client_id", "global"),
-                            "client_name": agent.get("client_name", "Unknown"),
-                            "status": "active" if agent.get("active", agent.get("enabled", True)) else "inactive",
-                            "active": agent.get("active", agent.get("enabled", True)),
-                            "enabled": agent.get("enabled", True),
-                            "created_at": agent.get("created_at", ""),
-                            "updated_at": agent.get("updated_at", ""),
-                            "system_prompt": agent.get("system_prompt", "")[:100] + "..." if agent.get("system_prompt") and len(agent.get("system_prompt", "")) > 100 else agent.get("system_prompt", ""),
-                            "voice_settings": agent.get("voice_settings", {}),
-                            "webhooks": agent.get("webhooks", {}),
-                            "show_citations": agent.get("show_citations", True)
-                        }
-                        agents_data.append(agent_dict)
-                
-                return agents_data
-            except Exception as project_error:
-                logger.warning(f"Project-based agent discovery failed: {project_error}")
-        
-        # Fall back to original Redis-based agent service
-        from app.core.dependencies import get_client_service, get_agent_service
-        client_service = get_client_service()
-        agent_service = get_agent_service()
-        
-        # Get all clients first
-        clients = await client_service.get_all_clients()
-        all_agents = []
-        
-        # Create a mapping of client IDs to names for quick lookup
+        from uuid import UUID
+        from app.services.client_service_multitenant import ClientService as PlatformClientService
+        from app.services.agent_service_multitenant import AgentService as PlatformAgentService
+
+        client_service = PlatformClientService()
+        agent_service = PlatformAgentService()
+
+        clients = await client_service.get_clients()
+        all_agents: List[Dict[str, Any]] = []
+
         client_map = {client.id: client.name for client in clients}
-        
-        # CORRECT METHOD: Iterate through each client to get their agents
+
         for client in clients:
-                try:
-                    client_agents = await agent_service.get_client_agents(client.id)
-                    for agent in client_agents:
-                        agent_dict = {
-                            "id": agent.id,
-                            "slug": agent.slug,
-                            "name": agent.name,
-                            "description": getattr(agent, 'description', ''),
-                            "client_id": agent.client_id,
-                            "client_name": client.name,
-                            "status": "active" if getattr(agent, 'active', agent.enabled) else "inactive",
-                            "active": getattr(agent, 'active', agent.enabled),
-                            "enabled": agent.enabled,
-                            "created_at": agent.created_at.isoformat() if hasattr(agent.created_at, 'isoformat') else str(agent.created_at),
-                            "updated_at": getattr(agent, 'updated_at', ''),
-                            "system_prompt": agent.system_prompt[:100] + "..." if agent.system_prompt and len(agent.system_prompt) > 100 else agent.system_prompt,
-                            "voice_settings": getattr(agent, 'voice_settings', {}),
-                            "webhooks": getattr(agent, 'webhooks', {}),
-                            "show_citations": getattr(agent, 'show_citations', True)
-                        }
-                        all_agents.append(agent_dict)
-                except Exception as client_error:
-                    logger.warning(f"Failed to get agents for client {client.id}: {client_error}")
-                    continue
-        
+            try:
+                client_uuid = UUID(client.id)
+                client_agents = await agent_service.get_agents(client_uuid)
+                for agent in client_agents:
+                    agent_dict = {
+                        "id": agent.id,
+                        "slug": agent.slug,
+                        "name": agent.name,
+                        "description": getattr(agent, 'description', ''),
+                        "client_id": agent.client_id,
+                        "client_name": client_map.get(agent.client_id, client.name),
+                        "status": "active" if getattr(agent, 'active', getattr(agent, 'enabled', True)) else "inactive",
+                        "active": getattr(agent, 'active', getattr(agent, 'enabled', True)),
+                        "enabled": getattr(agent, 'enabled', True),
+                        "created_at": agent.created_at.isoformat() if hasattr(agent.created_at, 'isoformat') else str(agent.created_at),
+                        "updated_at": getattr(agent, 'updated_at', ''),
+                        "system_prompt": agent.system_prompt[:100] + "..." if agent.system_prompt and len(agent.system_prompt) > 100 else agent.system_prompt,
+                        "voice_settings": getattr(agent, 'voice_settings', {}),
+                        "webhooks": getattr(agent, 'webhooks', {}),
+                        "show_citations": getattr(agent, 'show_citations', True)
+                    }
+                    all_agents.append(agent_dict)
+            except Exception as client_error:
+                logger.warning(f"Failed to get agents for client {client.id}: {client_error}")
+                continue
+
         return all_agents
     except Exception as e:
         logger.error(f"Error fetching agents: {e}")
@@ -997,7 +1182,7 @@ async def dashboard(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Main admin dashboard with HTMX"""
-    summary = await get_system_summary()
+    summary = await get_system_summary(admin_user)
     
     return templates.TemplateResponse("admin/dashboard.html", {
         "request": request,
@@ -1012,7 +1197,7 @@ async def clients_list(
 ):
     """Client management page"""
     try:
-        clients = await get_all_clients_with_containers()
+        clients = await get_all_clients_with_containers(admin_user)
         logger.info(f"Admin Dashboard: Successfully prepared {len(clients)} clients for display")
         return templates.TemplateResponse("admin/clients.html", {
             "request": request,
@@ -1039,10 +1224,12 @@ async def client_edit(
 ):
     """Client edit page"""
     try:
+        ensure_client_access(client_id, admin_user)
+
         # Get client service
         from app.core.dependencies import get_client_service
         client_service = get_client_service()
-        
+
         # Get client details
         client = await client_service.get_client(client_id, auto_sync=False)
         if not client:
@@ -1081,58 +1268,35 @@ async def agents_page(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Agent management page"""
-    # Determine which clients this user can see
-    visible_client_ids: List[str] = []
-    try:
-        # Superadmins see all clients
-        if admin_user.get("role") == "superadmin":
-            from app.core.dependencies import get_client_service
-            client_service = get_client_service()
-            clients_all = await client_service.get_all_clients()
-            visible_client_ids = [c.id for c in clients_all]
-        else:
-            # Subscribers/Admins: load tenant assignments from metadata
-            # Note: If RBAC tables are added, we can replace this with tenant_memberships
-            from app.integrations.supabase_client import supabase_manager
-            if not supabase_manager._initialized:
-                await supabase_manager.initialize()
-            # Fetch user to read metadata
-            import httpx
-            headers = {
-                'apikey': supabase_manager.admin_client.supabase_key if hasattr(supabase_manager.admin_client, 'supabase_key') else os.getenv('SUPABASE_SERVICE_ROLE_KEY', ''),
-                'Authorization': f"Bearer {os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')}",
-            }
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(f"{os.getenv('SUPABASE_URL')}/auth/v1/admin/users/{admin_user.get('user_id')}", headers=headers)
-            if r.status_code == 200:
-                user = r.json()
-                meta = user.get('user_metadata') or {}
-                ta = meta.get('tenant_assignments') or {}
-                if admin_user.get('role') == 'admin':
-                    visible_client_ids = ta.get('admin_client_ids') or []
-                else:
-                    visible_client_ids = ta.get('subscriber_client_ids') or []
-    except Exception:
-        visible_client_ids = []
+    scoped_ids = get_scoped_client_ids(admin_user)
+    visible_client_ids: List[str] = [] if scoped_ids is None else list(scoped_ids)
 
     # Get agents from visible clients only
     try:
-        if admin_user.get("role") == "superadmin":
+        if admin_is_super(admin_user):
             agents = await get_all_agents()
         else:
             from app.core.dependencies import get_agent_service
             agent_service = get_agent_service()
             agents = []
+            client_name_cache: Dict[str, str] = {}
+            from app.core.dependencies import get_client_service
+            client_service = get_client_service()
             for cid in visible_client_ids:
                 client_agents = await agent_service.get_client_agents(cid)
                 # Attach client_name via client service
-                try:
-                    from app.core.dependencies import get_client_service
-                    client_service = get_client_service()
-                    client = await client_service.get_client(cid)
-                    client_name = client.name if hasattr(client, 'name') else (client.get('name') if isinstance(client, dict) else 'Unknown')
-                except Exception:
-                    client_name = 'Unknown'
+                if cid not in client_name_cache:
+                    try:
+                        client = await client_service.get_client(cid)
+                        if hasattr(client, 'name'):
+                            client_name_cache[cid] = client.name
+                        elif isinstance(client, dict):
+                            client_name_cache[cid] = client.get('name', 'Unknown')
+                        else:
+                            client_name_cache[cid] = 'Unknown'
+                    except Exception:
+                        client_name_cache[cid] = 'Unknown'
+                client_name = client_name_cache[cid]
                 for a in client_agents:
                     a_dict = a.dict() if hasattr(a, 'dict') else a
                     a_dict['client_name'] = client_name
@@ -1145,11 +1309,12 @@ async def agents_page(
     try:
         from app.core.dependencies import get_client_service
         client_service = get_client_service()
-        if admin_user.get("role") == "superadmin":
+        if admin_is_super(admin_user):
             clients = await client_service.get_all_clients()
         else:
             clients_all = await client_service.get_all_clients()
-            clients = [c for c in clients_all if c.id in set(visible_client_ids)]
+            visible_set = {str(cid) for cid in visible_client_ids}
+            clients = [c for c in clients_all if str(getattr(c, 'id', '')) in visible_set]
     except Exception as e:
         logger.error(f"Failed to load clients: {e}")
         # Return minimal client data if database is inaccessible
@@ -1193,11 +1358,16 @@ async def debug_agents():
         return {"error": str(e), "type": str(type(e))}
     
 @router.get("/debug/agent-data/{client_id}/{agent_slug}")
-async def debug_agent_data(client_id: str, agent_slug: str):
+async def debug_agent_data(
+    client_id: str,
+    agent_slug: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
     """Debug what data is passed to agent detail template"""
     try:
         # Copy the same logic from agent_detail function
         if client_id == "global":
+            ensure_client_or_global_access(client_id, admin_user)
             all_agents = await get_all_agents()
             agent = None
             for a in all_agents:
@@ -1208,6 +1378,7 @@ async def debug_agent_data(client_id: str, agent_slug: str):
                 return {"error": "Agent not found"}
             client = {"id": "global", "name": "Global Agents", "domain": "global.local"}
         else:
+            ensure_client_or_global_access(client_id, admin_user)
             from app.core.dependencies import get_client_service, get_agent_service
             client_service = get_client_service()
             agent_service = get_agent_service()
@@ -1267,7 +1438,11 @@ async def debug_agent_data(client_id: str, agent_slug: str):
         return {"error": str(e), "traceback": str(e)}
 
 @router.get("/debug/agent/{client_id}/{agent_slug}")
-async def debug_single_agent(client_id: str, agent_slug: str):
+async def debug_single_agent(
+    client_id: str,
+    agent_slug: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
     """Debug single agent lookup"""
     try:
         debug_info = {
@@ -1278,8 +1453,9 @@ async def debug_single_agent(client_id: str, agent_slug: str):
             },
             "search_result": None
         }
-        
+
         if client_id == "global":
+            ensure_client_or_global_access(client_id, admin_user)
             all_agents = await get_all_agents()
             for a in all_agents:
                 if a.get("slug") == agent_slug:
@@ -1300,9 +1476,29 @@ async def debug_single_agent(client_id: str, agent_slug: str):
                     "found": False,
                     "available_slugs": [a.get("slug") for a in all_agents]
                 }
-        
+        else:
+            ensure_client_or_global_access(client_id, admin_user)
+            from app.core.dependencies import get_agent_service
+            agent_service = get_agent_service()
+            agent = await agent_service.get_agent(client_id, agent_slug)
+            if agent:
+                debug_info["search_result"] = {
+                    "found": True,
+                    "agent": {
+                        "slug": getattr(agent, "slug", None),
+                        "name": getattr(agent, "name", None),
+                        "description": getattr(agent, "description", "")[:200],
+                        "client_id": client_id,
+                    },
+                }
+            else:
+                debug_info["search_result"] = {
+                    "found": False,
+                    "message": "Agent not found for client",
+                }
+
         return debug_info
-        
+
     except Exception as e:
         return {"error": str(e), "type": str(type(e))}
 
@@ -1329,34 +1525,8 @@ async def tools_page(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Abilities (Tools) management page"""
-    visible_client_ids: List[str] = []
-    if admin_user.get("role") != "superadmin":
-        try:
-            from app.integrations.supabase_client import supabase_manager
-            if not getattr(supabase_manager, "_initialized", False):
-                await supabase_manager.initialize()
-            import httpx
-
-            headers = {
-                "apikey": supabase_manager.admin_client.supabase_key if hasattr(supabase_manager.admin_client, "supabase_key") else os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""),
-                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')}",
-            }
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
-                    f"{os.getenv('SUPABASE_URL')}/auth/v1/admin/users/{admin_user.get('user_id')}",
-                    headers=headers,
-                )
-            if resp.status_code == 200:
-                user_payload = resp.json()
-                meta = user_payload.get("user_metadata") or {}
-                assignments = meta.get("tenant_assignments") or {}
-                if admin_user.get("role") == "admin":
-                    visible_client_ids = assignments.get("admin_client_ids") or []
-                else:
-                    visible_client_ids = assignments.get("subscriber_client_ids") or []
-        except Exception as exc:
-            logger.warning(f"Failed to load tenant assignments for tools page: {exc}")
-            visible_client_ids = []
+    scoped_ids = get_scoped_client_ids(admin_user)
+    visible_client_ids: List[str] = [] if scoped_ids is None else list(scoped_ids)
 
     clients: List[Any] = []
     default_client_id: str = ""
@@ -1364,12 +1534,12 @@ async def tools_page(
         from app.core.dependencies import get_client_service
         client_service = get_client_service()
         all_clients = await client_service.get_all_clients()
-        if admin_user.get("role") == "superadmin":
+        if admin_is_super(admin_user):
             clients = all_clients
         else:
-            visible_set = set(visible_client_ids)
-            clients = [c for c in all_clients if c.id in visible_set]
-        if admin_user.get("role") != "superadmin" and clients:
+            visible_set = {str(cid) for cid in visible_client_ids}
+            clients = [c for c in all_clients if str(getattr(c, 'id', '')) in visible_set]
+        if not admin_is_super(admin_user) and clients:
             default_client_id = clients[0].id
     except Exception as exc:
         logger.error(f"Error loading clients for tools page: {exc}")
@@ -1411,8 +1581,28 @@ async def admin_list_tools(
     from app.core.dependencies import get_client_service
 
     tools_service = ToolsService(get_client_service())
+    scoped_ids = get_scoped_client_ids(admin_user)
     try:
-        tools = await tools_service.list_tools(client_id=client_id, scope=scope, type=type, search=search)
+        if scoped_ids is None:
+            tools = await tools_service.list_tools(client_id=client_id, scope=scope, type=type, search=search)
+        else:
+            allowed_ids = list(scoped_ids)
+            tools_map: Dict[str, Any] = {}
+
+            if client_id:
+                ensure_client_access(client_id, admin_user)
+                selected_tools = await tools_service.list_tools(client_id=client_id, scope=scope, type=type, search=search)
+                for tool in selected_tools:
+                    tools_map[tool.id] = tool
+            else:
+                if scope in (None, "global"):
+                    for tool in await tools_service.list_tools(client_id=None, scope="global", type=type, search=search):
+                        tools_map[tool.id] = tool
+                if scope in (None, "client"):
+                    for cid in allowed_ids:
+                        for tool in await tools_service.list_tools(client_id=cid, scope="client", type=type, search=search):
+                            tools_map[tool.id] = tool
+            tools = list(tools_map.values())
         return JSONResponse([tool.dict() for tool in tools])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1427,6 +1617,10 @@ async def admin_create_tool(
     from app.core.dependencies import get_client_service
 
     tools_service = ToolsService(get_client_service())
+    if payload.scope == "client":
+        if not payload.client_id:
+            raise HTTPException(status_code=400, detail="client_id is required for client-scoped tools")
+        ensure_client_access(payload.client_id, admin_user)
     try:
         tool = await tools_service.create_tool(payload)
         return JSONResponse(tool.dict())
@@ -1444,8 +1638,9 @@ async def admin_delete_tool(
     from app.core.dependencies import get_client_service
 
     tools_service = ToolsService(get_client_service())
+    resolved_client_id = await ensure_tool_access(tool_id, admin_user, tools_service, client_id)
     try:
-        await tools_service.delete_tool(client_id, tool_id)
+        await tools_service.delete_tool(client_id or resolved_client_id, tool_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse({"success": True})
@@ -1462,8 +1657,9 @@ async def admin_update_tool(
     from app.core.dependencies import get_client_service
 
     tools_service = ToolsService(get_client_service())
+    resolved_client_id = await ensure_tool_access(tool_id, admin_user, tools_service, client_id)
     try:
-        tool = await tools_service.update_tool(client_id, tool_id, payload)
+        tool = await tools_service.update_tool(client_id or resolved_client_id, tool_id, payload)
         return JSONResponse(tool.dict())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1496,6 +1692,8 @@ async def admin_set_agent_tools(
 ):
     from app.core.dependencies import get_client_service
 
+    ensure_client_access(client_id, admin_user)
+
     tools_service = ToolsService(get_client_service())
     try:
         await tools_service.set_agent_tools(client_id, agent_id, payload.tool_ids)
@@ -1512,6 +1710,8 @@ async def admin_get_perplexity_key(
     admin_user: Dict[str, Any] = Depends(get_admin_user),
 ):
     from app.core.dependencies import get_client_service
+
+    ensure_client_access(client_id, admin_user)
 
     client_service = get_client_service()
     client = await client_service.get_client(client_id, auto_sync=False)
@@ -1540,6 +1740,8 @@ async def admin_update_perplexity_key(
     admin_user: Dict[str, Any] = Depends(get_admin_user),
 ):
     from app.core.dependencies import get_client_service
+
+    ensure_client_access(client_id, admin_user)
 
     payload = await request.json()
     value = (payload.get("api_key") or "").strip()
@@ -1631,6 +1833,8 @@ async def agent_detail(
     """Agent detail and configuration page"""
     # Subscribers can view detail but not edit; page template handles action buttons
     try:
+        ensure_client_or_global_access(client_id, admin_user)
+
         # Simple approach: For "global" agents, use the same method as the agents list page
         if client_id == "global":
             # Load all agents and find the matching one
@@ -2588,7 +2792,7 @@ async def stats_partial(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Stats partial for HTMX updates"""
-    summary = await get_system_summary()
+    summary = await get_system_summary(admin_user)
     
     return templates.TemplateResponse("admin/partials/stats.html", {
         "request": request,
@@ -2601,8 +2805,8 @@ async def client_list_partial(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Client list partial for HTMX updates"""
-    clients = await get_all_clients_with_containers()
-    
+    clients = await get_all_clients_with_containers(admin_user)
+
     return templates.TemplateResponse("admin/partials/client_list.html", {
         "request": request,
         "clients": clients
@@ -2617,11 +2821,15 @@ async def health_partial(
     # Get clients and create mock health status
     from app.core.dependencies import get_client_service
     client_service = get_client_service()
-    
+    scoped_ids = get_scoped_client_ids(admin_user)
+
     health_statuses = []
     try:
         clients = await client_service.get_all_clients()
-        
+        if scoped_ids is not None:
+            allowed = {str(cid) for cid in scoped_ids}
+            clients = [c for c in clients if str(getattr(c, 'id', '')) in allowed]
+
         # Create health status for each client (mocked for now)
         for client in clients[:5]:  # Limit to first 5 for dashboard
             health_statuses.append({
@@ -2649,6 +2857,7 @@ async def container_status_partial(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Container status partial for HTMX updates"""
+    ensure_client_or_global_access(client_id, admin_user)
     container = await get_container_detail(client_id)
     
     return templates.TemplateResponse("admin/partials/container_status.html", {
@@ -2663,6 +2872,7 @@ async def container_metrics_partial(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Container metrics partial for HTMX updates"""
+    ensure_client_or_global_access(client_id, admin_user)
     redis = await get_redis()
     
     # Get last 24 hours of metrics
@@ -2692,6 +2902,7 @@ async def restart_container(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Restart container and return updated status"""
+    ensure_client_or_global_access(client_id, admin_user)
     orchestrator = ContainerOrchestrator()
     
     # Stop and start container
@@ -2714,6 +2925,7 @@ async def stop_container(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Stop container"""
+    ensure_client_or_global_access(client_id, admin_user)
     orchestrator = ContainerOrchestrator()
     await orchestrator.stop_container(client_id)
     
@@ -2732,6 +2944,7 @@ async def get_container_logs(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Stream container logs"""
+    ensure_client_or_global_access(client_id, admin_user)
     orchestrator = ContainerOrchestrator()
     logs = await orchestrator.get_container_logs(client_id, lines)
     
@@ -2767,6 +2980,7 @@ async def agent_preview_modal(
     """Return the agent preview modal that embeds the production embed UI in an iframe"""
     try:
         logger.info(f"Preview (embed) modal requested for client_id={client_id}, agent_slug={agent_slug}")
+        ensure_client_or_global_access(client_id, admin_user)
         
         # Call EnsureClientUser to get client JWT for admin preview
         import httpx
@@ -2777,14 +2991,14 @@ async def agent_preview_modal(
             if not platform_token and admin_user:
                 # Try to get from admin_user if available
                 platform_token = admin_user.get("access_token", "")
-            
+
             ensure_response = None
             try:
                 ensure_response = await client.post(
                     f"{request.base_url}api/v2/admin/ensure-client-user",
                     json={
                         "client_id": client_id,
-                        "platform_user_id": admin_user.get("id"),
+                        "platform_user_id": admin_user.get("user_id"),
                         "user_email": admin_user.get("email")
                     },
                     headers={"Authorization": f"Bearer {platform_token}"} if platform_token else {}
@@ -2919,7 +3133,9 @@ async def send_preview_message(
 ):
     """Send a message in preview mode and get response"""
     from app.core.dependencies import get_agent_service
-    
+
+    ensure_client_or_global_access(client_id, admin_user)
+
     # Get agent details
     from app.integrations.supabase_client import supabase_manager
     
@@ -3193,6 +3409,8 @@ async def stream_preview_message(
     from livekit.agents import llm as lk_llm
     import json, asyncio
 
+    ensure_client_or_global_access(client_id, admin_user)
+
     async def generate():
         try:
             try:
@@ -3306,6 +3524,7 @@ async def get_preview_messages(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Get messages for a preview session"""
+    ensure_client_or_global_access(client_id, admin_user)
     preview_sessions = getattr(request.app.state, 'preview_sessions', {})
     session_data = preview_sessions.get(session_id, {"messages": [], "conversation_id": None})
     
@@ -3334,11 +3553,13 @@ async def set_preview_mode(
     """Switch between text and voice preview modes"""
     import time
     request_start = time.time()
-    
+
     from app.core.dependencies import get_agent_service
     from app.integrations.supabase_client import supabase_manager
     import json
-    
+
+    ensure_client_or_global_access(client_id, admin_user)
+
     logger.info(f"Set preview mode started: mode={mode}, client_id={client_id}, agent_slug={agent_slug}")
     
     agent = None
@@ -3570,8 +3791,10 @@ async def start_voice_preview(
     from app.core.dependencies import get_agent_service
     from app.integrations.supabase_client import supabase_manager
     import json
-    
+
     try:
+        ensure_client_or_global_access(client_id, admin_user)
+
         # Get agent details
         agent = None
         
@@ -3725,6 +3948,8 @@ async def stop_voice_preview(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Stop a voice preview session"""
+    ensure_client_or_global_access(client_id, admin_user)
+
     # Stop the agent if room name provided
     if room_name:
         try:
@@ -3804,6 +4029,7 @@ async def clear_preview_messages(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Clear messages for a preview session"""
+    ensure_client_or_global_access(client_id, admin_user)
     if hasattr(request.app.state, 'preview_sessions') and session_id in request.app.state.preview_sessions:
         # Reset with new conversation_id
         request.app.state.preview_sessions[session_id] = {
@@ -3826,6 +4052,7 @@ async def get_trigger_info(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Get trigger endpoint info for testing"""
+    ensure_client_or_global_access(client_id, admin_user)
     # Simple info modal
     return f"""
     <div class="fixed bottom-4 right-4 max-w-md p-4 bg-dark-surface rounded-lg shadow-lg border border-dark-border">
@@ -3861,6 +4088,7 @@ async def get_trigger_info(
 
 @router.get("/agents/{client_id}/{agent_slug}/embed-code", response_class=HTMLResponse)
 async def embed_code_modal(request: Request, client_id: str, agent_slug: str, admin_user: Dict[str, Any] = Depends(get_admin_user)):
+    ensure_client_access(client_id, admin_user)
     host = request.base_url.hostname
     iframe = f"""<iframe
 src=\"https://{host}/embed/{client_id}/{agent_slug}?theme=dark\"
@@ -3956,6 +4184,8 @@ async def upload_agent_image(
 ):
     """Persist an uploaded image to the static assets directory for an agent."""
 
+    ensure_client_or_global_access(client_id, admin_user)
+
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
 
@@ -4039,6 +4269,7 @@ async def admin_update_agent(
     # Enforce authenticated admin; temporarily relax role check to unblock saves
     from app.admin.auth import get_admin_user
     admin_user = await get_admin_user(request)
+    ensure_client_or_global_access(client_id, admin_user)
     try:
         # Parse JSON body
         data = await request.json()
@@ -4183,6 +4414,7 @@ def get_redis_client_admin():
 async def edit_client_modal(client_id: str, request: Request, admin_user: Dict[str, Any] = Depends(get_admin_user)):
     from app.core.dependencies import get_client_service
     client_service = get_client_service()
+    ensure_client_access(client_id, admin_user)
     client = await client_service.get_client(client_id, auto_sync=False)
     if not client:
         return HTMLResponse("<div class='p-4 text-red-600'>Client not found</div>", status_code=404)
@@ -4223,7 +4455,8 @@ async def edit_client_modal(client_id: str, request: Request, admin_user: Dict[s
 @router.post("/clients/{client_id}/update")
 async def admin_update_client(
     client_id: str,
-    request: Request
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Admin endpoint to update client using Supabase service"""
     try:
@@ -4237,7 +4470,9 @@ async def admin_update_client(
         # Get client service
         from app.core.dependencies import get_client_service
         client_service = get_client_service()
-        
+
+        ensure_client_access(client_id, admin_user)
+
         # Get existing client (disable auto-sync to prevent overriding manual changes)
         client = await client_service.get_client(client_id, auto_sync=False)
         if not client:
@@ -4374,6 +4609,8 @@ async def get_client_wordpress_sites(
 ):
     """Get WordPress sites for a specific client"""
     try:
+        ensure_client_access(client_id, admin_user)
+
         # Initialize WordPress service
         wp_service = get_wordpress_service()
         sites = wp_service.list_sites(client_id=client_id)
@@ -4401,6 +4638,8 @@ async def create_wordpress_site(
 ):
     """Create a new WordPress site for a client"""
     try:
+        ensure_client_access(client_id, admin_user)
+
         # Initialize WordPress service  
         wp_service = get_wordpress_service()
         
@@ -4445,7 +4684,9 @@ async def regenerate_wordpress_keys(
                 "success": False,
                 "error": "Site not found"
             }
-        
+
+        ensure_client_access(str(site.client_id), admin_user)
+
         # Generate new keys
         new_api_key = WordPressSite.generate_api_key()
         new_api_secret = WordPressSite.generate_api_secret()
@@ -4477,6 +4718,15 @@ async def delete_wordpress_site(
     """Delete a WordPress site"""
     try:
         wp_service = get_wordpress_service()
+
+        site = wp_service.get_site(site_id)
+        if not site:
+            return {
+                "success": False,
+                "error": "Site not found"
+            }
+
+        ensure_client_access(str(site.client_id), admin_user)
         
         # Delete the site
         success = wp_service.delete_site(site_id)
@@ -4516,9 +4766,11 @@ async def get_knowledge_base_documents(
                 status_code=400,
                 content={"error": "Client ID is required. Please select a client from the dropdown."}
             )
-        
+
+        ensure_client_access(client_id, admin_user)
+
         from app.services.document_processor import document_processor
-        
+
         # Get documents for the specified client
         documents = await document_processor.get_documents(
             user_id=None,  # Admin access doesn't need user_id
@@ -4544,7 +4796,12 @@ async def get_admin_clients(
         from app.core.dependencies import get_client_service
         client_service = get_client_service()
         clients = await client_service.get_all_clients()
-        
+
+        scoped_ids = get_scoped_client_ids(admin_user)
+        if scoped_ids is not None:
+            scoped_id_strings = {str(cid) for cid in scoped_ids}
+            clients = [c for c in clients if str(getattr(c, 'id', '')) in scoped_id_strings]
+
         # Convert to list of dicts for JSON response
         client_list = []
         for client in clients:
@@ -4569,8 +4826,10 @@ async def get_knowledge_base_agents(
 ):
     """Get agents for Knowledge Base admin interface"""
     try:
+        ensure_client_access(client_id, admin_user)
+
         from app.core.dependencies import get_agent_service
-        
+
         # Get agent service
         agent_service = get_agent_service()
         
@@ -4619,7 +4878,9 @@ async def upload_knowledge_base_document(
         
         if not client_id:
             return {"success": False, "message": "No client ID provided"}
-        
+
+        ensure_client_access(client_id, admin_user)
+
         # Get file content
         content = await file.read()
         filename = file.filename
@@ -4650,7 +4911,7 @@ async def upload_knowledge_base_document(
                 file_path=temp_file_path,
                 title=title or filename,
                 description=description,
-                user_id=admin_user.get("id"),  # Admin user ID
+                user_id=admin_user.get("user_id"),
                 agent_ids=agent_id_list,
                 client_id=client_id
             )
@@ -4699,13 +4960,16 @@ async def delete_knowledge_base_document(
     """Delete a document from knowledge base"""
     try:
         from app.services.document_processor import document_processor
-        
+        scoped_ids = get_scoped_client_ids(admin_user)
+        target_client_id = None if scoped_ids is None else await resolve_document_client(document_id, admin_user)
+
         # Delete the document using document processor
         success = await document_processor.delete_document(
             document_id=document_id,
-            user_id=admin_user.get("id")  # Pass admin user ID for permission check
+            user_id=admin_user.get("user_id"),
+            client_id=target_client_id,
         )
-        
+
         if success:
             return {"success": True, "message": "Document deleted successfully"}
         else:
@@ -4723,6 +4987,10 @@ async def reprocess_knowledge_base_document(
 ):
     """Reprocess a document"""
     try:
+        scoped_ids = get_scoped_client_ids(admin_user)
+        if scoped_ids is not None:
+            await resolve_document_client(document_id, admin_user)
+
         # For now, return success
         # TODO: Implement actual reprocessing
         return {"success": True, "message": "Document reprocessing started"}
@@ -4739,6 +5007,10 @@ async def update_document_access(
 ):
     """Update document access permissions"""
     try:
+        scoped_ids = get_scoped_client_ids(admin_user)
+        if scoped_ids is not None:
+            await resolve_document_client(document_id, admin_user)
+
         data = await request.json()
         agent_access = data.get("agent_access", "specific")
         agent_ids = data.get("agent_ids", [])

@@ -7,6 +7,7 @@ their own Supabase project.
 """
 import os
 import logging
+from datetime import datetime
 from typing import Optional, Dict, Any
 from uuid import UUID
 from supabase import create_client, Client
@@ -70,7 +71,15 @@ class ClientConnectionManager:
             self._load_client_config(client_id)
         
         client_config = self._client_cache[client_id_str]
-        
+
+        status = (client_config.get('provisioning_status') or 'ready').lower()
+        if status != 'ready':
+            if not self._promote_legacy_client_if_ready(client_id_str, client_config):
+                raise ClientConfigurationError(
+                    f"Client {client_id} is not ready (provisioning_status={status})."
+                )
+            status = (client_config.get('provisioning_status') or 'ready').lower()
+
         # Validate required credentials
         if not client_config.get('supabase_url') or not client_config.get('supabase_service_role_key'):
             raise ClientConfigurationError(
@@ -109,7 +118,41 @@ class ClientConnectionManager:
                     "Please run the database setup scripts first."
                 )
             raise ClientConfigurationError(f"Failed to load client configuration: {str(e)}")
-    
+
+    def _promote_legacy_client_if_ready(self, client_id: str, client_config: Dict[str, Any]) -> bool:
+        """Promote pre-provisioning clients with manual credentials to ready status."""
+        try:
+            auto_provision = bool(client_config.get('auto_provision'))
+            if auto_provision:
+                return False
+
+            has_credentials = bool(client_config.get('supabase_url') and client_config.get('supabase_service_role_key'))
+            if not has_credentials:
+                return False
+
+            update_payload = {
+                'provisioning_status': 'ready',
+                'provisioning_error': None,
+            }
+
+            now_iso = datetime.utcnow().isoformat()
+            if not client_config.get('provisioning_started_at'):
+                update_payload['provisioning_started_at'] = now_iso
+            if not client_config.get('provisioning_completed_at'):
+                update_payload['provisioning_completed_at'] = now_iso
+
+            self.platform_client.table('clients').update(update_payload).eq('id', client_id).execute()
+            client_config.update(update_payload)
+            logger.info("Promoted legacy client %s to ready status", client_id)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Failed to auto-promote client %s provisioning status: %s",
+                client_id,
+                exc,
+            )
+            return False
+
     def get_client_api_keys(self, client_id: UUID) -> Dict[str, Optional[str]]:
         """
         Get all API keys configured for a client.

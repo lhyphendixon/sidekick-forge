@@ -27,14 +27,24 @@
                 </nav>
                 <h1 class="text-2xl font-bold text-gray-900">Edit Client Configuration</h1>
                 <p class="text-gray-600">Manage settings for {{ client.name }}</p>
+                <div class="mt-2 flex flex-wrap items-center gap-2">
+                    {% if client.auto_provision %}
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
+                        Auto-Provisioned Supabase
+                    </span>
+                    {% endif %}
+                    <span id="provisioningStatusChip"
+                          class="hidden inline-flex items-center px-3 py-1 rounded-full text-xs font-medium"></span>
+                </div>
             </div>
-            <div class="flex space-x-2">
+            <div class="flex items-center space-x-2">
                 <span id="syncStatus" class="hidden inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
                     <svg class="mr-2 h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
                         <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                     </svg>
                     Synced from Supabase
                 </span>
+                {% if not client.auto_provision %}
                 <button type="button" onclick="manualSync()" 
                         class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                     <svg class="-ml-0.5 mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -42,9 +52,50 @@
                     </svg>
                     Refresh from Supabase
                 </button>
+                {% endif %}
             </div>
         </div>
     </div>
+
+    {% if client.auto_provision %}
+    <div id="provisioningStatusCard" class="bg-white shadow rounded-lg mb-6" data-status="{{ client.provisioning_status or 'unknown' }}">
+        <div class="px-6 py-4 border-b flex items-center justify-between">
+            <div>
+                <h2 class="text-lg font-medium text-gray-900">Provisioning Status</h2>
+                <p class="text-sm text-gray-600">We manage the Supabase project for this client automatically. Credentials appear once provisioning completes.</p>
+            </div>
+            <span id="provisioningStatusBadge" class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold"></span>
+        </div>
+        <div class="px-6 py-5 space-y-4">
+            <div id="provisioningStatusMessage" class="text-sm text-gray-700"></div>
+            <div id="provisioningErrorBlock" class="hidden text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-4 py-3"></div>
+            <dl class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm text-gray-600">
+                <div>
+                    <dt class="font-medium text-gray-500">Started</dt>
+                    <dd id="provisioningStartedAt" class="text-gray-900 mt-1">{{ client.provisioning_started_at or '—' }}</dd>
+                </div>
+                <div>
+                    <dt class="font-medium text-gray-500">Completed</dt>
+                    <dd id="provisioningCompletedAt" class="text-gray-900 mt-1">{{ client.provisioning_completed_at or 'Pending' }}</dd>
+                </div>
+                <div>
+                    <dt class="font-medium text-gray-500">Schema Version</dt>
+                    <dd id="provisioningSchemaVersion" class="text-gray-900 mt-1">{{ client.schema_version or '—' }}</dd>
+                </div>
+            </dl>
+            <div class="flex items-center gap-3">
+                <button id="retryProvisioningButton" type="button"
+                        class="hidden inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    <svg class="-ml-0.5 mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                    </svg>
+                    Retry Provisioning
+                </button>
+                <span id="provisioningPollingNotice" class="text-xs text-gray-500">Status updates every few seconds.</span>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <form id="editClientForm" action="/admin/clients/{{ client.id }}/update" method="POST">
         <div class="bg-white shadow rounded-lg">
@@ -93,48 +144,103 @@
                 <h2 class="text-lg font-medium text-gray-900">Supabase Configuration</h2>
             </div>
             <div class="px-6 py-4 space-y-4">
+                {% if client.auto_provision %}
+                <div id="managedSupabaseNotice" class="rounded-md border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+                    Supabase credentials are managed by Sidekick Forge. They become available automatically once provisioning completes.
+                </div>
+                {% endif %}
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Supabase URL</label>
-                    <input type="url" id="supabaseUrl" name="supabase_url" value="{{ client.settings.supabase.url }}" required
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                    <input type="url"
+                           id="supabaseUrl"
+                           name="supabase_url"
+                           value="{{ client.supabase_project_url or client.settings.get('supabase', {}).get('url', '') }}"
+                           {% if client.auto_provision %}readonly{% else %}required{% endif %}
+                           placeholder="{% if client.auto_provision and (client.provisioning_status != 'ready') %}Provisioning…{% else %}https://your-project.supabase.co{% endif %}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                           data-managed-field="supabase-url">
                 </div>
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Anon Key</label>
-                        <input type="password" id="supabaseAnonKey" name="supabase_anon_key" value="{{ client.settings.supabase.anon_key }}" required
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                        <input type="password"
+                               id="supabaseAnonKey"
+                               name="supabase_anon_key"
+                               value="{{ client.supabase_anon_key or client.settings.get('supabase', {}).get('anon_key', '') }}"
+                               {% if client.auto_provision %}readonly{% else %}required{% endif %}
+                               placeholder="{% if client.auto_provision and (client.provisioning_status != 'ready') %}Pending…{% else %}Paste anon key{% endif %}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                               data-managed-field="supabase-anon">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Service Role Key</label>
-                        <input type="password" id="supabaseServiceKey" name="supabase_service_key" value="{{ client.settings.supabase.service_role_key }}" required
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                        <input type="password"
+                               id="supabaseServiceKey"
+                               name="supabase_service_key"
+                               value="{{ client.supabase_service_role_key or client.settings.get('supabase', {}).get('service_role_key', '') }}"
+                               {% if client.auto_provision %}readonly{% else %}required{% endif %}
+                               placeholder="{% if client.auto_provision and (client.provisioning_status != 'ready') %}Provisioning…{% else %}Supabase service key{% endif %}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                               data-managed-field="supabase-service">
                     </div>
                 </div>
             </div>
         </div>
 
         <div class="bg-white shadow rounded-lg mt-6">
-            <div class="px-6 py-4 border-b">
-                <h2 class="text-lg font-medium text-gray-900">LiveKit Configuration</h2>
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <div>
+                    <h2 class="text-lg font-medium text-gray-900">LiveKit Configuration</h2>
+                    <p class="text-sm text-gray-600">Voice streaming and realtime sessions.</p>
+                </div>
+                {% if client.auto_provision %}
+                <span id="livekitManagedBadge" class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
+                    Managed
+                </span>
+                {% endif %}
             </div>
             <div class="px-6 py-4 space-y-4">
+                {% set livekit_settings = (client.settings or {}).get('livekit_config', (client.settings or {}).get('livekit', {})) %}
+                {% if client.auto_provision %}
+                <div id="managedLivekitNotice" class="rounded-md border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+                    LiveKit credentials are supplied automatically for auto-provisioned clients. Once available, you can copy them here or override with custom values if needed.
+                </div>
+                {% endif %}
                 <div>
                     <label class="block text-sm font-medium text-gray-700">LiveKit Server URL</label>
-                    <input type="url" id="livekitUrl" name="livekit_server_url" value="{{ client.settings.livekit.server_url }}" required
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                    <input type="url"
+                           id="livekitUrl"
+                           name="livekit_server_url"
+                           value="{{ livekit_settings.get('server_url') or livekit_settings.get('url', '') }}"
+                           {% if client.auto_provision %}readonly{% else %}required{% endif %}
+                           placeholder="{% if client.auto_provision and (client.provisioning_status != 'ready') %}Pending…{% else %}https://livekit.yourdomain.com{% endif %}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                           data-managed-field="livekit-url">
                 </div>
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">API Key</label>
-                        <input type="text" id="livekitApiKey" name="livekit_api_key" value="{{ client.settings.livekit.api_key }}" required
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                        <input type="text"
+                               id="livekitApiKey"
+                               name="livekit_api_key"
+                               value="{{ livekit_settings.get('api_key', '') }}"
+                               {% if client.auto_provision %}readonly{% else %}required{% endif %}
+                               placeholder="{% if client.auto_provision and (client.provisioning_status != 'ready') %}Provisioning…{% else %}lk_****************{% endif %}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                               data-managed-field="livekit-key">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">API Secret</label>
-                        <input type="password" id="livekitApiSecret" name="livekit_api_secret" value="{{ client.settings.livekit.api_secret }}" required
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                        <input type="password"
+                               id="livekitApiSecret"
+                               name="livekit_api_secret"
+                               value="{{ livekit_settings.get('api_secret', '') }}"
+                               {% if client.auto_provision %}readonly{% else %}required{% endif %}
+                               placeholder="{% if client.auto_provision and (client.provisioning_status != 'ready') %}Provisioning…{% else %}Paste secret{% endif %}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                               data-managed-field="livekit-secret">
                     </div>
                 </div>
             </div>
@@ -321,6 +427,225 @@
 
 <script>
 const clientId = '{{ client.id }}';
+const autoProvisionEnabled = {{ 'true' if client.auto_provision else 'false' }};
+const provisioningPollIntervalMs = 5000;
+let provisioningPollHandle = null;
+
+const provisioningInitialSnapshot = {{ {
+    "provisioning_status": client.provisioning_status or "unknown",
+    "provisioning_error": client.provisioning_error,
+    "provisioning_started_at": client.provisioning_started_at,
+    "provisioning_completed_at": client.provisioning_completed_at,
+    "schema_version": client.schema_version,
+    "supabase_project_url": client.supabase_project_url,
+    "supabase_service_role_key": client.supabase_service_role_key,
+    "supabase_anon_key": client.supabase_anon_key,
+    "settings": {
+        "livekit_config": (client.settings or {}).get('livekit_config', (client.settings or {}).get('livekit', {}))
+    }
+} | tojson | safe }};
+
+const provisioningStatusConfig = {
+    ready: {
+        label: 'Ready',
+        classes: 'bg-green-100 text-green-800 border border-green-200',
+        message: 'Provisioning completed successfully. Supabase credentials are available below.'
+    },
+    queued: {
+        label: 'Queued',
+        classes: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+        message: 'Queued for provisioning. A worker will pick this up shortly.'
+    },
+    creating_project: {
+        label: 'Creating Project',
+        classes: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+        message: 'Creating the dedicated Supabase project for this client.'
+    },
+    schema_syncing: {
+        label: 'Syncing Schema',
+        classes: 'bg-blue-100 text-blue-800 border border-blue-200',
+        message: 'Applying database schema and seeding tenant data.'
+    },
+    failed: {
+        label: 'Failed',
+        classes: 'bg-red-100 text-red-800 border border-red-200',
+        message: 'Provisioning failed. Review the error below and retry once resolved.'
+    },
+    unknown: {
+        label: 'Unknown',
+        classes: 'bg-gray-100 text-gray-700 border border-gray-200',
+        message: 'Provisioning state is unknown. Try refreshing or retrying provisioning.'
+    }
+};
+
+function applyStatusClasses(element, status, baseClasses) {
+    if (!element) return;
+    const config = provisioningStatusConfig[status] || provisioningStatusConfig.unknown;
+    element.className = `${baseClasses} ${config.classes}`;
+    element.textContent = config.label;
+}
+
+function formatIso(timestamp) {
+    if (!timestamp) return '—';
+    try {
+        const date = new Date(timestamp);
+        if (Number.isNaN(date.getTime())) return timestamp;
+        return date.toLocaleString();
+    } catch (error) {
+        return timestamp;
+    }
+}
+
+function syncManagedField(fieldId, value) {
+    if (!value) return;
+    const input = document.getElementById(fieldId);
+    if (!input) return;
+    input.value = value;
+    input.dataset.provisioned = 'true';
+}
+
+function setManagedFieldDisabled(fieldId, disabled) {
+    const input = document.getElementById(fieldId);
+    if (!input) return;
+    if (disabled) {
+        input.setAttribute('disabled', 'disabled');
+    } else {
+        input.removeAttribute('disabled');
+    }
+}
+
+function updateProvisioningUI(snapshot) {
+    if (!autoProvisionEnabled || !snapshot) return;
+
+    const status = snapshot.provisioning_status || 'unknown';
+    const config = provisioningStatusConfig[status] || provisioningStatusConfig.unknown;
+
+    const topChip = document.getElementById('provisioningStatusChip');
+    if (topChip) {
+        topChip.classList.remove('hidden');
+        applyStatusClasses(topChip, status, 'inline-flex items-center px-3 py-1 rounded-full text-xs font-medium');
+    }
+
+    applyStatusClasses(document.getElementById('provisioningStatusBadge'), status, 'inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold');
+
+    const managedFieldIds = ['supabaseUrl', 'supabaseAnonKey', 'supabaseServiceKey', 'livekitUrl', 'livekitApiKey', 'livekitApiSecret'];
+    const disableManagedFields = status !== 'ready';
+    managedFieldIds.forEach(id => setManagedFieldDisabled(id, disableManagedFields));
+
+    const statusMessage = document.getElementById('provisioningStatusMessage');
+    if (statusMessage) {
+        statusMessage.textContent = config.message;
+    }
+
+    const startedAt = document.getElementById('provisioningStartedAt');
+    if (startedAt) startedAt.textContent = formatIso(snapshot.provisioning_started_at);
+
+    const completedAt = document.getElementById('provisioningCompletedAt');
+    if (completedAt) completedAt.textContent = status === 'ready' ? formatIso(snapshot.provisioning_completed_at) : 'Pending';
+
+    const schemaVersion = document.getElementById('provisioningSchemaVersion');
+    if (schemaVersion) schemaVersion.textContent = snapshot.schema_version || '—';
+
+    const errorBlock = document.getElementById('provisioningErrorBlock');
+    if (errorBlock) {
+        if (snapshot.provisioning_error) {
+            errorBlock.textContent = `Last error: ${snapshot.provisioning_error}`;
+            errorBlock.classList.remove('hidden');
+        } else {
+            errorBlock.classList.add('hidden');
+        }
+    }
+
+    const retryButton = document.getElementById('retryProvisioningButton');
+    if (retryButton) {
+        if (status === 'failed') {
+            retryButton.classList.remove('hidden');
+        } else {
+            retryButton.classList.add('hidden');
+        }
+    }
+
+    const pollingNotice = document.getElementById('provisioningPollingNotice');
+    if (pollingNotice) {
+        pollingNotice.textContent = status === 'ready' ? 'Provisioning complete.' : 'Status updates every few seconds.';
+    }
+
+    syncManagedField('supabaseUrl', snapshot.supabase_project_url);
+    syncManagedField('supabaseAnonKey', snapshot.supabase_anon_key);
+    syncManagedField('supabaseServiceKey', snapshot.supabase_service_role_key);
+
+    const livekit = snapshot.settings && snapshot.settings.livekit_config ? snapshot.settings.livekit_config : null;
+    if (livekit) {
+        syncManagedField('livekitUrl', livekit.server_url || livekit.url);
+        syncManagedField('livekitApiKey', livekit.api_key);
+        syncManagedField('livekitApiSecret', livekit.api_secret);
+    }
+
+    if (status === 'ready' || status === 'failed') {
+        stopProvisioningPolling();
+    }
+}
+
+async function pollProvisioningStatus() {
+    try {
+        const response = await fetch(`/api/v2/clients/${clientId}`);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch provisioning status (${response.status})`);
+        }
+        const snapshot = await response.json();
+        updateProvisioningUI(snapshot);
+    } catch (error) {
+        console.error('Provisioning poll failed:', error);
+    }
+}
+
+function startProvisioningPolling(force = false) {
+    if (!autoProvisionEnabled) return;
+    if (provisioningPollHandle && !force) return;
+    if (provisioningPollHandle) {
+        clearInterval(provisioningPollHandle);
+    }
+    provisioningPollHandle = setInterval(pollProvisioningStatus, provisioningPollIntervalMs);
+    pollProvisioningStatus();
+}
+
+function stopProvisioningPolling() {
+    if (provisioningPollHandle) {
+        clearInterval(provisioningPollHandle);
+        provisioningPollHandle = null;
+    }
+}
+
+async function retryProvisioning() {
+    const retryButton = document.getElementById('retryProvisioningButton');
+    if (!retryButton) return;
+    const originalContent = retryButton.innerHTML;
+    retryButton.disabled = true;
+    retryButton.innerHTML = '<span class="flex items-center"><svg class="animate-spin -ml-0.5 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Retrying...</span>';
+
+    try {
+        const response = await fetch(`/api/v2/clients/${clientId}/provisioning/retry`, { method: 'POST' });
+        if (!response.ok) {
+            throw new Error(`Retry failed (${response.status})`);
+        }
+        const statusMessage = document.getElementById('provisioningStatusMessage');
+        if (statusMessage) {
+            statusMessage.textContent = 'Provisioning re-queued. Monitoring for updates…';
+        }
+        const errorBlock = document.getElementById('provisioningErrorBlock');
+        if (errorBlock) {
+            errorBlock.classList.add('hidden');
+        }
+        retryButton.classList.add('hidden');
+        startProvisioningPolling(true);
+    } catch (error) {
+        console.error('Retry provisioning failed:', error);
+        alert('Failed to retry provisioning: ' + error.message);
+    } finally {
+        retryButton.disabled = false;
+        retryButton.innerHTML = originalContent;
+    }
+}
 
 // Auto-sync disabled - backend handles credential sync automatically
 document.addEventListener('DOMContentLoaded', function() {
@@ -328,6 +653,19 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize embedding configuration
     updateEmbeddingModels();
     updateDimensionVisibility();
+
+    if (autoProvisionEnabled) {
+        updateProvisioningUI(provisioningInitialSnapshot);
+        const initialStatus = provisioningInitialSnapshot.provisioning_status || 'unknown';
+        if (['ready', 'failed'].indexOf(initialStatus) === -1) {
+            startProvisioningPolling();
+        }
+    }
+
+    const retryButton = document.getElementById('retryProvisioningButton');
+    if (retryButton) {
+        retryButton.addEventListener('click', retryProvisioning);
+    }
 });
 
 // Store current selections to restore after model list update

@@ -66,17 +66,20 @@ async def create_client(client: ClientCreate) -> Client:
         if not client.name:
             raise HTTPException(status_code=400, detail="Client name is required")
         
-        if not client.settings or not client.settings.supabase:
-            raise HTTPException(
-                status_code=400,
-                detail="Supabase configuration is required"
-            )
-        
-        if not client.settings.supabase.url or not client.settings.supabase.service_role_key:
-            raise HTTPException(
-                status_code=400,
-                detail="Supabase project URL and service role key are required"
-            )
+        auto_provision = getattr(client, "auto_provision", False)
+
+        if not auto_provision:
+            if not client.supabase_project_url:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Supabase project URL is required when auto_provision is false"
+                )
+
+            if not client.supabase_service_role_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Supabase service role key is required when auto_provision is false"
+                )
         
         created_client = await client_service.create_client(client)
         if not created_client:
@@ -168,6 +171,35 @@ async def sync_client_from_supabase(client_id: str) -> Client:
     except Exception as e:
         logger.error(f"Error syncing client: {e}")
         raise HTTPException(status_code=500, detail="Failed to sync client")
+
+
+@router.post("/clients/{client_id}/provisioning/retry")
+async def retry_provisioning_job(client_id: str) -> dict:
+    try:
+        success = await client_service.retry_provisioning(client_id)
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Client {client_id} not found or retry failed"
+            )
+
+        logger.info(f"Re-queued provisioning for client {client_id}")
+        return {"success": True, "client_id": client_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrying provisioning for client {client_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retry provisioning")
+
+
+@router.get("/clients/provisioning/jobs")
+async def list_provisioning_jobs() -> List[dict]:
+    try:
+        jobs = await client_service.list_provisioning_jobs()
+        return jobs
+    except Exception as e:
+        logger.error(f"Error fetching provisioning jobs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch provisioning jobs")
 
 
 @router.get("/clients/{client_id}/api-keys")

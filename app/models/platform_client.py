@@ -48,10 +48,19 @@ class PlatformClient(BaseModel):
     # Supabase credentials for the client's own database
     supabase_project_url: Optional[str] = Field(None, description="Client's Supabase project URL")
     supabase_service_role_key: Optional[str] = Field(None, description="Client's Supabase service role key")
+    supabase_project_ref: Optional[str] = Field(None, description="Supabase project reference for management API calls")
+    supabase_anon_key: Optional[str] = Field(None, description="Client's Supabase anon key")
     
     # Settings
     settings: PlatformClientSettings = Field(default_factory=PlatformClientSettings)
     
+    provisioning_status: str = Field(default="ready", description="Onboarding status for this client")
+    provisioning_error: Optional[str] = Field(None, description="Last provisioning error message, if any")
+    schema_version: Optional[str] = Field(None, description="Latest schema version applied to the tenant database")
+    provisioning_started_at: Optional[datetime] = Field(None, description="Timestamp when provisioning began")
+    provisioning_completed_at: Optional[datetime] = Field(None, description="Timestamp when provisioning finished")
+    auto_provision: bool = Field(default=False, description="Whether the client was provisioned automatically")
+
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -65,8 +74,9 @@ class PlatformClient(BaseModel):
 class PlatformClientCreate(BaseModel):
     """Model for creating a new platform client"""
     name: str = Field(..., description="Client name")
-    supabase_project_url: str = Field(..., description="Client's Supabase project URL")
-    supabase_service_role_key: str = Field(..., description="Client's Supabase service role key")
+    supabase_project_url: Optional[str] = Field(None, description="Client's Supabase project URL")
+    supabase_service_role_key: Optional[str] = Field(None, description="Client's Supabase service role key")
+    auto_provision: bool = Field(default=False, description="Provision a new Supabase project automatically")
     settings: Optional[PlatformClientSettings] = None
 
 
@@ -76,3 +86,9 @@ class PlatformClientUpdate(BaseModel):
     supabase_project_url: Optional[str] = None
     supabase_service_role_key: Optional[str] = None
     settings: Optional[PlatformClientSettings] = None
+    supabase_project_ref: Optional[str] = None
+    supabase_anon_key: Optional[str] = None
+    provisioning_status: Optional[str] = None
+    provisioning_error: Optional[str] = None
+    schema_version: Optional[str] = None
+    auto_provision: Optional[bool] = None

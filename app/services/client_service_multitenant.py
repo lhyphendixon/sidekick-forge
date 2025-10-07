@@ -47,6 +47,8 @@ class ClientService:
         
         # Parse additional settings
         additional_settings = client_data.get("additional_settings", {})
+        if not additional_settings:
+            additional_settings = {}
         if isinstance(additional_settings, str):
             try:
                 additional_settings = json.loads(additional_settings)
@@ -69,27 +71,57 @@ class ClientService:
             additional_settings=additional_settings
         )
         
-        # Parse datetime fields
-        created_at = client_data.get("created_at")
-        if isinstance(created_at, str):
+        def _parse_datetime(value: Any) -> Optional[datetime]:
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, str):
+                try:
+                    return datetime.fromisoformat(value.replace('Z', '+00:00'))
+                except ValueError:
+                    return None
+            return value
+
+        created_at = _parse_datetime(client_data.get("created_at")) or datetime.utcnow()
+        updated_at = _parse_datetime(client_data.get("updated_at")) or datetime.utcnow()
+        provisioning_started_at = _parse_datetime(client_data.get("provisioning_started_at"))
+        provisioning_completed_at = _parse_datetime(client_data.get("provisioning_completed_at"))
+
+        provisioning_status = client_data.get("provisioning_status") or "ready"
+        auto_provision = bool(client_data.get("auto_provision"))
+
+        # Legacy clients created before the provisioning rollout may have been
+        # defaulted to "queued" even though they already have credentials.
+        if not auto_provision and provisioning_status in (None, "", "queued", "pending"):
+            provisioning_status = "ready"
             try:
-                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-            except ValueError:
-                created_at = datetime.utcnow()
-        
-        updated_at = client_data.get("updated_at")
-        if isinstance(updated_at, str):
-            try:
-                updated_at = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
-            except ValueError:
-                updated_at = datetime.utcnow()
-        
+                now_iso = datetime.utcnow().isoformat()
+                self.platform_db.table("clients").update({
+                    "provisioning_status": "ready",
+                    "provisioning_error": None,
+                    "provisioning_started_at": client_data.get("provisioning_started_at") or now_iso,
+                    "provisioning_completed_at": client_data.get("provisioning_completed_at") or now_iso,
+                }).eq("id", client_data["id"]).execute()
+            except Exception as legacy_update_error:
+                logger.debug(
+                    "Unable to auto-promote provisioning status for legacy client %s: %s",
+                    client_data.get("id"),
+                    legacy_update_error,
+                )
+
         return Client(
             id=client_data["id"],
             name=client_data["name"],
             supabase_project_url=client_data.get("supabase_url"),
             supabase_service_role_key=client_data.get("supabase_service_role_key"),
+            supabase_project_ref=client_data.get("supabase_project_ref"),
+            supabase_anon_key=client_data.get("supabase_anon_key"),
             settings=settings,
+            provisioning_status=provisioning_status,
+            provisioning_error=client_data.get("provisioning_error"),
+            schema_version=client_data.get("schema_version"),
+            provisioning_started_at=provisioning_started_at,
+            provisioning_completed_at=provisioning_completed_at,
+            auto_provision=auto_provision,
             created_at=created_at,
             updated_at=updated_at
         )
@@ -133,15 +165,26 @@ class ClientService:
     async def create_client(self, client_data: ClientCreate) -> Optional[Client]:
         """Create a new client in the platform database"""
         try:
+            now_iso = datetime.utcnow().isoformat()
+            auto_provision = getattr(client_data, "auto_provision", False)
+            provisioning_status = "queued" if auto_provision else "ready"
+
             # Prepare data for insertion
             data = {
                 "name": client_data.name,
                 "supabase_url": client_data.supabase_project_url,
                 "supabase_service_role_key": client_data.supabase_service_role_key,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat()
+                "auto_provision": auto_provision,
+                "provisioning_status": provisioning_status,
+                "created_at": now_iso,
+                "updated_at": now_iso,
+                "provisioning_started_at": now_iso,
+                "provisioning_error": None,
             }
-            
+
+            if not auto_provision:
+                data["provisioning_completed_at"] = now_iso
+
             # Add API keys if provided
             if client_data.settings and client_data.settings.api_keys:
                 keys = client_data.settings.api_keys
@@ -161,7 +204,7 @@ class ClientService:
                 })
                 if hasattr(keys, 'anthropic_api_key'):
                     data["anthropic_api_key"] = keys.anthropic_api_key
-            
+
             # Add LiveKit config if provided
             if client_data.settings and client_data.settings.livekit_config:
                 livekit = client_data.settings.livekit_config
@@ -170,18 +213,46 @@ class ClientService:
                     "livekit_api_key": livekit.get("api_key"),
                     "livekit_api_secret": livekit.get("api_secret"),
                 })
-            
+
             # Insert into platform database
             result = self.platform_db.table("clients").insert(data).execute()
-            
+
             if result.data:
+                client_row = result.data[0]
+                client_id = client_row["id"]
                 logger.info(f"Created client {client_data.name}")
+
+                if auto_provision:
+                    try:
+                        # Queue provisioning; worker design documented in docs/provisioning_worker_plan.md
+                        self.platform_db.table("client_provisioning_jobs").upsert(
+                            {
+                                "client_id": client_id,
+                                "job_type": "supabase_project",
+                                "attempts": 0,
+                                "claimed_at": None,
+                                "last_error": None,
+                            },
+                            on_conflict="client_id,job_type",
+                        ).execute()
+                    except Exception as job_error:
+                        logger.error(
+                            f"Error queueing provisioning job for client {client_id}: {job_error}"
+                        )
+                        self.platform_db.table("clients").update(
+                            {
+                                "provisioning_status": "failed",
+                                "provisioning_error": str(job_error),
+                            }
+                        ).eq("id", client_id).execute()
+                        raise
+
                 # Clear cache for new client
                 self.connection_manager.clear_cache()
-                return self._parse_client_data(result.data[0])
-            
+                return self._parse_client_data(client_row)
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Error creating client: {e}")
             return None
@@ -200,7 +271,25 @@ class ClientService:
             
             if client_update.supabase_service_role_key is not None:
                 update_data["supabase_service_role_key"] = client_update.supabase_service_role_key
-            
+
+            if client_update.supabase_project_ref is not None:
+                update_data["supabase_project_ref"] = client_update.supabase_project_ref
+
+            if client_update.supabase_anon_key is not None:
+                update_data["supabase_anon_key"] = client_update.supabase_anon_key
+
+            if client_update.provisioning_status is not None:
+                update_data["provisioning_status"] = client_update.provisioning_status
+
+            if client_update.provisioning_error is not None:
+                update_data["provisioning_error"] = client_update.provisioning_error
+
+            if client_update.schema_version is not None:
+                update_data["schema_version"] = client_update.schema_version
+
+            if client_update.auto_provision is not None:
+                update_data["auto_provision"] = client_update.auto_provision
+
             # Update API keys if provided
             if client_update.settings and client_update.settings.api_keys:
                 keys = client_update.settings.api_keys
@@ -261,6 +350,92 @@ class ClientService:
         except Exception as e:
             logger.error(f"Error deleting client {client_id}: {e}")
             return False
+
+    async def retry_provisioning(self, client_id: str) -> bool:
+        """Reset provisioning state and enqueue a fresh provisioning job."""
+        try:
+            now_iso = datetime.utcnow().isoformat()
+
+            result = self.platform_db.table("clients").update({
+                "provisioning_status": "queued",
+                "provisioning_error": None,
+                "provisioning_started_at": now_iso,
+                "provisioning_completed_at": None,
+            }).eq("id", client_id).execute()
+
+            if not result.data:
+                logger.warning(f"Cannot retry provisioning for client {client_id}: not found")
+                return False
+
+            self.platform_db.table("client_provisioning_jobs").upsert({
+                "client_id": client_id,
+                "job_type": "supabase_project",
+                "attempts": 0,
+                "claimed_at": None,
+                "last_error": None,
+            }, on_conflict="client_id,job_type").execute()
+
+            self.connection_manager.clear_cache(UUID(client_id))
+            logger.info(f"Re-queued provisioning for client {client_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error retrying provisioning for client {client_id}: {e}")
+            return False
+
+    async def list_provisioning_jobs(self) -> List[Dict[str, Any]]:
+        """Return provisioning job queue with associated client metadata."""
+        try:
+            job_result = (
+                self.platform_db
+                .table("client_provisioning_jobs")
+                .select("*")
+                .order("created_at")
+                .execute()
+            )
+
+            jobs = job_result.data or []
+            if not jobs:
+                return []
+
+            client_ids = list({job["client_id"] for job in jobs if job.get("client_id")})
+
+            clients_map: Dict[str, Dict[str, Any]] = {}
+            if client_ids:
+                clients_result = (
+                    self.platform_db
+                    .table("clients")
+                    .select("id,name,provisioning_status,provisioning_error,supabase_url")
+                    .in_("id", client_ids)
+                    .execute()
+                )
+                if clients_result.data:
+                    clients_map = {row["id"]: row for row in clients_result.data}
+
+            enriched = []
+            for job in jobs:
+                client_info = clients_map.get(job["client_id"], {})
+                enriched.append(
+                    {
+                        "id": job.get("id"),
+                        "client_id": job.get("client_id"),
+                        "job_type": job.get("job_type"),
+                        "attempts": job.get("attempts", 0),
+                        "claimed_at": job.get("claimed_at"),
+                        "last_error": job.get("last_error"),
+                        "created_at": job.get("created_at"),
+                        "updated_at": job.get("updated_at"),
+                        "client_name": client_info.get("name"),
+                        "client_status": client_info.get("provisioning_status"),
+                        "client_error": client_info.get("provisioning_error"),
+                        "client_supabase_url": client_info.get("supabase_url"),
+                    }
+                )
+
+            return enriched
+
+        except Exception as e:
+            logger.error(f"Error listing provisioning jobs: {e}")
+            return []
     
     async def sync_from_supabase(self, client_id: str) -> Optional[Client]:
         """

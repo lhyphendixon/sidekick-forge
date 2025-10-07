@@ -57,6 +57,33 @@ async def store_turn(
     metadata = turn_data.get('metadata', {})
     if not isinstance(metadata, dict):
         metadata = {}
+    else:
+        metadata = dict(metadata)  # avoid mutating caller state
+
+    # Normalize user identifiers to UUIDs (Supabase schema requires uuid)
+    original_user_id = user_id
+    normalization_details = None
+    try:
+        if user_id:
+            user_id = str(uuid.UUID(str(user_id)))
+        else:
+            raise ValueError("empty user_id")
+    except Exception as normalize_exc:
+        # Generate a deterministic UUID from the provided identifier to avoid collisions
+        user_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(original_user_id))) if original_user_id else str(uuid.uuid4())
+        normalization_details = {
+            "original": original_user_id,
+            "normalized": user_id,
+            "strategy": "uuid5" if original_user_id else "generated_uuid4",
+            "error": str(normalize_exc)
+        }
+        logger.warning(
+            "Normalizing non-UUID user_id for transcript storage",
+            extra={"original_user_id": original_user_id, "normalized_user_id": user_id}
+        )
+
+    if normalization_details:
+        metadata.setdefault("normalization", {})["user_id"] = normalization_details
     
     # Validate required fields
     if not conversation_id:

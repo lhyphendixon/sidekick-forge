@@ -642,13 +642,20 @@ class ClientService:
         settings_dict = db_row.get("settings", {})
         
         # Override with individual columns if they exist
-        # Supabase config (required)
         if "supabase" not in settings_dict:
             settings_dict["supabase"] = {}
-        settings_dict["supabase"]["url"] = db_row.get("supabase_url", "")
-        # Get anon_key from additional_settings since column doesn't exist
-        additional = db_row.get("additional_settings", {})
-        settings_dict["supabase"]["anon_key"] = additional.get("supabase_anon_key", "")
+
+        additional = db_row.get("additional_settings", {}) or {}
+
+        # Prefer legacy supabase_url, fall back to the newer supabase_project_url set by the provisioning worker
+        supabase_url = db_row.get("supabase_url") or db_row.get("supabase_project_url") or ""
+        settings_dict["supabase"]["url"] = supabase_url
+
+        # Pull anon key from dedicated column first, then from legacy additional settings
+        supabase_anon = db_row.get("supabase_anon_key") or additional.get("supabase_anon_key", "")
+        settings_dict["supabase"]["anon_key"] = supabase_anon
+
+        # Service role key remains stored on the main row
         settings_dict["supabase"]["service_role_key"] = db_row.get("supabase_service_role_key", "")
         
         # LiveKit config (required by model but may be empty)
@@ -672,8 +679,17 @@ class ClientService:
                 settings_dict["api_keys"][key_field] = db_row[key_field]
         
         # Extract additional fields from additional_settings JSONB
-        additional = db_row.get("additional_settings", {})
-        
+        additional = db_row.get("additional_settings", {}) or {}
+
+        if db_row.get("supabase_project_ref") and "supabase_project_ref" not in additional:
+            additional["supabase_project_ref"] = db_row.get("supabase_project_ref")
+        if db_row.get("provisioning_status") and "provisioning_status" not in additional:
+            additional["provisioning_status"] = db_row.get("provisioning_status")
+        if db_row.get("provisioning_error") and "provisioning_error" not in additional:
+            additional["provisioning_error"] = db_row.get("provisioning_error")
+        if db_row.get("schema_version") and "schema_version" not in additional:
+            additional["schema_version"] = db_row.get("schema_version")
+
         # Get embedding settings from additional_settings
         if "embedding" in additional and additional["embedding"]:
             settings_dict["embedding"] = additional["embedding"]

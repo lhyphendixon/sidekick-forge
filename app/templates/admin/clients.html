@@ -21,7 +21,7 @@
     <!-- Clients Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {% for client in clients %}
-        <div class="client-card bg-dark-surface rounded-lg border border-dark-border p-6">
+        <div class="client-card bg-dark-surface rounded-lg border border-dark-border p-6" data-client-id="{{ client.id }}">
             <div class="flex justify-between items-start mb-4">
                 <h3 class="text-lg font-medium text-dark-text">{{ client.name }}</h3>
                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {% if client.active %}bg-brand-teal/20 text-brand-teal{% else %}bg-dark-elevated text-dark-text-secondary{% endif %}">
@@ -31,21 +31,48 @@
             
             <div class="text-sm text-dark-text-secondary space-y-2">
                 <p><strong class="text-dark-text">ID:</strong> {{ client.id }}</p>
+                {% if client.slug %}
+                <p><strong class="text-dark-text">Slug:</strong> {{ client.slug }}</p>
+                {% endif %}
                 {% if client.domain %}
                 <p><strong class="text-dark-text">Domain:</strong> {{ client.domain }}</p>
                 {% endif %}
                 {% if client.description %}
-                <p class="mt-2">{{ client.description }}</p>
+                <p class="mt-2 text-dark-text-secondary">{{ client.description }}</p>
                 {% endif %}
             </div>
-            
+
+            <div class="mt-4 pt-4 border-t border-dark-border space-y-2">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-dark-text-secondary uppercase tracking-wide">Provisioning</span>
+                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-semibold"
+                          data-role="provisioning-badge"
+                          data-status="{{ client.provisioning_status | default('unknown') }}">
+                        {{ client.provisioning_status | default('unknown') | replace('_', ' ') | title }}
+                    </span>
+                </div>
+                {% if client.auto_provision %}
+                <p class="text-xs text-dark-text-secondary">Automatically provisioned tenant</p>
+                {% endif %}
+                <p class="text-xs text-brand-salmon bg-brand-salmon/10 border border-brand-salmon/30 rounded p-2 {% if not client.provisioning_error %}hidden{% endif %}"
+                   data-role="provisioning-error">
+                    {{ client.provisioning_error or '' }}
+                </p>
+                <p class="text-xs text-dark-text-secondary truncate {% if not client.supabase_project_url %}hidden{% endif %}"
+                   data-role="supabase-url">
+                    <strong class="text-dark-text">Supabase:</strong> <span>{{ client.supabase_project_url or '' }}</span>
+                </p>
+            </div>
+
             <div class="mt-4 pt-4 border-t border-dark-border">
-                <div class="text-xs text-dark-text-secondary mb-2">Configuration Status</div>
+                <div class="text-xs text-dark-text-secondary mb-2">Service Configuration</div>
                 <div class="flex gap-2 flex-wrap">
-                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium {% if client.settings.supabase %}bg-brand-teal/20 text-brand-teal{% else %}bg-brand-salmon/20 text-brand-salmon{% endif %}">
+                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium
+                        {% if client.supabase_ready %}bg-brand-teal/20 text-brand-teal{% else %}bg-brand-salmon/20 text-brand-salmon{% endif %}">
                         Supabase
                     </span>
-                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium {% if client.settings.livekit %}bg-brand-teal/20 text-brand-teal{% else %}bg-brand-salmon/20 text-brand-salmon{% endif %}">
+                    <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium
+                        {% if client.livekit_ready %}bg-brand-teal/20 text-brand-teal{% else %}bg-brand-salmon/20 text-brand-salmon{% endif %}">
                         LiveKit
                     </span>
                 </div>
@@ -113,74 +140,82 @@
                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"></textarea>
                         </div>
                     </div>
-                    
-                    <h4 class="text-md font-medium text-gray-900 mt-6 mb-4">Supabase Configuration</h4>
-                    <div class="space-y-4">
+                    <div class="md:col-span-2 mt-6 bg-dark-elevated border border-dark-border rounded-lg p-4 flex items-start gap-3">
+                        <input type="checkbox" id="autoProvisionToggle" class="mt-1 h-4 w-4 text-brand-teal border-gray-300 rounded focus:ring-brand-teal" checked onchange="toggleProvisionMode()">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700">Supabase URL*</label>
-                            <input type="url" id="supabaseUrl" required
-                                   class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
-                                   placeholder="https://xxxxx.supabase.co"
-                                   onchange="enableSyncButton()">
+                            <label for="autoProvisionToggle" class="text-sm font-medium text-dark-text">Automatically provision Supabase project</label>
+                            <p class="text-xs text-dark-text-secondary mt-1">Enable to spin up a dedicated Supabase project for this client. Disable if you need to supply credentials for an existing Supabase account.</p>
                         </div>
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    </div>
+
+                    <div id="manualConfigSection" class="mt-6 space-y-6 hidden">
+                        <div class="space-y-4">
+                            <h4 class="text-md font-medium text-gray-900">Supabase Configuration</h4>
                             <div>
-                                <label class="block text-sm font-medium text-gray-700">Anon Key*</label>
-                                <input type="password" id="supabaseAnonKey" required
-                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Service Role Key*</label>
-                                <input type="password" id="supabaseServiceKey" required
+                                <label class="block text-sm font-medium text-gray-700">Supabase URL*</label>
+                                <input type="url" id="supabaseUrl"
                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                                       placeholder="https://xxxxx.supabase.co"
                                        onchange="enableSyncButton()">
                             </div>
-                        </div>
-                        
-                        <div class="flex justify-end">
-                            <button type="button" id="syncSettingsBtn" onclick="syncSettingsFromSupabase()"
-                                    disabled
-                                    class="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
-                                <svg class="-ml-0.5 mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                                </svg>
-                                Sync Settings from Supabase
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <h4 class="text-md font-medium text-gray-900 mt-6 mb-4">LiveKit Configuration</h4>
-                    <div class="space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">LiveKit Server URL*</label>
-                            <input type="url" id="livekitUrl" required
-                                   class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
-                                   placeholder="https://your-livekit-server.com">
-                        </div>
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">API Key*</label>
-                                <input type="text" id="livekitApiKey" required
-                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Anon Key*</label>
+                                    <input type="password" id="supabaseAnonKey"
+                                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Service Role Key*</label>
+                                    <input type="password" id="supabaseServiceKey"
+                                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                                           onchange="enableSyncButton()">
+                                </div>
                             </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">API Secret*</label>
-                                <input type="password" id="livekitApiSecret" required
-                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+
+                            <div class="flex justify-end">
+                                <button type="button" id="syncSettingsBtn" onclick="syncSettingsFromSupabase()"
+                                        disabled
+                                        class="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <svg class="-ml-0.5 mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
+                                    Sync Settings from Supabase
+                                </button>
                             </div>
                         </div>
-                    </div>
-                    
-                    <!-- API Keys Section (hidden by default, shown when synced) -->
-                    <div id="apiKeysSection" class="hidden">
-                        <h4 class="text-md font-medium text-gray-900 mt-6 mb-4">API Keys (From Supabase)</h4>
-                        <div class="bg-blue-50 border border-blue-200 rounded-md p-4 mb-4">
-                            <p class="text-sm text-blue-700">These API keys were retrieved from your Supabase project and will be saved with this client configuration.</p>
+
+                        <div class="space-y-4">
+                            <h4 class="text-md font-medium text-gray-900">LiveKit Configuration</h4>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">LiveKit Server URL*</label>
+                                <input type="url" id="livekitUrl"
+                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                                       placeholder="https://your-livekit-server.com">
+                            </div>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">API Key*</label>
+                                    <input type="text" id="livekitApiKey"
+                                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">API Secret*</label>
+                                    <input type="password" id="livekitApiSecret"
+                                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                                </div>
+                            </div>
                         </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="apiKeysList">
-                            <!-- API keys will be populated here dynamically -->
+
+                        <div id="apiKeysSection" class="hidden">
+                            <h4 class="text-md font-medium text-gray-900">API Keys (From Supabase)</h4>
+                            <div class="bg-blue-50 border border-blue-200 rounded-md p-4 mb-4">
+                                <p class="text-sm text-blue-700">These API keys were retrieved from your Supabase project and will be saved with this client configuration.</p>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="apiKeysList">
+                                <!-- API keys will be populated here dynamically -->
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -203,8 +238,22 @@
 
 {% block extra_scripts %}
 <script>
+const MANUAL_FIELDS = [
+    'supabaseUrl',
+    'supabaseAnonKey',
+    'supabaseServiceKey',
+    'livekitUrl',
+    'livekitApiKey',
+    'livekitApiSecret'
+];
+
 function showAddClientModal() {
-    document.getElementById('addClientForm').reset();
+    const form = document.getElementById('addClientForm');
+    form.reset();
+    document.getElementById('apiKeysSection').classList.add('hidden');
+    document.getElementById('apiKeysList').innerHTML = '';
+    document.getElementById('autoProvisionToggle').checked = true;
+    toggleProvisionMode();
     document.getElementById('addClientModal').classList.remove('hidden');
 }
 
@@ -212,65 +261,125 @@ function closeAddClientModal() {
     document.getElementById('addClientModal').classList.add('hidden');
 }
 
+function toggleProvisionMode() {
+    const autoProvision = document.getElementById('autoProvisionToggle').checked;
+    const manualSection = document.getElementById('manualConfigSection');
+    const syncBtn = document.getElementById('syncSettingsBtn');
+
+    manualSection.classList.toggle('hidden', autoProvision);
+    setManualFieldRequired(!autoProvision);
+
+    if (autoProvision) {
+        syncBtn.disabled = true;
+        document.getElementById('apiKeysSection').classList.add('hidden');
+        document.getElementById('apiKeysList').innerHTML = '';
+    } else {
+        enableSyncButton();
+    }
+}
+
+function setManualFieldRequired(required) {
+    MANUAL_FIELDS.forEach(id => {
+        const field = document.getElementById(id);
+        if (!field) return;
+        if (required) {
+            field.setAttribute('required', 'required');
+        } else {
+            field.removeAttribute('required');
+        }
+    });
+}
+
 async function addClient() {
     const form = document.getElementById('addClientForm');
+    const autoProvision = document.getElementById('autoProvisionToggle').checked;
+
     if (!form.checkValidity()) {
         form.reportValidity();
         return;
     }
-    
-    const clientData = {
-        slug: document.getElementById('clientSlug').value,
-        name: document.getElementById('clientName').value,
-        description: document.getElementById('clientDescription').value || null,
-        domain: document.getElementById('clientDomain').value || null,
-        settings: {
-            supabase: {
-                url: document.getElementById('supabaseUrl').value,
-                anon_key: document.getElementById('supabaseAnonKey').value,
-                service_role_key: document.getElementById('supabaseServiceKey').value
-            },
-            livekit: {
-                server_url: document.getElementById('livekitUrl').value,
-                api_key: document.getElementById('livekitApiKey').value,
-                api_secret: document.getElementById('livekitApiSecret').value
+
+    const slug = document.getElementById('clientSlug').value.trim();
+    const name = document.getElementById('clientName').value.trim();
+    const description = document.getElementById('clientDescription').value.trim();
+    const domain = document.getElementById('clientDomain').value.trim();
+
+    const additionalSettings = {};
+    if (slug) additionalSettings.slug = slug;
+    if (domain) additionalSettings.domain = domain;
+    if (description) additionalSettings.description = description;
+
+    const payload = {
+        name,
+        auto_provision: autoProvision
+    };
+
+    const settingsPayload = {};
+    if (Object.keys(additionalSettings).length > 0) {
+        settingsPayload.additional_settings = additionalSettings;
+    }
+
+    if (!autoProvision) {
+        const supabaseUrl = document.getElementById('supabaseUrl').value;
+        const supabaseAnonKey = document.getElementById('supabaseAnonKey').value;
+        const supabaseServiceKey = document.getElementById('supabaseServiceKey').value;
+        const livekitUrl = document.getElementById('livekitUrl').value;
+        const livekitApiKey = document.getElementById('livekitApiKey').value;
+        const livekitApiSecret = document.getElementById('livekitApiSecret').value;
+
+        payload.supabase_project_url = supabaseUrl;
+        payload.supabase_service_role_key = supabaseServiceKey;
+        if (supabaseAnonKey) {
+            payload.supabase_anon_key = supabaseAnonKey;
+        }
+
+        settingsPayload.livekit_config = {
+            url: livekitUrl,
+            api_key: livekitApiKey,
+            api_secret: livekitApiSecret
+        };
+
+        const apiKeyInputs = document.querySelectorAll('#apiKeysList input[data-api-key]');
+        if (apiKeyInputs.length > 0) {
+            const apiKeys = {};
+            apiKeyInputs.forEach(input => {
+                const key = input.getAttribute('data-api-key');
+                const value = input.value;
+                if (value) {
+                    apiKeys[key] = value;
+                }
+            });
+            if (Object.keys(apiKeys).length > 0) {
+                settingsPayload.api_keys = apiKeys;
             }
         }
-    };
-    
-    // Add API keys if they were synced
-    const apiKeyInputs = document.querySelectorAll('#apiKeysList input[data-api-key]');
-    if (apiKeyInputs.length > 0) {
-        clientData.settings.api_keys = {};
-        apiKeyInputs.forEach(input => {
-            const key = input.getAttribute('data-api-key');
-            const value = input.value;
-            if (value) {
-                clientData.settings.api_keys[key] = value;
-            }
-        });
     }
-    
+
+    if (Object.keys(settingsPayload).length > 0) {
+        payload.settings = settingsPayload;
+    }
+
     try {
-        if (window.showGlobalLoading) window.showGlobalLoading('/api/v1/clients/');
-        const response = await fetch('/api/v1/clients/', {
+        if (window.showGlobalLoading) window.showGlobalLoading('/api/v2/clients');
+        const response = await fetch('/api/v2/clients', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(clientData)
+            body: JSON.stringify(payload)
         });
-        
+
         if (response.ok) {
             window.location.reload();
+            return;
+        }
+
+        const error = await response.json().catch(() => ({}));
+        console.error('Error response:', error);
+
+        if (error.detail && Array.isArray(error.detail)) {
+            const messages = error.detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join('\n');
+            alert('Validation error:\n' + messages);
         } else {
-            const error = await response.json();
-            console.error('Error response:', error);
-            // Handle validation errors
-            if (error.detail && Array.isArray(error.detail)) {
-                const messages = error.detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join('\n');
-                alert('Validation error:\n' + messages);
-            } else {
-                alert('Error creating client: ' + (error.detail || JSON.stringify(error)));
-            }
+            alert('Error creating client: ' + (error.detail || JSON.stringify(error)));
         }
     } catch (error) {
         console.error('Request error:', error);
@@ -284,12 +393,14 @@ async function confirmDeleteClient(clientId, clientName) {
     if (!confirm(`Are you sure you want to delete client "${clientName}"? This action cannot be undone.`)) {
         return;
     }
-    
+
     try {
-        const response = await fetch(`/api/v1/clients/${clientId}`, {
-            method: 'DELETE'
-        });
-        
+        let response = await fetch(`/api/v2/clients/${clientId}`, { method: 'DELETE' });
+
+        if (!response.ok && response.status !== 404) {
+            response = await fetch(`/api/v1/clients/${clientId}`, { method: 'DELETE' });
+        }
+
         if (response.ok) {
             window.location.reload();
         } else {
@@ -301,118 +412,189 @@ async function confirmDeleteClient(clientId, clientName) {
 }
 
 function enableSyncButton() {
+    const autoProvision = document.getElementById('autoProvisionToggle').checked;
+    const syncBtn = document.getElementById('syncSettingsBtn');
+
+    if (autoProvision) {
+        syncBtn.disabled = true;
+        return;
+    }
+
     const url = document.getElementById('supabaseUrl').value;
     const key = document.getElementById('supabaseServiceKey').value;
-    const syncBtn = document.getElementById('syncSettingsBtn');
-    
-    if (url && key) {
-        syncBtn.disabled = false;
-    } else {
-        syncBtn.disabled = true;
-    }
+    syncBtn.disabled = !(url && key);
 }
 
 async function syncSettingsFromSupabase() {
+    if (document.getElementById('autoProvisionToggle').checked) {
+        alert('Disable automatic provisioning to sync settings from an existing Supabase project.');
+        return;
+    }
+
     const url = document.getElementById('supabaseUrl').value;
     const serviceKey = document.getElementById('supabaseServiceKey').value;
-    
+
     if (!url || !serviceKey) {
         alert('Please enter both Supabase URL and Service Role Key first');
         return;
     }
-    
+
     const syncBtn = document.getElementById('syncSettingsBtn');
     syncBtn.disabled = true;
     syncBtn.innerHTML = '<svg class="animate-spin -ml-0.5 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Syncing...';
-    
+
     try {
         const response = await fetch('/api/v1/clients/sync-settings', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                url: url,
-                service_role_key: serviceKey
-            })
+            body: JSON.stringify({ url, service_role_key: serviceKey })
         });
-        
-        if (response.ok) {
-            const settings = await response.json();
-            
-            // Populate API keys if they exist
-            if (settings.api_keys && Object.keys(settings.api_keys).some(k => settings.api_keys[k])) {
-                const apiKeysSection = document.getElementById('apiKeysSection');
-                const apiKeysList = document.getElementById('apiKeysList');
-                
-                // Clear existing content
-                apiKeysList.innerHTML = '';
-                
-                // Add each API key that has a value
-                const apiKeyLabels = {
-                    // LLM Providers
-                    'openai_api_key': 'OpenAI API Key',
-                    'groq_api_key': 'Groq API Key',
-                    'deepinfra_api_key': 'DeepInfra API Key',
-                    'replicate_api_key': 'Replicate API Key',
-                    // Voice/Speech Providers
-                    'deepgram_api_key': 'Deepgram API Key',
-                    'elevenlabs_api_key': 'ElevenLabs API Key',
-                    'cartesia_api_key': 'Cartesia API Key',
-                    'speechify_api_key': 'Speechify API Key',
-                    // Embedding/Reranking Providers
-                    'novita_api_key': 'Novita API Key',
-                    'cohere_api_key': 'Cohere API Key',
-                    'siliconflow_api_key': 'SiliconFlow API Key',
-                    'jina_api_key': 'Jina API Key'
-                };
-                
-                for (const [key, value] of Object.entries(settings.api_keys)) {
-                    if (value) {
-                        const div = document.createElement('div');
-                        div.innerHTML = `
-                            <label class="block text-sm font-medium text-gray-700">${apiKeyLabels[key] || key}</label>
-                            <input type="password" value="${value}" readonly
-                                   class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border bg-gray-50"
-                                   data-api-key="${key}">
-                        `;
-                        apiKeysList.appendChild(div);
-                    }
-                }
-                
-                // Show the API keys section
-                apiKeysSection.classList.remove('hidden');
-            }
-            
-            // Populate LiveKit settings if they exist
-            if (settings.livekit) {
-                if (settings.livekit.server_url) {
-                    document.getElementById('livekitUrl').value = settings.livekit.server_url;
-                }
-                if (settings.livekit.api_key) {
-                    document.getElementById('livekitApiKey').value = settings.livekit.api_key;
-                }
-                if (settings.livekit.api_secret) {
-                    document.getElementById('livekitApiSecret').value = settings.livekit.api_secret;
-                }
-            }
-            
-            // Show success message
-            if (settings.message) {
-                alert('Success: ' + settings.message);
-            } else {
-                alert('Successfully synced settings from Supabase');
-            }
-            
-        } else {
-            const error = await response.json();
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
             alert('Error syncing settings: ' + (error.detail || 'Unknown error'));
+            return;
         }
+
+        const settings = await response.json();
+
+        if (settings.api_keys && Object.keys(settings.api_keys).some(k => settings.api_keys[k])) {
+            const apiKeysSection = document.getElementById('apiKeysSection');
+            const apiKeysList = document.getElementById('apiKeysList');
+            apiKeysList.innerHTML = '';
+
+            const apiKeyLabels = {
+                'openai_api_key': 'OpenAI API Key',
+                'groq_api_key': 'Groq API Key',
+                'deepinfra_api_key': 'DeepInfra API Key',
+                'replicate_api_key': 'Replicate API Key',
+                'deepgram_api_key': 'Deepgram API Key',
+                'elevenlabs_api_key': 'ElevenLabs API Key',
+                'cartesia_api_key': 'Cartesia API Key',
+                'speechify_api_key': 'Speechify API Key',
+                'novita_api_key': 'Novita API Key',
+                'cohere_api_key': 'Cohere API Key',
+                'siliconflow_api_key': 'SiliconFlow API Key',
+                'jina_api_key': 'Jina API Key'
+            };
+
+            for (const [key, value] of Object.entries(settings.api_keys)) {
+                if (!value) continue;
+                const div = document.createElement('div');
+                div.innerHTML = `
+                    <label class="block text-sm font-medium text-gray-700">${apiKeyLabels[key] || key}</label>
+                    <input type="password" value="${value}" readonly
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border bg-gray-50"
+                           data-api-key="${key}">
+                `;
+                apiKeysList.appendChild(div);
+            }
+
+            apiKeysSection.classList.remove('hidden');
+        }
+
+        if (settings.livekit) {
+            if (settings.livekit.server_url) {
+                document.getElementById('livekitUrl').value = settings.livekit.server_url;
+            }
+            if (settings.livekit.api_key) {
+                document.getElementById('livekitApiKey').value = settings.livekit.api_key;
+            }
+            if (settings.livekit.api_secret) {
+                document.getElementById('livekitApiSecret').value = settings.livekit.api_secret;
+            }
+        }
+
+        alert('Successfully synced settings from Supabase');
     } catch (error) {
         alert('Error syncing settings: ' + error.message);
     } finally {
-        syncBtn.disabled = false;
+        const autoProvision = document.getElementById('autoProvisionToggle').checked;
+        syncBtn.disabled = autoProvision;
         syncBtn.innerHTML = '<svg class="-ml-0.5 mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>Sync Settings from Supabase';
-        enableSyncButton(); // Re-check if button should be enabled
+        if (!autoProvision) enableSyncButton();
     }
 }
+
+const CLIENT_PROVISIONING_POLL_INTERVAL = 8000;
+const CLIENT_PROVISIONING_STATUS_CLASSES = {
+    ready: 'bg-brand-teal/20 text-brand-teal',
+    queued: 'bg-yellow-500/20 text-yellow-500',
+    creating_project: 'bg-yellow-500/20 text-yellow-500',
+    schema_syncing: 'bg-yellow-500/20 text-yellow-500',
+    failed: 'bg-brand-salmon/20 text-brand-salmon',
+    unknown: 'bg-dark-elevated text-dark-text-secondary'
+};
+
+function formatProvisioningLabel(status) {
+    if (!status) return 'Unknown';
+    return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function applyCardProvisioningStatus(card, status) {
+    if (!card) return;
+    const badge = card.querySelector('[data-role="provisioning-badge"]');
+    if (badge) {
+        const classes = CLIENT_PROVISIONING_STATUS_CLASSES[status] || CLIENT_PROVISIONING_STATUS_CLASSES.unknown;
+        badge.className = `inline-flex items-center px-2 py-1 rounded text-xs font-semibold ${classes}`;
+        badge.textContent = formatProvisioningLabel(status);
+        badge.dataset.status = status;
+    }
+}
+
+function updateClientCardFromSnapshot(snapshot) {
+    const card = document.querySelector(`.client-card[data-client-id="${snapshot.id}"]`);
+    if (!card) return;
+
+    applyCardProvisioningStatus(card, snapshot.provisioning_status || 'unknown');
+
+    const errorBlock = card.querySelector('[data-role="provisioning-error"]');
+    if (errorBlock) {
+        if (snapshot.provisioning_error) {
+            errorBlock.textContent = snapshot.provisioning_error;
+            errorBlock.classList.remove('hidden');
+        } else {
+            errorBlock.textContent = '';
+            errorBlock.classList.add('hidden');
+        }
+    }
+
+    const supabaseRow = card.querySelector('[data-role="supabase-url"] span');
+    const supabaseWrapper = supabaseRow ? supabaseRow.closest('[data-role="supabase-url"]') : null;
+    if (supabaseRow && supabaseWrapper) {
+        const url = snapshot.supabase_project_url || '';
+        supabaseRow.textContent = url;
+        if (url) {
+            supabaseWrapper.classList.remove('hidden');
+        } else {
+            supabaseWrapper.classList.add('hidden');
+        }
+    }
+}
+
+let clientProvisioningPollHandle = null;
+
+async function pollClientProvisioningStatuses() {
+    try {
+        const response = await fetch('/api/v2/clients');
+        if (!response.ok) {
+            throw new Error(`Failed to fetch clients (${response.status})`);
+        }
+        const clientSnapshots = await response.json();
+        clientSnapshots.forEach(updateClientCardFromSnapshot);
+    } catch (error) {
+        console.debug('Client provisioning poll skipped:', error.message || error);
+    }
+}
+
+function startClientProvisioningPolling() {
+    if (clientProvisioningPollHandle) return;
+    pollClientProvisioningStatuses();
+    clientProvisioningPollHandle = setInterval(pollClientProvisioningStatuses, CLIENT_PROVISIONING_POLL_INTERVAL);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    startClientProvisioningPolling();
+});
 </script>
 {% endblock %}

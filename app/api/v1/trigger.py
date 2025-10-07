@@ -26,6 +26,8 @@ from app.config import settings
 # Tools service for abilities
 from app.services.tools_service_supabase import ToolsService
 from app.utils.tool_prompts import apply_tool_prompt_instructions
+from livekit.agents.llm.tool_context import ToolContext
+from app.agent_modules.tool_registry import ToolRegistry
 # Redis dedupe removed
 
 # --- Helpers ---
@@ -38,6 +40,165 @@ def _normalize_ws_url(url: Optional[str]) -> Optional[str]:
     if url.startswith("http://"):
         return url.replace("http://", "ws://", 1)
     return url
+
+
+def _extract_agent_tools_config(agent: Any) -> Dict[str, Any]:
+    """Normalize the agent.tools_config field into a dict."""
+    tools_config: Dict[str, Any] = {}
+    if getattr(agent, "tools_config", None):
+        raw_cfg = agent.tools_config
+        if isinstance(raw_cfg, str):
+            try:
+                tools_config = json.loads(raw_cfg)
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse agent.tools_config string; defaulting to empty dict")
+                tools_config = {}
+        elif isinstance(raw_cfg, dict):
+            tools_config = raw_cfg
+    return tools_config
+
+
+async def _gather_text_tool_outputs(
+    *,
+    agent: Any,
+    client: Any,
+    api_keys: Dict[str, Any],
+    tools_service: Optional[ToolsService],
+    conversation_id: str,
+    user_id: str,
+    user_message: str,
+    session_id: Optional[str],
+    recent_history: Optional[List[Dict[str, Any]]] = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Fetch assigned tools (Abilities), execute them, and return summaries for text chat."""
+    result: Dict[str, Any] = {
+        "tools_payload": [],
+        "tool_results": [],
+        "tool_instructions": [],
+        "tool_context_summary": None,
+    }
+
+    if not tools_service or not getattr(agent, "id", None) or not getattr(client, "id", None):
+        return result
+
+    try:
+        assigned_tools = await tools_service.list_agent_tools(client.id, agent.id)
+    except Exception as exc:
+        logger.error(f"Unable to fetch tools for agent {agent.slug}: {exc}")
+        return result
+
+    if not assigned_tools:
+        return result
+
+    tools_payload = [tool.dict() for tool in assigned_tools]
+    result["tools_payload"] = tools_payload
+
+    # Collect any system prompt instructions from tool config so the LLM knows when to use them.
+    instructions: List[str] = []
+    for tool in tools_payload:
+        cfg = tool.get("config") or {}
+        instruction = cfg.get("system_prompt_instructions")
+        if instruction:
+            slug = tool.get("slug") or tool.get("name") or "ability"
+            instructions.append(f"Ability '{slug}': {instruction}")
+    result["tool_instructions"] = instructions
+
+    try:
+        tools_config = _extract_agent_tools_config(agent)
+        registry = ToolRegistry(tools_config=tools_config, api_keys=api_keys or {})
+        built_tools = registry.build(tools_payload)
+    except Exception as exc:
+        logger.error(f"Failed to initialize tool registry for agent {agent.slug}: {exc}")
+        return result
+
+    if not built_tools:
+        return result
+
+    tool_context = ToolContext(built_tools.copy())
+    base_runtime_context = {
+        "conversation_id": conversation_id,
+        "user_id": user_id,
+        "agent_slug": getattr(agent, "slug", None),
+        "client_id": getattr(client, "id", None),
+        "session_id": session_id,
+    }
+    if extra_metadata:
+        for key, value in extra_metadata.items():
+            if value is not None:
+                base_runtime_context[key] = value
+
+    # Prime registry runtime context for n8n tools so webhook payloads include identifiers.
+    for tool_def in tools_payload:
+        slug = tool_def.get("slug") or tool_def.get("name") or tool_def.get("id")
+        if slug:
+            registry.update_runtime_context(slug, base_runtime_context)
+
+    tool_results: List[Dict[str, Any]] = []
+
+    # Prepare conversation history for abilities that expect message arrays (Perplexity, etc.)
+    history_messages: List[Dict[str, str]] = []
+    if recent_history:
+        for row in recent_history:
+            role = row.get("role")
+            content = row.get("content")
+            if role in ("user", "assistant") and content:
+                history_messages.append({"role": role, "content": content})
+    history_messages.append({"role": "user", "content": user_message})
+
+    for tool_def in tools_payload:
+        slug = tool_def.get("slug") or tool_def.get("name") or tool_def.get("id") or "ability"
+        tool_type = tool_def.get("type")
+        fn = tool_context.function_tools.get(slug)
+        if not fn:
+            logger.warning(f"Tool function not found for slug={slug}; skipping")
+            continue
+
+        args: Dict[str, Any] = {}
+        if tool_type == "mcp":  # Perplexity remote/MCP
+            args["messages"] = history_messages
+        else:
+            args["user_inquiry"] = user_message
+            args["metadata"] = {**base_runtime_context, **(extra_metadata or {})}
+
+        try:
+            output = fn(**args)
+            if asyncio.iscoroutine(output):
+                output = await output
+            if output is None:
+                output = ""
+            output_text = output if isinstance(output, str) else json.dumps(output)
+            tool_results.append({
+                "slug": slug,
+                "type": tool_type,
+                "success": True,
+                "output": output_text,
+            })
+        except Exception as exc:
+            logger.error(f"Ability '{slug}' execution failed: {exc}")
+            tool_results.append({
+                "slug": slug,
+                "type": tool_type,
+                "success": False,
+                "error": str(exc),
+            })
+
+    result["tool_results"] = tool_results
+
+    if tool_results:
+        summary_lines = []
+        for entry in tool_results:
+            if entry.get("success"):
+                summary_lines.append(
+                    f"Ability '{entry['slug']}' responded with:\n{entry['output']}"
+                )
+            else:
+                summary_lines.append(
+                    f"Ability '{entry['slug']}' failed: {entry.get('error')}"
+                )
+        result["tool_context_summary"] = "\n\n".join(summary_lines)
+
+    return result
 
 # --- Performance Logging Helper ---
 def log_perf(event: str, room_name: str, details: Dict[str, Any]):
@@ -198,9 +359,10 @@ async def trigger_agent(
                 detail=f"Client '{client_id}' not found"
             )
         
+        tools_service = ToolsService(agent_service.client_service)
+
         # Process based on mode
         if request.mode == TriggerMode.VOICE:
-            tools_service = ToolsService(agent_service.client_service)
             result = await handle_voice_trigger(request, agent, client, tools_service)
             # Enforce no-fallback: conversation_id must be present in result
             try:
@@ -213,7 +375,7 @@ async def trigger_agent(
                 logger.error(f"Validation error for voice result: {e}")
                 raise HTTPException(status_code=500, detail="Invalid voice trigger result")
         else:  # TEXT mode
-            result = await handle_text_trigger(request, agent, client)
+            result = await handle_text_trigger(request, agent, client, tools_service)
         
         request_total = time.time() - request_start
         logger.info(f"✅ COMPLETED trigger-agent request in {request_total:.2f}s")
@@ -711,9 +873,10 @@ async def _store_conversation_turn(
 
 
 async def handle_text_trigger(
-    request: TriggerAgentRequest, 
-    agent, 
-    client
+    request: TriggerAgentRequest,
+    agent,
+    client,
+    tools_service: Optional[ToolsService] = None,
 ) -> Dict[str, Any]:
     """
     Handle text mode agent triggering with full RAG support

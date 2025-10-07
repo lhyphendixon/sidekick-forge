@@ -458,10 +458,88 @@ class SidekickAgent(voice.Agent):
         
         try:
             ts = datetime.utcnow().isoformat()
+
+            # Normalize user identifiers to UUIDs (conversation + transcript tables expect uuid)
+            original_user_id = self._user_id
+            normalization_details = None
+            normalized_user_id = None
+            try:
+                if original_user_id:
+                    normalized_user_id = str(uuid.UUID(str(original_user_id)))
+                else:
+                    raise ValueError("empty user_id")
+            except Exception as normalize_exc:
+                # Deterministically derive a UUID from the identifier so we can correlate future turns
+                normalized_user_id = (
+                    str(uuid.uuid5(uuid.NAMESPACE_URL, str(original_user_id)))
+                    if original_user_id
+                    else str(uuid.uuid4())
+                )
+                normalization_details = {
+                    "original": original_user_id,
+                    "normalized": normalized_user_id,
+                    "strategy": "uuid5" if original_user_id else "generated_uuid4",
+                    "error": str(normalize_exc),
+                }
+                logger.warning(
+                    "Normalizing non-UUID user_id for transcript storage",
+                    extra={
+                        "conversation_id": self._conversation_id,
+                        "original_user_id": original_user_id,
+                        "normalized_user_id": normalized_user_id,
+                    },
+                )
+
+            # Persist normalized identifier for subsequent inserts in this session
+            self._user_id = normalized_user_id
+
+            # Ensure the parent conversation record exists (FK enforcement)
+            try:
+                def _ensure_conversation():
+                    existing = (
+                        self._supabase_client
+                        .table("conversations")
+                        .select("id")
+                        .eq("id", self._conversation_id)
+                        .limit(1)
+                        .execute()
+                    )
+
+                    if not existing or not getattr(existing, "data", None):
+                        payload = {
+                            "id": self._conversation_id,
+                            "agent_id": self._agent_id or self._agent_config.get("id"),
+                            "user_id": normalized_user_id,
+                            "channel": "voice",
+                            "created_at": ts,
+                            "updated_at": ts,
+                        }
+                        return (
+                            self._supabase_client
+                            .table("conversations")
+                            .insert(payload)
+                            .execute()
+                        )
+                    return existing
+
+                await asyncio.to_thread(_ensure_conversation)
+            except Exception as ensure_exc:
+                logger.warning(
+                    "Failed to ensure conversation exists before storing transcript",
+                    extra={
+                        "conversation_id": self._conversation_id,
+                        "error": str(ensure_exc),
+                    },
+                )
+
+            row_metadata: Dict[str, Any] = {}
+            if normalization_details:
+                row_metadata.setdefault("normalization", {})["user_id"] = normalization_details
+
             row = {
                 "conversation_id": self._conversation_id,
                 "agent_id": self._agent_id or self._agent_config.get('id'),
-                "user_id": self._user_id,
+                "user_id": normalized_user_id,
                 # Generate a stable session_id per conversation to satisfy NOT NULL constraint
                 "session_id": str(self._conversation_id),
                 "role": role,
@@ -470,6 +548,9 @@ class SidekickAgent(voice.Agent):
                 "created_at": ts,
                 "source": "voice",  # Mark as voice transcript for SSE filtering
             }
+
+            if row_metadata:
+                row["metadata"] = row_metadata
             
             # Add citations if available (for assistant role)
             if role == "assistant" and citations:
