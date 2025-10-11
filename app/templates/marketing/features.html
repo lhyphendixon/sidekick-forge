@@ -1,0 +1,108 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Features - Sidekick Forge{% endblock %}
+
+{% block content %}
+<!-- Hero -->
+<section class="bg-brand-dark-elevated py-24">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <h1 class="text-5xl md:text-6xl font-bold text-white mb-6">
+            Powerful <span class="gradient-text">Features</span> for Every Hero
+        </h1>
+        <p class="text-xl text-gray-400 max-w-2xl mx-auto">
+            Everything you need to automate, scale, and amplify your mission.
+        </p>
+    </div>
+</section>
+
+<!-- Features Grid -->
+<section class="py-24 bg-brand-dark">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+            
+            {% set features = [
+                {
+                    "icon": "M13 10V3L4 14h7v7l9-11h-7z",
+                    "title": "Instant Automation",
+                    "description": "Connect your tools and automate repetitive tasks. Your sidekick learns your workflows and executes them flawlessly."
+                },
+                {
+                    "icon": "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z",
+                    "title": "Smart Insights",
+                    "description": "Get data-driven recommendations tailored to your business. Your sidekick analyzes patterns and suggests improvements."
+                },
+                {
+                    "icon": "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
+                    "title": "Natural Conversations",
+                    "description": "Talk to your sidekick like a team member. Voice and text interfaces that understand context and intent."
+                },
+                {
+                    "icon": "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
+                    "title": "Knowledge Base",
+                    "description": "Your sidekick remembers everything. Upload documents, emails, notes - instant access to your entire knowledge base."
+                },
+                {
+                    "icon": "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z",
+                    "title": "Team Collaboration",
+                    "description": "Shared sidekicks that understand your team's context. Seamless handoffs and consistent communication."
+                },
+                {
+                    "icon": "M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1",
+                    "title": "Deep Integrations",
+                    "description": "Connect with your favorite tools. CRM, email, calendar, project management - all in one place."
+                },
+                {
+                    "icon": "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z",
+                    "title": "Enterprise Security",
+                    "description": "Bank-level encryption and compliance. Your data stays private and secure, always."
+                },
+                {
+                    "icon": "M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4",
+                    "title": "Custom Workflows",
+                    "description": "Build automations unique to your business. Visual workflow builder with unlimited possibilities."
+                },
+                {
+                    "icon": "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
+                    "title": "Analytics & Reporting",
+                    "description": "Track performance with beautiful dashboards. See what's working and optimize continuously."
+                }
+            ] %}
+            
+            {% for feature in features %}
+            <div class="bg-brand-dark-elevated border border-gray-800 rounded-xl p-8 hover-lift">
+                <div class="w-14 h-14 bg-brand-teal/10 rounded-lg flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ feature.icon }}"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold text-white mb-4">{{ feature.title }}</h3>
+                <p class="text-gray-400">{{ feature.description }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<!-- CTA -->
+<section class="py-24 bg-brand-dark-elevated">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <h2 class="text-4xl font-bold text-white mb-6">
+            See It In <span class="gradient-text">Action</span>
+        </h2>
+        <p class="text-xl text-gray-400 mb-8">
+            Book a demo and discover how sidekicks can transform your business.
+        </p>
+        <div class="flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4">
+            <a href="/signup" 
+               class="bg-brand-teal hover:bg-brand-teal/90 text-white px-8 py-4 rounded-lg font-semibold text-lg transition btn-glow">
+                Get Early Access
+            </a>
+            <a href="/contact" 
+               class="bg-transparent border-2 border-brand-teal text-brand-teal hover:bg-brand-teal hover:text-white px-8 py-4 rounded-lg font-semibold text-lg transition">
+                Book a Demo
+            </a>
+        </div>
+    </div>
+</section>
+{% endblock %}
+

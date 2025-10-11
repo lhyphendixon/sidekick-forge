@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Sidekick Forge Platform API",
     description="Multi-tenant AI Agent management platform with LiveKit integration",
-    version="2.1.3",
+    version="2.1.6",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -111,7 +111,6 @@ from app.api.v1 import (
     documents,
     auth,
     containers,
-    workers,
     tools,
     livekit_proxy,
     conversations_proxy,
@@ -131,7 +130,6 @@ app.include_router(conversations.router, prefix="/api/v1", tags=["conversations"
 app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(containers.router, prefix="/api/v1", tags=["containers"])
-app.include_router(workers.router, prefix="/api/v1", tags=["workers"])
 app.include_router(tools.router, prefix="/api/v1", tags=["tools"])
 app.include_router(livekit_proxy.router, prefix="/api/v1", tags=["sessions"])
 app.include_router(conversations_proxy.router, prefix="/api/v1", tags=["conversations"])
@@ -140,7 +138,20 @@ app.include_router(text_chat_proxy.router, prefix="/api/v1", tags=["text-chat"])
 app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-base"])
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="/root/sidekick-forge/app/static"), name="static")
+import os
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+else:
+    logger.warning(f"Static directory not found at {static_dir}, skipping static file mount")
+
+# Include marketing site routes (homepage, pricing, features, etc.)
+try:
+    from app.marketing.routes import router as marketing_router
+    app.include_router(marketing_router)
+    logger.info("✅ Marketing site routes loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load marketing routes: {e}")
 
 # Include admin dashboard (will need updating for multi-tenant)
 from app.admin.routes import router as admin_router
@@ -169,15 +180,16 @@ from app.api.webhooks import livekit_router, supabase_router
 app.include_router(livekit_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
 
-# Root endpoint
-@app.get("/", tags=["health"])
-async def root():
-    return {
-        "service": "Sidekick Forge Platform",
-        "version": "2.1.3",
-        "status": "operational",
-        "timestamp": datetime.utcnow().isoformat()
-    }
+# Root endpoint - Now handled by marketing routes (app/marketing/routes.py)
+# The homepage at / is served by the marketing site
+# @app.get("/", tags=["health"])
+# async def root():
+#     return {
+#         "service": "Sidekick Forge Platform",
+#         "version": "2.1.6",
+#         "status": "operational",
+#         "timestamp": datetime.utcnow().isoformat()
+#     }
 
 # Health check endpoints
 @app.get("/health", tags=["health"])

@@ -177,6 +177,14 @@ async def _no_cache_admin_pages(request: Request, call_next):
         pass
     return response
 
+# Include marketing site routes (homepage, pricing, features, etc.)
+try:
+    from app.marketing.routes import router as marketing_router
+    app.include_router(marketing_router)
+    logger.info("✅ Marketing site routes loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load marketing routes: {e}")
+
 # Include API router
 app.include_router(api_router, prefix="/api")
 
@@ -263,15 +271,16 @@ async def debug_livekit():
     except Exception:
         return {"initialized": False}
 
-# Root endpoint
-@app.get("/", tags=["health"])
-async def root():
-    return {
-        "service": "Autonomite SaaS Backend",
-        "version": "1.0.0",
-        "status": "operational",
-        "timestamp": datetime.utcnow().isoformat()
-    }
+# Root endpoint - Now handled by marketing routes (app/marketing/routes.py)
+# The homepage at / is served by the marketing site
+# @app.get("/", tags=["health"])
+# async def root():
+#     return {
+#         "service": "Autonomite SaaS Backend",
+#         "version": "1.0.0",
+#         "status": "operational",
+#         "timestamp": datetime.utcnow().isoformat()
+#     }
 
 # Health check endpoints
 @app.get("/health", tags=["health"])

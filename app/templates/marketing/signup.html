@@ -1,0 +1,137 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Get Early Access - Sidekick Forge{% endblock %}
+
+{% block content %}
+<section class="py-24 bg-brand-dark min-h-screen flex items-center">
+    <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
+        <div class="text-center mb-12">
+            <div class="inline-flex items-center space-x-2 bg-brand-teal/10 border border-brand-teal/30 rounded-full px-4 py-2 mb-6">
+                <span class="w-2 h-2 bg-brand-teal rounded-full animate-pulse"></span>
+                <span class="text-brand-teal text-sm font-medium">Early Access Program</span>
+            </div>
+            <h1 class="text-4xl md:text-5xl font-bold text-white mb-4">
+                Join the <span class="gradient-text">Hero's Journey</span>
+            </h1>
+            <p class="text-xl text-gray-400">
+                Be among the first to experience AI sidekicks built for mission-driven entrepreneurs.
+            </p>
+        </div>
+        
+        <div class="bg-brand-dark-elevated border border-gray-800 rounded-2xl p-8 md:p-12">
+            <form hx-post="/api/signup/early-access" 
+                  hx-target="#signup-response" 
+                  hx-swap="innerHTML"
+                  class="space-y-6">
+                
+                <!-- Name -->
+                <div>
+                    <label for="name" class="block text-sm font-medium text-gray-300 mb-2">Full Name *</label>
+                    <input type="text" 
+                           id="name" 
+                           name="name" 
+                           required
+                           class="w-full bg-brand-dark border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent"
+                           placeholder="Jane Doe">
+                </div>
+                
+                <!-- Email -->
+                <div>
+                    <label for="email" class="block text-sm font-medium text-gray-300 mb-2">Email Address *</label>
+                    <input type="email" 
+                           id="email" 
+                           name="email" 
+                           required
+                           class="w-full bg-brand-dark border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent"
+                           placeholder="jane@example.com">
+                </div>
+                
+                <!-- Company/Business -->
+                <div>
+                    <label for="company" class="block text-sm font-medium text-gray-300 mb-2">Company/Business Name</label>
+                    <input type="text" 
+                           id="company" 
+                           name="company"
+                           class="w-full bg-brand-dark border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent"
+                           placeholder="Your Company">
+                </div>
+                
+                <!-- Business Stage -->
+                <div>
+                    <label for="stage" class="block text-sm font-medium text-gray-300 mb-2">Where are you in your journey? *</label>
+                    <select id="stage" 
+                            name="stage" 
+                            required
+                            class="w-full bg-brand-dark border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent">
+                        <option value="">Select your stage</option>
+                        <option value="idea">Just starting out (Idea stage)</option>
+                        <option value="solo">Solo entrepreneur</option>
+                        <option value="small-team">Small team (2-10 people)</option>
+                        <option value="growing">Growing business (10+ people)</option>
+                    </select>
+                </div>
+                
+                <!-- Use Case -->
+                <div>
+                    <label for="use_case" class="block text-sm font-medium text-gray-300 mb-2">What's your biggest challenge? *</label>
+                    <textarea id="use_case" 
+                              name="use_case" 
+                              required
+                              rows="4"
+                              class="w-full bg-brand-dark border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent"
+                              placeholder="Tell us what you're hoping to accomplish with a sidekick..."></textarea>
+                </div>
+                
+                <!-- Plan (if from pricing) -->
+                <input type="hidden" name="plan" value="{{ request.query_params.get('plan', '') }}">
+                
+                <!-- Submit -->
+                <div id="signup-response"></div>
+                
+                <button type="submit" 
+                        class="w-full bg-brand-teal hover:bg-brand-teal/90 text-white px-6 py-4 rounded-lg font-semibold text-lg transition btn-glow">
+                    Request Early Access
+                </button>
+                
+                <p class="text-sm text-gray-400 text-center">
+                    By signing up, you agree to our 
+                    <a href="/terms" class="text-brand-teal hover:underline">Terms of Service</a> and 
+                    <a href="/privacy" class="text-brand-teal hover:underline">Privacy Policy</a>.
+                </p>
+            </form>
+        </div>
+        
+        <!-- Benefits -->
+        <div class="mt-12 grid md:grid-cols-3 gap-6">
+            <div class="text-center">
+                <div class="w-12 h-12 bg-brand-teal/10 rounded-lg flex items-center justify-center mx-auto mb-3">
+                    <svg class="w-6 h-6 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-white font-semibold mb-1">Early Bird Pricing</h3>
+                <p class="text-gray-400 text-sm">Lock in exclusive discounts</p>
+            </div>
+            <div class="text-center">
+                <div class="w-12 h-12 bg-brand-orange/10 rounded-lg flex items-center justify-center mx-auto mb-3">
+                    <svg class="w-6 h-6 text-brand-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                    </svg>
+                </div>
+                <h3 class="text-white font-semibold mb-1">Shape the Product</h3>
+                <p class="text-gray-400 text-sm">Your feedback matters</p>
+            </div>
+            <div class="text-center">
+                <div class="w-12 h-12 bg-brand-salmon/10 rounded-lg flex items-center justify-center mx-auto mb-3">
+                    <svg class="w-6 h-6 text-brand-salmon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-white font-semibold mb-1">Exclusive Community</h3>
+                <p class="text-gray-400 text-sm">Connect with founders</p>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+

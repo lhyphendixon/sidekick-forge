@@ -1,0 +1,138 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Contact Us - Sidekick Forge{% endblock %}
+
+{% block content %}
+<section class="py-24 bg-brand-dark min-h-screen">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-16">
+            <h1 class="text-5xl md:text-6xl font-bold text-white mb-6">
+                Let's <span class="gradient-text">Connect</span>
+            </h1>
+            <p class="text-xl text-gray-400">
+                Have questions? Want to book a demo? We'd love to hear from you.
+            </p>
+        </div>
+        
+        <div class="grid md:grid-cols-2 gap-12">
+            <!-- Contact Form -->
+            <div class="bg-brand-dark-elevated border border-gray-800 rounded-2xl p-8">
+                <form hx-post="/api/contact/submit" 
+                      hx-target="#contact-response" 
+                      hx-swap="innerHTML"
+                      class="space-y-6">
+                    
+                    <div>
+                        <label for="name" class="block text-sm font-medium text-gray-300 mb-2">Name *</label>
+                        <input type="text" 
+                               id="name" 
+                               name="name" 
+                               required
+                               class="w-full bg-brand-dark border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent">
+                    </div>
+                    
+                    <div>
+                        <label for="email" class="block text-sm font-medium text-gray-300 mb-2">Email *</label>
+                        <input type="email" 
+                               id="email" 
+                               name="email" 
+                               required
+                               class="w-full bg-brand-dark border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent">
+                    </div>
+                    
+                    <div>
+                        <label for="subject" class="block text-sm font-medium text-gray-300 mb-2">Subject *</label>
+                        <select id="subject" 
+                                name="subject" 
+                                required
+                                class="w-full bg-brand-dark border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent">
+                            <option value="">Select a subject</option>
+                            <option value="demo">Book a Demo</option>
+                            <option value="sales">Sales Inquiry</option>
+                            <option value="support">Support Question</option>
+                            <option value="partnership">Partnership Opportunity</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label for="message" class="block text-sm font-medium text-gray-300 mb-2">Message *</label>
+                        <textarea id="message" 
+                                  name="message" 
+                                  required
+                                  rows="6"
+                                  class="w-full bg-brand-dark border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent"></textarea>
+                    </div>
+                    
+                    <div id="contact-response"></div>
+                    
+                    <button type="submit" 
+                            class="w-full bg-brand-teal hover:bg-brand-teal/90 text-white px-6 py-4 rounded-lg font-semibold transition btn-glow">
+                        Send Message
+                    </button>
+                </form>
+            </div>
+            
+            <!-- Contact Info -->
+            <div class="space-y-8">
+                <div>
+                    <h2 class="text-3xl font-bold text-white mb-6">Get in Touch</h2>
+                    <p class="text-gray-400 mb-8">
+                        Whether you're curious about features, pricing, or ready to start your journey, 
+                        we're here to answer any questions.
+                    </p>
+                </div>
+                
+                <div class="space-y-6">
+                    <div class="flex items-start space-x-4">
+                        <div class="w-12 h-12 bg-brand-teal/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <svg class="w-6 h-6 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="text-white font-semibold mb-1">Email Us</h3>
+                            <a href="mailto:hello@sidekickforge.com" class="text-brand-teal hover:underline">hello@sidekickforge.com</a>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-start space-x-4">
+                        <div class="w-12 h-12 bg-brand-orange/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <svg class="w-6 h-6 text-brand-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="text-white font-semibold mb-1">Book a Demo</h3>
+                            <p class="text-gray-400">See Sidekick Forge in action</p>
+                            <a href="/signup" class="text-brand-teal hover:underline">Schedule now →</a>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-start space-x-4">
+                        <div class="w-12 h-12 bg-brand-salmon/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <svg class="w-6 h-6 text-brand-salmon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="text-white font-semibold mb-1">Join Community</h3>
+                            <p class="text-gray-400">Connect with fellow entrepreneurs</p>
+                            <a href="#" class="text-brand-teal hover:underline">Coming soon →</a>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-brand-teal/10 border border-brand-teal/30 rounded-xl p-6">
+                    <h3 class="text-white font-semibold mb-2">📧 Response Time</h3>
+                    <p class="text-gray-300">
+                        We typically respond within 24 hours during business days. 
+                        For urgent inquiries, please mark your subject accordingly.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
