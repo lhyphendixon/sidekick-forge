@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Sidekick Forge Platform API",
     description="Multi-tenant AI Agent management platform with LiveKit integration",
-    version="2.1.6",
+    version="2.1.7",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
