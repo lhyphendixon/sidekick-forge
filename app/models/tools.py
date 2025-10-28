@@ -4,7 +4,7 @@ from typing import Optional, Literal, Any, Dict, List
 from pydantic import BaseModel, Field
 
 
-ToolType = Literal["mcp", "n8n", "sidekick", "code"]
+ToolType = Literal["mcp", "n8n", "sidekick", "code", "asana"]
 ToolScope = Literal["global", "client"]
 
 
@@ -52,5 +52,4 @@ class ToolExecutionLog(BaseModel):
     response: Optional[Dict[str, Any]]
     error: Optional[str]
     duration_ms: Optional[int]
-
 

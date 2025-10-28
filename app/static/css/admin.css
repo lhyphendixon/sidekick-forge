@@ -1,0 +1,10 @@
+/* Placeholder admin stylesheet to avoid missing asset errors during staging.
+   Eventually replace with the compiled admin bundle when available. */
+body {
+    /* Fall back to the same typography as the inline admin styles */
+    font-family: 'Inter', sans-serif;
+}
+
+.admin-placeholder {
+    display: none;
+}

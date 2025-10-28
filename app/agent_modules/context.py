@@ -7,7 +7,9 @@ Uses remote embedding services only - no local models or vector stores
 import asyncio
 import logging
 import json
-from typing import Dict, Any, List, Optional, Tuple
+import math
+from ast import literal_eval
+from typing import Dict, Any, List, Optional, Tuple, Set
 from datetime import datetime, timedelta
 import httpx
 import time
@@ -420,23 +422,59 @@ class AgentContextManager:
                 "p_match_count": 5
             }).execute()
             
-            if result.data:
-                logger.info(f"✅ match_documents returned {len(result.data)} results.")
+            match_rows = list(result.data or [])
+
+            dataset_ids = []
+            try:
+                raw_ids = self.agent_config.get("dataset_ids")
+                if isinstance(raw_ids, (list, tuple, set)):
+                    dataset_ids = [int(str(did)) for did in raw_ids if str(did).strip()]
+            except Exception:
+                dataset_ids = []
+
+            if dataset_ids:
+                seen_ids: Set[int] = set()
+                for row in match_rows:
+                    try:
+                        seen_ids.add(int(str(row.get("id"))))
+                    except Exception:
+                        continue
+
+                missing_ids = [doc_id for doc_id in dataset_ids if doc_id not in seen_ids]
+
+                if missing_ids:
+                    logger.info(
+                        "⚠️ match_documents missing %s assigned documents; performing fallback similarity search.",
+                        len(missing_ids),
+                    )
+                    fallback_rows = await self._fallback_document_similarity(
+                        missing_ids,
+                        query_embedding,
+                    )
+                    if fallback_rows:
+                        match_rows.extend(fallback_rows)
+
+            if match_rows:
+                # Sort combined rows by similarity (desc) and cap to RPC limit (default 5)
+                match_rows.sort(key=lambda row: row.get("similarity", 0.0), reverse=True)
+                match_rows = match_rows[:5]
+
+                logger.info(f"✅ match_documents returned {len(match_rows)} results (after fallback).")
+
                 # Expose citations for trigger.py (_last_rag_results.citations)
-                # match_documents returns: id, title, content, similarity
                 self._last_rag_results = SimpleNamespace(
                     citations=[
                         SimpleNamespace(
-                            doc_id=doc.get("id"),
-                            title=doc.get("title"),
+                            doc_id=row.get("id"),
+                            title=row.get("title"),
                             source_url=None,             # not available from this RPC
-                            chunk_text=doc.get("content"),
-                            score=doc.get("similarity", 0.0)
+                            chunk_text=row.get("content"),
+                            score=row.get("similarity", 0.0),
                         )
-                        for doc in result.data
+                        for row in match_rows
                     ]
                 )
-                formatted_results = self._format_match_documents_results(result.data)
+                formatted_results = self._format_match_documents_results(match_rows)
                 return formatted_results, time.perf_counter() - start_time
             
             logger.info("No relevant knowledge found via RAG.")
@@ -444,6 +482,68 @@ class AgentContextManager:
         except Exception as e:
             logger.error(f"Knowledge RAG error: {e}")
             raise
+
+    async def _fallback_document_similarity(
+        self,
+        document_ids: List[int],
+        query_embedding: List[float],
+    ) -> List[Dict[str, Any]]:
+        """
+        Compute document similarity client-side for documents missing from match_documents RPC.
+        """
+        try:
+            if not document_ids:
+                return []
+
+            # Normalize query embedding once
+            query_norm = math.sqrt(sum(val * val for val in query_embedding)) or 1.0
+
+            doc_info = (
+                self.supabase
+                .table("documents")
+                .select("id,title")
+                .in_("id", document_ids)
+                .execute()
+            )
+            doc_title_map = {int(row["id"]): row.get("title", "Untitled") for row in doc_info.data or []}
+
+            chunk_response = (
+                self.supabase
+                .table("document_chunks")
+                .select("document_id, chunk_index, content, embeddings")
+                .in_("document_id", document_ids)
+                .execute()
+            )
+
+            best_per_doc: Dict[int, Dict[str, Any]] = {}
+            for row in chunk_response.data or []:
+                doc_id = row.get("document_id")
+                embeddings = row.get("embeddings")
+                content = row.get("content")
+                if doc_id is None or embeddings is None or content is None:
+                    continue
+                try:
+                    vector = literal_eval(embeddings)
+                    chunk_norm = math.sqrt(sum(val * val for val in vector)) or 1.0
+                    similarity = sum(a * b for a, b in zip(query_embedding, vector)) / (query_norm * chunk_norm)
+                except Exception as exc:
+                    logger.debug(f"Failed to compute similarity for fallback chunk: {exc}")
+                    continue
+
+                current_best = best_per_doc.get(doc_id)
+                if current_best is None or similarity > current_best["similarity"]:
+                    best_per_doc[doc_id] = {
+                        "id": doc_id,
+                        "title": doc_title_map.get(doc_id, "Untitled"),
+                        "content": content,
+                        "similarity": similarity,
+                    }
+
+            return list(best_per_doc.values())
+
+        except Exception as exc:
+            logger.warning(f"Fallback similarity computation failed: {exc}")
+            return []
 
     def _format_match_documents_results(self, match_results):
         """Format results from match_documents RPC function"""

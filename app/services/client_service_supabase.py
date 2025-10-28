@@ -661,9 +661,9 @@ class ClientService:
         # LiveKit config (required by model but may be empty)
         if "livekit" not in settings_dict:
             settings_dict["livekit"] = {}
-        settings_dict["livekit"]["server_url"] = db_row.get("livekit_url", db_row.get("livekit_server_url", ""))
-        settings_dict["livekit"]["api_key"] = db_row.get("livekit_api_key", "")
-        settings_dict["livekit"]["api_secret"] = db_row.get("livekit_api_secret", "")
+        settings_dict["livekit"]["server_url"] = (db_row.get("livekit_url") or db_row.get("livekit_server_url") or settings.livekit_url or "https://example.com")
+        settings_dict["livekit"]["api_key"] = db_row.get("livekit_api_key") or settings.livekit_api_key or "placeholder"
+        settings_dict["livekit"]["api_secret"] = db_row.get("livekit_api_secret") or settings.livekit_api_secret or "placeholder"
         
         # API keys from individual columns
         if "api_keys" not in settings_dict:

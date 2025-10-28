@@ -101,7 +101,7 @@ User=root
 WorkingDirectory=$PROJECT_ROOT
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=$PROJECT_ROOT/.env
-ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+ExecStart=/usr/bin/python3 -m uvicorn app.main_multitenant:app --host 0.0.0.0 --port 8000 --workers 4
 Restart=always
 RestartSec=10
 StandardOutput=journal

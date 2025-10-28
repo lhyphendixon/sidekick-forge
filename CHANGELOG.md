@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.6] - 2024-10-05
+
+### Fixed
+- Resolved tool invocation failures in text chat by ensuring proxy services consistently dispatch agent abilities.
+- Removed hard-coded host overrides in Nginx so the platform honors the requested domain in upstream headers.
+
+### Added
+- Client provisioning metadata columns and job orchestration to coordinate Supabase onboarding tasks.
+
+### Changed
+- Deployment scripts now require an explicit domain when generating Nginx and SSL assets to prevent accidental reuse of staging URLs.
+
 ## [2.1.2] - 2025-09-25
 
 ## [2.1.3] - 2025-09-25

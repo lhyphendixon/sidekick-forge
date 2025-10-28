@@ -28,6 +28,7 @@ from app.permissions.rbac import get_platform_permissions
 from app.integrations.supabase_client import supabase_manager
 from app.models.tools import ToolCreate, ToolUpdate, ToolAssignmentRequest
 from app.services.tools_service_supabase import ToolsService
+from app.services.asana_oauth_service import AsanaOAuthService, AsanaOAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +80,54 @@ def get_wordpress_service() -> WordPressSiteService:
     return WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key)
 
 
+def get_asana_oauth_service() -> AsanaOAuthService:
+    from app.core.dependencies import get_client_service
+
+    return AsanaOAuthService(get_client_service())
+
+
 def admin_is_super(admin_user: Dict[str, Any]) -> bool:
     """Return True if the admin user has platform-wide access."""
     if not admin_user:
         return False
-    if admin_user.get("is_super_admin") is True:
+
+    # Explicit boolean flag takes priority
+    flag = admin_user.get("is_super_admin")
+    if isinstance(flag, bool):
+        if flag:
+            return True
+    elif isinstance(flag, str) and flag.strip().lower() in {"true", "1", "yes"}:
         return True
-    return (admin_user.get("role") or "").lower() == "superadmin"
+
+    # Treat role/role_key indicators as equivalent
+    role = (admin_user.get("role") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if role in {
+        "superadmin",
+        "super_admin",
+        "platform_admin",
+        "platformadmin",
+        "platform_super_admin",
+        "platformsuperadmin",
+    }:
+        return True
+
+    role_key = (admin_user.get("role_key") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if role_key in {"superadmin", "super_admin", "platform_super_admin"}:
+        return True
+
+    client_access = (admin_user.get("client_access") or "").strip().lower()
+    if client_access in {"all", "global"}:
+        return True
+
+    permissions = admin_user.get("permissions")
+    if isinstance(permissions, (list, tuple, set)):
+        lowered = {str(p).strip().lower() for p in permissions}
+        if {"super_admin", "platform_admin", "superadmin"} & lowered:
+            return True
+    elif isinstance(permissions, str) and permissions.strip().lower() in {"super_admin", "superadmin", "platform_admin"}:
+        return True
+
+    return False
 
 
 def get_scoped_client_ids(admin_user: Dict[str, Any]) -> Optional[Set[str]]:
@@ -1608,6 +1650,103 @@ async def admin_list_tools(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/api/asana/status")
+async def admin_asana_status(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    service = get_asana_oauth_service()
+    record = service.get_connection(client_id)
+    if not record:
+        return {"connected": False}
+
+    extra = record.get("extra") or {}
+    return {
+        "connected": True,
+        "updated_at": record.get("updated_at"),
+        "expires_at": record.get("expires_at"),
+        "user_gid": extra.get("gid"),
+        "user_name": extra.get("name") or extra.get("email"),
+        "workspaces": extra.get("workspaces"),
+    }
+
+
+@router.delete("/api/asana/connection")
+async def admin_disconnect_asana(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    service = get_asana_oauth_service()
+    service.disconnect(client_id)
+    return {"success": True}
+
+
+@router.get("/api/asana/oauth/start")
+async def admin_asana_oauth_start(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Unable to determine admin user ID for OAuth state.")
+
+    service = get_asana_oauth_service()
+    try:
+        authorization_url = service.build_authorization_url(client_id, user_id)
+    except AsanaOAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"authorization_url": authorization_url}
+
+
+@router.get("/oauth/asana/callback")
+async def admin_asana_oauth_callback(
+    request: Request,
+    code: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+):
+    service = get_asana_oauth_service()
+
+    if error:
+        return HTMLResponse(
+            f"<p>Asana returned an error: {error}</p>",
+            status_code=400,
+        )
+
+    if not state:
+        return HTMLResponse("<p>Missing state parameter.</p>", status_code=400)
+
+    try:
+        state_data = service.parse_state(state)
+    except AsanaOAuthError as exc:
+        return HTMLResponse(f"<p>{exc}</p>", status_code=400)
+
+    client_id = state_data.get("client_id")
+    if not client_id:
+        return HTMLResponse("<p>Invalid state payload: missing client reference.</p>", status_code=400)
+
+    if not code:
+        return HTMLResponse("<p>Missing authorization code.</p>", status_code=400)
+
+    try:
+        await service.exchange_code(client_id, code)
+    except AsanaOAuthError as exc:
+        return HTMLResponse(f"<p>Failed to complete Asana OAuth: {exc}</p>", status_code=400)
+
+    success_markup = (
+        "<script>"
+        "if(window.opener){window.opener.postMessage('asana-connected','*');}"
+        "window.close();"
+        "</script>"
+        "<p>Asana connected successfully. You can close this window.</p>"
+    )
+    return HTMLResponse(success_markup)
+
+
 @router.post("/api/tools")
 async def admin_create_tool(
     payload: ToolCreate,
@@ -2981,7 +3120,25 @@ async def agent_preview_modal(
     try:
         logger.info(f"Preview (embed) modal requested for client_id={client_id}, agent_slug={agent_slug}")
         ensure_client_or_global_access(client_id, admin_user)
-        
+
+        base_url = request.base_url
+        scheme = (
+            request.headers.get("x-forwarded-proto")
+            or base_url.scheme
+            or "https"
+        )
+        netloc = (
+            request.headers.get("x-forwarded-host")
+            or base_url.netloc
+            or base_url.hostname
+            or request.headers.get("host", "")
+        )
+        if not netloc:
+            netloc = "localhost"
+        if scheme == "http" and netloc and not netloc.startswith("localhost"):
+            scheme = "https"
+        api_base = "http://127.0.0.1:8000"
+
         # Call EnsureClientUser to get client JWT for admin preview
         import httpx
         timeout = httpx.Timeout(20.0, connect=5.0)
@@ -2995,7 +3152,7 @@ async def agent_preview_modal(
             ensure_response = None
             try:
                 ensure_response = await client.post(
-                    f"{request.base_url}api/v2/admin/ensure-client-user",
+                    f"{api_base}/api/v2/admin/ensure-client-user",
                     json={
                         "client_id": client_id,
                         "platform_user_id": admin_user.get("user_id"),
@@ -3018,20 +3175,6 @@ async def agent_preview_modal(
                 logger.warning(f"Failed to get client JWT: {ensure_response.status_code}")
         
         # Respect the original request scheme/host (include port in dev) for the embed iframe
-        base_url = request.base_url
-        scheme = (
-            request.headers.get("x-forwarded-proto")
-            or base_url.scheme
-            or "https"
-        )
-        netloc = (
-            request.headers.get("x-forwarded-host")
-            or base_url.netloc
-            or base_url.hostname
-            or request.headers.get("host", "")
-        )
-        if not netloc:
-            netloc = "localhost"
         iframe_src = f"{scheme}://{netloc}/embed/{client_id}/{agent_slug}?theme=dark&source=admin"
         
         # If we have a client JWT, pass it to the embed
@@ -4551,12 +4694,16 @@ async def admin_update_client(
         )
         
         # Create update object - handle both dict and object formats
+        # Handle checkbox: if multiple values (hidden + checked), take the last one
+        active_values = form.getlist("active") if hasattr(form, 'getlist') else ([form.get("active")] if form.get("active") else [])
+        active_value = active_values[-1] if active_values else "true"
+        
         update_data = ClientUpdate(
             name=form.get("name", client.name if hasattr(client, 'name') else client.get('name', '')),
             domain=form.get("domain", client.domain if hasattr(client, 'domain') else client.get('domain', '')),
             description=form.get("description", client.description if hasattr(client, 'description') else client.get('description', '')),
             settings=settings_update,
-            active=form.get("active", "true").lower() == "true"
+            active=str(active_value).lower() == "true"
         )
         
         # Debug: Log the API keys and embedding settings being updated

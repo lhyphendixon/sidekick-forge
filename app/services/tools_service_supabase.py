@@ -11,6 +11,43 @@ class ToolsService:
     def __init__(self, client_service: ClientService) -> None:
         self.client_service = client_service
 
+    def _ensure_default_global_tools(self) -> None:
+        """Seed built-in global abilities (non-destructive)."""
+        platform_sb = self.client_service.supabase
+        if not self._table_exists(platform_sb, "tools"):
+            return
+
+        default_tools = [
+            {
+                "name": "Asana Task Manager",
+                "slug": "asana_tasks",
+                "description": "Interact with Asana projects to read and manage tasks using OAuth.",
+                "type": "asana",
+                "scope": "global",
+                "client_id": None,
+                "icon_url": "/static/images/ability-default.png",
+                "config": {
+                    "projects": [],
+                    "workspace_gid": "",
+                    "default_action": "list",
+                    "list_include_completed": False,
+                    "oauth_provider": "asana",
+                },
+                "enabled": False,
+            }
+        ]
+
+        try:
+            slugs = [entry["slug"] for entry in default_tools]
+            existing = platform_sb.table("tools").select("slug").in_("slug", slugs).execute()
+            existing_slugs = {row["slug"] for row in (existing.data or [])}
+            for entry in default_tools:
+                if entry["slug"] not in existing_slugs:
+                    platform_sb.table("tools").insert(entry).execute()
+        except Exception:
+            # Seed failures should not block the admin UI; log and continue.
+            return
+
     async def get_client_supabase(self, client_id: Optional[str]) -> SupabaseClient:
         if not client_id:
             return self.client_service.supabase
@@ -84,6 +121,7 @@ class ToolsService:
         platform_has_table = await self._platform_table_exists("tools")
 
         if scope in (None, "global") and platform_has_table:
+            self._ensure_default_global_tools()
             q = platform_sb.table("tools").select("*").eq("scope", "global")
             q = apply_filters(q)
             res = q.execute()

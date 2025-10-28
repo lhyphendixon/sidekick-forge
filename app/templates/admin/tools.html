@@ -23,6 +23,7 @@
       <option value="n8n">n8n</option>
       <option value="sidekick">Sidekick</option>
       <option value="code">Code</option>
+      <option value="asana">Asana</option>
     </select>
     <select id="scopeFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
       <option value="">All scopes</option>
@@ -63,6 +64,7 @@
             <option value="n8n">n8n</option>
             <option value="sidekick">Sidekick</option>
             <option value="code">Code</option>
+            <option value="asana">Asana</option>
           </select>
         </div>
         <div>
@@ -129,6 +131,7 @@
             <option value="n8n">n8n</option>
             <option value="sidekick">Sidekick</option>
             <option value="code">Code</option>
+            <option value="asana">Asana</option>
           </select>
         </div>
         <div>
@@ -294,6 +297,66 @@ function renderTypeFields(prefix, toolType, existingConfig = {}){
       <input id="${prefix}_sidekick_agent" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${safeConfig.agent_slug || ''}" />
     </div>`;
     appendHiddenInstructions(prefix, wrap, safeConfig);
+    return;
+  }
+  if(toolType === 'asana'){
+    const workspace = escapeHtml(safeConfig.workspace_gid || '');
+    const assignee = escapeHtml(safeConfig.default_assignee || '');
+    const maxTasks = Number.isFinite(Number(safeConfig.max_tasks_per_project)) ? Number(safeConfig.max_tasks_per_project) : 10;
+    const lookupLimit = Number.isFinite(Number(safeConfig.lookup_limit)) ? Number(safeConfig.lookup_limit) : Math.max(maxTasks, 25);
+    const includeCompleted = safeConfig.list_include_completed === true;
+    const defaultAction = escapeHtml(safeConfig.default_action || 'list');
+    const projectsJsonRaw = safeConfig.projects ? JSON.stringify(safeConfig.projects, null, 2) : (safeConfig.project_gids ? JSON.stringify(safeConfig.project_gids, null, 2) : '');
+    const projectsJson = escapeHtml(projectsJsonRaw);
+
+    wrap.innerHTML = `
+    <div class="space-y-3">
+      <p class="text-sm text-dark-text-secondary">Connect Asana via OAuth for each client. Use the client filter above to choose a tenant before connecting.</p>
+      <div id="${prefix}_asana_status" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-sm text-dark-text-secondary">Select a client to view connection status.</div>
+      <div class="flex flex-wrap gap-2">
+        <button type="button" class="btn-primary px-4 py-2 rounded" onclick="connectAsana('${prefix}')">Connect Asana</button>
+        <button type="button" class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="disconnectAsana('${prefix}')">Disconnect</button>
+      </div>
+      <div>
+        <label class="text-sm text-dark-text">Default Projects (JSON or newline list)</label>
+        <textarea id="${prefix}_asana_projects" rows="5" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder='[\n  "1201234567890",\n  {"gid": "1201234567891", "name": "Marketing"}\n]'>${projectsJson}</textarea>
+        <p class="text-xs text-dark-text-secondary mt-1">Provide project gids (JSON array or newline separated). The first entry becomes the default if users do not specify a project.</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label class="text-sm text-dark-text">Workspace GID</label>
+          <input id="${prefix}_asana_workspace" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${workspace}" placeholder="1200..." />
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Default Assignee GID</label>
+          <input id="${prefix}_asana_assignee" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${assignee}" placeholder="me or user gid" />
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div>
+          <label class="text-sm text-dark-text">Max Tasks per Project</label>
+          <input id="${prefix}_asana_max_tasks" type="number" min="1" max="50" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${maxTasks}" />
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Lookup Limit</label>
+          <input id="${prefix}_asana_lookup_limit" type="number" min="5" max="100" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${lookupLimit}" />
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Default Action</label>
+          <select id="${prefix}_asana_default_action" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text">
+            <option value="list" ${defaultAction === 'list' ? 'selected' : ''}>List tasks</option>
+            <option value="create" ${defaultAction === 'create' ? 'selected' : ''}>Create task</option>
+            <option value="update" ${defaultAction === 'update' ? 'selected' : ''}>Update task</option>
+          </select>
+        </div>
+      </div>
+      <label class="flex items-center gap-2 text-sm text-dark-text">
+        <input id="${prefix}_asana_include_completed" type="checkbox" class="rounded border-dark-border" ${includeCompleted ? 'checked' : ''} />
+        Include recently completed tasks when listing.
+      </label>
+    </div>`;
+    appendHiddenInstructions(prefix, wrap, safeConfig);
+    setTimeout(() => loadAsanaStatus(prefix), 0);
     return;
   }
   if(toolType === 'code'){
@@ -468,6 +531,14 @@ function handleScopeChange(prefix){
 
 function onClientFilterChange(){
   refreshTools();
+  const createType = document.getElementById('ct_type');
+  if(createType && createType.value === 'asana'){
+    loadAsanaStatus('ct');
+  }
+  const editType = document.getElementById('et_type');
+  if(editType && editType.value === 'asana'){
+    loadAsanaStatus('et');
+  }
 }
 
 function escapeHtml(value){
@@ -506,6 +577,122 @@ function appendHiddenInstructions(prefix, wrap, safeConfig){
     <p class="text-xs text-dark-text-secondary">Appended to the agent's system prompt automatically whenever this ability is active. Operators never see this block in the UI.</p>
   `;
   wrap.appendChild(container);
+}
+
+function getSelectedClientId(){
+  const clientSelect = document.getElementById('clientFilter');
+  return clientSelect ? clientSelect.value : '';
+}
+
+async function loadAsanaStatus(prefix){
+  const statusEl = document.getElementById(`${prefix}_asana_status`);
+  if(!statusEl){ return; }
+  const clientId = getSelectedClientId();
+  if(!clientId){
+    statusEl.textContent = 'Select a client to view Asana connection status.';
+    return;
+  }
+  try{
+    const resp = await fetch(`/admin/api/asana/status?client_id=${encodeURIComponent(clientId)}`, { credentials: 'include' });
+    if(!resp.ok){
+      const text = await resp.text();
+      statusEl.textContent = text || 'Failed to load connection status.';
+      return;
+    }
+    const data = await resp.json();
+    if(data.connected){
+      const parts = [];
+      if(data.user_name){ parts.push(`Connected as ${data.user_name}`); }
+      if(data.expires_at){ parts.push(`expires ${data.expires_at}`); }
+      statusEl.textContent = parts.join(' • ') || 'Asana connection active.';
+    } else {
+      statusEl.textContent = 'Not connected yet.';
+    }
+  } catch(err){
+    statusEl.textContent = `Failed to load connection status: ${err.message}`;
+  }
+}
+
+async function connectAsana(prefix){
+  const clientId = getSelectedClientId();
+  if(!clientId){
+    alert('Select a client using the filter before connecting Asana.');
+    return;
+  }
+  try{
+    const resp = await fetch(`/admin/api/asana/oauth/start?client_id=${encodeURIComponent(clientId)}`, { credentials: 'include' });
+    if(!resp.ok){
+      const text = await resp.text();
+      alert(text || 'Failed to initiate Asana OAuth.');
+      return;
+    }
+    const data = await resp.json();
+    if(data.authorization_url){
+      const width = 600;
+      const height = 780;
+      const left = window.screenX + Math.max(0, (window.outerWidth - width) / 2);
+      const top = window.screenY + Math.max(0, (window.outerHeight - height) / 2);
+      window.open(
+        data.authorization_url,
+        'asana-oauth',
+        `width=${width},height=${height},left=${left},top=${top}`
+      );
+    } else {
+      alert('Missing authorization URL from server response.');
+    }
+  } catch(err){
+    alert(`Failed to start Asana OAuth: ${err.message}`);
+  }
+}
+
+async function disconnectAsana(prefix){
+  const clientId = getSelectedClientId();
+  if(!clientId){
+    alert('Select a client to disconnect.');
+    return;
+  }
+  if(!confirm('Disconnect Asana for this client?')){
+    return;
+  }
+  try{
+    const resp = await fetch(`/admin/api/asana/connection?client_id=${encodeURIComponent(clientId)}`, {
+      method: 'DELETE',
+      credentials: 'include'
+    });
+    if(!resp.ok){
+      const text = await resp.text();
+      alert(text || 'Failed to disconnect Asana.');
+    }
+  } catch(err){
+    alert(`Failed to disconnect Asana: ${err.message}`);
+  }
+  loadAsanaStatus(prefix);
+}
+
+if(!window.__asanaOAuthListener){
+  window.addEventListener('message', (event) => {
+    if(event.data === 'asana-connected'){
+      loadAsanaStatus('ct');
+      loadAsanaStatus('et');
+      refreshTools();
+    }
+  });
+  window.__asanaOAuthListener = true;
+}
+
+function toggleTypeFields(){
+  const select = document.getElementById('ct_type');
+  if(select){
+    const scopeSelect = document.getElementById('ct_scope');
+    if(scopeSelect && select.value === 'asana' && scopeSelect.value !== 'global'){
+      scopeSelect.value = 'global';
+      handleScopeChange('ct');
+    }
+    renderTypeFields('ct', select.value);
+    if(select.value === 'asana'){
+      loadAsanaStatus('ct');
+    }
+  }
 }
 
 function buildConfigFromForm(prefix, type){
@@ -563,6 +750,47 @@ function buildConfigFromForm(prefix, type){
     const cfg = {
       agent_slug: document.getElementById(`${prefix}_sidekick_agent`).value.trim(),
     };
+    return applyHiddenInstructions(prefix, cfg);
+  }
+  if(type === 'asana'){
+    const projectsField = document.getElementById(`${prefix}_asana_projects`);
+    const projectsRaw = projectsField ? projectsField.value.trim() : '';
+    let projectsValue = null;
+    if(projectsRaw){
+      try {
+        projectsValue = JSON.parse(projectsRaw);
+      } catch(err){
+        const lines = projectsRaw.split(/\\r?\\n/).map(line => line.trim()).filter(Boolean);
+        if(lines.length){
+          projectsValue = lines;
+        } else {
+          throw new Error('Projects field must be valid JSON (array or object) or newline separated gids.');
+        }
+      }
+      if(typeof projectsValue !== 'object'){
+        throw new Error('Projects field must resolve to an array or object.');
+      }
+    }
+    const workspaceInput = document.getElementById(`${prefix}_asana_workspace`);
+    const workspace = workspaceInput ? workspaceInput.value.trim() : '';
+    const assigneeInput = document.getElementById(`${prefix}_asana_assignee`);
+    const assignee = assigneeInput ? assigneeInput.value.trim() : '';
+    const maxTasksInput = document.getElementById(`${prefix}_asana_max_tasks`);
+    const lookupInput = document.getElementById(`${prefix}_asana_lookup_limit`);
+    const maxTasks = maxTasksInput ? parseInt(maxTasksInput.value, 10) : NaN;
+    const lookupLimit = lookupInput ? parseInt(lookupInput.value, 10) : NaN;
+    const includeCompletedEl = document.getElementById(`${prefix}_asana_include_completed`);
+    const defaultActionSelect = document.getElementById(`${prefix}_asana_default_action`);
+
+    const cfg = {};
+    if(projectsValue){ cfg.projects = projectsValue; }
+    if(workspace){ cfg.workspace_gid = workspace; }
+    if(assignee){ cfg.default_assignee = assignee; }
+    if(!Number.isNaN(maxTasks)){ cfg.max_tasks_per_project = maxTasks; }
+    if(!Number.isNaN(lookupLimit)){ cfg.lookup_limit = lookupLimit; }
+    cfg.list_include_completed = includeCompletedEl ? includeCompletedEl.checked : false;
+    if(defaultActionSelect && defaultActionSelect.value){ cfg.default_action = defaultActionSelect.value; }
+    cfg.oauth_provider = 'asana';
     return applyHiddenInstructions(prefix, cfg);
   }
   if(type === 'mcp'){
@@ -732,6 +960,9 @@ function openEditToolModal(id){
   renderTypeFields('et', tool.type || 'mcp', tool.config || {});
   const providerSelect = document.getElementById('et_mcp_provider');
   if(providerSelect){ togglePerplexityClientPanel('et', providerSelect.value === 'perplexity'); }
+  if(tool.type === 'asana'){
+    loadAsanaStatus('et');
+  }
   const inlineClientSelect = document.getElementById('et_perplexity_client_select');
   const filterSelect = document.getElementById('clientFilter');
   if(inlineClientSelect && filterSelect && filterSelect.value){ inlineClientSelect.value = filterSelect.value; loadPerplexityClientKey('et'); }

@@ -2,14 +2,29 @@
 # Generate nginx configuration from template with environment variables
 
 # Load environment variables
-if [ -f "${PROJECT_ROOT:-/root/sidekick-forge}/.env" ]; then
-    export $(cat "${PROJECT_ROOT:-/root/sidekick-forge}/.env" | grep -v '^#' | xargs)
+ENV_ROOT=${PROJECT_ROOT:-/root/sidekick-forge}
+if [ -f "${ENV_ROOT}/.env" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${ENV_ROOT}/.env"
+    set +a
 fi
 
+# Determine domain
+DOMAIN_NAME_INPUT=${1:-${DOMAIN_NAME:-}}
+if [ -z "$DOMAIN_NAME_INPUT" ]; then
+    echo "ERROR: DOMAIN_NAME is not set. Pass it as the first argument or define it in .env."
+    exit 1
+fi
+DOMAIN_NAME=$DOMAIN_NAME_INPUT
+
 # Set defaults if not provided
-DOMAIN_NAME=${DOMAIN_NAME:-"sidekickforge.com"}
 PROJECT_ROOT=${PROJECT_ROOT:-"/root/sidekick-forge"}
 CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-"https?://(www\.)?(localhost:[0-9]+)"}
+DOMAIN_REGEX=${DOMAIN_NAME//./\\.}
+
+# Export for envsubst
+export DOMAIN_NAME PROJECT_ROOT CORS_ALLOWED_ORIGINS DOMAIN_REGEX
 
 # Create nginx config directory if it doesn't exist
 mkdir -p /etc/nginx/sites-available

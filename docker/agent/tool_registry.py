@@ -15,6 +15,21 @@ import logging
 from livekit.agents import llm
 from livekit.agents.llm.tool_context import function_tool as lk_function_tool, ToolError
 
+try:
+    from app.agent_modules.abilities.asana import (  # type: ignore
+        AsanaAbilityConfigError,
+        build_asana_tool,
+    )
+    from app.services.asana_oauth_service import AsanaOAuthService  # type: ignore
+except Exception as exc:  # pragma: no cover - agent runtime runs standalone
+    logging.getLogger(__name__).warning(
+        "Failed to import Asana ability modules in agent runtime: %s", exc,
+        exc_info=True,
+    )
+    build_asana_tool = None
+    AsanaAbilityConfigError = None  # type: ignore
+    AsanaOAuthService = None  # type: ignore
+
 
 class ToolRegistry:
     def __init__(
@@ -48,6 +63,8 @@ class ToolRegistry:
                     ft = self._build_mcp_tool(t)
                 elif ttype == "code":
                     ft = self._build_code_tool(t)
+                elif ttype == "asana":
+                    ft = self._build_asana_tool(t)
                 else:
                     self._logger.warning(f"Unsupported tool type '{ttype}' for slug={slug}; skipping")
                     continue
@@ -85,7 +102,18 @@ class ToolRegistry:
 
         per_tool_cfg: Dict[str, Any] = {}
         if isinstance(self._tools_config, dict):
-            per_tool_cfg = self._tools_config.get(slug) or {}
+            lookup_keys = (
+                slug,
+                t.get("id"),
+                t.get("name"),
+            )
+            for key in lookup_keys:
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
 
         def _merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
             merged = dict(base)
@@ -266,6 +294,18 @@ class ToolRegistry:
                     text = await resp.text()
                     if resp.status >= 400:
                         raise ToolError(f"n8n webhook returned HTTP {resp.status}: {text[:256]}")
+                    try:
+                        self._logger.info(
+                            "🌐 n8n webhook response",
+                            extra={
+                                "slug": slug,
+                                "status": resp.status,
+                                "length": len(text) if text is not None else 0,
+                                "preview": text[:200],
+                            },
+                        )
+                    except Exception:
+                        pass
                     try:
                         data = json.loads(text)
                         return json.dumps(data)
@@ -627,3 +667,94 @@ class ToolRegistry:
             name=t.get("slug") or t.get("name") or "code_tool",
             description=t.get("description") or "Custom code tool",
         )(_invoke)
+
+    def _build_asana_tool(self, t: Dict[str, Any]) -> Any:
+        slug = t.get("slug") or t.get("name") or t.get("id") or "asana_tasks"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            lookup_keys = (
+                slug,
+                t.get("id"),
+                t.get("name"),
+            )
+            for key in lookup_keys:
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        access_token = merged_cfg.get("access_token")
+        key_name = merged_cfg.get("access_token_key") or merged_cfg.get("api_key_name") or "asana_access_token"
+        if not access_token and key_name:
+            access_token = self._api_keys.get(key_name)
+        env_key = merged_cfg.get("access_token_env")
+        if not access_token and env_key:
+            access_token = os.getenv(str(env_key))
+        if not access_token and key_name:
+            env_candidate = os.getenv(str(key_name).upper())
+            if env_candidate:
+                access_token = env_candidate
+        if access_token:
+            merged_cfg["access_token"] = access_token
+        if not build_asana_tool:
+            self._logger.warning("Asana ability not available in agent runtime; skipping.")
+            return None
+
+        oauth_service = None
+        if AsanaOAuthService is not None:
+            try:  # pragma: no cover - best-effort in agent runtime
+                from app.core.dependencies import get_client_service
+
+                oauth_service = AsanaOAuthService(get_client_service())
+            except Exception:
+                oauth_service = None
+
+        try:
+            return build_asana_tool(t, merged_cfg, oauth_service=oauth_service)
+        except Exception as exc:
+            if not AsanaAbilityConfigError or not isinstance(exc, AsanaAbilityConfigError):
+                raise
+            message = f"Asana ability is not ready: {exc}"
+            try:
+                self._logger.warning(
+                    "Asana ability could not be built",
+                    extra={"slug": slug, "reason": str(exc)},
+                )
+            except Exception:
+                pass
+
+            async def _misconfigured_tool(**_: Any) -> str:
+                return message
+
+            description = t.get("description") or "Asana integration is not configured yet."
+            return lk_function_tool(
+                raw_schema={
+                    "name": slug,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_inquiry": {
+                                "type": "string",
+                                "description": "Latest user request describing the desired Asana action.",
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional session metadata.",
+                                "additionalProperties": True,
+                            },
+                        },
+                        "required": ["user_inquiry"],
+                    },
+                }
+            )(_misconfigured_tool)

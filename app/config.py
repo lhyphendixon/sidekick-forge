@@ -2,6 +2,9 @@ from pydantic_settings import BaseSettings
 from pydantic import validator, Field
 from typing import List, Optional
 import os
+import json
+from pathlib import Path
+from dotenv import dotenv_values
 
 class Settings(BaseSettings):
     # Application Settings
@@ -85,12 +88,25 @@ class Settings(BaseSettings):
     sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN")
     prometheus_enabled: bool = Field(default=False, env="PROMETHEUS_ENABLED")
 
+    # Mailjet transactional email
+    mailjet_api_key: Optional[str] = Field(default=None, env="MAILJET_API_KEY")
+    mailjet_api_secret: Optional[str] = Field(default=None, env="MAILJET_API_SECRET")
+    mailjet_sender_email: Optional[str] = Field(default=None, env="MAILJET_SENDER_EMAIL")
+    mailjet_sender_name: Optional[str] = Field(default=None, env="MAILJET_SENDER_NAME")
+    mailjet_notification_recipients_raw: Optional[str] = Field(default=None, env="MAILJET_NOTIFICATION_RECIPIENTS")
+
     # Perplexity MCP container configuration
     perplexity_mcp_image: str = Field(default="perplexity-mcp:latest", env="PERPLEXITY_MCP_IMAGE")
     perplexity_mcp_container_name: str = Field(default="perplexity-mcp", env="PERPLEXITY_MCP_CONTAINER_NAME")
     perplexity_mcp_port: int = Field(default=8081, env="PERPLEXITY_MCP_PORT")
     perplexity_mcp_host: str = Field(default="perplexity-mcp", env="PERPLEXITY_MCP_HOST")
     perplexity_mcp_network: Optional[str] = Field(default=None, env="PERPLEXITY_MCP_NETWORK")
+
+    # Asana OAuth configuration
+    asana_oauth_client_id: Optional[str] = Field(default=None, env="ASANA_OAUTH_CLIENT_ID")
+    asana_oauth_client_secret: Optional[str] = Field(default=None, env="ASANA_OAUTH_CLIENT_SECRET")
+    asana_oauth_redirect_uri: Optional[str] = Field(default=None, env="ASANA_OAUTH_REDIRECT_URI")
+    asana_oauth_scopes: str = Field(default="default", env="ASANA_OAUTH_SCOPES")
 
     class Config:
         env_file = ".env"
@@ -134,6 +150,51 @@ class Settings(BaseSettings):
     @property
     def perplexity_mcp_server_url(self) -> str:
         return f"http://{self.perplexity_mcp_host}:{self.perplexity_mcp_port}/mcp/sse"
+
+    @property
+    def mailjet_is_configured(self) -> bool:
+        recipients = self.mailjet_notification_recipients
+        return all(
+            [
+                self.mailjet_api_key,
+                self.mailjet_api_secret,
+                self.mailjet_sender_email,
+                recipients,
+            ]
+        )
+
+    @staticmethod
+    def _coerce_recipient_list(value: Optional[str]) -> List[str]:
+        if not value:
+            return []
+        raw = value.strip()
+        if not raw:
+            return []
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except json.JSONDecodeError:
+                pass
+        return [item.strip() for item in raw.split(",") if item.strip()]
+
+    @property
+    def mailjet_notification_recipients(self) -> List[str]:
+        raw = self.mailjet_notification_recipients_raw
+        if not raw:
+            raw = os.getenv("MAILJET_NOTIFICATION_RECIPIENTS")
+        if not raw:
+            env_file = getattr(self.Config, "env_file", ".env")
+            try:
+                path = Path(env_file)
+                if not path.is_absolute():
+                    path = Path(os.getcwd()) / path
+                if path.exists():
+                    raw = dotenv_values(path).get("MAILJET_NOTIFICATION_RECIPIENTS")
+            except Exception:
+                raw = None
+        return self._coerce_recipient_list(raw)
 
 # Create settings instance
 settings = Settings()

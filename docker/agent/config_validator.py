@@ -96,7 +96,7 @@ class ConfigValidator:
         # Validate provider values
         valid_llm_providers = ['openai', 'groq', 'cerebras', 'deepinfra']
         valid_stt_providers = ['deepgram', 'cartesia']
-        valid_tts_providers = ['elevenlabs', 'cartesia']
+        valid_tts_providers = ['elevenlabs', 'cartesia', 'livekit']
         
         llm = voice_settings.get('llm_provider')
         if llm not in valid_llm_providers:

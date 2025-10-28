@@ -25,10 +25,81 @@ from supabase import create_client, Client as SupabaseClient
 from app.config import settings
 # Tools service for abilities
 from app.services.tools_service_supabase import ToolsService
+from app.services.document_processor import document_processor
 from app.utils.tool_prompts import apply_tool_prompt_instructions
 from livekit.agents.llm.tool_context import ToolContext
 from app.agent_modules.tool_registry import ToolRegistry
 # Redis dedupe removed
+
+DATASET_ID_FALLBACKS: Dict[str, List[int]] = {
+    "clarence-coherence": [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571],
+    "able": list(range(7, 36)),
+}
+
+
+async def _resolve_agent_dataset_ids(client_id: str, agent) -> List[Any]:
+    """Fetch document IDs assigned to an agent, falling back to known defaults when necessary."""
+    dataset_ids: List[Any] = []
+
+    try:
+        supabase = await document_processor._get_client_supabase(client_id)
+        if not supabase:
+            logger.warning(
+                "No Supabase client available when resolving dataset IDs for agent %s (client %s)",
+                getattr(agent, "slug", agent),
+                client_id,
+            )
+        else:
+            response = (
+                supabase
+                .table('agent_documents')
+                .select('document_id')
+                .eq('agent_id', agent.id)
+                .eq('enabled', True)
+                .order('document_id')
+                .execute()
+            )
+            records = getattr(response, "data", None) or []
+            seen: set[str] = set()
+            normalized: List[Any] = []
+            for row in records:
+                doc_id = row.get("document_id")
+                if doc_id is None:
+                    continue
+                key = str(doc_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                normalized.append(doc_id)
+            dataset_ids = normalized
+            if dataset_ids:
+                logger.info(
+                    "📚 Resolved %s dataset IDs for agent %s (client %s)",
+                    len(dataset_ids),
+                    getattr(agent, "slug", agent),
+                    client_id,
+                )
+    except Exception as exc:
+        logger.warning(
+            "Failed to resolve dataset IDs for agent %s (client %s): %s",
+            getattr(agent, "slug", agent),
+            client_id,
+            exc,
+        )
+
+    if dataset_ids:
+        return dataset_ids
+
+    fallback = DATASET_ID_FALLBACKS.get(getattr(agent, "slug", None))
+    if fallback:
+        logger.info(
+            "Using fallback dataset IDs (%s items) for agent %s",
+            len(fallback),
+            getattr(agent, "slug", agent),
+        )
+        return fallback
+
+    return []
 
 # --- Helpers ---
 def _normalize_ws_url(url: Optional[str]) -> Optional[str]:
@@ -91,7 +162,14 @@ async def _gather_text_tool_outputs(
     if not assigned_tools:
         return result
 
-    tools_payload = [tool.dict() for tool in assigned_tools]
+    tools_payload = []
+    for tool in assigned_tools:
+        tool_dict = tool.dict()
+        for ts_field in ("created_at", "updated_at"):
+            value = tool_dict.get(ts_field)
+            if hasattr(value, "isoformat"):
+                tool_dict[ts_field] = value.isoformat()
+        tools_payload.append(tool_dict)
     result["tools_payload"] = tools_payload
 
     # Collect any system prompt instructions from tool config so the LLM knows when to use them.
@@ -664,10 +742,12 @@ async def handle_voice_trigger(
     except Exception:
         logger.warning("Failed to apply hidden tool instructions to system prompt", exc_info=True)
 
-    # Include dataset_ids for RAG/citations when known
-    if agent.slug == "clarence-coherence":
-        agent_context["dataset_ids"] = [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571]
-        logger.info(f"📚 Added dataset_ids to voice agent_context for {agent.slug}: {len(agent_context['dataset_ids'])} documents")
+    agent_dataset_ids: List[Any] = await _resolve_agent_dataset_ids(client.id, agent)
+    if agent_dataset_ids:
+        agent_context["dataset_ids"] = agent_dataset_ids
+        logger.info(
+            f"📚 Added dataset_ids to voice agent_context for {agent.slug}: {len(agent_dataset_ids)} documents"
+        )
     
     # Ensure the room exists (create if it doesn't)
     room_start = time.time()
@@ -906,8 +986,12 @@ async def handle_text_trigger(
     # Prepare metadata for context
     # Check for embedding config in both locations (additional_settings first, then settings)
     embedding_cfg = {}
-    if client.additional_settings and client.additional_settings.get("embedding"):
-        embedding_cfg = client.additional_settings.get("embedding", {})
+    additional_settings = getattr(client, "additional_settings", None)
+    if not additional_settings and getattr(client, "settings", None):
+        additional_settings = getattr(client.settings, "additional_settings", None)
+
+    if isinstance(additional_settings, dict) and additional_settings.get("embedding"):
+        embedding_cfg = additional_settings.get("embedding", {})
     elif client.settings and hasattr(client.settings, 'embedding') and client.settings.embedding:
         embedding_cfg = client.settings.embedding.dict()
     
@@ -923,16 +1007,10 @@ async def handle_text_trigger(
         "embedding": embedding_cfg
     }
     
-    # Add document_ids (dataset_ids) for RAG context
-    # For clarence-coherence, these are the assigned document IDs
-    if agent.slug == "clarence-coherence":
-        metadata["dataset_ids"] = [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571]
-        logger.info(f"📚 Added dataset_ids for clarence-coherence: {len(metadata['dataset_ids'])} documents")
-    # For able in KCG, add the document IDs that have 'able' permissions
-    elif agent.slug == "able":
-        # These are the KCG document IDs with 'able' permissions
-        metadata["dataset_ids"] = list(range(7, 36))  # Documents 7-35 in KCG have 'able' permissions
-        logger.info(f"📚 Added dataset_ids for able: {len(metadata['dataset_ids'])} documents")
+    agent_dataset_ids: List[Any] = await _resolve_agent_dataset_ids(client.id, agent)
+    if agent_dataset_ids:
+        metadata["dataset_ids"] = agent_dataset_ids
+        logger.info(f"📚 Added dataset_ids for {agent.slug}: {len(agent_dataset_ids)} documents")
     
     # Get API keys from client configuration
     api_keys = {}
@@ -950,7 +1028,9 @@ async def handle_text_trigger(
             "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key,
             "jina_api_key": client.settings.api_keys.jina_api_key,
         }
-    
+
+    recent_rows: List[Dict[str, Any]] = []
+
     try:
         # Initialize context manager if we have Supabase credentials
         context_manager = None
@@ -964,6 +1044,9 @@ async def handle_text_trigger(
         if hasattr(client, 'supabase_url') and client.supabase_url:
             supabase_url = client.supabase_url
             supabase_key = client.supabase_service_role_key
+        elif hasattr(client, 'supabase_project_url') and client.supabase_project_url:
+            supabase_url = client.supabase_project_url
+            supabase_key = getattr(client, 'supabase_service_role_key', None) or getattr(client, 'supabase_anon_key', None)
         # Then check settings.supabase (old structure)
         elif client.settings and hasattr(client.settings, 'supabase'):
             supabase_url = client.settings.supabase.url
@@ -990,52 +1073,8 @@ async def handle_text_trigger(
                 api_keys=api_keys
             )
             logger.info("✅ Context manager initialized")
-        
-        # Configure LLM based on provider (shared factory)
-        from app.shared.llm_factory import get_llm
-        from livekit.agents import llm as lk_llm
-        
-        
-        llm_plugin = None
-        llm_plugin = get_llm(llm_provider, llm_model, api_keys)
-        logger.info(f"✅ Initialized {llm_provider} LLM with model: {llm_model}")
-        
-        if not llm_plugin:
-            raise ValueError(f"No valid API key for {llm_provider}")
-        
-        # Wrap LLM with context awareness if we have context manager
-        if context_manager:
-            logger.info("🧠 Wrapping LLM with RAG context...")
-            context_aware_llm = ContextAwareLLM(
-                base_llm=llm_plugin,
-                context_manager=context_manager,
-                user_id=user_id
-            )
-            
-            # Try to build complete context, but don't fail if RAG functions are missing
-            enhanced_prompt = agent.system_prompt
-            try:
-                logger.info("🔍 Building complete context with RAG...")
-                context_result = await context_manager.build_complete_context(
-                    user_message=request.message,
-                    user_id=user_id
-                )
-                enhanced_prompt = context_result.get("enhanced_system_prompt", agent.system_prompt)
-                logger.info("✅ RAG context built successfully")
-            except Exception as rag_error:
-                # Log the error but continue without RAG
-                logger.warning(f"⚠️ RAG context building failed (continuing without RAG): {rag_error}")
-                # Continue with basic system prompt
-                enhanced_prompt = agent.system_prompt
-                # Don't raise the exception - we can still work without RAG
-                pass
-            
-            # Create chat context using the SDK's abstraction
-            ctx = lk_llm.ChatContext()
-            ctx.add_message(role="system", content=enhanced_prompt)
-            
-            # Short-term buffer memory: fetch last 20 messages from this conversation
-            recent_rows = []
+
+        if client_supabase:
             try:
                 recent_q = (
                     client_supabase
@@ -1046,91 +1085,127 @@ async def handle_text_trigger(
                     .limit(20)
                     .execute()
                 )
-                # Reverse so oldest messages come first
                 recent_rows = list(reversed(recent_q.data or []))
                 if recent_rows:
                     logger.info(f"📚 Loaded {len(recent_rows)} recent messages for buffer memory")
             except Exception as e:
                 logger.warning(f"Couldn't load recent turns for buffer memory: {e}")
-            
-            # Inject recent history into context
-            for row in recent_rows:
-                role = row["role"] if row["role"] in ("user", "assistant") else "user"
-                text = row["content"] or ""
-                ctx.add_message(role=role, content=text)
-            
-            # Finally add the new user message
-            ctx.add_message(role="user", content=request.message)
-            
-            # Get response using LLM directly (wrapper has async issues)
-            logger.info("🤖 Generating RAG-enhanced response...")
-            stream = llm_plugin.chat(chat_ctx=ctx)
-            
-            # Collect the stream response
-            response_text = ""
-            async for chunk in stream:
-                # Handle different chunk formats from LiveKit SDK
-                if hasattr(chunk, 'choices') and chunk.choices:
-                    for choice in chunk.choices:
-                        if hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'content') and choice.delta.content:
-                            response_text += choice.delta.content
-                elif hasattr(chunk, 'delta') and chunk.delta and hasattr(chunk.delta, 'content') and chunk.delta.content:
-                    response_text += chunk.delta.content
-                elif hasattr(chunk, 'content') and chunk.content:
-                    response_text += chunk.content
-                
-            logger.info(f"✅ Generated response: {response_text[:100]}...")
-            
-        else:
-            # Fallback to basic LLM without RAG (no context manager)
-            logger.warning("⚠️ No context manager available, using basic LLM")
-            # Use ChatContext for consistency
-            ctx = lk_llm.ChatContext()
-            ctx.add_message(role="system", content=agent.system_prompt)
-            
-            # Short-term buffer memory even without RAG
-            if client_supabase:
-                recent_rows = []
+
+        # Configure LLM based on provider (shared factory)
+        from app.shared.llm_factory import get_llm
+        from livekit.agents import llm as lk_llm
+
+        llm_plugin = get_llm(llm_provider, llm_model, api_keys)
+        logger.info(f"✅ Initialized {llm_provider} LLM with model: {llm_model}")
+
+        if not llm_plugin:
+            raise ValueError(f"No valid API key for {llm_provider}")
+
+        tools_payload: List[Dict[str, Any]] = []
+        tool_results: List[Dict[str, Any]] = []
+        tool_context_summary: Optional[str] = None
+        tool_prompt_sections: List[Dict[str, Any]] = []
+        tool_instructions: List[str] = []
+
+        tool_execution = await _gather_text_tool_outputs(
+            agent=agent,
+            client=client,
+            api_keys=api_keys or {},
+            tools_service=tools_service,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            user_message=request.message,
+            session_id=request.session_id,
+            recent_history=recent_rows,
+            extra_metadata={
+                "conversation_id": conversation_id,
+                "rag_enabled": bool(context_manager),
+            },
+        )
+        if tool_execution:
+            tools_payload = tool_execution.get("tools_payload") or []
+            tool_results = tool_execution.get("tool_results") or []
+            tool_context_summary = tool_execution.get("tool_context_summary")
+            tool_prompt_sections = []
+            tool_instructions = tool_execution.get("tool_instructions") or []
+            if tool_results:
                 try:
-                    recent_q = (
-                        client_supabase
-                        .table("conversation_transcripts")
-                        .select("role,content")
-                        .eq("conversation_id", conversation_id)
-                        .order("created_at", desc=True)
-                        .limit(20)
-                        .execute()
-                    )
-                    # Reverse so oldest messages come first
-                    recent_rows = list(reversed(recent_q.data or []))
-                    if recent_rows:
-                        logger.info(f"📚 Loaded {len(recent_rows)} recent messages for buffer memory (non-RAG)")
-                except Exception as e:
-                    logger.warning(f"Couldn't load recent turns for buffer memory: {e}")
-                
-                # Inject recent history into context
-                for row in recent_rows:
-                    role = row["role"] if row["role"] in ("user", "assistant") else "user"
-                    text = row["content"] or ""
-                    ctx.add_message(role=role, content=text)
-            
-            # Finally add the new user message
-            ctx.add_message(role="user", content=request.message)
-            stream = llm_plugin.chat(chat_ctx=ctx)
-            
-            # Collect the stream response
-            response_text = ""
-            async for chunk in stream:
-                # Handle different chunk formats from LiveKit SDK
-                if hasattr(chunk, 'choices') and chunk.choices:
-                    for choice in chunk.choices:
-                        if hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'content') and choice.delta.content:
-                            response_text += choice.delta.content
-                elif hasattr(chunk, 'delta') and chunk.delta and hasattr(chunk.delta, 'content') and chunk.delta.content:
-                    response_text += chunk.delta.content
-                elif hasattr(chunk, 'content') and chunk.content:
-                    response_text += chunk.content
-        
+                    slugs = [entry.get("slug") for entry in tool_results]
+                    logger.info("🧰 Executed abilities for text chat", extra={"count": len(tool_results), "abilities": slugs})
+                except Exception:
+                    logger.info(f"🧰 Executed {len(tool_results)} abilities for text chat")
+
+        enhanced_prompt = agent.system_prompt
+
+        if context_manager:
+            logger.info("🧠 Wrapping LLM with RAG context...")
+            _contextual_llm = ContextAwareLLM(
+                base_llm=llm_plugin,
+                context_manager=context_manager,
+                user_id=user_id
+            )
+            try:
+                logger.info("🔍 Building complete context with RAG...")
+                context_result = await context_manager.build_complete_context(
+                    user_message=request.message,
+                    user_id=user_id
+                )
+                enhanced_prompt = context_result.get("enhanced_system_prompt", agent.system_prompt)
+                logger.info("✅ RAG context built successfully")
+            except Exception as rag_error:
+                logger.warning(f"⚠️ RAG context building failed (continuing without RAG): {rag_error}")
+                enhanced_prompt = agent.system_prompt
+        else:
+            logger.warning("⚠️ No context manager available, using basic LLM")
+
+        if tools_payload:
+            try:
+                enhanced_prompt, tool_prompt_sections = apply_tool_prompt_instructions(
+                    enhanced_prompt,
+                    tools_payload,
+                )
+                if tool_prompt_sections:
+                    try:
+                        abilities = [section.get("slug") or section.get("name") for section in tool_prompt_sections]
+                        logger.info("🧠 Appended hidden tool instructions", extra={"count": len(tool_prompt_sections), "abilities": abilities})
+                    except Exception:
+                        logger.info(f"🧠 Appended {len(tool_prompt_sections)} hidden tool instruction sections")
+            except Exception as tool_prompt_error:
+                logger.warning(f"Failed to apply hidden tool instructions to system prompt: {tool_prompt_error}")
+
+        ctx = lk_llm.ChatContext()
+        ctx.add_message(role="system", content=enhanced_prompt)
+
+        if tool_context_summary:
+            ctx.add_message(
+                role="system",
+                content=f"Ability execution results shared with the assistant:\n{tool_context_summary}",
+            )
+
+        for row in recent_rows:
+            role = row["role"] if row["role"] in ("user", "assistant") else "user"
+            text = row["content"] or ""
+            ctx.add_message(role=role, content=text)
+
+        ctx.add_message(role="user", content=request.message)
+
+        logger.info("🤖 Generating response with text abilities applied...")
+        stream = llm_plugin.chat(chat_ctx=ctx)
+
+        response_text = ""
+        async for chunk in stream:
+            if hasattr(chunk, 'choices') and chunk.choices:
+                for choice in chunk.choices:
+                    if hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'content') and choice.delta.content:
+                        response_text += choice.delta.content
+            elif hasattr(chunk, 'delta') and chunk.delta and hasattr(chunk.delta, 'content') and chunk.delta.content:
+                response_text += chunk.delta.content
+            elif hasattr(chunk, 'content') and chunk.content:
+                response_text += chunk.content
+
+        if response_text:
+            logger.info(f"✅ Generated response: {response_text[:100]}...")
+
         # Try to retrieve citations if RAG was used
         citations = None
         if context_manager and hasattr(context_manager, '_last_rag_results'):
@@ -1153,9 +1228,23 @@ async def handle_text_trigger(
             except Exception as e:
                 logger.warning(f"Failed to extract citations from context manager: {e}")
         
+        # Normalize citations to a list for transcript storage helpers
+        if citations is None:
+            citations = []
+
         # Store conversation turn if we have a response and Supabase client
         if response_text and client_supabase:
             try:
+                turn_metadata: Dict[str, Any] = {'agent_slug': agent.slug}
+                if tool_results:
+                    turn_metadata['tool_results'] = tool_results
+                if tool_context_summary:
+                    turn_metadata['tool_context_summary'] = tool_context_summary
+                if tool_prompt_sections:
+                    turn_metadata['tool_prompt_sections'] = tool_prompt_sections
+                if tool_instructions:
+                    turn_metadata['tool_instructions'] = tool_instructions
+
                 await _store_conversation_turn(
                     supabase_client=client_supabase,
                     user_id=user_id,
@@ -1166,7 +1255,7 @@ async def handle_text_trigger(
                     session_id=request.session_id,
                     context_manager=context_manager,  # Pass context manager for embeddings
                     citations=citations,  # Include citations if available
-                    metadata={'agent_slug': agent.slug}  # Include agent metadata
+                    metadata=turn_metadata  # Include agent metadata plus tool execution context
                 )
                 logger.info(f"✅ Text conversation turn stored for conversation_id={conversation_id} with {len(citations) if citations else 0} citations")
             except Exception as e:
@@ -1178,6 +1267,14 @@ async def handle_text_trigger(
         response_text = f"I apologize, but I encountered an error processing your message. Please try again."
     
     # Prepare response
+    tools_response = {
+        "assigned": tools_payload,
+        "results": tool_results,
+        "context_summary": tool_context_summary,
+        "prompt_sections": tool_prompt_sections,
+        "instructions": tool_instructions,
+    }
+
     return {
         "mode": "text",
         "message_received": request.message,
@@ -1188,7 +1285,10 @@ async def handle_text_trigger(
         "rag_enabled": bool(context_manager),
         "status": "text_message_processed",
         "response": response_text or f"I'm sorry, I couldn't process your message. Please ensure the {llm_provider} API key is configured.",
-        "agent_response": response_text
+        "agent_response": response_text,
+        "ai_response": response_text,
+        "citations": citations,
+        "tools": tools_response,
     }
 
 
@@ -1307,6 +1407,17 @@ async def dispatch_agent_job(
 
                 runtime_tools_config[slug] = existing_entry
 
+        context_dataset_ids: List[Any] = context_snapshot.get("dataset_ids") or []
+        if not context_dataset_ids:
+            fallback_ids = DATASET_ID_FALLBACKS.get(agent.slug)
+            if fallback_ids:
+                logger.info(
+                    "Using fallback dataset IDs for dispatch metadata (agent=%s, count=%s)",
+                    agent.slug,
+                    len(fallback_ids),
+                )
+                context_dataset_ids = fallback_ids
+
         job_metadata = {
             "client_id": client.id,
             "agent_slug": agent.slug,
@@ -1326,7 +1437,7 @@ async def dispatch_agent_job(
             # Include embedding configuration from client's additional_settings
             "embedding": client.additional_settings.get("embedding", {}) if client.additional_settings else {},
             # Include dataset_ids for RAG context (document IDs for this agent)
-            "dataset_ids": [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571] if agent.slug == "clarence-coherence" else [],
+            "dataset_ids": context_dataset_ids,
             "api_keys": api_keys_map,
         }
 

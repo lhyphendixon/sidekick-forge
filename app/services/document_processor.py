@@ -346,14 +346,53 @@ class DocumentProcessor:
                     'success': False,
                     'error': 'Failed to stage uploaded file for processing'
                 }
-            
+
+            # Normalize user_id to a UUID if possible; otherwise store as None
+            normalized_user_id = None
+            if user_id:
+                try:
+                    normalized_user_id = str(uuid.UUID(str(user_id)))
+                except Exception:
+                    logger.warning(
+                        "Non-UUID user_id '%s' encountered during document upload; storing as NULL.",
+                        user_id,
+                    )
+
+            if normalized_user_id and supabase_client:
+                try:
+                    lookup_response = (
+                        supabase_client
+                        .table('users')
+                        .select('id')
+                        .eq('id', normalized_user_id)
+                        .limit(1)
+                        .execute()
+                    )
+                except Exception as lookup_error:
+                    logger.warning(
+                        "Failed to verify user %s in client %s Supabase; defaulting to system upload: %s",
+                        normalized_user_id,
+                        client_id or "platform",
+                        lookup_error,
+                    )
+                    normalized_user_id = None
+                else:
+                    data = getattr(lookup_response, "data", None)
+                    if not data:
+                        logger.warning(
+                            "User %s not found in client %s Supabase; storing knowledge base upload without user attribution.",
+                            normalized_user_id,
+                            client_id or "platform",
+                        )
+                        normalized_user_id = None
+
             # Create document record
             document_id = await self._create_document_record(
                 file_path=file_path,
                 title=title,
                 description=description,
                 file_info=file_info,
-                user_id=user_id,
+                user_id=normalized_user_id,
                 client_id=client_id,
                 checksum=checksum,
                 supabase=supabase_client,
@@ -897,6 +936,7 @@ class DocumentProcessor:
     ):
         """Assign document to specific agents"""
         try:
+            assigned_agent_ids: List[str] = []
             for agent_id in agent_ids:
                 agent_doc_data = {
                     'agent_id': agent_id,
@@ -929,9 +969,88 @@ class DocumentProcessor:
                     logger.debug(f"Assignment lookup failed for agent {agent_id}, doc {document_id}: {e}")
 
                 supabase_client.table('agent_documents').insert(agent_doc_data).execute()
+                assigned_agent_ids.append(agent_id)
+
+            if assigned_agent_ids:
+                await self._sync_document_agent_permissions(
+                    document_id=document_id,
+                    agent_ids=assigned_agent_ids,
+                    client_id=client_id,
+                    supabase=supabase_client,
+                )
                 
         except Exception as e:
             logger.error(f"Error assigning document to agents: {e}")
+    
+    async def _sync_document_agent_permissions(
+        self,
+        document_id: str,
+        agent_ids: List[str],
+        client_id: Optional[str] = None,
+        supabase=None,
+    ):
+        """Ensure the document.agent_permissions array stays in sync with agent assignments."""
+        try:
+            if not agent_ids:
+                return
+
+            supabase_client = supabase
+            if client_id and supabase_client is None:
+                supabase_client, _ = await self._get_client_context(client_id)
+            elif supabase_client is None:
+                supabase_client = self._ensure_supabase()
+
+            if not supabase_client:
+                logger.warning(
+                    "Unable to update agent_permissions for document %s; Supabase client missing.",
+                    document_id,
+                )
+                return
+
+            agent_rows = (
+                supabase_client
+                .table('agents')
+                .select('id,slug')
+                .in_('id', agent_ids)
+                .execute()
+            )
+
+            slugs = {row.get('slug') for row in getattr(agent_rows, 'data', []) if row.get('slug')}
+            if not slugs:
+                return
+
+            try:
+                doc_id_for_update = int(document_id)
+            except (TypeError, ValueError):
+                doc_id_for_update = document_id
+
+            existing = (
+                supabase_client
+                .table('documents')
+                .select('agent_permissions')
+                .eq('id', doc_id_for_update)
+                .limit(1)
+                .execute()
+            )
+
+            current = set()
+            if getattr(existing, 'data', None):
+                doc_row = existing.data[0]
+                current_values = doc_row.get('agent_permissions') or []
+                current = {str(val) for val in current_values if val}
+
+            merged = sorted(current | {str(slug) for slug in slugs})
+
+            supabase_client.table('documents').update(
+                {'agent_permissions': merged}
+            ).eq('id', doc_id_for_update).execute()
+
+        except Exception as exc:
+            logger.warning(
+                "Failed to sync agent_permissions for document %s: %s",
+                document_id,
+                exc,
+            )
     
     async def _update_document_status(
         self,

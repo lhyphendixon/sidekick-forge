@@ -2,13 +2,22 @@
 # Setup SSL certificate for any domain using Certbot
 
 # Load environment variables
-if [ -f "${PROJECT_ROOT:-/root/sidekick-forge}/.env" ]; then
-    export $(cat "${PROJECT_ROOT:-/root/sidekick-forge}/.env" | grep -v '^#' | xargs)
+ENV_ROOT=${PROJECT_ROOT:-/root/sidekick-forge}
+if [ -f "${ENV_ROOT}/.env" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${ENV_ROOT}/.env"
+    set +a
 fi
 
-# Set defaults
-DOMAIN_NAME=${DOMAIN_NAME:-"sidekickforge.com"}
-SSL_EMAIL=${SSL_EMAIL:-"admin@$DOMAIN_NAME"}
+# Determine domain and email
+DOMAIN_NAME_INPUT=${1:-${DOMAIN_NAME:-}}
+if [ -z "$DOMAIN_NAME_INPUT" ]; then
+    echo "ERROR: DOMAIN_NAME is not set. Pass it as the first argument or define it in .env."
+    exit 1
+fi
+DOMAIN_NAME=$DOMAIN_NAME_INPUT
+SSL_EMAIL=${SSL_EMAIL:-"admin@${DOMAIN_NAME}"}
 
 echo "Setting up SSL certificate for domain: $DOMAIN_NAME"
 echo "Using email: $SSL_EMAIL"

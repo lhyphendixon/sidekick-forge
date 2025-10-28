@@ -1,5 +1,8 @@
 <!-- Live Voice Chat Interface with LiveKit Client and Transcripts -->
 <div class="flex flex-col h-full">
+    <!-- Status slot (used by HTMX swaps when ending the session) -->
+    <div id="voiceStatus" class="hidden"></div>
+
     <!-- Status Header -->
     <div class="text-center p-4 border-b border-dark-border">
         <div id="connectionStatus" class="flex items-center justify-center gap-2 mb-2">

@@ -54,6 +54,7 @@ class SidekickAgent(voice.Agent):
         self._conversation_id = None
         self._agent_id = None
         self._current_turn_id: Optional[str] = None
+        self._latest_tool_results: List[Dict[str, Any]] = []
         # Strategy: store final assistant transcript once per turn via session events
         self._suppress_on_assistant_transcript = True
         self._last_assistant_commit: str = ""
@@ -81,6 +82,10 @@ class SidekickAgent(voice.Agent):
                             # Check if it's a list of strings (as seen in logs)
                             if msg.content and isinstance(msg.content[0], str):
                                 user_text = " ".join(msg.content)
+                                try:
+                                    msg.content = user_text
+                                except Exception:
+                                    logger.debug("Unable to coerce turn_ctx message content to string")
                                 logger.info(f"DEBUG: Extracted user text from turn_ctx string list: {user_text[:100]}")
                             else:
                                 # Handle structured content (list of dicts)
@@ -107,6 +112,10 @@ class SidekickAgent(voice.Agent):
                         # Check if it's a list of strings (as seen in logs)
                         if content and isinstance(content[0], str):
                             user_text = " ".join(content)  # Join all strings in the list
+                            try:
+                                new_message.content = user_text
+                            except Exception:
+                                logger.debug("Unable to coerce new_message.content to string")
                             logger.info(f"DEBUG: Extracted user text from string list: {user_text[:100]}")
                         else:
                             # Handle structured content (list of dicts)
@@ -425,11 +434,14 @@ class SidekickAgent(voice.Agent):
             
             if self._supabase_client and self._conversation_id:
                 turn_id = self._current_turn_id or str(uuid.uuid4())
+                tool_results = getattr(self, "_latest_tool_results", None) or None
+                self._latest_tool_results = []
                 await self._store_transcript(
                     role="assistant",
                     content=text,
                     citations=citations,
-                    turn_id=turn_id
+                    turn_id=turn_id,
+                    tool_results=tool_results,
                 )
                 logger.info(f"📝 Stored assistant transcript with {len(citations) if citations else 0} citations")
                 self._current_turn_id = None
@@ -443,7 +455,8 @@ class SidekickAgent(voice.Agent):
         citations: Optional[List[Dict[str, Any]]] = None,
         *,
         sequence: Optional[int] = None,
-        turn_id: Optional[str] = None
+        turn_id: Optional[str] = None,
+        tool_results: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[str]:
         """Store a transcript entry in the database."""
         if not self._supabase_client:
@@ -535,6 +548,8 @@ class SidekickAgent(voice.Agent):
             row_metadata: Dict[str, Any] = {}
             if normalization_details:
                 row_metadata.setdefault("normalization", {})["user_id"] = normalization_details
+            if role == "assistant" and tool_results:
+                row_metadata["tool_results"] = tool_results
 
             row = {
                 "conversation_id": self._conversation_id,
@@ -605,7 +620,7 @@ class SidekickAgent(voice.Agent):
             except Exception:
                 pass
             return None
-            
+
         except Exception as e:
             logger.error(f"Failed to store {role} transcript: {e}")
             return None
@@ -614,10 +629,20 @@ class SidekickAgent(voice.Agent):
         """Public wrapper used by session event handlers."""
         try:
             citations = self._current_citations if (role == "assistant" and self._citations_enabled) else None
+            tool_results = None
+            if role == "assistant":
+                tool_results = getattr(self, "_latest_tool_results", None) or None
+                self._latest_tool_results = []
             if role == "user" and not self._current_turn_id:
                 self._current_turn_id = str(uuid.uuid4())
             turn_id = self._current_turn_id or str(uuid.uuid4())
-            await self._store_transcript(role=role, content=content, citations=citations, turn_id=turn_id)
+            await self._store_transcript(
+                role=role,
+                content=content,
+                citations=citations,
+                turn_id=turn_id,
+                tool_results=tool_results,
+            )
             if role == "assistant":
                 self._current_turn_id = None
         except Exception as e:

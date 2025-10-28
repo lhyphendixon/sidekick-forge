@@ -895,6 +895,21 @@ async def agent_job_handler(ctx: JobContext):
                         session.latest_user_text = merged
                         agent.latest_user_text = merged
                         if is_final:
+                            try:
+                                fut = session.interrupt(force=True)
+                                if fut:
+                                    if asyncio.iscoroutine(fut) or isinstance(fut, asyncio.Future):
+                                        async def _await_interrupt(task):
+                                            try:
+                                                await task
+                                                logger.info("⛔ Assistant speech interrupted due to user transcript final chunk")
+                                            except Exception as interrupt_err:
+                                                logger.debug("Interrupt future raised %s: %s", type(interrupt_err).__name__, interrupt_err)
+
+                                        asyncio.create_task(_await_interrupt(fut))
+                            except Exception as interrupt_exc:
+                                logger.debug("Interrupt call failed: %s: %s", type(interrupt_exc).__name__, interrupt_exc)
+                        if is_final:
                             push_runtime_context({"latest_user_text": merged})
                 except Exception as e:
                     logger.error(f"user_input_transcribed handler failed: {e}")
@@ -1155,8 +1170,58 @@ async def agent_job_handler(ctx: JobContext):
                 @session.on("function_tools_executed")
                 def _on_tools_executed(ev):
                     try:
-                        calls = [getattr(call, "name", None) for call in getattr(ev, "function_calls", [])]
-                        logger.info("🛠️ function_tools_executed: %s", calls)
+                        raw_calls = list(getattr(ev, "function_calls", []) or [])
+                        calls_summary = []
+                        tool_results: List[Dict[str, Any]] = []
+                        for call in raw_calls:
+                            try:
+                                logger.debug("🛠️ function_call payload: %s", getattr(call, "__dict__", {}))
+                            except Exception:
+                                pass
+                            name = getattr(call, "name", None)
+                            calls_summary.append(name)
+                            entry: Dict[str, Any] = {
+                                "slug": name,
+                                "type": getattr(call, "tool", None) or getattr(call, "type", None),
+                            }
+                            success = getattr(call, "success", None)
+                            if isinstance(success, bool):
+                                entry["success"] = success
+                            else:
+                                status = str(getattr(call, "status", "")).lower()
+                                entry["success"] = status not in {"error", "failed"}
+
+                            output = getattr(call, "output", None)
+                            if output is None:
+                                # LiveKit may expose the tool return value under `response` or `result`
+                                output = getattr(call, "response", None)
+                            if output is None:
+                                output = getattr(call, "result", None)
+                            if output is None:
+                                payload = getattr(call, "tool_output", None)
+                                if payload is not None:
+                                    output = payload
+                            if output is not None and not isinstance(output, (str, int, float, bool)):
+                                try:
+                                    entry["output"] = json.dumps(output, ensure_ascii=False)
+                                except Exception:
+                                    entry["output"] = str(output)
+                            else:
+                                entry["output"] = output
+
+                            error_msg = getattr(call, "error", None)
+                            if error_msg:
+                                entry["error"] = error_msg
+
+                            tool_results.append(entry)
+
+                        logger.info("🛠️ function_tools_executed: %s", calls_summary)
+
+                        if tool_results and hasattr(agent, "_latest_tool_results"):
+                            try:
+                                agent._latest_tool_results = tool_results  # type: ignore[attr-defined]
+                            except Exception as assign_err:
+                                logger.debug("Failed to attach tool results to agent: %s", assign_err)
                     except Exception:
                         logger.info("🛠️ function_tools_executed (unable to serialize event)")
 

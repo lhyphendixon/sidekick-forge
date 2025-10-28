@@ -118,6 +118,7 @@ from app.api.v1 import (
     text_chat_proxy,
     knowledge_base
 )
+from app.api.v1 import voice_transcripts
 
 # Mount multi-tenant routes
 app.include_router(trigger_multitenant.router, prefix="/api/v1", tags=["trigger"])
@@ -136,6 +137,7 @@ app.include_router(conversations_proxy.router, prefix="/api/v1", tags=["conversa
 app.include_router(documents_proxy.router, prefix="/api/v1", tags=["documents"])
 app.include_router(text_chat_proxy.router, prefix="/api/v1", tags=["text-chat"])
 app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-base"])
+app.include_router(voice_transcripts.router, prefix="/api/v1", tags=["voice-transcripts"])
 
 # Mount static files
 import os
@@ -152,6 +154,17 @@ try:
     logger.info("✅ Marketing site routes loaded successfully")
 except Exception as e:
     logger.error(f"Failed to load marketing routes: {e}")
+
+# Admin preview standalone routes (for embed preview & ensure-client-user helper)
+try:
+    logger.info("Attempting to load admin preview routes...")
+    from app.api.admin_preview_standalone import router as admin_preview_router
+    app.include_router(admin_preview_router)
+    logger.info("✅ Admin preview routes loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load admin preview routes: {e}")
+    import traceback
+    logger.error(traceback.format_exc())
 
 # Include admin dashboard (will need updating for multi-tenant)
 from app.admin.routes import router as admin_router
@@ -179,6 +192,10 @@ async def auth_exception_handler(request: Request, exc):
 from app.api.webhooks import livekit_router, supabase_router
 app.include_router(livekit_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
+
+# Include embed router for sidekick preview functionality
+from app.api.embed import router as embed_router
+app.include_router(embed_router)
 
 # Root endpoint - Now handled by marketing routes (app/marketing/routes.py)
 # The homepage at / is served by the marketing site

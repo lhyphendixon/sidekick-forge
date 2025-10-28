@@ -1,3 +1,14 @@
+# Rate limiting zones
+limit_req_zone $binary_remote_addr zone=api:10m rate=100r/s;
+limit_req_zone $binary_remote_addr zone=auth:10m rate=10r/s;
+
+# Origin whitelist
+map $http_origin $cors_origin {
+    default "";
+    "~^https?://(www\.)?(${DOMAIN_REGEX})$" $http_origin;
+    "~^https?://(www\.)?(localhost:[0-9]+)$" $http_origin;
+}
+
 # Upstream configuration for FastAPI
 upstream fastapi_backend {
     server 127.0.0.1:8000;
@@ -39,17 +50,34 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Content-Security-Policy "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';" always;
-
-    # CORS configuration - dynamically loaded from environment
-    set $cors_origin "";
-    if ($http_origin ~* (${CORS_ALLOWED_ORIGINS})) {
-        set $cors_origin $http_origin;
-    }
+    add_header Content-Security-Policy "default-src 'self' https:; script-src 'self' https: 'unsafe-inline' 'unsafe-eval'; style-src 'self' https: 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https: wss:; font-src 'self' https: data:; media-src 'self' https:;" always;
 
     # Logging
     access_log ${PROJECT_ROOT}/logs/nginx/access.log;
     error_log ${PROJECT_ROOT}/logs/nginx/error.log;
+
+    # Favicon shortcut
+    location = /favicon.ico {
+        alias ${PROJECT_ROOT}/app/static/favicon.ico;
+        access_log off;
+    }
+
+    location / {
+        proxy_pass http://fastapi_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        proxy_buffering off;
+        proxy_redirect off;
+    }
 
     # API endpoints
     location /api/ {
@@ -69,7 +97,7 @@ server {
         }
 
         # Rate limiting
-        limit_req zone=api_limit burst=20 nodelay;
+        limit_req zone=api burst=20 nodelay;
 
         # Proxy settings
         proxy_pass http://fastapi_backend;
@@ -80,7 +108,7 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $server_name;
+        proxy_set_header X-Forwarded-Host $host;
         
         # Increased timeouts for long-running operations
         proxy_connect_timeout 60s;
@@ -116,7 +144,7 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $server_name;
+        proxy_set_header X-Forwarded-Host $host;
         proxy_buffering off;
         proxy_redirect off;
         
