@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "autonomite-agent-platform"
-version = "2.1.6"
+version = "2.1.9"
 description = "FastAPI-based SaaS platform for hosting AI agents with WordPress integration"
 authors = ["Autonomite Team <dev@autonomite.ai>"]
 readme = "README.md"
