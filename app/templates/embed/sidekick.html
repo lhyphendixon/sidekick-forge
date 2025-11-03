@@ -48,6 +48,10 @@
   <link rel="stylesheet" href="/static/css/citations.css">
   <link rel="stylesheet" href="/static/css/video-background.css">
   <script src="/static/js/citations.js"></script>
+  <script>
+    // Injected by server to allow non-auth embeds in development mode
+    const DEV_MODE = {{ 'true' if development_mode else 'false' }};
+  </script>
 </head>
 <body class="video-background-body">
   <!-- Video Background -->
@@ -622,7 +626,7 @@
       chatMessages.appendChild(loadingDiv);
       // stream (FormData to match server Form(...))
       const fd = new FormData(); fd.append('client_id', CLIENT_ID); fd.append('agent_slug', AGENT_SLUG); fd.append('message', text);
-      const bearer = manualToken || (session && session.access_token) || '';
+      const bearer = manualToken || (session && session.access_token) || (DEV_MODE ? 'dev-token' : '');
       const res = await fetch('/api/embed/text/stream', { method: 'POST', body: fd, headers: { Authorization: `Bearer ${bearer}` } });
       if (!res.ok || !res.body) {
         const errDiv = document.createElement('div'); errDiv.className='flex justify-start';
@@ -893,7 +897,7 @@
         platform: 'livekit',
         user_id: (hasSupabaseUser ? session.user.id : (injectedUserId || 'preview-user'))
       };
-      const bearer = manualToken || (session && session.access_token) || '';
+      const bearer = manualToken || (session && session.access_token) || (DEV_MODE ? 'dev-token' : '');
       try { console.log('[voice] trigger payload prepared', { room, bearerPresent: !!bearer }); } catch {}
       const res = await fetch('/api/v1/trigger-agent', { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${bearer}` }, body: JSON.stringify(payload) });
       try { console.log('[voice] trigger request sent', payload); } catch {}

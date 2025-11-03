@@ -28,6 +28,8 @@ async def embed_sidekick(
     agent_slug: str,
     theme: Optional[str] = "dark",
 ):
+    import os
+    dev_mode = os.getenv("DEVELOPMENT_MODE", "false").lower() == "true"
     return templates.TemplateResponse(
         "embed/sidekick.html",
         {
@@ -37,6 +39,7 @@ async def embed_sidekick(
             "theme": theme,
             "supabase_url": settings.supabase_url,
             "supabase_anon_key": settings.supabase_anon_key,
+            "development_mode": dev_mode,
         },
     )
 
