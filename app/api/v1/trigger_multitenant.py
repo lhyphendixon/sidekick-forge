@@ -4,7 +4,7 @@ Multi-tenant Agent trigger endpoint for Sidekick Forge Platform
 This endpoint handles agent triggering with proper tenant isolation.
 """
 from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from enum import Enum
 from uuid import UUID
@@ -28,6 +28,8 @@ from livekit import api
 import os
 from app.config import settings
 from app.utils.tool_prompts import apply_tool_prompt_instructions
+from app.utils.embed_tokens import create_embed_token
+import jwt
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +89,7 @@ except Exception as shared_tools_error:
 
 
 @router.post("/trigger-agent", response_model=TriggerAgentResponse)
-async def trigger_agent(request: TriggerAgentRequest) -> TriggerAgentResponse:
+async def trigger_agent(request: TriggerAgentRequest, raw_request: Request) -> TriggerAgentResponse:
     """
     Trigger an AI agent for voice or text interaction
     
@@ -104,6 +106,35 @@ async def trigger_agent(request: TriggerAgentRequest) -> TriggerAgentResponse:
         if request.mode == TriggerMode.TEXT and not request.message:
             raise HTTPException(status_code=400, detail="message is required for text mode")
         
+        # If called from an embed, a short-lived embed token may be provided via header
+        try:
+            auth_ctx = getattr(raw_request.state, "auth", None)
+        except Exception:
+            auth_ctx = None
+
+        # Read optional embed token from header for scope enforcement
+        embed_token = raw_request.headers.get("x-embed-token") or raw_request.headers.get("X-Embed-Token")
+        if embed_token:
+            try:
+                payload = jwt.decode(embed_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+                perms = set(payload.get("permissions", []) or [])
+                allowed_client = payload.get("client_id")
+                allowed_agent = payload.get("agent_slug")
+                # Enforce exact match
+                if allowed_agent and request.agent_slug != allowed_agent:
+                    raise HTTPException(status_code=403, detail="Embed token not valid for this agent")
+                if allowed_client and request.client_id and request.client_id != allowed_client:
+                    raise HTTPException(status_code=403, detail="Embed token not valid for this client")
+            except jwt.ExpiredSignatureError:
+                raise HTTPException(status_code=401, detail="Embed token expired")
+            except Exception:
+                # Invalid token
+                raise HTTPException(status_code=401, detail="Invalid embed token")
+
+            # Require a real Supabase user session for embeds (do not allow embed token alone)
+            if not auth_ctx or getattr(auth_ctx, "type", None) != "supabase":
+                raise HTTPException(status_code=401, detail="Login required")
+
         # Auto-detect client_id if not provided
         client_id = None
         if request.client_id:
