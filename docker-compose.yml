@@ -77,7 +77,8 @@ services:
       - /var/www/certbot:/var/www/certbot:ro
       - ./app/static:/app/static:ro
     depends_on:
-      - fastapi
+      fastapi:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - platform-network

@@ -29,8 +29,17 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Sidekick Forge Platform")
     
-    # Initialize Redis (for caching only)
-    redis_client = await aioredis.from_url(settings.redis_url)
+    # Initialize Redis (for caching only) with short timeouts to avoid startup hangs
+    try:
+        redis_client = await aioredis.from_url(
+            settings.redis_url,
+            socket_connect_timeout=0.2,
+            socket_timeout=0.2,
+        )
+        logger.info("✅ Redis client initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis not available (non-critical): {e}")
+        redis_client = None
     
     # Initialize platform services
     from app.services.client_connection_manager import get_connection_manager
