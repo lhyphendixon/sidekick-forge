@@ -6,7 +6,7 @@ which stores client configurations differently than the full Client model.
 """
 from typing import Optional, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class APIKeys(BaseModel):
@@ -33,20 +33,31 @@ class APIKeys(BaseModel):
     jina_api_key: Optional[str] = None
 
 
+class PlatformSupabaseConfig(BaseModel):
+    """Minimal Supabase config for platform clients"""
+    url: Optional[str] = None
+    anon_key: Optional[str] = None
+    service_role_key: Optional[str] = None
+
+
 class PlatformClientSettings(BaseModel):
     """Simplified settings for platform clients"""
     api_keys: APIKeys = Field(default_factory=APIKeys)
     livekit_config: Optional[Dict[str, str]] = None
     additional_settings: Dict[str, Any] = Field(default_factory=dict)
+    supabase: Optional[PlatformSupabaseConfig] = None
 
 
 class PlatformClient(BaseModel):
     """Platform client model for multi-tenant support"""
+    model_config = {"extra": "allow"}  # Allow dynamic attributes for compatibility
+    
     id: str = Field(..., description="Unique client identifier (UUID)")
     name: str = Field(..., description="Client name")
     
     # Supabase credentials for the client's own database
     supabase_project_url: Optional[str] = Field(None, description="Client's Supabase project URL")
+    supabase_url: Optional[str] = Field(None, description="Alias for supabase_project_url (compatibility)")
     supabase_service_role_key: Optional[str] = Field(None, description="Client's Supabase service role key")
     supabase_project_ref: Optional[str] = Field(None, description="Supabase project reference for management API calls")
     supabase_anon_key: Optional[str] = Field(None, description="Client's Supabase anon key")
@@ -65,10 +76,26 @@ class PlatformClient(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    @field_serializer(
+        'created_at',
+        'updated_at',
+        'provisioning_started_at',
+        'provisioning_completed_at'
+    )
+    def serialize_datetimes(
+        self,
+        value: Optional[datetime],
+        info
+    ) -> Optional[str]:
+        # Be defensive: Pydantic may pass a SerializationInfo object as "value"
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if hasattr(value, "isoformat"):
+            try:
+                return value.isoformat()
+            except Exception:
+                pass
+        return value if value is None else str(value)
 
 
 class PlatformClientCreate(BaseModel):

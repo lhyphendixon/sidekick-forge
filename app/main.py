@@ -19,15 +19,12 @@ from app.middleware.logging import LoggingMiddleware
 from app.utils.exceptions import APIException
 from app.integrations.supabase_client import supabase_manager
 from app.integrations.livekit_client import livekit_manager
-# Container manager removed - using worker pool architecture
-# Redis is deprecated; keep import removable
-import redis.asyncio as aioredis  # noqa: F401
 
 # Configure logging
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger("autonomite_saas")
 
-# Redis client removed (deprecated)
+# Redis unused in this deployment
 redis_client = None
 
 @asynccontextmanager

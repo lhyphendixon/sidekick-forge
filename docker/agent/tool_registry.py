@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import asyncio
 import os
+import functools
+from types import SimpleNamespace
 
 try:
     from livekit.agents.llm import mcp as lk_mcp
@@ -36,12 +38,18 @@ class ToolRegistry:
         self,
         tools_config: Optional[Dict[str, Any]] = None,
         api_keys: Optional[Dict[str, Any]] = None,
+        primary_supabase_client: Optional[Any] = None,
+        platform_supabase_client: Optional[Any] = None,
+        tool_result_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._tools: Dict[str, Any] = {}
         self._tools_config = tools_config or {}
         self._api_keys = api_keys or {}
         self._runtime_context: Dict[str, Dict[str, Any]] = {}
+        self._primary_supabase = primary_supabase_client
+        self._platform_supabase = platform_supabase_client
+        self._tool_result_callback = tool_result_callback
 
     def build(self, tool_defs: List[Dict[str, Any]]) -> List[Any]:
         try:
@@ -86,6 +94,35 @@ class ToolRegistry:
         except Exception:
             pass
         return out
+
+    def _emit_tool_result(
+        self,
+        *,
+        slug: Optional[str],
+        tool_type: Optional[str],
+        success: bool,
+        output: Any = None,
+        raw_output: Any = None,
+        error: Optional[str] = None,
+    ) -> None:
+        if not self._tool_result_callback:
+            return
+        entry: Dict[str, Any] = {
+            "slug": slug,
+            "type": tool_type,
+            "success": bool(success),
+            "output": output,
+            "raw_call_output": raw_output,
+        }
+        if error:
+            entry["error"] = error
+        try:
+            self._tool_result_callback(entry)
+        except Exception as callback_err:
+            try:
+                self._logger.debug("Tool result callback failed: %s", callback_err)
+            except Exception:
+                pass
 
     def update_runtime_context(self, slug: str, updates: Dict[str, Any]) -> None:
         if not slug or not isinstance(updates, dict):
@@ -306,11 +343,21 @@ class ToolRegistry:
                         )
                     except Exception:
                         pass
+                    parsed: Any = None
                     try:
-                        data = json.loads(text)
-                        return json.dumps(data)
+                        parsed = json.loads(text)
+                        output_value = json.dumps(parsed)
                     except json.JSONDecodeError:
-                        return text
+                        output_value = text
+
+                    self._emit_tool_result(
+                        slug=slug,
+                        tool_type="n8n",
+                        success=True,
+                        output=output_value,
+                        raw_output=parsed if parsed is not None else text,
+                    )
+                    return output_value
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
 
@@ -711,16 +758,42 @@ class ToolRegistry:
             return None
 
         oauth_service = None
+        client_service = None
         if AsanaOAuthService is not None:
             try:  # pragma: no cover - best-effort in agent runtime
                 from app.core.dependencies import get_client_service
-
-                oauth_service = AsanaOAuthService(get_client_service())
+                client_service = get_client_service()
+                platform_client = self._platform_supabase or getattr(client_service, "supabase", None)
+                oauth_service = AsanaOAuthService(
+                    client_service,
+                    primary_supabase=self._primary_supabase,
+                    platform_supabase=platform_client,
+                )
             except Exception:
                 oauth_service = None
+                client_service = None
+
+        if oauth_service is None and AsanaOAuthService is not None:
+            platform_client = self._platform_supabase or getattr(client_service, "supabase", None) if client_service else self._platform_supabase
+            if platform_client is not None or self._primary_supabase is not None:
+                try:
+                    stub_service = SimpleNamespace(supabase=platform_client)
+                    oauth_service = AsanaOAuthService(
+                        stub_service,
+                        primary_supabase=self._primary_supabase,
+                        platform_supabase=platform_client,
+                    )
+                    self._logger.info(
+                        "Asana OAuth fallback initialized via Supabase clients: platform=%s primary=%s",
+                        bool(platform_client),
+                        bool(self._primary_supabase),
+                    )
+                except Exception as exc:  # pragma: no cover - logging path
+                    self._logger.warning("Failed to initialize Asana OAuth fallback: %s", exc)
+                    oauth_service = None
 
         try:
-            return build_asana_tool(t, merged_cfg, oauth_service=oauth_service)
+            original_tool = build_asana_tool(t, merged_cfg, oauth_service=oauth_service)
         except Exception as exc:
             if not AsanaAbilityConfigError or not isinstance(exc, AsanaAbilityConfigError):
                 raise
@@ -733,8 +806,8 @@ class ToolRegistry:
             except Exception:
                 pass
 
-            async def _misconfigured_tool(**_: Any) -> str:
-                return message
+            async def _misconfigured_tool(**_: Any) -> Dict[str, str]:
+                return {"error": message, "slug": slug}
 
             description = t.get("description") or "Asana integration is not configured yet."
             return lk_function_tool(
@@ -758,3 +831,65 @@ class ToolRegistry:
                     },
                 }
             )(_misconfigured_tool)
+
+        if original_tool is None:
+            return None
+
+        @functools.wraps(original_tool)
+        async def _invoke_with_context(**kwargs: Any) -> Any:
+            runtime_ctx = self._runtime_context.get(slug) or {}
+
+            incoming_metadata = kwargs.get("metadata")
+            merged_metadata: Dict[str, Any] = {}
+            if isinstance(runtime_ctx, dict):
+                merged_metadata.update(runtime_ctx)
+            if isinstance(incoming_metadata, dict):
+                merged_metadata.update(incoming_metadata)
+
+            if merged_metadata:
+                kwargs["metadata"] = merged_metadata
+
+            user_inquiry = kwargs.get("user_inquiry")
+            if not isinstance(user_inquiry, str) or not user_inquiry.strip():
+                for key in (
+                    "user_inquiry",
+                    "latest_user_text",
+                    "user_text",
+                    "text",
+                    "message",
+                    "transcript",
+                ):
+                    candidate = merged_metadata.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        kwargs["user_inquiry"] = candidate.strip()
+                        break
+
+            try:
+                result = await original_tool(**kwargs)
+            except Exception as exc:
+                self._emit_tool_result(
+                    slug=slug,
+                    tool_type="asana",
+                    success=False,
+                    error=str(exc),
+                )
+                raise
+
+            summary = None
+            if isinstance(result, dict):
+                summary = result.get("summary") or result.get("text")
+            output_value = summary or (result if isinstance(result, str) else str(result))
+
+            self._emit_tool_result(
+                slug=slug,
+                tool_type="asana",
+                success=True,
+                output=output_value,
+                raw_output=result,
+            )
+            return result
+
+        if hasattr(original_tool, "__livekit_tool_info"):
+            setattr(_invoke_with_context, "__livekit_tool_info", getattr(original_tool, "__livekit_tool_info"))
+
+        return _invoke_with_context

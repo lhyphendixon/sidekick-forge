@@ -87,6 +87,14 @@ async def create_agent(
     This endpoint creates a new agent configuration for the specified client.
     """
     try:
+        # Fast duplicate guard to return a friendly error before insert
+        existing = await agent_service.get_agent(client_id, agent.slug)
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Agent slug '{agent.slug}' already exists for this client"
+            )
+
         created_agent = await agent_service.create_agent(client_id, agent)
         if not created_agent:
             raise HTTPException(status_code=400, detail="Failed to create agent")
@@ -97,6 +105,13 @@ async def create_agent(
         logger.error(f"Client configuration error: {e}")
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        # Map duplicate key errors to a user-friendly message
+        message = str(e)
+        if "duplicate key value" in message or "already exists" in message:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Agent slug '{agent.slug}' already exists for this client"
+            )
         logger.error(f"Error creating agent: {e}")
         raise HTTPException(status_code=500, detail="Failed to create agent")
 

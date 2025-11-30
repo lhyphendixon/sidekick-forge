@@ -59,6 +59,113 @@
         </div>
     </div>
 
+    <!-- WordPress Plugin Access -->
+    <div class="bg-white shadow overflow-hidden sm:rounded-lg mb-6">
+        <div class="px-4 py-5 sm:px-6">
+            <h3 class="text-lg leading-6 font-medium text-gray-900">
+                WordPress Plugin Access
+            </h3>
+            <p class="mt-1 text-sm text-gray-500">
+                Use these credentials to connect the Sidekick Forge WordPress plugin to this client.
+            </p>
+        </div>
+        <div class="border-t border-gray-200">
+            <dl>
+                <div class="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                    <dt class="text-sm font-medium text-gray-500">API Endpoint</dt>
+                    <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2 font-mono break-all">
+                        {{ wordpress_api_endpoint }}
+                    </dd>
+                </div>
+                <div class="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                    <dt class="text-sm font-medium text-gray-500">Base Domain</dt>
+                    <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2 font-mono break-all">
+                        https://{{ wordpress_domain }}
+                    </dd>
+                </div>
+            </dl>
+        </div>
+        {% if wordpress_error %}
+        <div class="px-4 py-3 bg-red-50 text-sm text-red-700 border-t border-red-100">
+            {{ wordpress_error }}
+        </div>
+        {% endif %}
+        <div class="px-4 py-5 sm:px-6 space-y-6">
+            {% if wordpress_sites %}
+            <div class="overflow-x-auto border border-gray-200 rounded-lg">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Domain</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">API Key</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">API Secret</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        {% for site in wordpress_sites %}
+                        <tr>
+                            <td class="px-4 py-3 text-sm text-gray-900">
+                                {{ site.domain }}
+                                <div class="text-xs text-gray-500">{{ site.site_name }}</div>
+                            </td>
+                            <td class="px-4 py-3 text-sm text-gray-900 font-mono break-all">
+                                {{ site.api_key }}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-gray-900 font-mono break-all">
+                                {{ site.api_secret }}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-gray-500">
+                                {{ site.created_at or 'Unknown' }}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-gray-900">
+                                <form method="post" action="/admin/clients/{{ client.id }}/wordpress-sites/{{ site.id }}/regenerate">
+                                    <button type="submit" class="text-indigo-600 hover:text-indigo-900 text-sm font-medium">
+                                        Regenerate Keys
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-sm text-gray-500">
+                No WordPress connections have been created yet for this client.
+            </p>
+            {% endif %}
+
+            <div class="border-t border-gray-200 pt-5">
+                <h4 class="text-md font-medium text-gray-900 mb-3">Create New WordPress Credentials</h4>
+                <form method="post" action="/admin/clients/{{ client.id }}/wordpress-sites" class="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                        <label for="domain" class="block text-sm font-medium text-gray-700">Domain</label>
+                        <input type="text" name="domain" id="domain" required placeholder="example.com"
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    </div>
+                    <div>
+                        <label for="site_name" class="block text-sm font-medium text-gray-700">Site Name</label>
+                        <input type="text" name="site_name" id="site_name" required placeholder="Marketing Site"
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    </div>
+                    <div>
+                        <label for="admin_email" class="block text-sm font-medium text-gray-700">Admin Email</label>
+                        <input type="email" name="admin_email" id="admin_email" required placeholder="admin@example.com"
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    </div>
+                    <div class="md:col-span-3">
+                        <button type="submit"
+                                class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            Generate Credentials
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <!-- Agents -->
     <div class="bg-white shadow overflow-hidden sm:rounded-lg">
         <div class="px-4 py-5 sm:px-6">

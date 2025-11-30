@@ -233,25 +233,78 @@
                             <input type="text" id="voiceId" value="alloy"
                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                         </div>
+
+                        <div id="ttsModelContainer" class="hidden md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700">TTS Model</label>
+                            <select id="ttsModel"
+                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                                <option value="">Select a TTS model</option>
+                                <optgroup label="Cartesia">
+                                    <option value="sonic-english">sonic-english</option>
+                                    <option value="sonic-2">sonic-2</option>
+                                    <option value="sonic-3">sonic-3</option>
+                                </optgroup>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">Cartesia requires an explicit model.</p>
+                        </div>
+
+                        <div id="cartesiaEmotionsContainer" class="hidden md:col-span-2 border border-gray-200 rounded-md bg-gray-50 p-4">
+                            <label class="flex items-center text-sm font-medium text-gray-700">
+                                <input type="checkbox" id="cartesiaEmotionsEnabled"
+                                       class="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50">
+                                <span class="ml-2">Enable Cartesia Sonic-3 emotions</span>
+                            </label>
+                            <p class="text-xs text-gray-500 mt-1">
+                                Allows Sonic-3 to leverage Cartesia emotion SSML tags for richer delivery.
+                            </p>
+                            <div id="cartesiaEmotionFields" class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4 hidden">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Emotion Style</label>
+                                    <select id="cartesiaEmotionStyle"
+                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                        <option value="neutral">Neutral</option>
+                                        <option value="joy">Joy</option>
+                                        <option value="sad">Sad</option>
+                                        <option value="angry">Angry</option>
+                                        <option value="compassionate">Compassionate</option>
+                                        <option value="excited">Excited</option>
+                                        <option value="empathetic">Empathetic</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Intensity</label>
+                                    <select id="cartesiaEmotionIntensity"
+                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                        {% for level in [1,2,3,4,5] %}
+                                        <option value="{{ level }}">Level {{ level }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Volume Hint</label>
+                                    <select id="cartesiaEmotionVolume"
+                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                        {% for option in ['x-soft','soft','medium','loud','x-loud'] %}
+                                        <option value="{{ option }}">{{ option }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">Speed Hint</label>
+                                    <select id="cartesiaEmotionSpeed"
+                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                        {% for option in ['x-slow','slow','medium','fast','x-fast'] %}
+                                        <option value="{{ option }}">{{ option }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Temperature</label>
                             <input type="number" id="temperature" min="0" max="2" step="0.1" value="0.7"
                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
-                        </div>
-                        
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Voice Context Webhook</label>
-                            <input type="url" id="voiceWebhook"
-                                   class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
-                                   placeholder="https://example.com/webhook">
-                        </div>
-                        
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Text Context Webhook</label>
-                            <input type="url" id="textWebhook"
-                                   class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
-                                   placeholder="https://example.com/webhook">
                         </div>
                         
                         <div class="md:col-span-2">
@@ -337,7 +390,46 @@ document.addEventListener('DOMContentLoaded', () => {
     const agentCards = Array.from(document.querySelectorAll('.agent-card'));
     const visibleCount = agentCards.filter(card => card.style.display !== 'none').length || agentCards.length;
     adjustGridColumns(visibleCount);
+    initCartesiaCreationControls();
 });
+
+function initCartesiaCreationControls() {
+    const providerSelect = document.getElementById('voiceProvider');
+    const ttsModelSelect = document.getElementById('ttsModel');
+    const emotionsToggle = document.getElementById('cartesiaEmotionsEnabled');
+    if (providerSelect) {
+        providerSelect.addEventListener('change', updateAddAgentTTSUI);
+    }
+    if (ttsModelSelect) {
+        ttsModelSelect.addEventListener('change', updateAddAgentTTSUI);
+    }
+    if (emotionsToggle) {
+        emotionsToggle.addEventListener('change', updateCartesiaEmotionFields);
+    }
+    updateAddAgentTTSUI();
+}
+
+function updateAddAgentTTSUI() {
+    const provider = document.getElementById('voiceProvider')?.value;
+    const model = document.getElementById('ttsModel')?.value;
+    const ttsModelContainer = document.getElementById('ttsModelContainer');
+    const emotionsContainer = document.getElementById('cartesiaEmotionsContainer');
+    if (!ttsModelContainer || !emotionsContainer) return;
+    ttsModelContainer.classList.toggle('hidden', provider !== 'cartesia');
+    const shouldShowEmotions = provider === 'cartesia' && model === 'sonic-3';
+    emotionsContainer.classList.toggle('hidden', !shouldShowEmotions);
+    updateCartesiaEmotionFields();
+}
+
+function updateCartesiaEmotionFields() {
+    const model = document.getElementById('ttsModel')?.value;
+    const provider = document.getElementById('voiceProvider')?.value;
+    const toggle = document.getElementById('cartesiaEmotionsEnabled');
+    const fields = document.getElementById('cartesiaEmotionFields');
+    if (!fields) return;
+    const show = provider === 'cartesia' && model === 'sonic-3' && toggle?.checked;
+    fields.classList.toggle('hidden', !show);
+}
 
 async function addAgent() {
     const form = document.getElementById('addAgentForm');
@@ -355,18 +447,34 @@ async function addAgent() {
         system_prompt: document.getElementById('systemPrompt').value,
         voice_settings: {
             provider: document.getElementById('voiceProvider').value,
+            tts_provider: document.getElementById('voiceProvider').value,
             voice_id: document.getElementById('voiceId').value,
+            model: null,
             temperature: parseFloat(document.getElementById('temperature').value)
-        },
-        webhooks: {
-            voice_context_webhook_url: document.getElementById('voiceWebhook').value || null,
-            text_context_webhook_url: document.getElementById('textWebhook').value || null
         },
         enabled: document.getElementById('agentEnabled').checked
     };
+    agentData.voice_settings.provider_config = {};
+    
+    if (agentData.voice_settings.provider === 'cartesia') {
+        const selectedModel = document.getElementById('ttsModel')?.value || null;
+        agentData.voice_settings.model = selectedModel;
+        agentData.voice_settings.provider_config.cartesia_voice_id = agentData.voice_settings.voice_id;
+        agentData.voice_settings.cartesia_emotions_enabled = false;
+        if (selectedModel === 'sonic-3') {
+            const emotionsToggle = document.getElementById('cartesiaEmotionsEnabled');
+            if (emotionsToggle && emotionsToggle.checked) {
+                agentData.voice_settings.cartesia_emotions_enabled = true;
+                agentData.voice_settings.cartesia_emotion_style = document.getElementById('cartesiaEmotionStyle')?.value || 'neutral';
+                agentData.voice_settings.cartesia_emotion_intensity = parseInt(document.getElementById('cartesiaEmotionIntensity')?.value || '3', 10);
+                agentData.voice_settings.cartesia_emotion_volume = document.getElementById('cartesiaEmotionVolume')?.value || 'medium';
+                agentData.voice_settings.cartesia_emotion_speed = document.getElementById('cartesiaEmotionSpeed')?.value || 'medium';
+            }
+        }
+    }
     
     try {
-        const response = await fetch(`/api/v1/agents/client/${clientId}`, {
+        const response = await fetch(`/api/v1/agents?client_id=${clientId}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(agentData)
@@ -396,7 +504,7 @@ async function confirmDeleteAgent(clientId, agentSlug, agentName) {
     }
     
     try {
-        const response = await fetch(`/api/v1/agents/client/${clientId}/${agentSlug}`, {
+        const response = await fetch(`/api/v1/agents/${agentSlug}?client_id=${clientId}`, {
             method: 'DELETE'
         });
         

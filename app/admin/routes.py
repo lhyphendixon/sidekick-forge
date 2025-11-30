@@ -29,6 +29,11 @@ from app.integrations.supabase_client import supabase_manager
 from app.models.tools import ToolCreate, ToolUpdate, ToolAssignmentRequest
 from app.services.tools_service_supabase import ToolsService
 from app.services.asana_oauth_service import AsanaOAuthService, AsanaOAuthError
+from app.utils.supabase_credentials import SupabaseCredentialManager
+from app.constants import DOCUMENT_MAX_UPLOAD_BYTES, DOCUMENT_MAX_UPLOAD_MB
+from app.services.client_supabase_auth import generate_client_session_tokens
+from app.services.client_connection_manager import get_connection_manager
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +177,25 @@ def ensure_client_or_global_access(client_id: str, admin_user: Dict[str, Any]) -
             )
         return
     ensure_client_access(client_id, admin_user)
+
+
+async def _get_transcript_supabase_context(client_id: str) -> Dict[str, str]:
+    """Resolve Supabase credentials for realtime transcript streaming."""
+    try:
+        url, anon = await SupabaseCredentialManager.get_frontend_credentials(
+            client_id,
+            allow_platform_ids={"debug-client"},
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+    return {
+        "client_supabase_url": url,
+        "client_supabase_anon_key": anon,
+    }
 
 
 async def resolve_document_client(document_id: str, admin_user: Dict[str, Any]) -> Optional[str]:
@@ -1259,46 +1283,86 @@ async def clients_list(
 
 
 @router.get("/clients/{client_id}", response_class=HTMLResponse)
-async def client_edit(
+async def client_detail_page(
     client_id: str,
     request: Request,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Client edit page"""
+    """Client detail/configuration page with WordPress credentials"""
     try:
         ensure_client_access(client_id, admin_user)
 
-        # Get client service
-        from app.core.dependencies import get_client_service
+        from app.core.dependencies import get_client_service, get_agent_service
         client_service = get_client_service()
+        agent_service = get_agent_service()
 
         # Get client details
         client = await client_service.get_client(client_id, auto_sync=False)
         if not client:
-            # Redirect to clients list with error
             return RedirectResponse(
                 url="/admin/clients?error=Client+not+found",
                 status_code=303
             )
-        
-        # Get any additional data needed for the form
-        # For example, available API providers, etc.
-        
-        # Convert client to dict if it's a Pydantic model
+
+        # Normalize client to dict for template safety
         if hasattr(client, 'dict'):
             client_dict = client.dict()
         elif hasattr(client, 'model_dump'):
             client_dict = client.model_dump()
         else:
             client_dict = client
-        
-        return templates.TemplateResponse("admin/client_edit.html", {
+
+        # Get agents for this client
+        agents = []
+        try:
+            agents = await agent_service.get_client_agents(client_id)
+        except Exception as agent_err:
+            logger.warning(f"Unable to load agents for client {client_id}: {agent_err}")
+
+        # Masked API keys from connection manager
+        masked_keys: Dict[str, Any] = {}
+        try:
+            connection_manager = get_connection_manager()
+            api_keys = connection_manager.get_client_api_keys(uuid.UUID(client_id))
+            for key, value in api_keys.items():
+                if value and isinstance(value, str) and len(value) > 10:
+                    masked_keys[key] = f"{value[:4]}...{value[-4:]}"
+                else:
+                    masked_keys[key] = "Not configured" if not value else value
+        except Exception as e:
+            logger.warning(f"Unable to load API keys for client {client_id}: {e}")
+
+        # Load WordPress sites for this client
+        wordpress_sites: List[Dict[str, Any]] = []
+        wordpress_error: Optional[str] = None
+        try:
+            wp_service = get_wordpress_service()
+            sites = wp_service.list_sites(client_id=client_id)
+            for site in sites:
+                site_dict = site.dict() if hasattr(site, "dict") else dict(site)
+                for ts_field in ("created_at", "updated_at", "last_seen_at"):
+                    if site_dict.get(ts_field):
+                        site_dict[ts_field] = str(site_dict[ts_field])
+                wordpress_sites.append(site_dict)
+        except Exception as e:
+            logger.error(f"Failed to load WordPress sites for client {client_id}: {e}")
+            wordpress_error = str(e)
+
+        wordpress_api_endpoint = f"https://{settings.domain_name}/api/v1/wordpress-sites/auth/validate"
+
+        return templates.TemplateResponse("admin/client_detail.html", {
             "request": request,
+            "user": admin_user,
             "client": client_dict,
-            "user": admin_user
+            "agents": agents,
+            "api_keys": masked_keys,
+            "wordpress_sites": wordpress_sites,
+            "wordpress_error": wordpress_error,
+            "wordpress_api_endpoint": wordpress_api_endpoint,
+            "wordpress_domain": settings.domain_name,
         })
     except Exception as e:
-        logger.error(f"Error loading client edit page: {e}")
+        logger.error(f"Error loading client detail page: {e}")
         return RedirectResponse(
             url=f"/admin/clients?error={str(e)}",
             status_code=303
@@ -1554,7 +1618,9 @@ async def knowledge_base_page(
     response = templates.TemplateResponse("admin/knowledge_base.html", {
         "request": request,
         "user": admin_user,
-        "cache_bust": int(time.time())
+        "cache_bust": int(time.time()),
+        "max_upload_size_mb": DOCUMENT_MAX_UPLOAD_MB,
+        "supported_formats": "PDF, DOC, DOCX, TXT, MD, SRT",
     })
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
@@ -2110,9 +2176,7 @@ async def agent_detail(
             "tts_model": voice_settings_data.get("model", "sonic-english"),
             "openai_voice": voice_settings_data.get("openai_voice", "alloy"),
             "elevenlabs_voice_id": voice_settings_data.get("elevenlabs_voice_id", ""),
-            "cartesia_voice_id": voice_settings_data.get("voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d") if voice_settings_data.get("tts_provider") == "cartesia" else voice_settings_data.get("provider_config", {}).get("cartesia_voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d"),
-            "voice_context_webhook_url": "",
-            "text_context_webhook_url": ""
+            "cartesia_voice_id": voice_settings_data.get("voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d") if voice_settings_data.get("tts_provider") == "cartesia" else voice_settings_data.get("provider_config", {}).get("cartesia_voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d")
         }
         latest_config_json = None
         
@@ -2810,7 +2874,7 @@ async def agent_detail(
                         
                         try {{
                             // Use the existing API endpoint
-                            const response = await fetch('/api/v1/agents/client/{client_id}/{agent_slug_clean}', {{
+                            const response = await fetch('/api/v1/agents/{agent_slug_clean}?client_id={client_id}', {{
                                 method: 'PUT',
                                 headers: {{
                                     'Content-Type': 'application/json',
@@ -3163,23 +3227,46 @@ async def agent_preview_modal(
             except httpx.TimeoutException:
                 logger.warning("ensure-client-user request timed out; continuing without client JWT fallback")
             
-            client_jwt = None
-            client_user_id = None
+        client_jwt = None
+        client_user_id = None
+        client_supabase_tokens = None
+        admin_email = admin_user.get("email") if isinstance(admin_user, dict) else None
             
-            if ensure_response and ensure_response.status_code == 200:
-                ensure_data = ensure_response.json()
-                client_jwt = ensure_data.get("client_jwt")
-                client_user_id = ensure_data.get("client_user_id")
-                logger.info(f"Got client JWT for preview: client_user_id={client_user_id}")
-            elif ensure_response is not None:
-                logger.warning(f"Failed to get client JWT: {ensure_response.status_code}")
+        if ensure_response and ensure_response.status_code == 200:
+            ensure_data = ensure_response.json()
+            client_jwt = ensure_data.get("client_jwt")
+            client_user_id = ensure_data.get("client_user_id")
+            logger.info(f"Got client JWT for preview: client_user_id={client_user_id}")
+        elif ensure_response is not None:
+            logger.warning(f"Failed to get client JWT: {ensure_response.status_code}")
+
+        if client_id != "global" and admin_email:
+            try:
+                client_supabase_tokens = await generate_client_session_tokens(client_id, admin_email)
+                logger.info(
+                    "Generated client Supabase tokens for embed preview user %s (client %s)",
+                    admin_email,
+                    client_id,
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to bootstrap client Supabase session for embed preview: {exc}")
         
         # Respect the original request scheme/host (include port in dev) for the embed iframe
         iframe_src = f"{scheme}://{netloc}/embed/{client_id}/{agent_slug}?theme=dark&source=admin"
         
+        def _format_token_json(tokens: Optional[Dict[str, str]]):
+            if not tokens:
+                return "null", "null"
+            return json.dumps(tokens.get("access_token")), json.dumps(tokens.get("refresh_token"))
+
+        client_supabase_access_json, client_supabase_refresh_json = _format_token_json(client_supabase_tokens)
+
         # If we have a client JWT, pass it to the embed
         jwt_script = ""
         if client_jwt:
+            if not client_supabase_tokens:
+                client_supabase_tokens = {"access_token": client_jwt, "refresh_token": None}
+            client_supabase_access_json, client_supabase_refresh_json = _format_token_json(client_supabase_tokens)
             jwt_script = f"""
                     // Send client JWT for admin preview (shadow user in client Supabase)
                     iframe.contentWindow.postMessage({{ 
@@ -3188,7 +3275,9 @@ async def agent_preview_modal(
                         // No refresh token for admin preview sessions
                         refresh_token: null,
                         is_admin_preview: true,
-                        client_user_id: '{client_user_id}'
+                        client_user_id: '{client_user_id}',
+                        client_supabase_access_token: {client_supabase_access_json},
+                        client_supabase_refresh_token: {client_supabase_refresh_json}
                     }}, '*');
             """
         else:
@@ -3200,9 +3289,9 @@ async def agent_preview_modal(
                     var res = await sb.auth.getSession();
                     var session = (res && res.data && res.data.session) ? res.data.session : null;
                     if (session && session.access_token && session.refresh_token) {
-                      iframe.contentWindow.postMessage({ type: 'supabase-session', access_token: session.access_token, refresh_token: session.refresh_token }, '*');
+                      iframe.contentWindow.postMessage({ type: 'supabase-session', access_token: session.access_token, refresh_token: session.refresh_token, client_supabase_access_token: %s, client_supabase_refresh_token: %s }, '*');
                     }
-            """
+            """ % (client_supabase_access_json, client_supabase_refresh_json)
         
         # Add development banner if in dev mode
         dev_banner = ""
@@ -3811,6 +3900,15 @@ async def set_preview_mode(
                 # Log what we're sending to the template
                 logger.info(f"Voice preview from trigger - Room: {room_name}, Server: {server_url}, Token: {user_token[:50] if user_token else 'None'}...")
                 
+                transcript_context = await _get_transcript_supabase_context(client_id)
+                client_supabase_tokens = None
+                admin_email = admin_user.get("email") if isinstance(admin_user, dict) else None
+                if client_id != "global" and admin_email:
+                    try:
+                        client_supabase_tokens = await generate_client_session_tokens(client_id, admin_email)
+                    except Exception as exc:
+                        logger.warning(f"Failed to bootstrap client Supabase session: {exc}")
+
                 # Return voice interface with LiveKit client
                 return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
                     "request": request,
@@ -3819,7 +3917,12 @@ async def set_preview_mode(
                     "user_token": user_token,
                     "agent_slug": agent_slug,
                     "client_id": client_id,
-                    "session_id": session_id
+                    "session_id": session_id,
+                    **transcript_context,
+                    "client_supabase_access_token": (client_supabase_tokens or {}).get("access_token"),
+                    "client_supabase_refresh_token": (client_supabase_tokens or {}).get("refresh_token"),
+                    "client_supabase_token_type": (client_supabase_tokens or {}).get("token_type"),
+                    "client_supabase_expires_in": (client_supabase_tokens or {}).get("expires_in"),
                 })
             else:
                 error_msg = trigger_result.message if hasattr(trigger_result, 'message') else "Failed to start voice session"
@@ -3906,6 +4009,7 @@ async def voice_preview_debug(request: Request):
             room_name=room_name
         )
         
+        transcript_context = await _get_transcript_supabase_context("debug-client")
         return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
             "request": request,
             "room_name": room_name,
@@ -3913,7 +4017,8 @@ async def voice_preview_debug(request: Request):
             "user_token": user_token,
             "agent_slug": "debug-agent",
             "client_id": "debug-client",
-            "session_id": "debug-session"
+            "session_id": "debug-session",
+            **transcript_context,
         })
     except Exception as e:
         logger.error(f"Voice debug error: {e}")
@@ -4056,6 +4161,20 @@ async def start_voice_preview(
         
         logger.info(f"📝 Voice session started with conversation_id: {conversation_id}")
         
+        transcript_context = await _get_transcript_supabase_context(client_id)
+        client_supabase_tokens = None
+        admin_email = admin_user.get("email") if isinstance(admin_user, dict) else None
+        if client_id != "global" and admin_email:
+            try:
+                client_supabase_tokens = await generate_client_session_tokens(client_id, admin_email)
+                logger.info(
+                    "Generated client Supabase tokens for voice preview user %s (client %s)",
+                    admin_email,
+                    client_id,
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to bootstrap client Supabase session: {exc}")
+
         # Return voice interface with LiveKit client and transcript support
         return templates.TemplateResponse("admin/partials/voice_preview_live.html", {
             "request": request,
@@ -4067,7 +4186,12 @@ async def start_voice_preview(
             "agent_slug": agent_slug,
             "client_id": client_id,
             "session_id": session_id,
-            "conversation_id": conversation_id
+            "conversation_id": conversation_id,
+            **transcript_context,
+            "client_supabase_access_token": (client_supabase_tokens or {}).get("access_token"),
+            "client_supabase_refresh_token": (client_supabase_tokens or {}).get("refresh_token"),
+            "client_supabase_token_type": (client_supabase_tokens or {}).get("token_type"),
+            "client_supabase_expires_in": (client_supabase_tokens or {}).get("expires_in"),
         })
         
     except Exception as e:
@@ -4781,6 +4905,7 @@ async def create_wordpress_site(
     domain: str = Form(...),
     site_name: str = Form(...),
     admin_email: str = Form(...),
+    allowed_origins: Optional[str] = Form(None),
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Create a new WordPress site for a client"""
@@ -4791,28 +4916,33 @@ async def create_wordpress_site(
         wp_service = get_wordpress_service()
         
         # Create site data
+        metadata: Dict[str, Any] = {}
+        if allowed_origins:
+            parsed = [o.strip() for o in allowed_origins.split(',') if o.strip()]
+            metadata["allowed_origins"] = parsed
+
         site_data = WordPressSiteCreate(
             domain=domain,
             site_name=site_name,
             admin_email=admin_email,
-            client_id=client_id
+            client_id=client_id,
+            metadata=metadata
         )
         
         # Create the site
         site = wp_service.create_site(site_data)
         
-        return {
-            "success": True,
-            "message": f"WordPress site {domain} created successfully",
-            "site": site.dict()
-        }
+        return RedirectResponse(
+            url=f"/admin/clients/{client_id}?message=WordPress+credentials+created",
+            status_code=303
+        )
         
     except Exception as e:
         logger.error(f"Failed to create WordPress site: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return RedirectResponse(
+            url=f"/admin/clients/{client_id}?error=Failed+to+create+WordPress+site:+{str(e)}",
+            status_code=303
+        )
 
 
 @router.post("/wordpress-sites/{site_id}/regenerate-keys")
@@ -4827,28 +4957,19 @@ async def regenerate_wordpress_keys(
         # Get existing site
         site = wp_service.get_site(site_id)
         if not site:
-            return {
-                "success": False,
-                "error": "Site not found"
-            }
+            return {"success": False, "error": "Site not found"}
 
         ensure_client_access(str(site.client_id), admin_user)
 
-        # Generate new keys
-        new_api_key = WordPressSite.generate_api_key()
-        new_api_secret = WordPressSite.generate_api_secret()
-        
-        # Update site with new keys
-        # Note: This will need to be implemented in the service
-        # For now, return the new keys
-        
-        return {
-            "success": True,
-            "message": "API keys regenerated successfully",
-            "api_key": new_api_key,
-            "api_secret": new_api_secret
-        }
-        
+        updated_site = wp_service.regenerate_api_keys(site_id)
+        if not updated_site:
+            raise ValueError("Failed to regenerate keys")
+
+        return RedirectResponse(
+            url=f"/admin/clients/{site.client_id}?message=WordPress+shared+secret+regenerated",
+            status_code=303
+        )
+
     except Exception as e:
         logger.error(f"Failed to regenerate keys for site {site_id}: {e}")
         return {
@@ -4902,6 +5023,8 @@ async def delete_wordpress_site(
 async def get_knowledge_base_documents(
     client_id: str,
     status: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Get documents for Knowledge Base admin interface"""
@@ -4919,19 +5042,73 @@ async def get_knowledge_base_documents(
         from app.services.document_processor import document_processor
 
         # Get documents for the specified client
-        documents = await document_processor.get_documents(
+        offset = (page - 1) * page_size
+        documents, total_count, total_size, all_filenames = await document_processor.get_documents(
             user_id=None,  # Admin access doesn't need user_id
             client_id=client_id,
             status=status,
-            limit=100
+            limit=page_size,
+            offset=offset,
+            with_count=True,
         )
-        
-        # Return documents array directly to match frontend expectation
-        return documents
-        
+
+        return {
+            "documents": documents,
+            "total_count": total_count,
+            "total_size": total_size,
+            "page": page,
+            "page_size": page_size,
+            "all_file_names": all_filenames,
+        }
+
     except Exception as e:
         logger.error(f"Failed to get documents for client {client_id}: {e}")
-        return []
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to load documents", "details": str(e)},
+        )
+
+
+@router.get("/knowledge-base/document-stats")
+async def get_knowledge_base_document_stats(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Return aggregate document counts by status for the given client."""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.services.document_processor import document_processor
+        supabase, _ = await document_processor._get_client_context(client_id)
+        if not supabase:
+            raise HTTPException(status_code=500, detail="Supabase connection unavailable")
+
+        counts = {}
+        for status in ["processing", "ready", "error"]:
+            counts[status] = supabase.table('documents').select('id', count='exact').eq('status', status).execute().count or 0
+
+        # Track documents that are marked ready but still missing embeddings
+        pending_embeddings = supabase.table('documents')\
+            .select('id', count='exact')\
+            .eq('status', 'ready')\
+            .is_('embeddings', 'null')\
+            .execute()\
+            .count or 0
+
+        total = supabase.table('documents').select('id', count='exact').execute().count or 0
+        return {
+            "processing": counts.get("processing", 0),
+            "ready": counts.get("ready", 0),
+            "error": counts.get("error", 0),
+            "total": total,
+            "pending_embeddings": pending_embeddings,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get document stats for client {client_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load document stats: {e}")
 
 
 @router.get("/api/clients")
@@ -5009,8 +5186,8 @@ async def upload_knowledge_base_document(
 ):
     """Upload document to knowledge base using document processor"""
     try:
-        # Set max content length to 50MB
-        request._max_content_length = 50 * 1024 * 1024
+        # Set max content length to configured limit
+        request._max_content_length = DOCUMENT_MAX_UPLOAD_BYTES
         
         # Parse form data
         form = await request.form()
@@ -5130,17 +5307,55 @@ async def delete_knowledge_base_document(
 @router.post("/knowledge-base/documents/{document_id}/reprocess")
 async def reprocess_knowledge_base_document(
     document_id: str,
+    client_id: Optional[str] = Query(None),
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Reprocess a document"""
     try:
         scoped_ids = get_scoped_client_ids(admin_user)
-        if scoped_ids is not None:
-            await resolve_document_client(document_id, admin_user)
+        target_client_id = client_id
 
-        # For now, return success
-        # TODO: Implement actual reprocessing
+        # Resolve client if not provided
+        if not target_client_id:
+            target_client_id = await resolve_document_client(document_id, admin_user)
+
+        # Enforce scope
+        if scoped_ids is not None:
+            ensure_client_access(target_client_id, admin_user)
+        if not target_client_id:
+            raise HTTPException(status_code=400, detail="client_id is required to reprocess this document")
+
+        from app.services.document_processor import document_processor
+        import asyncio
+
+        supabase_client, _ = await document_processor._get_client_context(target_client_id)
+        if not supabase_client:
+            raise HTTPException(status_code=500, detail="Supabase connection unavailable for client")
+
+        # Try to fetch document to find file_path
+        doc = supabase_client.table('documents').select('metadata').eq('id', document_id).single().execute().data
+        metadata = doc.get('metadata', {}) if doc else {}
+        file_path = metadata.get('file_path')
+
+        # Mark as processing to give feedback immediately
+        supabase_client.table('documents').update({'status': 'processing', 'processing_status': 'processing'}).eq('id', document_id).execute()
+
+        if file_path and os.path.exists(file_path):
+            asyncio.create_task(
+                document_processor._process_document_async(
+                    document_id=document_id,
+                    file_path=file_path,
+                    agent_ids=[],
+                    client_id=target_client_id
+                )
+            )
+        else:
+            # Fall back to rebuilding from chunks
+            asyncio.create_task(document_processor.reprocess_from_chunks(document_id, client_id=target_client_id, supabase=supabase_client))
+
         return {"success": True, "message": "Document reprocessing started"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to reprocess document {document_id}: {e}")
         return {"success": False, "message": str(e)}

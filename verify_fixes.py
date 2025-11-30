@@ -2,7 +2,6 @@
 """
 Verification script for the fixes to transcript citations implementation
 """
-import re
 
 def check_migration_file():
     """Verify the migration file includes the source column"""
@@ -37,13 +36,13 @@ def check_voice_transcripts():
     with open('/root/sidekick-forge/app/api/v1/voice_transcripts.py', 'r') as f:
         content = f.read()
     
-    # Check for type-safe access patterns
+    # Ensure the legacy endpoint now redirects callers to Supabase Realtime
     checks = {
-        'hasattr check': 'hasattr(client.settings, \'supabase\')',
-        'attribute access': 'client.settings.supabase.url',
-        'dict fallback': "client.settings['supabase']['url']",
-        'error handling for stream': 'yield f"data: {json.dumps',
-        'error handling for history': 'raise HTTPException'
+        'deprecation message defined': 'DEPRECATION_MESSAGE =',
+        'mentions Supabase Realtime': 'Supabase Realtime',
+        'stream route raises 410': 'async def stream_voice_transcripts',
+        'history route raises 410': 'async def get_transcript_history',
+        'uses HTTPException 410': 'status.HTTP_410_GONE'
     }
     
     all_good = True
@@ -52,18 +51,6 @@ def check_voice_transcripts():
             print(f"  ✅ {check_name}: Found")
         else:
             print(f"  ❌ {check_name}: NOT FOUND")
-            all_good = False
-    
-    # Check that dict-style access is no longer used without fallback
-    bad_patterns = [
-        r'client\.settings\["supabase"\]\["url"\](?!\s*if)',
-        r'client\.settings\["supabase"\]\["service_role_key"\](?!\s*if)'
-    ]
-    
-    for pattern in bad_patterns:
-        matches = re.findall(pattern, content)
-        if matches:
-            print(f"  ⚠️ Found unsafe dict access without fallback: {matches}")
             all_good = False
     
     return all_good

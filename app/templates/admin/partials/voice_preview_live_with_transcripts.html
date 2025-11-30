@@ -29,7 +29,7 @@
             
             <!-- Transcript Messages -->
             <div id="transcriptContainer" class="flex-1 overflow-y-auto p-4 space-y-3">
-                <div class="text-center text-dark-text-secondary text-sm py-8">
+                <div class="text-center text-dark-text-secondary text-sm py-8" data-transcript-placeholder="true">
                     <svg class="w-8 h-8 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
                     </svg>
@@ -111,140 +111,418 @@
 
 <script>
 // Transcript Management
-let transcriptEventSource = null;
+const transcriptSupabaseConfig = {
+    url: {{ (client_supabase_url or '')|tojson }},
+    anonKey: {{ (client_supabase_anon_key or '')|tojson }}
+};
+let transcriptSupabaseClient = null;
+let transcriptChannel = null;
+let transcriptConversationId = null;
+const transcriptSeenIds = new Set();
 let autoScroll = true;
+const transcriptBootstrapSession = {
+    access_token: {{ (client_supabase_access_token or '')|tojson }},
+    refresh_token: {{ (client_supabase_refresh_token or '')|tojson }}
+};
 const transcriptContainer = document.getElementById('transcriptContainer');
 const autoScrollCheckbox = document.getElementById('autoScroll');
+let pendingTranscriptStart = null;
+const transcriptPlaceholderMarkup = `
+    <div class="text-center text-dark-text-secondary text-sm py-8" data-transcript-placeholder="true">
+        <svg class="w-8 h-8 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+        </svg>
+        <p>Waiting for conversation to start...</p>
+    </div>
+`;
+
+function ensureTranscriptPlaceholder() {
+    if (!transcriptContainer) {
+        return;
+    }
+    const hasEntries = transcriptContainer.querySelector('[data-transcript-entry]');
+    if (hasEntries) {
+        return;
+    }
+    if (!transcriptContainer.querySelector('[data-transcript-placeholder]')) {
+        transcriptContainer.insertAdjacentHTML('beforeend', transcriptPlaceholderMarkup);
+    }
+}
+
+function showTranscriptError(message) {
+    if (!transcriptContainer) {
+        return;
+    }
+    const hasExistingTranscripts = transcriptContainer.querySelector('[data-transcript-entry]');
+    if (hasExistingTranscripts) {
+        let banner = document.getElementById('transcript-error-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'transcript-error-banner';
+            banner.className = 'mb-3 p-3 text-sm text-orange-400 border border-orange-500/40 rounded-md bg-orange-500/5';
+            banner.innerHTML = `
+                <p class="font-semibold mb-1">⚠️ Live updates paused</p>
+                <p class="text-xs" data-transcript-error-text>${message}</p>
+                <button onclick="location.reload()" class="mt-2 text-xs px-3 py-1 bg-orange-500/20 hover:bg-orange-500/30 rounded border border-orange-500/40">
+                    Refresh to reconnect
+                </button>
+            `;
+            transcriptContainer.insertBefore(banner, transcriptContainer.firstChild);
+        } else {
+            const textSpan = banner.querySelector('[data-transcript-error-text]');
+            if (textSpan) {
+                textSpan.textContent = message;
+            }
+        }
+        return;
+    }
+
+    transcriptContainer.innerHTML = `
+        <div class="text-center text-red-400 text-sm py-6 border border-red-500/40 rounded-md bg-red-500/5" data-transcript-error>
+            <p class="font-semibold mb-2">Transcripts unavailable</p>
+            <p>${message}</p>
+            <button onclick="location.reload()" class="mt-4 text-xs px-3 py-1 bg-red-500/10 hover:bg-red-500/20 rounded border border-red-500/40">
+                Refresh to reconnect
+            </button>
+        </div>
+    `;
+}
+
+function clearTranscriptError() {
+    if (!transcriptContainer) {
+        return;
+    }
+    const banner = document.getElementById('transcript-error-banner');
+    if (banner) {
+        banner.remove();
+    }
+    const inlineError = transcriptContainer.querySelector('[data-transcript-error]');
+    if (inlineError) {
+        inlineError.remove();
+    }
+    if (
+        !transcriptContainer.querySelector('[data-transcript-entry]') &&
+        !transcriptContainer.querySelector('[data-transcript-placeholder]')
+    ) {
+        ensureTranscriptPlaceholder();
+    }
+}
 
 // Configure auto-scroll
 autoScrollCheckbox.addEventListener('change', (e) => {
     autoScroll = e.target.checked;
 });
 
+function resumePendingTranscriptStart(delayMs = 0) {
+    if (!pendingTranscriptStart) {
+        return;
+    }
+    const { conversationId } = pendingTranscriptStart;
+    pendingTranscriptStart = null;
+    const restart = () => startTranscriptStream(conversationId);
+    if (delayMs) {
+        setTimeout(restart, delayMs);
+    } else {
+        restart();
+    }
+}
+
+function getTranscriptSupabaseClient() {
+    if (transcriptSupabaseClient) {
+        return transcriptSupabaseClient;
+    }
+    if (!window.supabase) {
+        console.warn('Supabase client unavailable for transcripts');
+        showTranscriptError('Supabase client library not loaded.');
+        return null;
+    }
+    if (!transcriptSupabaseConfig.url || !transcriptSupabaseConfig.anonKey) {
+        console.warn('Client Supabase credentials missing for transcripts');
+        showTranscriptError('Missing client Supabase credentials. Please update the client record.');
+        return null;
+    }
+    transcriptSupabaseClient = window.supabase.createClient(
+        transcriptSupabaseConfig.url,
+        transcriptSupabaseConfig.anonKey
+    );
+    if (transcriptBootstrapSession.access_token) {
+        transcriptSupabaseClient.auth.setSession({
+            access_token: transcriptBootstrapSession.access_token,
+            refresh_token: transcriptBootstrapSession.refresh_token || null
+        }).then(() => {
+            resumePendingTranscriptStart(250);
+        }).catch((error) => {
+            console.warn('Failed to bootstrap transcript Supabase session', error);
+            showTranscriptError('Unable to authenticate with client Supabase. Please refresh and try again.');
+        });
+    }
+    return transcriptSupabaseClient;
+}
+
+async function ensureTranscriptAuth() {
+    const client = getTranscriptSupabaseClient();
+    if (!client) {
+        return false;
+    }
+    try {
+        const { data } = await client.auth.getSession();
+        if (data && data.session) {
+            return true;
+        }
+        if (transcriptBootstrapSession.access_token) {
+            const { data: setData, error } = await client.auth.setSession({
+                access_token: transcriptBootstrapSession.access_token,
+                refresh_token: transcriptBootstrapSession.refresh_token || null
+            });
+            if (!error && setData?.session) {
+                return true;
+            }
+        }
+    } catch (err) {
+        console.warn('Transcript auth check failed', err);
+    }
+    console.warn('Transcript Supabase session unavailable');
+    showTranscriptError('You must be authenticated with the client\'s Supabase project to view transcripts. Please refresh and ensure you are signed in.');
+    return false;
+}
+
+// Function to update an existing transcript message (for TTS-aligned streaming)
+function updateTranscript(data) {
+    if (!data || !data.id) {
+        return;
+    }
+    const text = data.content || data.transcript;
+    if (!text) {
+        return;
+    }
+    
+    // Find existing transcript entry by ID
+    const existing = transcriptContainer.querySelector(`[data-transcript-id="${data.id}"]`);
+    if (existing) {
+        // Update the text content of the existing bubble
+        const textEl = existing.querySelector('[data-transcript-text]');
+        if (textEl) {
+            textEl.textContent = text;
+            // Auto-scroll if enabled
+            if (autoScroll) {
+                transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+            }
+        }
+    } else {
+        // If not found, add as new (fallback)
+        addTranscript(data);
+    }
+}
+
 // Function to add a transcript message
 function addTranscript(data) {
-    const container = document.getElementById('transcriptContainer');
-    
-    // Clear placeholder if it exists
-    const placeholder = container.querySelector('.text-center');
+    if (!data) {
+        return;
+    }
+    const text = data.content || data.transcript;
+    if (!text) {
+        return;
+    }
+    if (data.id && transcriptSeenIds.has(data.id)) {
+        return;
+    }
+    const container = transcriptContainer;
+    if (!container) {
+        console.warn('Transcript container missing');
+        return;
+    }
+    clearTranscriptError();
+    const placeholder = container.querySelector('[data-transcript-placeholder]');
     if (placeholder) {
         placeholder.remove();
     }
-    
-    // Create message element
+
     const messageDiv = document.createElement('div');
+    messageDiv.dataset.transcriptEntry = 'true';
+    messageDiv.dataset.transcriptId = data.id; // Add ID for updating
     messageDiv.className = `flex gap-3 ${data.role === 'user' ? 'justify-start' : 'justify-end'}`;
-    
-    // Message content
+
     const contentDiv = document.createElement('div');
     contentDiv.className = `max-w-[80%] ${data.role === 'user' ? 'order-2' : 'order-1'}`;
-    
-    // Role indicator
+
     const roleDiv = document.createElement('div');
     roleDiv.className = `text-xs font-medium mb-1 ${data.role === 'user' ? 'text-dark-text-secondary' : 'text-brand-teal'}`;
     roleDiv.textContent = data.role === 'user' ? 'You' : '{{ agent.name }}';
-    
-    // Message bubble
+
     const bubbleDiv = document.createElement('div');
+    bubbleDiv.dataset.transcriptText = 'true'; // Add attribute for finding text element
     bubbleDiv.className = `px-4 py-2 rounded-lg ${
-        data.role === 'user' 
-            ? 'bg-dark-elevated text-dark-text' 
+        data.role === 'user'
+            ? 'bg-dark-elevated text-dark-text'
             : 'bg-brand-teal/20 text-dark-text border border-brand-teal/30'
     }`;
-    bubbleDiv.textContent = data.content || data.transcript;
-    
-    // Add citations if available (for assistant messages)
-    if (data.role === 'assistant' && data.citations && data.citations.length > 0) {
+    bubbleDiv.textContent = text;
+
+    if (data.role === 'assistant' && Array.isArray(data.citations) && data.citations.length > 0) {
         const citationsDiv = document.createElement('div');
         citationsDiv.className = 'mt-2 pt-2 border-t border-brand-teal/20';
         citationsDiv.innerHTML = `
             <div class="text-xs text-dark-text-secondary">
                 <span class="font-medium">Sources:</span>
                 ${data.citations.map((c, i) => `
-                    <a href="${c.source_url || '#'}" 
-                       class="text-brand-teal hover:underline ml-1" 
+                    <a href="${c.source_url || '#'}"
+                       class="text-brand-teal hover:underline ml-1"
                        target="_blank">[${i + 1}]</a>
                 `).join('')}
             </div>
         `;
         bubbleDiv.appendChild(citationsDiv);
     }
-    
-    // Timestamp
+
     const timeDiv = document.createElement('div');
     timeDiv.className = 'text-xs text-dark-text-secondary mt-1';
     const time = new Date(data.created_at || Date.now());
     timeDiv.textContent = time.toLocaleTimeString();
-    
-    // Assemble message
+
     contentDiv.appendChild(roleDiv);
     contentDiv.appendChild(bubbleDiv);
     contentDiv.appendChild(timeDiv);
-    
-    // Avatar
+
     const avatarDiv = document.createElement('div');
     avatarDiv.className = `w-8 h-8 rounded-full flex items-center justify-center ${
         data.role === 'user' ? 'order-1 bg-dark-elevated' : 'order-2 bg-brand-teal/20'
     }`;
-    avatarDiv.innerHTML = data.role === 'user' 
+    avatarDiv.innerHTML = data.role === 'user'
         ? '<svg class="w-4 h-4 text-dark-text-secondary" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"></path></svg>'
         : '<svg class="w-4 h-4 text-brand-teal" fill="currentColor" viewBox="0 0 20 20"><path d="M2 10a8 8 0 018-8v8h8a8 8 0 11-16 0z"></path></svg>';
-    
+
     messageDiv.appendChild(avatarDiv);
     messageDiv.appendChild(contentDiv);
-    
     container.appendChild(messageDiv);
-    
-    // Auto-scroll if enabled
+
+    if (data.id) {
+        transcriptSeenIds.add(data.id);
+    }
     if (autoScroll) {
         container.scrollTop = container.scrollHeight;
     }
 }
 
-// Function to start transcript streaming
-function startTranscriptStream() {
-    const conversationId = '{{ conversation_id or "" }}';
-    const clientId = '{{ client_id }}';
-    const agentId = '{{ agent_id or agent.id }}';
-    
+// Function to start transcript streaming via Supabase Realtime
+async function startTranscriptStream(conversationIdOverride) {
+    const fallbackId = '{{ conversation_id or "" }}';
+    const conversationId = conversationIdOverride || fallbackId;
     if (!conversationId) {
         console.warn('No conversation ID available for transcript streaming');
+        showTranscriptError('Conversation ID is missing; transcripts cannot be loaded.');
         return;
     }
-    
-    const url = `/api/v1/voice-transcripts/stream?conversation_id=${conversationId}&client_id=${clientId}&agent_id=${agentId}&include_citations=true`;
-    
-    transcriptEventSource = new EventSource(url);
-    
-    transcriptEventSource.onmessage = (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            if (!data.error) {
-                addTranscript(data);
+
+    const supabaseClient = getTranscriptSupabaseClient();
+    if (!supabaseClient) {
+        console.warn('Supabase client not ready for transcript streaming');
+        return;
+    }
+
+    const authorized = await ensureTranscriptAuth();
+    if (!authorized) {
+        pendingTranscriptStart = { conversationId };
+        return;
+    }
+
+    pendingTranscriptStart = null;
+
+    if (transcriptConversationId !== conversationId) {
+        transcriptSeenIds.clear();
+    }
+    transcriptConversationId = conversationId;
+
+    stopTranscriptStream();
+
+    transcriptChannel = supabaseClient
+        .channel(`transcripts:${conversationId}`)
+        .on(
+            'postgres_changes',
+            {
+                event: 'INSERT',
+                schema: 'public',
+                table: 'conversation_transcripts',
+                filter: `conversation_id=eq.${conversationId}`
+            },
+            (payload) => {
+                if (payload && payload.new) {
+                    addTranscript(payload.new);
+                }
             }
-        } catch (e) {
-            console.error('Error parsing transcript:', e);
+        )
+        .on(
+            'postgres_changes',
+            {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'conversation_transcripts',
+                filter: `conversation_id=eq.${conversationId}`
+            },
+            (payload) => {
+                if (payload && payload.new) {
+                    updateTranscript(payload.new);
+                }
+            }
+        )
+        .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                console.log('Subscribed to transcript updates (INSERT + UPDATE)');
+            } else if (status === 'CHANNEL_ERROR') {
+                console.error('Transcript channel error, scheduling reconnect');
+                setTimeout(() => startTranscriptStream(conversationId), 2000);
+            }
+        });
+
+    await loadTranscriptHistory(conversationId);
+    clearTranscriptError();
+}
+
+async function loadTranscriptHistory(conversationIdOverride) {
+    const conversationId = conversationIdOverride || '{{ conversation_id or "" }}';
+    const supabaseClient = getTranscriptSupabaseClient();
+
+    if (!conversationId || !supabaseClient) {
+        console.warn('Missing transcript prerequisites for history fetch');
+        showTranscriptError('Missing transcript prerequisites; refresh and try again.');
+        return;
+    }
+
+    const authorized = await ensureTranscriptAuth();
+    if (!authorized) {
+        return;
+    }
+
+    try {
+        const { data, error } = await supabaseClient
+            .from('conversation_transcripts')
+            .select('*')
+            .eq('conversation_id', conversationId)
+            .order('created_at', { ascending: true })
+            .limit(200);
+
+        if (error) {
+            console.error('Error loading transcript history', error);
+            showTranscriptError('Unable to load transcript history. Please refresh to try again.');
+            return;
         }
-    };
-    
-    transcriptEventSource.onerror = (error) => {
-        console.error('Transcript stream error:', error);
-        if (transcriptEventSource.readyState === EventSource.CLOSED) {
-            console.log('Transcript stream closed, attempting to reconnect...');
-            setTimeout(startTranscriptStream, 5000);
-        }
-    };
-    
-    console.log('Started transcript streaming');
+
+        clearTranscriptError();
+        (data || []).forEach(addTranscript);
+    } catch (e) {
+        console.warn('History fetch error', e);
+        showTranscriptError('Unable to load transcript history. Please refresh to try again.');
+    }
 }
 
 // Function to stop transcript streaming
 function stopTranscriptStream() {
-    if (transcriptEventSource) {
-        transcriptEventSource.close();
-        transcriptEventSource = null;
+    if (transcriptChannel && transcriptSupabaseClient) {
+        transcriptSupabaseClient.removeChannel(transcriptChannel);
+    }
+    if (transcriptChannel) {
         console.log('Stopped transcript streaming');
     }
+    transcriptChannel = null;
 }
 
 // Original LiveKit voice chat code (keeping existing functionality)
@@ -278,4 +556,18 @@ function stopTranscriptStream() {
 if ('{{ conversation_id }}') {
     startTranscriptStream();
 }
+
+window.addEventListener('beforeunload', () => {
+    stopTranscriptStream();
+});
+
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden && transcriptChannel) {
+        console.log('Tab hidden, pausing transcript stream');
+        stopTranscriptStream();
+    } else if (!document.hidden && '{{ conversation_id }}' && !transcriptChannel) {
+        console.log('Tab visible, resuming transcript stream');
+        startTranscriptStream();
+    }
+});
 </script>

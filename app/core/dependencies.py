@@ -12,6 +12,20 @@ from app.middleware.auth import get_current_auth
 from app.models.user import AuthContext
 from app.permissions.rbac import has_permission
 
+def get_db():
+    """Relational DB access is not configured in this deployment."""
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Database access not configured; override get_db in tests.",
+    )
+
+def get_redis_client():
+    """Redis is not part of the Supabase-only stack."""
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Redis access not configured; override get_redis_client in tests.",
+    )
+
 def get_client_service() -> ClientService:
     """Get client service for Sidekick Forge platform database"""
     # Use Sidekick Forge platform database credentials from environment

@@ -50,6 +50,8 @@ def format_status(ok: bool) -> str:
 def run_patches(project_ref: str, name: str, token: str, run_indexes: bool) -> None:
     results = apply_schema(project_ref, token, include_indexes=run_indexes)
     messages = {
+        "base_schema": "base tenant tables ensured",
+        "vector_dimensions": "vector dimensions normalized",
         "conversation_patch": "conversation_transcripts columns aligned",
         "ivfflat_indexes": "IVFFLAT indexes ensured (lists=16)",
     }

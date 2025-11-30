@@ -149,6 +149,16 @@
     const SUPABASE_URL = "{{ supabase_url }}";
     const SUPABASE_ANON = "{{ supabase_anon_key }}";
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+    const CLIENT_SUPABASE_URL = "{{ client_supabase_url }}";
+    const CLIENT_SUPABASE_ANON = "{{ client_supabase_anon_key }}";
+    const CLIENT_SUPABASE_BOOTSTRAP = {
+      access_token: "{{ client_supabase_access_token | default('') }}",
+      refresh_token: "{{ client_supabase_refresh_token | default('') }}"
+    };
+    const LIVEKIT_TRANSCRIPT_FALLBACK = Boolean(window.__enableLivekitTranscriptFallback) || (!CLIENT_SUPABASE_URL || !CLIENT_SUPABASE_ANON);
+    let transcriptSupabase = null;
+    let transcriptRealtimeChannel = null;
+    let transcriptConversationId = null;
     let session = null;
     let manualToken = null; // token provided by parent preview via postMessage
     window.__lk_audio_elements = window.__lk_audio_elements || {};
@@ -377,6 +387,7 @@
     }
 
     function ingestLivekitTranscript(payload, fallbackRole){
+      if (!LIVEKIT_TRANSCRIPT_FALLBACK) { return; }
       try {
         if (!payload) { return; }
         const role = payload.role || fallbackRole || 'assistant';
@@ -539,10 +550,55 @@
     }
     const urlParams = new URLSearchParams(location.search);
     const SOURCE = urlParams.get('source') || '';
-    let transcriptEventSource = null;
     
     // Initialize citations component
     const citationsComponent = new CitationsComponent();
+    function showVoiceTranscriptError(message){
+      const container = document.getElementById('voiceTranscriptList');
+      if (!container) { return; }
+      
+      // Check if transcripts already exist
+      const hasExistingTranscripts = container.children.length > 0 && 
+        !container.querySelector('.text-center.text-red-400');
+      
+      if (hasExistingTranscripts) {
+        // Don't clear existing transcripts, just add a banner at the top
+        const existingBanner = document.getElementById('voice-transcript-error-banner');
+        if (existingBanner) {
+          return; // Banner already exists
+        }
+        
+        const banner = document.createElement('div');
+        banner.id = 'voice-transcript-error-banner';
+        banner.className = 'mb-2 p-2 text-xs text-orange-400 border border-orange-500/30 rounded-md bg-orange-500/5';
+        banner.innerHTML = `
+          <p class="font-semibold mb-1">⚠️ Live updates paused</p>
+          <p class="text-xs">${message}</p>
+        `;
+        container.insertBefore(banner, container.firstChild);
+      } else {
+        // No transcripts yet, show full error message
+        container.innerHTML = `
+          <div class="text-center text-red-400 text-sm py-4 border border-red-500/30 rounded-md bg-red-500/5">
+            <p class="font-semibold mb-1">Live transcripts unavailable</p>
+            <p>${message}</p>
+          </div>
+        `;
+      }
+    }
+function clearVoiceTranscriptError(){
+  const container = document.getElementById('voiceTranscriptList');
+  if (!container) { return; }
+  const banner = document.getElementById('voice-transcript-error-banner');
+  if (banner) {
+    banner.remove();
+  }
+  const standalone = container.querySelector('.text-center.text-red-400');
+  if (standalone && standalone.parentElement === container) {
+    container.removeChild(standalone);
+    container.innerHTML = '';
+  }
+}
     let storedVoiceSession = null;
     let connectionMonitor = null;
     let monitorFailures = 0;
@@ -550,21 +606,139 @@
     let reconnectAttempts = 0;
     let manualVoiceEnd = false;
     let activeConversationId = null;
+    let pendingTranscriptStart = null;
+    function getTranscriptSupabase(){
+      if (transcriptSupabase) { return transcriptSupabase; }
+      if (!window.supabase) {
+        try { console.warn('[voice] Supabase client library missing'); } catch {}
+        showVoiceTranscriptError('Supabase client library not available.');
+        return null;
+      }
+      if (!CLIENT_SUPABASE_URL || !CLIENT_SUPABASE_ANON) {
+        try { console.warn('[voice] transcript Supabase config missing'); } catch {}
+        showVoiceTranscriptError('Client Supabase credentials are missing. Please contact support.');
+        return null;
+      }
+      transcriptSupabase = supabase.createClient(CLIENT_SUPABASE_URL, CLIENT_SUPABASE_ANON);
+      if (CLIENT_SUPABASE_BOOTSTRAP.access_token) {
+        transcriptSupabase.auth.setSession({
+          access_token: CLIENT_SUPABASE_BOOTSTRAP.access_token,
+          refresh_token: CLIENT_SUPABASE_BOOTSTRAP.refresh_token || null
+        }).catch((err) => {
+          console.warn('[voice] failed to bootstrap client Supabase session', err);
+          showVoiceTranscriptError('Unable to authenticate with client Supabase. Please refresh and try again.');
+        });
+      }
+      return transcriptSupabase;
+    }
+    async function ensureTranscriptSupabaseAuth(){
+      const clientSb = getTranscriptSupabase();
+      if (!clientSb) { return false; }
+      try {
+        // Check if we have an authenticated session
+        const { data } = await clientSb.auth.getSession();
+        if (data && data.session) { return true; }
+        
+        // Try to set session if bootstrap tokens are available
+        if (CLIENT_SUPABASE_BOOTSTRAP.access_token) {
+          const { data: setData, error } = await clientSb.auth.setSession({
+            access_token: CLIENT_SUPABASE_BOOTSTRAP.access_token,
+            refresh_token: CLIENT_SUPABASE_BOOTSTRAP.refresh_token || null
+          });
+          if (!error && setData?.session) { return true; }
+        }
+        
+        // For public embeds: anon key authentication is sufficient
+        // RLS policies allow anon users to read transcripts
+        // Just return true to proceed with anon authentication
+        try { console.info('[voice] using anon authentication for transcripts'); } catch {}
+        return true;
+      } catch (err) {
+        try { console.warn('[voice] transcript auth check failed', err); } catch {}
+        // Still return true for anon auth
+        return true;
+      }
+    }
 
     async function ensureSession() {
       if (manualToken) { return true; }
       const { data } = await sb.auth.getSession();
       session = data?.session || null;
+      if (session && !CLIENT_SUPABASE_BOOTSTRAP.access_token) {
+        await ensureTranscriptSupabaseAuth();
+      }
       return !!session;
     }
     function setAuthVisible(v) { document.getElementById('auth').classList.toggle('hidden', !v); }
     function setChatVisible(v) { document.getElementById('chat').classList.toggle('hidden', !v); }
+
+    async function syncClientUserCredentials(email, password){
+      try {
+        const token = manualToken || (session && session.access_token);
+        if (!token) {
+          console.warn('[voice] unable to sync client user without platform token');
+          return false;
+        }
+        const resp = await fetch('/api/embed/client-users/sync', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            client_id: CLIENT_ID,
+            email,
+            password
+          })
+        });
+        if (!resp.ok) {
+          console.warn('[voice] sync client user failed', await resp.text());
+          return false;
+        }
+        return true;
+      } catch (err) {
+        console.warn('[voice] sync client user exception', err);
+        return false;
+      }
+    }
+
+    async function ensureClientSupabaseSession(email, password){
+      const clientSb = getTranscriptSupabase();
+      if (!clientSb || !email || !password) { return false; }
+      try {
+        const { data } = await clientSb.auth.getSession();
+        if (data && data.session) { return true; }
+      } catch {}
+      const signInResponse = await clientSb.auth.signInWithPassword({ email, password });
+      if (signInResponse.error) {
+        const errorMessage = (signInResponse.error.message || '').toLowerCase();
+        if (errorMessage.includes('invalid login') || errorMessage.includes('not found')) {
+          const synced = await syncClientUserCredentials(email, password);
+          if (!synced) { throw signInResponse.error; }
+          const retry = await clientSb.auth.signInWithPassword({ email, password });
+          if (retry.error) { throw retry.error; }
+        } else {
+          throw signInResponse.error;
+        }
+      }
+      return true;
+    }
 
     async function login() {
       const email = document.getElementById('email').value.trim();
       const password = document.getElementById('password').value;
       const res = await sb.auth.signInWithPassword({ email, password });
       if (res.error) { document.getElementById('auth-msg').innerText = res.error.message; return; }
+      if (res.data?.session) {
+        session = res.data.session;
+      }
+      try {
+        await ensureClientSupabaseSession(email, password);
+      } catch (err) {
+        console.warn('[voice] client Supabase login failed', err);
+        document.getElementById('auth-msg').innerText = 'Unable to access voice transcripts. Please try again or contact support.';
+        return;
+      }
       await ensureSession(); setAuthVisible(false); setChatVisible(true);
     }
     async function signup() {
@@ -572,6 +746,15 @@
       const password = document.getElementById('password').value;
       const res = await sb.auth.signUp({ email, password });
       if (res.error) { document.getElementById('auth-msg').innerText = res.error.message; return; }
+      const synced = await syncClientUserCredentials(email, password);
+      if (!synced) {
+        document.getElementById('auth-msg').innerText = 'Account created, but voice access could not be provisioned automatically.';
+        return;
+      }
+      if (res.data?.session) {
+        session = res.data.session;
+        await ensureClientSupabaseSession(email, password);
+      }
       document.getElementById('auth-msg').innerText = 'Check your email to confirm.';
     }
 
@@ -682,6 +865,26 @@
 
     let __roomConn = null;
     let __seenTranscriptIds = new Set();
+    function updateVoiceTranscript(id, text) {
+      try {
+        if (!id) return;
+        const existing = document.querySelector(`[data-transcript-id="${id}"]`);
+        if (existing) {
+          const bubble = existing.querySelector('[data-transcript-text]');
+          if (bubble) {
+            bubble.textContent = text || '';
+            // Auto-scroll to bottom
+            const container = document.getElementById('voiceTranscriptList');
+            if (container) {
+              container.scrollTop = container.scrollHeight;
+            }
+          }
+        }
+      } catch (err) {
+        try { console.warn('[voice] failed to update transcript', err); } catch {}
+      }
+    }
+
     function appendVoiceTranscript(role, text, createdAt, citations, id){
       try {
         if (id && markTranscriptSeen(id)) { return; }
@@ -690,7 +893,9 @@
         const wrap = document.createElement('div');
         const isUser = role === 'user';
         wrap.className = isUser ? 'flex justify-end' : 'flex justify-start';
+        if (id) wrap.setAttribute('data-transcript-id', id); // Add ID for updating
         const bubble = document.createElement('div');
+        bubble.setAttribute('data-transcript-text', 'true'); // Add attribute for finding text element
         bubble.className = (isUser
           ? 'max-w-[80%] px-4 py-2 rounded-lg bg-brand-teal text-white'
           : 'max-w-[80%] px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap');
@@ -712,58 +917,122 @@
       } catch {}
     }
 
-    function startVoiceTranscriptStream(conversationId, clientId, agentId){
+    async function startVoiceTranscriptStream(conversationId, clientId, agentId){
       try {
-        // Guard: if already connected, don't start another SSE
-        if (transcriptEventSource && transcriptEventSource.readyState !== EventSource.CLOSED) {
-          try { console.log('[voice] SSE already active; skip reopening'); } catch {}
+        if (!conversationId || !clientId) {
+          try { console.warn('[voice] missing conversation/client id for transcript stream'); } catch {}
+          showVoiceTranscriptError('Conversation metadata missing; transcripts cannot be loaded.');
           return;
         }
-        if (transcriptEventSource) { try { transcriptEventSource.close(); } catch {} transcriptEventSource = null; }
-        if (!conversationId || !clientId) { try { console.warn('[voice] no conversationId or clientId; skipping SSE'); } catch {} return; }
-        const params = new URLSearchParams({
-          conversation_id: conversationId,
-          client_id: clientId,
-          agent_id: agentId || '' ,
-          include_citations: 'true'
-        });
-        const url = `/api/v1/voice-transcripts/stream?${params.toString()}`;
-        try { console.log('[voice] starting SSE', { url }); } catch {}
-        transcriptEventSource = new EventSource(url);
-        transcriptEventSource.onopen = async () => {
-          try { console.log('[voice] SSE connected'); } catch {}
-          // Prefetch recent history once on connect to avoid missing items if SSE attached late
-          try {
-            const historyUrl = `/api/v1/voice-transcripts/history?conversation_id=${encodeURIComponent(conversationId)}&client_id=${encodeURIComponent(clientId)}&agent_id=${encodeURIComponent(agentId||'')}&include_citations=true&limit=10`;
-            const resp = await fetch(historyUrl);
-            if (resp.ok) {
-              const obj = await resp.json();
-              if (obj && obj.success && Array.isArray(obj.data)) {
-                for (const t of obj.data) {
-                  const txt = t.content || t.transcript || '';
-                  if (txt) {
-                    appendVoiceTranscript(t.role, txt, t.created_at, t.citations, t.id);
-                  }
+        const supabaseClient = getTranscriptSupabase();
+        if (!supabaseClient) { return; }
+        const authorized = await ensureTranscriptSupabaseAuth();
+        if (!authorized) {
+          try { console.warn('[voice] transcript Supabase auth unavailable'); } catch {}
+          pendingTranscriptStart = { conversationId, clientId, agentId };
+          return;
+        }
+        pendingTranscriptStart = null;
+        if (transcriptConversationId !== conversationId) {
+          __seenTranscriptIds?.clear?.();
+        }
+        transcriptConversationId = conversationId;
+        stopVoiceTranscriptStream();
+        transcriptRealtimeChannel = supabaseClient
+          .channel(`voice-transcripts:${conversationId}`)
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'conversation_transcripts',
+              filter: `conversation_id=eq.${conversationId}`
+            },
+            (payload) => {
+              const row = payload?.new;
+              if (!row) { return; }
+              const txt = row.content || row.transcript || '';
+              if (!txt) { return; }
+              appendVoiceTranscript(row.role, txt, row.created_at, row.citations, row.id);
+            }
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'conversation_transcripts',
+              filter: `conversation_id=eq.${conversationId}`
+            },
+            (payload) => {
+              const row = payload?.new;
+              if (!row) { return; }
+              const txt = row.content || row.transcript || '';
+              if (!txt) { return; }
+              updateVoiceTranscript(row.id, txt);
+            }
+          )
+          .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              try { console.log('[voice] realtime subscribed for transcripts (INSERT + UPDATE)'); } catch {}
+            } else if (status === 'CHANNEL_ERROR') {
+              try { console.warn('[voice] transcript channel error; retrying'); } catch {}
+              setTimeout(() => {
+                if (transcriptConversationId === conversationId) {
+                  startVoiceTranscriptStream(conversationId, clientId, agentId);
                 }
-              }
+              }, 2000);
             }
-          } catch (e) { try { console.warn('[voice] history fetch failed', e); } catch {} }
-        };
-        transcriptEventSource.onmessage = (evt) => {
-          try {
-            const data = JSON.parse(evt.data || '{}');
-            try { console.log('[voice] SSE event', { id: data?.id, role: data?.role, len: (data?.content || data?.transcript || '').length }); } catch {}
-            if (data && data.role && (data.content || data.transcript)) {
-              appendVoiceTranscript(data.role, data.content || data.transcript || '', data.created_at, data.citations, data.id);
-            }
-          } catch {}
-        };
-        transcriptEventSource.onerror = (e) => {
-          try { console.warn('[voice] SSE error', e); } catch {}
-          // Reset handle if closed so future calls can reconnect
-          try { if (transcriptEventSource && transcriptEventSource.readyState === EventSource.CLOSED) { transcriptEventSource = null; } } catch {}
-        };
-      } catch {}
+          });
+        await loadVoiceTranscriptHistory(conversationId);
+        clearVoiceTranscriptError();
+      } catch (err) {
+        try { console.warn('[voice] failed to start transcript stream', err); } catch {}
+        showVoiceTranscriptError('Unable to start transcript stream. Please refresh and try again.');
+      }
+    }
+
+    async function loadVoiceTranscriptHistory(conversationId){
+      const supabaseClient = getTranscriptSupabase();
+      if (!supabaseClient || !conversationId) { return; }
+      const authorized = await ensureTranscriptSupabaseAuth();
+      if (!authorized) { return; }
+      try {
+        const { data, error } = await supabaseClient
+          .from('conversation_transcripts')
+          .select('*')
+          .eq('conversation_id', conversationId)
+          .order('created_at', { ascending: true })
+          .limit(200);
+        if (error) {
+          try { console.warn('[voice] transcript history error', error); } catch {}
+          showVoiceTranscriptError('Unable to load transcript history. Please refresh to try again.');
+          return;
+        }
+        (data || []).forEach((t) => {
+          const txt = t.content || t.transcript || '';
+          if (txt) {
+            appendVoiceTranscript(t.role, txt, t.created_at, t.citations, t.id);
+          }
+        });
+        if (data && data.length > 0) {
+          clearVoiceTranscriptError();
+        }
+      } catch (err) {
+        try { console.warn('[voice] transcript history fetch failed', err); } catch {}
+        showVoiceTranscriptError('Unable to load transcript history. Please refresh to try again.');
+      }
+    }
+
+    function stopVoiceTranscriptStream(){
+      try {
+        if (transcriptRealtimeChannel && transcriptSupabase) {
+          transcriptSupabase.removeChannel(transcriptRealtimeChannel);
+        }
+      } catch (err) {
+        try { console.warn('[voice] error while stopping transcript stream', err); } catch {}
+      }
+      transcriptRealtimeChannel = null;
     }
 
     function clearVoiceConnectionMonitor() {
@@ -1340,8 +1609,7 @@
       monitorFailures = 0;
       reconnectAttempts = 0;
       try {
-        try { if (transcriptEventSource) { transcriptEventSource.close(); } } catch {}
-        transcriptEventSource = null;
+        stopVoiceTranscriptStream();
         if (__roomConn) {
           try {
             const locals = [];
@@ -1384,6 +1652,30 @@
               session = (s && s.session) ? s.session : null;
             } catch (e) { /* fallback to manual token only */ }
           }
+          if (data.client_supabase_access_token) {
+            CLIENT_SUPABASE_BOOTSTRAP.access_token = data.client_supabase_access_token;
+            CLIENT_SUPABASE_BOOTSTRAP.refresh_token = data.client_supabase_refresh_token;
+            const clientSb = getTranscriptSupabase();
+            if (clientSb) {
+              try {
+                await clientSb.auth.setSession({
+                  access_token: CLIENT_SUPABASE_BOOTSTRAP.access_token,
+                  refresh_token: CLIENT_SUPABASE_BOOTSTRAP.refresh_token || null
+                });
+                if (pendingTranscriptStart) {
+                  const pending = pendingTranscriptStart;
+                  pendingTranscriptStart = null;
+                  setTimeout(() => {
+                    startVoiceTranscriptStream(pending.conversationId, pending.clientId, pending.agentId);
+                  }, 250);
+                } else if (storedVoiceSession && storedVoiceSession.conversationId) {
+                  startVoiceTranscriptStream(storedVoiceSession.conversationId, CLIENT_ID, storedVoiceSession.agentId);
+                }
+              } catch (err) {
+                console.warn('[voice] failed to apply client Supabase session from message', err);
+              }
+            }
+          }
           setAuthVisible(false); setChatVisible(true);
           try { document.getElementById('voiceStartBtn').disabled = false; } catch {}
         }
@@ -1398,6 +1690,27 @@
     })();
 
     (async ()=>{ const ok = await ensureSession(); setAuthVisible(!ok); setChatVisible(ok); try { document.getElementById('voiceStartBtn').disabled = !ok; } catch {} })();
+
+    // Clean up realtime subscription when page unloads to prevent orphaned connections
+    window.addEventListener('beforeunload', () => {
+      stopVoiceTranscriptStream();
+    });
+
+    // Pause/resume transcript streaming based on tab visibility
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && transcriptRealtimeChannel) {
+        try { console.log('[voice] Tab hidden, pausing transcript realtime channel'); } catch {}
+        stopVoiceTranscriptStream();
+      } else if (
+        !document.hidden &&
+        storedVoiceSession &&
+        storedVoiceSession.conversationId &&
+        !transcriptRealtimeChannel
+      ) {
+        try { console.log('[voice] Tab visible, resuming transcript realtime channel'); } catch {}
+        startVoiceTranscriptStream(storedVoiceSession.conversationId, CLIENT_ID, storedVoiceSession.agentId);
+      }
+    });
   </script>
 </body>
 </html>

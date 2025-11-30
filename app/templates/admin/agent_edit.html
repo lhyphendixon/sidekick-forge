@@ -128,9 +128,65 @@
                         <optgroup label="Cartesia">
                             <option value="sonic-english" {% if agent.voice_settings.model == 'sonic-english' %}selected{% endif %}>sonic-english</option>
                             <option value="sonic-2" {% if agent.voice_settings.model == 'sonic-2' %}selected{% endif %}>sonic-2</option>
+                            <option value="sonic-3" {% if agent.voice_settings.model == 'sonic-3' %}selected{% endif %}>sonic-3</option>
                         </optgroup>
                     </select>
                     <p class="mt-1 text-xs text-gray-500">Required when provider is Cartesia. Choose an explicit model.</p>
+                </div>
+
+                <div id="cartesiaEmotionsContainer" class="hidden md:col-span-2 border rounded-md border-gray-200 p-4 bg-gray-50">
+                    <label class="flex items-center text-sm font-medium text-gray-700">
+                        <input type="checkbox" id="cartesiaEmotionsEnabled"
+                               class="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50"
+                               {% if agent.voice_settings.cartesia_emotions_enabled %}checked{% endif %}>
+                        <span class="ml-2">Enable Cartesia Sonic-3 emotions</span>
+                    </label>
+                    <p class="text-xs text-gray-500 mt-1">
+                        When enabled, Sonic-3 can vary tone, volume, and speed using Cartesia's SSML <emotion> tags.
+                    </p>
+                    <div id="cartesiaEmotionFields" class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4 hidden">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600">Default Emotion Style</label>
+                            <select id="cartesiaEmotionStyle"
+                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                {% set emotion_style = agent.voice_settings.cartesia_emotion_style or 'neutral' %}
+                                {% set emotion_options = ['neutral','joy','sad','angry','compassionate','excited','empathetic'] %}
+                                {% for option in emotion_options %}
+                                <option value="{{ option }}" {% if emotion_style == option %}selected{% endif %}>{{ option|capitalize }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600">Emotion Intensity</label>
+                            <select id="cartesiaEmotionIntensity"
+                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                {% set emotion_intensity = agent.voice_settings.cartesia_emotion_intensity or 3 %}
+                                {% for level in [1,2,3,4,5] %}
+                                <option value="{{ level }}" {% if emotion_intensity == level %}selected{% endif %}>Level {{ level }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600">Volume Hint</label>
+                            <select id="cartesiaEmotionVolume"
+                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                {% set volume_value = agent.voice_settings.cartesia_emotion_volume or 'medium' %}
+                                {% for option in ['x-soft','soft','medium','loud','x-loud'] %}
+                                <option value="{{ option }}" {% if volume_value == option %}selected{% endif %}>{{ option }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600">Speed Hint</label>
+                            <select id="cartesiaEmotionSpeed"
+                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
+                                {% set speed_value = agent.voice_settings.cartesia_emotion_speed or 'medium' %}
+                                {% for option in ['x-slow','slow','medium','fast','x-fast'] %}
+                                <option value="{{ option }}" {% if speed_value == option %}selected{% endif %}>{{ option }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
                 </div>
 
                 <div>
@@ -138,27 +194,6 @@
                     <input type="number" id="temperature" min="0" max="2" step="0.1" value="{{ agent.voice_settings.temperature or 0.7 }}"
                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     <p class="mt-1 text-xs text-gray-500">Controls creativity (0.0 - 2.0)</p>
-                </div>
-
-                <!-- Webhook Settings -->
-                <div class="md:col-span-2 border-t pt-6">
-                    <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Webhook Settings</h3>
-                </div>
-                
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">Voice Context Webhook URL</label>
-                    <input type="url" id="voiceWebhook" value="{{ agent.webhooks.voice_context_webhook_url or '' }}"
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
-                           placeholder="https://example.com/webhook">
-                    <p class="mt-1 text-xs text-gray-500">Called during voice interactions</p>
-                </div>
-                
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">Text Context Webhook URL</label>
-                    <input type="url" id="textWebhook" value="{{ agent.webhooks.text_context_webhook_url or '' }}"
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
-                           placeholder="https://example.com/webhook">
-                    <p class="mt-1 text-xs text-gray-500">Called during text interactions</p>
                 </div>
 
                 <!-- Features -->
@@ -252,6 +287,42 @@ function updateTTSUI() {
     } else {
         ttsModelContainer.classList.add('hidden');
     }
+    updateCartesiaEmotionControls();
+}
+
+function updateCartesiaEmotionControls() {
+    const provider = document.getElementById('voiceProvider').value;
+    const model = document.getElementById('ttsModel') ? document.getElementById('ttsModel').value : '';
+    const emotionsContainer = document.getElementById('cartesiaEmotionsContainer');
+    const toggle = document.getElementById('cartesiaEmotionsEnabled');
+    const fields = document.getElementById('cartesiaEmotionFields');
+    const shouldShow = provider === 'cartesia' && model === 'sonic-3';
+    if (emotionsContainer) {
+        emotionsContainer.classList.toggle('hidden', !shouldShow);
+    }
+    if (fields) {
+        const showFields = shouldShow && toggle?.checked;
+        fields.classList.toggle('hidden', !showFields);
+    }
+}
+
+function handleEmotionToggle() {
+    updateCartesiaEmotionControls();
+}
+
+function initCartesiaDefaults() {
+    const toggle = document.getElementById('cartesiaEmotionsEnabled');
+    if (toggle) {
+        toggle.addEventListener('change', handleEmotionToggle);
+    }
+    const ttsModel = document.getElementById('ttsModel');
+    if (ttsModel) {
+        ttsModel.addEventListener('change', updateCartesiaEmotionControls);
+    }
+    if (provider === 'cartesia') {
+        ttsModelContainer.classList.remove('hidden');
+    }
+    updateCartesiaEmotionControls();
 }
 
 async function saveAgent() {
@@ -273,6 +344,28 @@ async function saveAgent() {
     });
     if (selectedProvider === 'cartesia') {
         mergedVoiceSettings.model = selectedModel || null;
+        mergedVoiceSettings.cartesia_emotions_enabled = false;
+        if (selectedModel === 'sonic-3') {
+            const toggle = document.getElementById('cartesiaEmotionsEnabled');
+            if (toggle && toggle.checked) {
+                mergedVoiceSettings.cartesia_emotions_enabled = true;
+                mergedVoiceSettings.cartesia_emotion_style = document.getElementById('cartesiaEmotionStyle')?.value || 'neutral';
+                mergedVoiceSettings.cartesia_emotion_intensity = parseInt(document.getElementById('cartesiaEmotionIntensity')?.value || '3', 10);
+                mergedVoiceSettings.cartesia_emotion_volume = document.getElementById('cartesiaEmotionVolume')?.value || 'medium';
+                mergedVoiceSettings.cartesia_emotion_speed = document.getElementById('cartesiaEmotionSpeed')?.value || 'medium';
+            } else {
+                mergedVoiceSettings.cartesia_emotion_style = null;
+                mergedVoiceSettings.cartesia_emotion_intensity = null;
+                mergedVoiceSettings.cartesia_emotion_volume = null;
+                mergedVoiceSettings.cartesia_emotion_speed = null;
+            }
+        } else {
+            mergedVoiceSettings.cartesia_emotions_enabled = false;
+            mergedVoiceSettings.cartesia_emotion_style = null;
+            mergedVoiceSettings.cartesia_emotion_intensity = null;
+            mergedVoiceSettings.cartesia_emotion_volume = null;
+            mergedVoiceSettings.cartesia_emotion_speed = null;
+        }
     } else {
         // Clear model if switching away from Cartesia
         mergedVoiceSettings.model = null;
@@ -284,16 +377,12 @@ async function saveAgent() {
         agent_image: document.getElementById('agentImage').value || null,
         system_prompt: document.getElementById('systemPrompt').value,
         voice_settings: mergedVoiceSettings,
-        webhooks: {
-            voice_context_webhook_url: document.getElementById('voiceWebhook').value || null,
-            text_context_webhook_url: document.getElementById('textWebhook').value || null
-        },
         show_citations: document.getElementById('showCitations').checked,
         enabled: document.getElementById('agentEnabled').checked
     };
     
     try {
-        const response = await fetch(`/api/v1/agents/client/{{ agent.client_id }}/{{ agent.slug }}`, {
+        const response = await fetch(`/api/v1/agents/{{ agent.slug }}?client_id={{ agent.client_id }}`, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(updateData)
@@ -324,7 +413,7 @@ async function saveAgent() {
 
 async function refreshFromSupabase() {
     try {
-        const response = await fetch(`/api/v1/agents/client/{{ agent.client_id }}/sync`, {
+        const response = await fetch(`/api/v1/agents/sync?client_id={{ agent.client_id }}`, {
             method: 'POST'
         });
         
@@ -349,7 +438,7 @@ async function confirmDeleteAgent() {
     }
     
     try {
-        const response = await fetch(`/api/v1/agents/client/{{ agent.client_id }}/{{ agent.slug }}`, {
+        const response = await fetch(`/api/v1/agents/{{ agent.slug }}?client_id={{ agent.client_id }}`, {
             method: 'DELETE'
         });
         
@@ -392,6 +481,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Page loaded with agent data from server
     console.log('Agent edit page loaded for: {{ agent.name }}');
     // Initialize TTS UI state
+    initCartesiaDefaults();
     updateTTSUI();
     document.getElementById('voiceProvider').addEventListener('change', updateTTSUI);
 });

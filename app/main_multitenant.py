@@ -3,34 +3,42 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+import asyncio
 import logging
+import os
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables before importing settings
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'), override=True)
 
 from app.config import settings
 from app.middleware.auth import AuthenticationMiddleware
-from app.middleware.rate_limiting import RateLimitMiddleware
 from app.middleware.logging import LoggingMiddleware
 from app.utils.exceptions import APIException
 from app.integrations.livekit_client import livekit_manager
-import redis.asyncio as aioredis
+# Redis is intentionally not used in this deployment. Keeping the import commented for reference only.
+# import redis.asyncio as aioredis
 
 # Configure logging
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger("sidekick_forge")
 
-# Initialize Redis client
+# Redis disabled
 redis_client = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     global redis_client
+    worker = None
+    worker_task = None
     
     # Startup
     logger.info("Starting Sidekick Forge Platform")
     
-    # Initialize Redis (for caching only)
-    redis_client = await aioredis.from_url(settings.redis_url)
+    # Redis disabled (was used for caching/rate limiting)
+    redis_client = None
     
     # Initialize platform services
     from app.services.client_connection_manager import get_connection_manager
@@ -51,20 +59,35 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠️ LiveKit initialization failed (non-critical): {e}")
     
     logger.info("All services initialized successfully")
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down Sidekick Forge Platform")
-    await livekit_manager.close()
-    if redis_client:
-        await redis_client.close()
+
+    # Start provisioning worker if credentials allow
+    try:
+        from app.services.onboarding.provisioning_worker import ProvisioningWorker
+        worker = ProvisioningWorker()
+        worker_task = asyncio.create_task(worker.run())
+        logger.info("Provisioning worker task started")
+    except RuntimeError as e:
+        logger.warning(f"Provisioning worker disabled: {e}")
+
+    try:
+        yield
+    finally:
+        if worker:
+            worker.stop()
+        if worker_task:
+            await worker_task
+
+        # Shutdown
+        logger.info("Shutting down Sidekick Forge Platform")
+        await livekit_manager.close()
+        if redis_client:
+            await redis_client.close()
 
 # Create FastAPI app
 app = FastAPI(
     title="Sidekick Forge Platform API",
     description="Multi-tenant AI Agent management platform with LiveKit integration",
-    version="2.1.7",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -95,9 +118,8 @@ app.add_middleware(
     expose_headers=["X-Total-Count", "X-Page", "X-Per-Page"]
 )
 
-# Add custom middleware
+# Add custom middleware (Redis-backed rate limiting removed)
 app.add_middleware(LoggingMiddleware)
-app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AuthenticationMiddleware)
 
 # Include multi-tenant API routers
@@ -118,12 +140,18 @@ from app.api.v1 import (
     text_chat_proxy,
     knowledge_base
 )
-from app.api.v1 import voice_transcripts
+from app.api import embed as embed_router
 
 # Mount multi-tenant routes
 app.include_router(trigger_multitenant.router, prefix="/api/v1", tags=["trigger"])
 app.include_router(agents_multitenant.router, prefix="/api/v1", tags=["agents"])
 app.include_router(clients_multitenant.router, prefix="/api/v1", tags=["clients"])
+
+# Temporary compatibility aliases so the admin UI can safely call /api/v2/*
+# while the multitenant server still primarily operates under /api/v1.
+app.include_router(trigger_multitenant.router, prefix="/api/v2", tags=["trigger-v2"])
+app.include_router(agents_multitenant.router, prefix="/api/v2", tags=["agents-v2"])
+app.include_router(clients_multitenant.router, prefix="/api/v2", tags=["clients-v2"])
 
 # Keep existing routes during migration
 app.include_router(sessions.router, prefix="/api/v1", tags=["sessions"])
@@ -137,34 +165,14 @@ app.include_router(conversations_proxy.router, prefix="/api/v1", tags=["conversa
 app.include_router(documents_proxy.router, prefix="/api/v1", tags=["documents"])
 app.include_router(text_chat_proxy.router, prefix="/api/v1", tags=["text-chat"])
 app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-base"])
-app.include_router(voice_transcripts.router, prefix="/api/v1", tags=["voice-transcripts"])
+app.include_router(embed_router.router)
 
 # Mount static files
-import os
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 else:
     logger.warning(f"Static directory not found at {static_dir}, skipping static file mount")
-
-# Include marketing site routes (homepage, pricing, features, etc.)
-try:
-    from app.marketing.routes import router as marketing_router
-    app.include_router(marketing_router)
-    logger.info("✅ Marketing site routes loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load marketing routes: {e}")
-
-# Admin preview standalone routes (for embed preview & ensure-client-user helper)
-try:
-    logger.info("Attempting to load admin preview routes...")
-    from app.api.admin_preview_standalone import router as admin_preview_router
-    app.include_router(admin_preview_router)
-    logger.info("✅ Admin preview routes loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load admin preview routes: {e}")
-    import traceback
-    logger.error(traceback.format_exc())
 
 # Include admin dashboard (will need updating for multi-tenant)
 from app.admin.routes import router as admin_router
@@ -193,20 +201,15 @@ from app.api.webhooks import livekit_router, supabase_router
 app.include_router(livekit_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
 
-# Include embed router for sidekick preview functionality
-from app.api.embed import router as embed_router
-app.include_router(embed_router)
-
-# Root endpoint - Now handled by marketing routes (app/marketing/routes.py)
-# The homepage at / is served by the marketing site
-# @app.get("/", tags=["health"])
-# async def root():
-#     return {
-#         "service": "Sidekick Forge Platform",
-#         "version": "2.1.6",
-#         "status": "operational",
-#         "timestamp": datetime.utcnow().isoformat()
-#     }
+# Root endpoint
+@app.get("/", tags=["health"])
+async def root():
+    return {
+        "service": "Sidekick Forge Platform",
+        "version": "2.0.0",
+        "status": "operational",
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 # Health check endpoints
 @app.get("/health", tags=["health"])

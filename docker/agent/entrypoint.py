@@ -4,6 +4,7 @@ LiveKit Agent Worker Entrypoint
 Implements proper worker registration and job handling for the Autonomite agent
 """
 
+import ast
 import asyncio
 import os
 import json
@@ -11,17 +12,21 @@ import logging
 import inspect
 import time
 import types
+import re
+import unicodedata
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from livekit import agents, rtc
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
 from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
+from livekit.plugins.turn_detector.english import EnglishModel
 from api_key_loader import APIKeyLoader
 from config_validator import ConfigValidator, ConfigurationError
 from context import AgentContextManager
 from sidekick_agent import SidekickAgent
 from tool_registry import ToolRegistry
+from supabase import create_client
 
 # Enable SDK debug logging for better diagnostics
 os.environ["LIVEKIT_LOG_LEVEL"] = "debug"
@@ -33,8 +38,471 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Initialize shared platform Supabase client for OAuth-backed tools (best-effort)
+PLATFORM_SUPABASE = None
+_platform_supabase_error: Optional[str] = None
+try:
+    platform_url = os.getenv("SUPABASE_URL")
+    platform_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
+    if platform_url and platform_key:
+        PLATFORM_SUPABASE = create_client(platform_url, platform_key)
+        logger.info("✅ Platform Supabase client initialized for agent worker")
+    else:
+        _platform_supabase_error = "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY"
+        logger.warning(
+            "⚠️ Platform Supabase credentials not configured; OAuth-backed tools may not access shared tokens"
+        )
+except Exception as exc:
+    _platform_supabase_error = str(exc)
+    logger.warning("⚠️ Failed to initialize platform Supabase client: %s", exc, exc_info=True)
+
+# Feature toggles for transcript handling
+VOICE_ITEM_COMMIT_FALLBACK = os.getenv("VOICE_ITEM_COMMIT_FALLBACK", "false").lower() == "true"
 
 # Agent logic handled via AgentSession and SidekickAgent
+
+
+def _parse_structured_output(text: Any) -> Optional[Any]:
+    if not isinstance(text, str):
+        return None
+    snippet = text.strip()
+    if not snippet or snippet[0] not in ("{", "["):
+        return None
+    try:
+        return json.loads(snippet)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(snippet)
+        except (ValueError, SyntaxError):
+            return None
+
+
+def _normalize_transcript_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = unicodedata.normalize("NFKC", value)
+    text = text.replace("\u2019", "'")
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = " ".join(text.split())
+    return text
+
+
+def _should_skip_user_commit(agent: Any, text: str) -> bool:
+    """Return True when the same user transcript is already pending for this turn."""
+    normalized_text = _normalize_transcript_text(text)
+    if not normalized_text:
+        return True
+
+    last_user = _normalize_transcript_text(getattr(agent, "_last_user_commit", ""))
+    if not last_user:
+        return False
+
+    if last_user != normalized_text:
+        return False
+
+    active_turn_id = getattr(agent, "_current_turn_id", None)
+    last_turn_id = getattr(agent, "_last_user_commit_turn", None)
+    if getattr(agent, "_pending_user_commit", False):
+        return True
+
+    if active_turn_id and (last_turn_id is None or active_turn_id == last_turn_id):
+        return True
+
+    return False
+
+
+def _safe_dump(obj: Any) -> Any:
+    try:
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump()
+    except Exception:
+        pass
+    try:
+        candidate = getattr(obj, "__dict__", obj)
+    except Exception:
+        candidate = str(obj)
+
+    if isinstance(candidate, (dict, list, tuple, str, int, float, bool)) or candidate is None:
+        return candidate
+    return str(candidate)
+
+
+def _initialize_tts_plugin(
+    *,
+    tts_provider: Optional[str],
+    voice_settings: Dict[str, Any],
+    api_keys: Dict[str, Any],
+) -> Any:
+    """Build and validate the configured TTS plugin (used for both voice + text modes)."""
+    if not tts_provider:
+        raise ConfigurationError("TTS provider required but not found (tts_provider or provider)")
+
+    provider_config = voice_settings.get("provider_config") or {}
+    if not isinstance(provider_config, dict):
+        provider_config = {}
+
+    if tts_provider == "elevenlabs":
+        elevenlabs_key = api_keys.get("elevenlabs_api_key")
+        if not elevenlabs_key:
+            raise ConfigurationError("ElevenLabs API key required for TTS but not found")
+        tts_plugin = elevenlabs.TTS(
+            voice_id=voice_settings.get("voice_id", "Xb7hH8MSUJpSbSDYk0k2"),
+            api_key=elevenlabs_key,
+        )
+    else:
+        cartesia_key = api_keys.get("cartesia_api_key")
+        if not cartesia_key:
+            raise ConfigurationError("Cartesia API key required for TTS but not found")
+
+        if cartesia_key.startswith("fixed_") and not cartesia_key.startswith("sk-test_"):
+            raise ConfigurationError(
+                "Test key 'fixed_cartesia_key' cannot be used with Cartesia API. "
+                "Update the client's Cartesia API key in the admin dashboard to a valid key."
+            )
+
+        tts_model = (
+            voice_settings.get("model")
+            or voice_settings.get("tts_model")
+            or voice_settings.get("provider_model")
+            or None
+        )
+        if not tts_model:
+            raise ConfigurationError(
+                "Cartesia TTS requires an explicit 'model'. "
+                "Set voice_settings.model or metadata.tts_model."
+            )
+
+        cartesia_voice_id = (
+            voice_settings.get("voice_id")
+            or voice_settings.get("cartesia_voice_id")
+            or provider_config.get("cartesia_voice_id")
+        )
+        if not cartesia_voice_id:
+            raise ConfigurationError(
+                "Cartesia TTS requires voice_settings.voice_id (or cartesia_voice_id) to be set"
+            )
+        cartesia_voice_id = str(cartesia_voice_id).strip()
+        if len(cartesia_voice_id) < 8:
+            raise ConfigurationError(
+                "Cartesia voice_id appears invalid (too short); provide the full Cartesia UUID"
+            )
+        voice_settings["voice_id"] = cartesia_voice_id
+        tts_plugin = cartesia.TTS(
+            voice=cartesia_voice_id,
+            model=tts_model,
+            api_key=cartesia_key,
+        )
+        logger.info("✅ Cartesia TTS configured with voice_id=%s model=%s", cartesia_voice_id, tts_model)
+
+    ConfigValidator.validate_provider_initialization(f"{tts_provider} TTS", tts_plugin)
+    return tts_plugin
+
+
+class TextResponseCollector:
+    """Capture assistant responses for text-only jobs."""
+
+    def __init__(self) -> None:
+        self._event: asyncio.Event = asyncio.Event()
+        self._response_text: Optional[str] = None
+        self._citations: List[Dict[str, Any]] = []
+        self._tool_results: List[Dict[str, Any]] = []
+
+    def commit_response(
+        self,
+        text: str,
+        *,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        tool_results: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        if self._response_text is not None:
+            return
+        self._response_text = text or ""
+        if citations:
+            self._citations = citations
+        if tool_results:
+            self._tool_results = tool_results
+        self._event.set()
+
+    async def wait_for_response(self, timeout: float = 30.0) -> str:
+        await asyncio.wait_for(self._event.wait(), timeout=timeout)
+        return self._response_text or ""
+
+    @property
+    def citations(self) -> List[Dict[str, Any]]:
+        return list(self._citations)
+
+    @property
+    def tool_results(self) -> List[Dict[str, Any]]:
+        return list(self._tool_results)
+
+
+def _extract_text_from_chat_items(items: List[Any]) -> str:
+    """Best-effort extraction of assistant text from chat items."""
+    for item in reversed(items or []):
+        if getattr(item, "role", None) != "assistant":
+            continue
+        content = getattr(item, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            chunks: List[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    chunks.append(part)
+                elif isinstance(part, dict):
+                    text_value = part.get("text")
+                    if isinstance(text_value, str):
+                        chunks.append(text_value)
+            if chunks:
+                return "".join(chunks).strip()
+        text_attr = getattr(item, "text", None)
+        if isinstance(text_attr, str) and text_attr.strip():
+            return text_attr.strip()
+    return ""
+
+
+async def _run_text_mode_interaction(
+    *,
+    session: voice.AgentSession,
+    agent: SidekickAgent,
+    room: rtc.Room,
+    user_message: str,
+    collector: Optional[TextResponseCollector],
+    conversation_id: str,
+    timeout: float = 30.0,
+) -> Dict[str, Any]:
+    if not user_message or not user_message.strip():
+        raise ConfigurationError("Text mode requests require 'user_message' in metadata")
+
+    logger.info("📝 Text-only mode: generating reply for provided user message")
+    speech_handle = session.generate_reply(
+        user_input=user_message,
+        allow_interruptions=False,
+    )
+    await speech_handle.wait_for_playout()
+    try:
+        logger.info(
+            "📝 Text mode speech_handle returned with %s chat items",
+            len(getattr(speech_handle, "chat_items", []) or []),
+        )
+    except Exception:
+        pass
+
+    # Allow time for asynchronous tool execution / follow-up responses
+    max_tool_wait_iterations = 20  # ~10 seconds total
+    wait_iteration = 0
+    while wait_iteration < max_tool_wait_iterations:
+        wait_iteration += 1
+        pending_tool_results: List[Dict[str, Any]] = []
+        if collector and collector.tool_results:
+            pending_tool_results = collector.tool_results
+        else:
+            pending_tool_results = getattr(agent, "_latest_tool_results", None) or []
+
+        candidate_response = _extract_text_from_chat_items(speech_handle.chat_items)
+        try:
+            logger.info(
+                "🕑 text-mode poll iteration=%s response_len=%s tool_results=%s",
+                wait_iteration,
+                len(candidate_response or ""),
+                len(pending_tool_results),
+            )
+        except Exception:
+            pass
+        if pending_tool_results:
+            logger.info(
+                "🧰 Detected %s tool results in text mode (iteration=%s); allowing LLM to incorporate them",
+                len(pending_tool_results),
+                wait_iteration,
+            )
+            await asyncio.sleep(0.5)
+            break
+
+        if candidate_response:
+            break
+
+        await asyncio.sleep(0.5)
+
+    collector_timeout = min(
+        timeout,
+        float(os.getenv("TEXT_RESPONSE_COLLECTOR_TIMEOUT", "4.0")),
+    )
+    collector_response: Optional[str] = None
+    collector_citations: List[Dict[str, Any]] = []
+    collector_results: List[Dict[str, Any]] = []
+
+    if collector:
+        try:
+            collector_response = await collector.wait_for_response(timeout=collector_timeout)
+            collector_citations = collector.citations
+            collector_results = collector.tool_results
+            logger.info(
+                "📝 Text collector response received len=%s citations=%s tool_results=%s",
+                len(collector_response or ""),
+                len(collector_citations),
+                len(collector_results),
+            )
+        except asyncio.TimeoutError:
+            logger.info(
+                "⌛ Text collector inactive after %.1fs; using speech_handle output",
+                collector_timeout,
+            )
+
+    response_text = collector_response or _extract_text_from_chat_items(speech_handle.chat_items)
+    if not response_text:
+        raise RuntimeError("Worker generated no assistant text for text-only job")
+
+    citations = collector_citations or list(getattr(agent, "_current_citations", []) or [])
+    tool_results: List[Dict[str, Any]] = []
+    if collector_results:
+        tool_results = list(collector_results)
+    else:
+        tool_results = list(getattr(agent, "_latest_tool_results", []) or [])
+    if tool_results and hasattr(agent, "_latest_tool_results"):
+        try:
+            agent._latest_tool_results = []
+        except Exception:
+            pass
+    buffer_ref = getattr(agent, "_tool_results_buffer", None)
+    if isinstance(buffer_ref, list):
+        buffer_ref.clear()
+    payload = {
+        "mode": "text",
+        "conversation_id": conversation_id,
+        "text_response": response_text,
+        "citations": citations,
+        "tool_results": tool_results,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+    await room.update_metadata(json.dumps(payload))
+    logger.info("✅ Text response stored in room metadata")
+    return payload
+
+
+def collect_tool_results_from_event(event: Any, *, log: logging.Logger) -> tuple[List[Optional[str]], List[Dict[str, Any]]]:
+    function_calls = list(getattr(event, "function_calls", []) or [])
+    function_call_outputs = list(getattr(event, "function_call_outputs", []) or [])
+
+    try:
+        zipped_calls = list(event.zipped())
+    except Exception:
+        zipped_calls = []
+
+    if not zipped_calls:
+        zipped_calls = [
+            (call, function_call_outputs[idx] if idx < len(function_call_outputs) else None)
+            for idx, call in enumerate(function_calls)
+        ]
+
+    calls_summary: List[Optional[str]] = []
+    tool_results: List[Dict[str, Any]] = []
+
+    for call, call_output in zipped_calls:
+        try:
+            log.debug("🛠️ function_call payload: %s", getattr(call, "__dict__", {}))
+        except Exception:
+            pass
+
+        name = getattr(call, "name", None)
+        calls_summary.append(name)
+
+        entry: Dict[str, Any] = {
+            "slug": name,
+            "type": getattr(call, "tool", None) or getattr(call, "type", None),
+        }
+
+        call_id = getattr(call, "call_id", None)
+        if call_id:
+            entry["call_id"] = call_id
+
+        success_flag: Optional[bool] = None
+        output_value: Any = None
+
+        if call_output is not None:
+            try:
+                if hasattr(call_output, "model_dump"):
+                    log.debug("🛠️ function_call_output payload: %s", call_output.model_dump())
+            except Exception:
+                pass
+            success_flag = not getattr(call_output, "is_error", False)
+            output_value = getattr(call_output, "output", None)
+            if not call_id:
+                output_call_id = getattr(call_output, "call_id", None)
+                if output_call_id:
+                    entry["call_id"] = output_call_id
+        else:
+            success_attr = getattr(call, "success", None)
+            if isinstance(success_attr, bool):
+                success_flag = success_attr
+            else:
+                status = str(getattr(call, "status", "")).lower()
+                success_flag = status not in {"error", "failed"}
+
+        if success_flag is not None:
+            entry["success"] = success_flag
+
+        raw_call_output = _safe_dump(call_output)
+        entry["raw_call_output"] = raw_call_output
+
+        if output_value is None:
+            output_value = getattr(call, "output", None)
+            if output_value is None:
+                output_value = getattr(call, "response", None)
+            if output_value is None:
+                output_value = getattr(call, "result", None)
+            if output_value is None:
+                payload = getattr(call, "tool_output", None)
+                if payload is not None:
+                    output_value = payload
+
+        if output_value is not None and not isinstance(output_value, (str, int, float, bool)):
+            try:
+                entry["output"] = json.dumps(output_value, ensure_ascii=False)
+            except Exception:
+                entry["output"] = str(output_value)
+        elif output_value is not None:
+            entry["output"] = str(output_value)
+        else:
+            entry["output"] = None
+
+        if entry["output"] is None and success_flag:
+            call_payload = None
+            if call_output is not None:
+                call_payload = _safe_dump(call_output)
+            log.warning(
+                "Function call returned success but no output payload",
+                extra={
+                    "slug": name,
+                    "call_id": entry.get("call_id"),
+                    "call_payload": call_payload,
+                    "call_data": _safe_dump(call),
+                },
+            )
+
+        if isinstance(entry.get("output"), str):
+            structured = _parse_structured_output(entry["output"])
+            if structured is not None:
+                entry["structured_output"] = structured
+        else:
+            log.warning(
+                "⚠️ Tool %s call_id=%s returned success=%s but no output payload",
+                name,
+                entry.get("call_id"),
+                success_flag,
+            )
+
+        error_msg = None
+        if call_output is not None:
+            error_msg = getattr(call_output, "error", None)
+        if not error_msg:
+            error_msg = getattr(call, "error", None)
+        if error_msg:
+            entry["error"] = error_msg
+
+        tool_results.append(entry)
+
+    return calls_summary, tool_results
 
 
 # --- Performance Logging Helper ---
@@ -344,6 +812,13 @@ async def agent_job_handler(ctx: JobContext):
                 }
             }
             
+        # Detect requested interaction mode (voice default)
+        requested_mode = str(metadata.get("mode") or metadata.get("conversation_mode") or "voice").strip().lower()
+        is_text_mode = requested_mode == "text"
+        metadata["mode"] = "text" if is_text_mode else "voice"
+        logger.info(f"🎯 Agent job running in {'TEXT' if is_text_mode else 'VOICE'} mode")
+        text_response_collector: Optional[TextResponseCollector] = TextResponseCollector() if is_text_mode else None
+
         # Load API keys using the loader (follows dynamic loading policy)
         api_keys = APIKeyLoader.load_api_keys(metadata)
         metadata['api_keys'] = api_keys
@@ -381,9 +856,14 @@ async def agent_job_handler(ctx: JobContext):
                 # Map old model names to new ones
                 if model == "llama3-70b-8192" or model == "llama-3.1-70b-versatile":
                     model = "llama-3.3-70b-versatile"
+                
+                # Groq LLM with explicit tool calling configuration
+                # Note: Groq may not fully support structured tool calling, which can cause
+                # the LLM to generate XML-like text instead of proper function calls
                 llm_plugin = groq.LLM(
                     model=model,
-                    api_key=groq_key
+                    api_key=groq_key,
+                    temperature=voice_settings.get("temperature", 0.8)
                 )
             elif llm_provider == "cerebras":
                 cerebras_key = api_keys.get("cerebras_api_key")
@@ -421,113 +901,63 @@ async def agent_job_handler(ctx: JobContext):
             # Validate LLM initialization
             ConfigValidator.validate_provider_initialization(f"{llm_provider} LLM", llm_plugin)
             
-            # Configure STT - NO FALLBACK to environment variables
+            stt_plugin = None
+            tts_plugin = None
+            vad = None
             stt_provider = voice_settings.get("stt_provider")
-            if not stt_provider:
-                raise ConfigurationError("STT provider required but not found (stt_provider)")
-            if stt_provider == "cartesia":
-                cartesia_key = api_keys.get("cartesia_api_key")
-                if not cartesia_key:
-                    raise ConfigurationError("Cartesia API key required for STT but not found")
-                stt_plugin = cartesia.STT(
-                    api_key=cartesia_key
-                )
-            else:
-                deepgram_key = api_keys.get("deepgram_api_key")
-                if not deepgram_key:
-                    raise ConfigurationError("Deepgram API key required for STT but not found")
-                stt_plugin = deepgram.STT(
-                    api_key=deepgram_key,
-                    model="nova-3",
-                    language="en-US",
-                    endpointing_ms=1000
-                )
-                logger.info("📊 DIAGNOSTIC: Deepgram configured with model=nova-3, language=en-US, endpointing_ms=1000")
-            
-            # Validate STT initialization
-            ConfigValidator.validate_provider_initialization(f"{stt_provider} STT", stt_plugin)
-            
-            # Configure TTS - NO FALLBACK to environment variables
             tts_provider = voice_settings.get("tts_provider") or voice_settings.get("provider")
-            if not tts_provider:
-                raise ConfigurationError("TTS provider required but not found (tts_provider or provider)")
-            provider_config = voice_settings.get("provider_config") or {}
-            if not isinstance(provider_config, dict):
-                provider_config = {}
-            if tts_provider == "elevenlabs":
-                elevenlabs_key = api_keys.get("elevenlabs_api_key")
-                if not elevenlabs_key:
-                    raise ConfigurationError("ElevenLabs API key required for TTS but not found")
-                tts_plugin = elevenlabs.TTS(
-                    voice_id=voice_settings.get("voice_id", "Xb7hH8MSUJpSbSDYk0k2"),
-                    api_key=elevenlabs_key
-                )
-            else:
-                cartesia_key = api_keys.get("cartesia_api_key")
-                if not cartesia_key:
-                    raise ConfigurationError("Cartesia API key required for TTS but not found")
-                
-                # Check for test keys and fail fast - NO FALLBACK
-                # Allow sk-test_ prefix for development
-                if cartesia_key.startswith("fixed_") and not cartesia_key.startswith("sk-test_"):
-                    raise ConfigurationError(
-                        f"Test key 'fixed_cartesia_key' cannot be used with Cartesia API. "
-                        f"Please update the client's Cartesia API key in the admin dashboard to a valid key. "
-                        f"Current TTS provider is set to '{tts_provider}' but the API key is a test key."
+
+            if not is_text_mode:
+                # Configure STT - NO FALLBACK to environment variables
+                if not stt_provider:
+                    raise ConfigurationError("STT provider required but not found (stt_provider)")
+                if stt_provider == "cartesia":
+                    cartesia_key = api_keys.get("cartesia_api_key")
+                    if not cartesia_key:
+                        raise ConfigurationError("Cartesia API key required for STT but not found")
+                    stt_plugin = cartesia.STT(
+                        api_key=cartesia_key,
+                        model="ink-whisper"  # Cartesia's STT model
                     )
-                
-                # Enforce no-fallback: require explicit TTS model for Cartesia
-                # Accept both voice_settings.model and voice_settings.tts_model, and metadata.tts_model for compatibility
-                tts_model = (
-                    voice_settings.get("model")
-                    or voice_settings.get("tts_model")
-                    or metadata.get("tts_model")
-                )
-                if not tts_model:
-                    raise ConfigurationError(
-                        "Cartesia TTS requires an explicit 'model'. Set voice_settings.model or metadata.tts_model."
+                    logger.info("📊 DIAGNOSTIC: Cartesia STT configured with model=ink-whisper")
+                else:
+                    deepgram_key = api_keys.get("deepgram_api_key")
+                    if not deepgram_key:
+                        raise ConfigurationError("Deepgram API key required for STT but not found")
+                    stt_plugin = deepgram.STT(
+                        api_key=deepgram_key,
+                        model="nova-3",
+                        language="en-US",
+                        endpointing_ms=False,  # Disable Deepgram endpointing - let turn detector handle it
+                        interim_results=True    # Enable interim results for turn detector
                     )
-                cartesia_voice_id = (
-                    voice_settings.get("voice_id")
-                    or voice_settings.get("cartesia_voice_id")
-                    or provider_config.get("cartesia_voice_id")
-                )
-                if not cartesia_voice_id:
-                    raise ConfigurationError(
-                        "Cartesia TTS requires voice_settings.voice_id (or cartesia_voice_id) to be set"
-                    )
-                cartesia_voice_id = str(cartesia_voice_id).strip()
-                if len(cartesia_voice_id) < 8:
-                    raise ConfigurationError(
-                        "Cartesia voice_id appears invalid (too short); provide the full Cartesia UUID"
-                    )
-                # Normalize voice_id back into settings so downstream logs show the actual value
-                voice_settings["voice_id"] = cartesia_voice_id
-                tts_plugin = cartesia.TTS(
-                    voice=cartesia_voice_id,
-                    model=tts_model,
-                    api_key=cartesia_key
-                )
-                logger.info(
-                    f"✅ Cartesia TTS configured with voice_id={cartesia_voice_id} model={tts_model}"
+                    logger.info("📊 DIAGNOSTIC: Deepgram configured with model=nova-3, language=en-US, endpointing_ms=False (turn detector handles endpointing)")
+                ConfigValidator.validate_provider_initialization(f"{stt_provider} STT", stt_plugin)
+
+                tts_plugin = _initialize_tts_plugin(
+                    tts_provider=tts_provider,
+                    voice_settings=voice_settings,
+                    api_keys=api_keys,
                 )
 
-            # Validate TTS initialization
-            ConfigValidator.validate_provider_initialization(f"{tts_provider} TTS", tts_plugin)
-            
-            # Configure VAD (Voice Activity Detection)
-            # VAD is crucial for turn detection - it determines when user stops speaking
-            try:
-                vad = silero.VAD.load(
-                    min_speech_duration=0.15,
-                    min_silence_duration=0.5,
+                try:
+                    vad = silero.VAD.load(
+                        min_speech_duration=0.1,
+                        min_silence_duration=5.0,
+                    )
+                    logger.info("✅ VAD loaded successfully with optimized parameters")
+                    logger.info(f"📊 DIAGNOSTIC: VAD type: {type(vad)}")
+                    logger.info("📊 DIAGNOSTIC: VAD params: min_speech=0.1s, min_silence=5.0s")
+                except Exception as e:
+                    logger.error(f"❌ Failed to load VAD: {e}", exc_info=True)
+                    raise
+            else:
+                logger.info("📝 Text-only mode: skipping STT/VAD initialization (TTS still enabled for session parity)")
+                tts_plugin = _initialize_tts_plugin(
+                    tts_provider=tts_provider,
+                    voice_settings=voice_settings,
+                    api_keys=api_keys,
                 )
-                logger.info("✅ VAD loaded successfully with optimized parameters")
-                logger.info(f"📊 DIAGNOSTIC: VAD type: {type(vad)}")
-                logger.info("📊 DIAGNOSTIC: VAD params: min_speech=0.15s, min_silence=0.5s")
-            except Exception as e:
-                logger.error(f"❌ Failed to load VAD: {e}", exc_info=True)
-                raise
             
             # Remove multilingual turn detector to avoid heavy HF model load/crash
             turn_detect = None
@@ -709,6 +1139,9 @@ async def agent_job_handler(ctx: JobContext):
                 agent_config={'id': agent_id, 'agent_slug': agent_slug, 'show_citations': show_citations, 'dataset_ids': dataset_ids},
             )
             logger.info("✅ Voice agent created with single-layer architecture")
+            if is_text_mode and text_response_collector:
+                agent.attach_text_response_collector(text_response_collector)
+                logger.info("📝 Text-only mode collector attached to agent")
             
             # Store references for event handlers in agent
             agent._room = ctx.room  # Store room reference for agent use
@@ -719,6 +1152,8 @@ async def agent_job_handler(ctx: JobContext):
                 raise ConfigurationError("conversation_id is required in room/job metadata")
             agent._conversation_id = conv_id
             logger.info(f"📌 Using conversation_id: {agent._conversation_id}")
+            client_conv_id = metadata.get("client_conversation_id") or conv_id
+            agent._client_conversation_id = client_conv_id
             # Pass the Supabase client that was created earlier
             agent._supabase_client = client_supabase if 'client_supabase' in locals() else None
             # Ensure transcript storage uses UUID when available
@@ -727,6 +1162,7 @@ async def agent_job_handler(ctx: JobContext):
 
             base_tool_context: Dict[str, Any] = {
                 "conversation_id": agent._conversation_id,
+                "client_conversation_id": metadata.get("client_conversation_id") or agent._conversation_id,
                 "user_id": agent._user_id,
                 "agent_slug": metadata.get("agent_slug") or metadata.get("agent_id"),
                 "client_id": metadata.get("client_id") or client_id,
@@ -734,9 +1170,32 @@ async def agent_job_handler(ctx: JobContext):
                 or metadata.get("voice_session_id")
                 or metadata.get("room_session_id"),
             }
+            if is_text_mode:
+                user_msg = (metadata.get("user_message") or "").strip()
+                if user_msg:
+                    base_tool_context["latest_user_text"] = user_msg
+                    try:
+                        agent.latest_user_text = user_msg
+                        agent._current_turn_text = user_msg
+                    except Exception:
+                        pass
 
             registry: Optional[ToolRegistry] = None
             tracked_tool_slugs: List[str] = []
+            tool_results_buffer: List[Dict[str, Any]] = []
+            try:
+                agent._tool_results_buffer = tool_results_buffer  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+            def _tool_result_callback(entry: Dict[str, Any]) -> None:
+                if not isinstance(entry, dict):
+                    return
+                tool_results_buffer.append(entry)
+                try:
+                    agent._latest_tool_results = list(tool_results_buffer)
+                except Exception:
+                    pass
 
             def push_runtime_context(updates: Dict[str, Any]) -> None:
                 if not registry or not tracked_tool_slugs or not isinstance(updates, dict):
@@ -768,16 +1227,6 @@ async def agent_job_handler(ctx: JobContext):
             # Set up transcript storage with room reference
             agent.setup_transcript_storage(ctx.room)
             
-            # Create AgentSession with the plugins - proper LiveKit v1.x pattern
-            logger.info("Creating AgentSession with plugins...")
-            session = voice.AgentSession(
-                vad=vad,
-                stt=stt_plugin,
-                llm=llm_plugin,
-                tts=tts_plugin,
-                turn_detection="stt"
-            )
-
             # Register tools (Abilities) if provided in metadata
             try:
                 tool_defs = metadata.get("tools") or []
@@ -788,15 +1237,20 @@ async def agent_job_handler(ctx: JobContext):
                         logger.info(f"🧰 Tool defs slugs: {slugs}")
                     except Exception:
                         pass
+                    primary_supabase_client = client_supabase if 'client_supabase' in locals() else None
                     registry = ToolRegistry(
                         tools_config=metadata.get("tools_config") or {},
                         api_keys=metadata.get("api_keys") or {},
+                        primary_supabase_client=primary_supabase_client,
+                        platform_supabase_client=PLATFORM_SUPABASE,
+                        tool_result_callback=_tool_result_callback if is_text_mode else None,
                     )
                     tools = registry.build(tool_defs)
                     if tools:
                         tracked_tool_slugs = []
                         for tool_def in tool_defs:
-                            if tool_def.get("type") != "n8n":
+                            tool_type = tool_def.get("type")
+                            if tool_type not in {"n8n", "asana"}:
                                 continue
                             slug_candidate = (
                                 tool_def.get("slug")
@@ -834,9 +1288,38 @@ async def agent_job_handler(ctx: JobContext):
             except Exception as e:
                 logger.warning(f"Tool registration failed: {type(e).__name__}: {e}")
             
+            # ========================================================================
+            # CREATE AGENT SESSION **AFTER** TOOLS ARE REGISTERED
+            # This ensures the LLM has function definitions available for calling
+            # ========================================================================
+            logger.info("Creating AgentSession with plugins (after tool registration)...")
+            # Use LiveKit's ML-based turn detection model instead of STT-based turn detection
+            # This provides better handling of multi-part requests and natural pauses
+            # The model understands conversational context to reduce fragmentation
+            session = voice.AgentSession(
+                vad=vad,
+                stt=stt_plugin,
+                llm=llm_plugin,
+                tts=tts_plugin,
+                turn_detection=EnglishModel(),           # ML-based turn detection instead of "stt"
+                # TTS-aligned transcriptions for better frontend synchronization
+                use_tts_aligned_transcript=True,         # Enable word-level transcription timing (Cartesia/ElevenLabs)
+                # Endpointing parameters for turn detection model
+                min_endpointing_delay=0.5,               # Min wait (seconds) before considering turn complete
+                max_endpointing_delay=6.0,               # Max wait (seconds) if model thinks user will continue
+                # Interruption settings that prevent scheduler from getting stuck
+                allow_interruptions=True,
+                min_interruption_duration=0.3,           # 300ms to interrupt - still responsive but more deliberate
+                min_interruption_words=0,                # Duration-based, not word-based
+                resume_false_interruption=False,         # CRITICAL: Never try to resume - treat all interruptions as final
+                false_interruption_timeout=10.0,         # Very high timeout - essentially disable false interruption detection
+                discard_audio_if_uninterruptible=True   # Always discard audio on interruption
+            )
+            logger.info("✅ AgentSession created with %s tools available to LLM", len(agent.tools))
+            
             # Log and capture STT transcripts; commit turn on finals
-            commit_delay = float(os.getenv("VOICE_TURN_COMMIT_DELAY", "0.8"))
-            commit_timeout = float(os.getenv("VOICE_TRANSCRIPT_TIMEOUT", "0.5"))
+            commit_delay = float(os.getenv("VOICE_TURN_COMMIT_DELAY", "1.4"))
+            commit_timeout = float(os.getenv("VOICE_TRANSCRIPT_TIMEOUT", "0.8"))
 
             if not hasattr(session, "_pending_commit_task"):
                 session._pending_commit_task = None
@@ -848,6 +1331,76 @@ async def agent_job_handler(ctx: JobContext):
                 session._last_committed_text = ""
             if not hasattr(agent, "_last_committed_text"):
                 agent._last_committed_text = ""
+
+            def _schedule_turn_commit():
+                pending = getattr(session, "_pending_commit_task", None)
+                if pending and not pending.done():
+                    pending.cancel()
+
+                async def _delayed_commit():
+                    try:
+                        await asyncio.sleep(commit_delay)
+                        buffered = getattr(session, "_current_turn_text", "").strip()
+                        if not buffered:
+                            logger.debug("Delayed commit skipped (buffer cleared before execution)")
+                            return
+                        session.latest_user_text = buffered
+                        agent.latest_user_text = buffered
+                        session._last_committed_text = buffered
+                        agent._last_committed_text = buffered
+                        push_runtime_context({"latest_user_text": buffered})
+                        session.commit_user_turn(transcript_timeout=commit_timeout)
+                        session._current_turn_text = ""
+                        agent._current_turn_text = ""
+                    except asyncio.CancelledError:
+                        logger.debug("Delayed commit cancelled before execution")
+                    except Exception as ce:
+                        logger.warning(f"commit_user_turn failed: {type(ce).__name__}: {ce}")
+                    finally:
+                        session._pending_commit_task = None
+
+                session._pending_commit_task = asyncio.create_task(_delayed_commit())
+
+            def _commit_user_transcript_text(user_text: str) -> None:
+                if not hasattr(agent, "store_transcript"):
+                    return
+                try:
+                    logger.info(
+                        "📝 Scheduling user transcript commit (turn_id=%s, len=%s)",
+                        getattr(agent, "_current_turn_id", None),
+                        len(user_text),
+                    )
+                except Exception:
+                    pass
+                if _should_skip_user_commit(agent, user_text):
+                    logger.info(
+                        "📝 Duplicate user transcript suppressed for active turn (turn_id=%s)",
+                        getattr(agent, "_current_turn_id", None) or "pending",
+                    )
+                    return
+                try:
+                    agent._last_user_commit = user_text  # type: ignore[attr-defined]
+                    agent._pending_user_commit = True  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                normalized_user_text = _normalize_transcript_text(user_text)
+                turn_snapshot = getattr(agent, "_current_turn_id", None)
+
+                async def _store_user_transcript():
+                    try:
+                        await agent.store_transcript("user", user_text)
+                        try:
+                            agent._last_user_commit_turn = turn_snapshot or getattr(agent, "_current_turn_id", None)  # type: ignore[attr-defined]
+                            agent._last_user_commit_normalized = normalized_user_text  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    finally:
+                        try:
+                            agent._pending_user_commit = False  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+
+                asyncio.create_task(_store_user_transcript())
 
             def _merge_transcript_text(existing: str, incoming: str) -> str:
                 """
@@ -886,8 +1439,16 @@ async def agent_job_handler(ctx: JobContext):
                     is_final = bool(getattr(ev, 'is_final', False))
                     logger.info(f"📝 STT transcript: '{txt[:200]}' final={is_final}")
                     if txt:
+                        prev_turn_text = getattr(session, "_current_turn_text", "")
+                        if not prev_turn_text:
+                            try:
+                                session._user_transcript_committed = False
+                                session._user_transcript_committed_text = ""
+                                session._user_transcript_committed_turn = None
+                            except Exception:
+                                pass
                         merged = _merge_transcript_text(
-                            getattr(session, "_current_turn_text", ""),
+                            prev_turn_text,
                             txt,
                         )
                         session._current_turn_text = merged
@@ -895,22 +1456,38 @@ async def agent_job_handler(ctx: JobContext):
                         session.latest_user_text = merged
                         agent.latest_user_text = merged
                         if is_final:
-                            try:
-                                fut = session.interrupt(force=True)
-                                if fut:
-                                    if asyncio.iscoroutine(fut) or isinstance(fut, asyncio.Future):
-                                        async def _await_interrupt(task):
-                                            try:
-                                                await task
-                                                logger.info("⛔ Assistant speech interrupted due to user transcript final chunk")
-                                            except Exception as interrupt_err:
-                                                logger.debug("Interrupt future raised %s: %s", type(interrupt_err).__name__, interrupt_err)
+                            # Only interrupt if this is NOT a duplicate transcript for the same turn
+                            should_skip_duplicate = _should_skip_user_commit(agent, merged)
+                            if not should_skip_duplicate:
+                                try:
+                                    fut = session.interrupt(force=True)
+                                    if fut:
+                                        if asyncio.iscoroutine(fut) or isinstance(fut, asyncio.Future):
+                                            async def _await_interrupt(task):
+                                                try:
+                                                    await task
+                                                    logger.info("⛔ Assistant speech interrupted due to user transcript final chunk")
+                                                except Exception as interrupt_err:
+                                                    logger.debug("Interrupt future raised %s: %s", type(interrupt_err).__name__, interrupt_err)
 
-                                        asyncio.create_task(_await_interrupt(fut))
-                            except Exception as interrupt_exc:
-                                logger.debug("Interrupt call failed: %s: %s", type(interrupt_exc).__name__, interrupt_exc)
+                                            asyncio.create_task(_await_interrupt(fut))
+                                except Exception as interrupt_exc:
+                                    logger.debug("Interrupt call failed: %s: %s", type(interrupt_exc).__name__, interrupt_exc)
+                            else:
+                                logger.info("⏭️  Skipping interruption for duplicate final transcript (turn_id=%s)", getattr(agent, "_current_turn_id", None))
+                            # Final chunk marks end of this user utterance; clear buffer immediately
+                            session._current_turn_text = ""
+                            agent._current_turn_text = ""
                         if is_final:
                             push_runtime_context({"latest_user_text": merged})
+                            try:
+                                session._user_transcript_committed = True
+                                session._user_transcript_committed_text = _normalize_transcript_text(merged)
+                                session._user_transcript_committed_turn = getattr(agent, "_current_turn_id", None)
+                            except Exception:
+                                pass
+                            _schedule_turn_commit()
+                            _commit_user_transcript_text(merged)
                 except Exception as e:
                     logger.error(f"user_input_transcribed handler failed: {e}")
 
@@ -928,10 +1505,25 @@ async def agent_job_handler(ctx: JobContext):
                                     user_text = part.get("text")
                                     break
                     if user_text:
+                        normalized_user_text = _normalize_transcript_text(user_text)
+                        if normalized_user_text:
+                            already_committed = getattr(session, "_user_transcript_committed", False)
+                            committed_text = getattr(session, "_user_transcript_committed_text", "")
+                            if already_committed and committed_text == normalized_user_text:
+                                logger.debug("📝 Skipping duplicate fallback transcript from user_speech_committed")
+                                return
                         session.latest_user_text = user_text
                         agent.latest_user_text = user_text
                         logger.info(f"💬 Captured user speech: {user_text[:100]}...")
                         push_runtime_context({"latest_user_text": user_text})
+                        if normalized_user_text:
+                            try:
+                                session._user_transcript_committed = True
+                                session._user_transcript_committed_text = normalized_user_text
+                                session._user_transcript_committed_turn = getattr(agent, "_current_turn_id", None)
+                            except Exception:
+                                pass
+                        _commit_user_transcript_text(user_text)
                 except Exception as e:
                     logger.error(f"Failed to capture user speech: {e}")
 
@@ -960,6 +1552,12 @@ async def agent_job_handler(ctx: JobContext):
                     if hasattr(agent, 'store_transcript'):
                         logger.info("📝 Committing assistant transcript on agent_speech_committed")
                         asyncio.create_task(agent.store_transcript('assistant', agent_text))
+                    try:
+                        session._user_transcript_committed = False
+                        session._user_transcript_committed_text = ""
+                        session._user_transcript_committed_turn = None
+                    except Exception:
+                        pass
                 except Exception as e:
                     logger.error(f"Failed to commit assistant transcript: {e}")
 
@@ -982,41 +1580,69 @@ async def agent_job_handler(ctx: JobContext):
                 audio_track_name="agent_audio",
             )
 
-            logger.info("Priming RoomIO audio output before starting AgentSession...")
-            try:
-                session_room_io = room_io.RoomIO(
-                    agent_session=session,
-                    room=ctx.room,
-                    input_options=input_options,
-                    output_options=output_options,
-                )
-                await session_room_io.start()
-                logger.info(
-                    "✅ RoomIO primed | audio_attached=%s transcription_attached=%s",
-                    bool(session.output.audio),
-                    bool(session.output.transcription),
-                )
-            except Exception as room_io_err:
-                logger.error(f"❌ Failed to initialize RoomIO before session.start: {room_io_err}")
-                raise
+            if not is_text_mode:
+                logger.info("Priming RoomIO audio output before starting AgentSession...")
+                try:
+                    session_room_io = room_io.RoomIO(
+                        agent_session=session,
+                        room=ctx.room,
+                        input_options=input_options,
+                        output_options=output_options,
+                    )
+                    await session_room_io.start()
+                    logger.info(
+                        "✅ RoomIO primed | audio_attached=%s transcription_attached=%s",
+                        bool(session.output.audio),
+                        bool(session.output.transcription),
+                    )
+                except Exception as room_io_err:
+                    logger.error(f"❌ Failed to initialize RoomIO before session.start: {room_io_err}")
+                    raise
+            else:
+                logger.info("📝 Text-only mode: skipping RoomIO audio priming")
 
             await session.start(
                 room=ctx.room,
                 agent=agent,
             )
 
-            try:
-                audio_output = session.output.audio
-                if audio_output is not None:
+            if is_text_mode:
+                user_message = metadata.get("user_message")
+                try:
+                    payload = await _run_text_mode_interaction(
+                        session=session,
+                        agent=agent,
+                        room=ctx.room,
+                        user_message=user_message or "",
+                        collector=text_response_collector,
+                        conversation_id=agent._conversation_id,
+                    )
+                    logger.info(f"✅ Text-only interaction completed with response length {len(payload.get('text_response', ''))}")
+                finally:
                     try:
-                        await asyncio.wait_for(audio_output.subscribed, timeout=5.0)
-                        logger.info("🔊 audio output subscription confirmed")
-                    except Exception as sub_err:
-                        logger.warning(f"⚠️ audio output subscription check failed: {type(sub_err).__name__}: {sub_err}")
-                else:
-                    logger.warning("⚠️ session.output.audio is None after start")
-            except Exception as sub_check_err:
-                logger.warning(f"⚠️ audio output subscription instrumentation failed: {type(sub_check_err).__name__}: {sub_check_err}")
+                        session.shutdown(drain=False)
+                    except Exception as shutdown_err:
+                        logger.warning(f"Text mode session shutdown warning: {shutdown_err}")
+                    try:
+                        if hasattr(ctx.room, "disconnect"):
+                            await ctx.room.disconnect()
+                    except Exception as disconnect_err:
+                        logger.warning(f"Failed to disconnect text room: {disconnect_err}")
+                return
+
+            if not is_text_mode:
+                try:
+                    audio_output = session.output.audio
+                    if audio_output is not None:
+                        try:
+                            await asyncio.wait_for(audio_output.subscribed, timeout=5.0)
+                            logger.info("🔊 audio output subscription confirmed")
+                        except Exception as sub_err:
+                            logger.warning(f"⚠️ audio output subscription check failed: {type(sub_err).__name__}: {sub_err}")
+                    else:
+                        logger.warning("⚠️ session.output.audio is None after start")
+                except Exception as sub_check_err:
+                    logger.warning(f"⚠️ audio output subscription instrumentation failed: {type(sub_check_err).__name__}: {sub_check_err}")
 
             try:
                 # Log local and remote participants right after start
@@ -1170,52 +1796,9 @@ async def agent_job_handler(ctx: JobContext):
                 @session.on("function_tools_executed")
                 def _on_tools_executed(ev):
                     try:
-                        raw_calls = list(getattr(ev, "function_calls", []) or [])
-                        calls_summary = []
-                        tool_results: List[Dict[str, Any]] = []
-                        for call in raw_calls:
-                            try:
-                                logger.debug("🛠️ function_call payload: %s", getattr(call, "__dict__", {}))
-                            except Exception:
-                                pass
-                            name = getattr(call, "name", None)
-                            calls_summary.append(name)
-                            entry: Dict[str, Any] = {
-                                "slug": name,
-                                "type": getattr(call, "tool", None) or getattr(call, "type", None),
-                            }
-                            success = getattr(call, "success", None)
-                            if isinstance(success, bool):
-                                entry["success"] = success
-                            else:
-                                status = str(getattr(call, "status", "")).lower()
-                                entry["success"] = status not in {"error", "failed"}
-
-                            output = getattr(call, "output", None)
-                            if output is None:
-                                # LiveKit may expose the tool return value under `response` or `result`
-                                output = getattr(call, "response", None)
-                            if output is None:
-                                output = getattr(call, "result", None)
-                            if output is None:
-                                payload = getattr(call, "tool_output", None)
-                                if payload is not None:
-                                    output = payload
-                            if output is not None and not isinstance(output, (str, int, float, bool)):
-                                try:
-                                    entry["output"] = json.dumps(output, ensure_ascii=False)
-                                except Exception:
-                                    entry["output"] = str(output)
-                            else:
-                                entry["output"] = output
-
-                            error_msg = getattr(call, "error", None)
-                            if error_msg:
-                                entry["error"] = error_msg
-
-                            tool_results.append(entry)
-
+                        calls_summary, tool_results = collect_tool_results_from_event(ev, log=logger)
                         logger.info("🛠️ function_tools_executed: %s", calls_summary)
+                        logger.debug("🛠️ tool_results payload: %s", tool_results)
 
                         if tool_results and hasattr(agent, "_latest_tool_results"):
                             try:
@@ -1275,100 +1858,77 @@ async def agent_job_handler(ctx: JobContext):
                 @session.on("user_stopped_speaking")
                 def _on_user_stopped():
                     logger.info("🛑 user_stopped_speaking")
-                    pending = getattr(session, "_pending_commit_task", None)
-                    if pending and not pending.done():
-                        pending.cancel()
-
                     final_text = getattr(session, "_current_turn_text", "").strip()
                     if not final_text:
                         logger.info("🛑 user_stopped_speaking but no buffered transcript; skipping commit schedule")
                         return
+                    _schedule_turn_commit()
 
-                    async def _delayed_commit():
+                if VOICE_ITEM_COMMIT_FALLBACK:
+                    logger.info("ℹ️ conversation_item_added transcript fallback ENABLED")
+
+                    @session.on("conversation_item_added")
+                    def _on_conversation_item_added(item):
                         try:
-                            await asyncio.sleep(commit_delay)
-                            buffered = getattr(session, "_current_turn_text", "").strip()
-                            if not buffered:
-                                logger.debug("Delayed commit skipped (buffer cleared before execution)")
-                                return
-                            session.latest_user_text = buffered
-                            agent.latest_user_text = buffered
-                            session._last_committed_text = buffered
-                            agent._last_committed_text = buffered
-                            push_runtime_context({"latest_user_text": buffered})
-                            session.commit_user_turn(transcript_timeout=commit_timeout)
-                            session._current_turn_text = ""
-                            agent._current_turn_text = ""
-                        except asyncio.CancelledError:
-                            logger.debug("Delayed commit cancelled before execution")
-                        except Exception as ce:
-                            logger.warning(f"commit_user_turn failed: {type(ce).__name__}: {ce}")
-                        finally:
-                            session._pending_commit_task = None
-
-                    session._pending_commit_task = asyncio.create_task(_delayed_commit())
-
-                # Primary commit: persist assistant transcript when conversation history updates
-                @session.on("conversation_item_added")
-                def _on_conversation_item_added(item):
-                    try:
-                        # Unwrap event container if needed
-                        raw = item.item if hasattr(item, "item") and item.item is not None else item
-                        role = getattr(raw, "role", None)
-                        # Observability
-                        try:
-                            tc = getattr(raw, 'text_content', None)
-                            has_tc = isinstance(tc, str) or (tc is not None)
-                            logger.info(f"🧩 conversation_item_added: role={role} has_text_content={has_tc} has_text={hasattr(raw, 'text')} content_type={type(getattr(raw, 'content', None))}")
-                        except Exception:
-                            pass
-                        # Only handle assistant items
-                        if role != "assistant":
-                            return
-                        # Extract text robustly (text_content is a property, not callable)
-                        text_value = getattr(raw, "text_content", None)
-                        if callable(text_value):
+                            # Unwrap event container if needed
+                            raw = item.item if hasattr(item, "item") and item.item is not None else item
+                            role = getattr(raw, "role", None)
+                            # Observability
                             try:
-                                text_value = text_value()
-                            except Exception as call_exc:
-                                logger.debug(f"text_content callable failed: {call_exc}")
-                                text_value = None
-                        if not text_value and hasattr(raw, "text") and isinstance(getattr(raw, "text"), str) and raw.text:
-                            text_value = raw.text
-                        if not text_value and hasattr(raw, "content"):
-                            content = raw.content
-                            if isinstance(content, str) and content:
-                                text_value = content
-                            elif isinstance(content, list):
-                                collected: list[str] = []
-                                for part in content:
-                                    if isinstance(part, str):
-                                        collected.append(part)
-                                    elif isinstance(part, dict):
-                                        ptype = part.get("type")
-                                        if ptype in ("text", "output_text", "response_text", "output_text_delta") and part.get("text"):
-                                            collected.append(part.get("text"))
-                                if collected:
-                                    text_value = "".join(collected)
-                        if not text_value:
-                            logger.info("ℹ️ conversation_item_added: assistant item had no extractable text")
-                            return
-                        try:
-                            logger.info(f"🧪 Extracted assistant text (len={len(text_value)}): {text_value[:120]}...")
-                        except Exception:
-                            pass
-                        # Dedup by last commit content
-                        if getattr(agent, "_last_assistant_commit", "") == text_value:
-                            return
-                        try:
-                            agent._last_assistant_commit = text_value
-                        except Exception:
-                            pass
-                        if hasattr(agent, "store_transcript"):
-                            logger.info("📝 Committing assistant transcript via conversation_item_added")
-                            asyncio.create_task(agent.store_transcript("assistant", text_value))
-                    except Exception as e:
-                        logger.error(f"conversation_item_added handler failed: {e}")
+                                tc = getattr(raw, 'text_content', None)
+                                has_tc = isinstance(tc, str) or (tc is not None)
+                                logger.info(f"🧩 conversation_item_added: role={role} has_text_content={has_tc} has_text={hasattr(raw, 'text')} content_type={type(getattr(raw, 'content', None))}")
+                            except Exception:
+                                pass
+                            # Only handle assistant items
+                            if role != "assistant":
+                                return
+                            # Extract text robustly (text_content is a property, not callable)
+                            text_value = getattr(raw, "text_content", None)
+                            if callable(text_value):
+                                try:
+                                    text_value = text_value()
+                                except Exception as call_exc:
+                                    logger.debug(f"text_content callable failed: {call_exc}")
+                                    text_value = None
+                            if not text_value and hasattr(raw, "text") and isinstance(getattr(raw, "text"), str) and raw.text:
+                                text_value = raw.text
+                            if not text_value and hasattr(raw, "content"):
+                                content = raw.content
+                                if isinstance(content, str) and content:
+                                    text_value = content
+                                elif isinstance(content, list):
+                                    collected: list[str] = []
+                                    for part in content:
+                                        if isinstance(part, str):
+                                            collected.append(part)
+                                        elif isinstance(part, dict):
+                                            ptype = part.get("type")
+                                            if ptype in ("text", "output_text", "response_text", "output_text_delta") and part.get("text"):
+                                                collected.append(part.get("text"))
+                                    if collected:
+                                        text_value = "".join(collected)
+                            if not text_value:
+                                logger.info("ℹ️ conversation_item_added: assistant item had no extractable text")
+                                return
+                            try:
+                                logger.info(f"🧪 Extracted assistant text (len={len(text_value)}): {text_value[:120]}...")
+                            except Exception:
+                                pass
+                            # Dedup by last commit content
+                            if getattr(agent, "_last_assistant_commit", "") == text_value:
+                                return
+                            try:
+                                agent._last_assistant_commit = text_value
+                            except Exception:
+                                pass
+                            if hasattr(agent, "store_transcript"):
+                                logger.info("📝 Committing assistant transcript via conversation_item_added")
+                                asyncio.create_task(agent.store_transcript("assistant", text_value))
+                        except Exception as e:
+                            logger.error(f"conversation_item_added handler failed: {e}")
+                else:
+                    logger.info("ℹ️ conversation_item_added transcript fallback DISABLED (VOICE_ITEM_COMMIT_FALLBACK=false)")
             except Exception as e:
                 logger.warning(f"Could not add diagnostic handlers: {e}")
 
@@ -1406,7 +1966,7 @@ async def agent_job_handler(ctx: JobContext):
             # Note: ctx.agent is read-only property - agent is already managed by the framework
             
             # Proactive greeting: trigger only when a user is present per LiveKit specs
-            if os.getenv("ENABLE_PROACTIVE_GREETING", "false").lower() == "true":
+            if (not is_text_mode) and os.getenv("ENABLE_PROACTIVE_GREETING", "false").lower() == "true":
                 greeting_message = f"Hi {user_name}, how can I help you?"
                 greeted_flag = {"done": False}
                 async def greet_now():

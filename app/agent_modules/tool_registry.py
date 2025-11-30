@@ -17,6 +17,7 @@ from livekit.agents.llm.tool_context import function_tool as lk_function_tool, T
 
 from app.agent_modules.abilities.asana import AsanaAbilityConfigError, build_asana_tool
 from app.services.asana_oauth_service import AsanaOAuthService
+from app.agent_modules.tool_status_wrapper import with_status_updates, get_tool_friendly_name
 
 
 class ToolRegistry:
@@ -24,12 +25,16 @@ class ToolRegistry:
         self,
         tools_config: Optional[Dict[str, Any]] = None,
         api_keys: Optional[Dict[str, Any]] = None,
+        primary_supabase_client: Optional[Any] = None,
+        platform_supabase_client: Optional[Any] = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._tools: Dict[str, Any] = {}
         self._tools_config = tools_config or {}
         self._api_keys = api_keys or {}
         self._runtime_context: Dict[str, Dict[str, Any]] = {}
+        self._primary_supabase = primary_supabase_client
+        self._platform_supabase = platform_supabase_client
 
     def build(self, tool_defs: List[Dict[str, Any]]) -> List[Any]:
         try:
@@ -59,9 +64,14 @@ class ToolRegistry:
                 if ft is None:
                     self._logger.info(f"ℹ️ Tool {slug} managed externally; skipping inline registration")
                     continue
-                self._tools[t.get("id")] = ft
-                out.append(ft)
-                self._logger.info(f"✅ Built stream tool ok: slug={slug}")
+                
+                # Wrap tool with status updates for long-running operations
+                friendly_name = get_tool_friendly_name(t)
+                wrapped_ft = with_status_updates(ft, friendly_name, delay_seconds=2.0)
+                
+                self._tools[t.get("id")] = wrapped_ft
+                out.append(wrapped_ft)
+                self._logger.info(f"✅ Built stream tool ok: slug={slug} (with 2s status updates)")
             except Exception:
                 # Log the error with context; still skip misconfigured tools per no-fallback policy
                 try:
@@ -676,7 +686,13 @@ class ToolRegistry:
         try:
             from app.core.dependencies import get_client_service
 
-            oauth_service = AsanaOAuthService(get_client_service())
+            client_service = get_client_service()
+            platform_client = self._platform_supabase or getattr(client_service, "supabase", None)
+            oauth_service = AsanaOAuthService(
+                client_service,
+                primary_supabase=self._primary_supabase,
+                platform_supabase=platform_client,
+            )
         except Exception:
             oauth_service = None
 
@@ -692,8 +708,8 @@ class ToolRegistry:
             except Exception:
                 pass
 
-            async def _misconfigured_tool(**_: Any) -> str:
-                return message
+            async def _misconfigured_tool(**_: Any) -> Dict[str, str]:
+                return {"error": message, "slug": slug}
 
             description = t.get("description") or "Asana integration is not configured yet."
             return lk_function_tool(

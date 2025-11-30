@@ -44,6 +44,8 @@ class WordPressSiteService:
         api_secret = WordPressSite.generate_api_secret()
         
         # Create site dict matching actual table structure
+        metadata = site_data.metadata or {}
+
         site_dict = {
             "id": site_id,
             "api_key": api_key,
@@ -53,7 +55,7 @@ class WordPressSiteService:
             "admin_email": site_data.admin_email,
             "client_id": site_data.client_id,  # Should be UUID format
             "is_active": True,
-            "metadata": {},
+            "metadata": metadata,
             "request_count": 0
         }
         
@@ -132,6 +134,38 @@ class WordPressSiteService:
         except Exception as e:
             logger.error(f"Error updating site in Supabase: {e}")
             return None
+        
+    def regenerate_api_keys(self, site_id: str) -> Optional[WordPressSite]:
+        """Regenerate the API key and secret for a WordPress site"""
+        site = self.get_site(site_id)
+        if not site:
+            return None
+
+        new_key = WordPressSite.generate_api_key()
+        new_secret = WordPressSite.generate_api_secret()
+
+        update_dict = {
+            "api_key": new_key,
+            "api_secret": new_secret,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+
+        try:
+            result = (
+                self.supabase
+                .table(self.table_name)
+                .update(update_dict)
+                .eq("id", site_id)
+                .execute()
+            )
+            if result.data:
+                logger.info(f"Regenerated API keys for WordPress site {site_id}")
+                mapped_data = self._map_db_to_model(result.data[0])
+                return WordPressSite(**mapped_data)
+        except Exception as e:
+            logger.error(f"Error regenerating keys for site {site_id}: {e}")
+
+        return None
         
     def validate_api_key(self, api_key: str, api_secret: Optional[str] = None) -> Optional[WordPressSite]:
         """Validate API key and optionally secret"""

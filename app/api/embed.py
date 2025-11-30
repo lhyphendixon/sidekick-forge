@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Form
+from fastapi import APIRouter, Request, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse
 from typing import Optional
 import asyncio
@@ -14,11 +14,24 @@ from app.services.tools_service_supabase import ToolsService
 from app.api.v1 import trigger as trigger_api
 from app.services.agent_service_multitenant import AgentService as MultitentAgentService
 from app.services.client_service_multitenant import ClientService as MultitenantClientService
+from app.services.client_service_supabase_enhanced import ClientService as SupabaseClientService
+from app.utils.supabase_credentials import SupabaseCredentialManager
+from app.services.client_supabase_auth import ensure_client_user_credentials
+from app.integrations.supabase_client import supabase_manager
+from app.middleware.auth import require_user_auth
+from app.models.user import AuthContext
+from pydantic import BaseModel, EmailStr
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+
+
+class ClientUserSyncRequest(BaseModel):
+    client_id: str
+    email: EmailStr
+    password: str
 
 
 @router.get("/embed/{client_id}/{agent_slug}", response_class=HTMLResponse)
@@ -28,6 +41,14 @@ async def embed_sidekick(
     agent_slug: str,
     theme: Optional[str] = "dark",
 ):
+    try:
+        client_supabase_url, client_supabase_anon_key = await SupabaseCredentialManager.get_frontend_credentials(
+            client_id,
+            allow_platform_ids={"global"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     return templates.TemplateResponse(
         "embed/sidekick.html",
         {
@@ -37,8 +58,35 @@ async def embed_sidekick(
             "theme": theme,
             "supabase_url": settings.supabase_url,
             "supabase_anon_key": settings.supabase_anon_key,
+            "client_supabase_url": client_supabase_url,
+            "client_supabase_anon_key": client_supabase_anon_key,
         },
     )
+
+
+@router.post("/api/embed/client-users/sync")
+async def sync_client_user_credentials(
+    payload: ClientUserSyncRequest,
+    auth: AuthContext = Depends(require_user_auth),
+):
+    await supabase_manager.initialize()
+
+    def _fetch_user():
+        return supabase_manager.admin_client.auth.admin.get_user_by_id(str(auth.user_id))
+
+    user_record = await asyncio.to_thread(_fetch_user)
+    user_email = getattr(user_record.user, "email", None) if user_record else None
+
+    if not user_email or user_email.lower() != payload.email.lower():
+        raise HTTPException(status_code=403, detail="Email mismatch")
+
+    try:
+        await ensure_client_user_credentials(payload.client_id, payload.email, payload.password)
+    except Exception as exc:
+        logger.error(f"Failed to sync client user credentials: {exc}")
+        raise HTTPException(status_code=500, detail="Unable to synchronize client credentials")
+
+    return {"success": True}
 
 
 @router.post("/api/embed/text/stream")
@@ -96,12 +144,22 @@ async def embed_text_stream(
                 conversation_id=conversation_id,
             )
 
+            # Initialize ToolsService with Supabase-based ClientService for platform access
+            import os
+            platform_supabase_url = os.getenv('SUPABASE_URL')
+            platform_supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+            supabase_client_service = SupabaseClientService(
+                supabase_url=platform_supabase_url,
+                supabase_key=platform_supabase_key
+            )
+            tools_service = ToolsService(client_service=supabase_client_service)
+
             # Use the handle_text_trigger that works with multitenant architecture
             result = await trigger_api.handle_text_trigger(
                 trigger_request,
                 agent,
                 platform_client,
-                None,  # tools_service is optional and handled internally
+                tools_service,  # Pass ToolsService to enable Asana and other abilities
             )
 
             response_text = (

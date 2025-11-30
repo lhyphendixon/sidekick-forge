@@ -8,12 +8,16 @@ from typing import Dict, Any, List, Optional
 import logging
 import os
 from datetime import datetime
+from urllib.parse import quote
 from uuid import UUID
 
 # Import multi-tenant services
 from app.services.client_service_multitenant import ClientService
 from app.services.agent_service_multitenant import AgentService
 from app.services.client_connection_manager import get_connection_manager, ClientConfigurationError
+from app.services.wordpress_site_service_supabase import WordPressSiteService
+from app.models.wordpress_site import WordPressSiteCreate
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,7 @@ templates = Jinja2Templates(directory=templates_dir)
 # Services
 client_service = ClientService()
 agent_service = AgentService()
+wordpress_service = WordPressSiteService(settings.supabase_url, settings.supabase_service_role_key)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -107,6 +112,7 @@ async def list_clients(
         context = {
             "request": request,
             "admin_user": admin_user,
+            "user": admin_user,
             "clients": client_data
         }
         
@@ -145,12 +151,34 @@ async def client_detail(
             else:
                 masked_keys[key] = "Not configured" if not value else value
         
+        # Load WordPress sites for this client
+        wordpress_sites: List[Dict[str, Any]] = []
+        wordpress_error: Optional[str] = None
+        try:
+            sites = wordpress_service.list_sites(client_id=client_id)
+            for site in sites:
+                site_dict = site.dict() if hasattr(site, "dict") else dict(site)
+                for ts_field in ("created_at", "updated_at", "last_seen_at"):
+                    if site_dict.get(ts_field):
+                        site_dict[ts_field] = str(site_dict[ts_field])
+                wordpress_sites.append(site_dict)
+        except Exception as e:
+            logger.error(f"Failed to load WordPress sites for client {client_id}: {e}")
+            wordpress_error = str(e)
+
+        wordpress_api_endpoint = f"https://{settings.domain_name}/api/v1/wordpress-sites/auth/validate"
+
         context = {
             "request": request,
             "admin_user": admin_user,
+            "user": admin_user,
             "client": client,
             "agents": agents,
-            "api_keys": masked_keys
+            "api_keys": masked_keys,
+            "wordpress_sites": wordpress_sites,
+            "wordpress_error": wordpress_error,
+            "wordpress_api_endpoint": wordpress_api_endpoint,
+            "wordpress_domain": settings.domain_name,
         }
         
         return templates.TemplateResponse("client_detail.html", context)
@@ -160,6 +188,48 @@ async def client_detail(
     except Exception as e:
         logger.error(f"Client detail error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/clients/{client_id}/wordpress-sites", response_class=RedirectResponse)
+async def create_client_wordpress_site(
+    client_id: str,
+    domain: str = Form(...),
+    site_name: str = Form(...),
+    admin_email: str = Form(...)
+):
+    """Create a WordPress site registration for the client"""
+    try:
+        site_data = WordPressSiteCreate(
+            domain=domain,
+            site_name=site_name,
+            admin_email=admin_email,
+            client_id=client_id
+        )
+        wordpress_service.create_site(site_data)
+        message = quote("WordPress site added successfully")
+        return RedirectResponse(url=f"/admin/clients/{client_id}?message={message}", status_code=303)
+    except Exception as e:
+        logger.error(f"Failed to create WordPress site for client {client_id}: {e}")
+        error = quote(f"Failed to create WordPress site: {e}")
+        return RedirectResponse(url=f"/admin/clients/{client_id}?error={error}", status_code=303)
+
+
+@router.post("/clients/{client_id}/wordpress-sites/{site_id}/regenerate", response_class=RedirectResponse)
+async def regenerate_client_wordpress_keys(
+    client_id: str,
+    site_id: str
+):
+    """Regenerate the API credentials for a WordPress site"""
+    try:
+        updated_site = wordpress_service.regenerate_api_keys(site_id)
+        if not updated_site:
+            raise ValueError("Site not found")
+        message = quote("WordPress API keys regenerated")
+        return RedirectResponse(url=f"/admin/clients/{client_id}?message={message}", status_code=303)
+    except Exception as e:
+        logger.error(f"Failed to regenerate keys for site {site_id}: {e}")
+        error = quote(f"Failed to regenerate keys: {e}")
+        return RedirectResponse(url=f"/admin/clients/{client_id}?error={error}", status_code=303)
 
 
 @router.get("/agents", response_class=HTMLResponse)

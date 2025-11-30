@@ -147,7 +147,15 @@ async def trigger_agent(request: TriggerAgentRequest) -> TriggerAgentResponse:
         if request.mode == TriggerMode.VOICE:
             result = await handle_voice_trigger(request, agent, client_info, api_keys, platform_client)
         else:  # TEXT mode
-            result = await handle_text_trigger(request, agent, platform_client, api_keys)
+            if settings.enable_livekit_text_dispatch:
+                logger.info("🔄 ENABLE_LIVEKIT_TEXT_DISPATCH=true -> routing multi-tenant text request via LiveKit worker")
+                result = await handle_text_trigger_via_livekit(request, agent, platform_client, api_keys)
+            else:
+                logger.warning(
+                    "⚠️ Legacy text execution path in use for multi-tenant trigger (ENABLE_LIVEKIT_TEXT_DISPATCH=false). "
+                    "This path is deprecated and will be removed soon."
+                )
+                result = await handle_text_trigger(request, agent, platform_client, api_keys)
         
         request_total = time.time() - request_start
         logger.info(f"✅ COMPLETED trigger-agent request in {request_total:.2f}s")
@@ -196,7 +204,9 @@ async def handle_voice_trigger(
     backend_livekit = livekit_manager
     
     # Generate conversation_id if not provided (no-fallback policy)
-    conversation_id = request.conversation_id or str(uuid.uuid4())
+    raw_conversation_id = request.conversation_id or str(uuid.uuid4())
+    conversation_id, original_client_id = shared_trigger._normalize_conversation_id_value(raw_conversation_id)
+    client_conversation_id = original_client_id or raw_conversation_id
 
     # Prepare agent context with all necessary configuration
     agent_context = {
@@ -212,6 +222,7 @@ async def handle_voice_trigger(
         "user_id": request.user_id,
         "session_id": request.session_id,
         "conversation_id": conversation_id,
+        "client_conversation_id": client_conversation_id,
         "context": request.context or {},
         "api_keys": {k: v for k, v in api_keys.items() if v}  # Include all available API keys
     }
@@ -305,7 +316,7 @@ async def handle_voice_trigger(
         "mode": "voice",
         "room_name": request.room_name,
         "platform": request.platform,
-        "conversation_id": conversation_id,
+        "conversation_id": client_conversation_id,
         "agent_context": agent_context,
         "livekit_config": {
             "server_url": backend_livekit.url,
@@ -321,19 +332,11 @@ async def handle_voice_trigger(
     }
 
 
-async def handle_text_trigger(
+def _prepare_shared_text_request(
     request: TriggerAgentRequest,
-    agent,
     platform_client: PlatformClient,
-    api_keys: Dict[str, Optional[str]]
-) -> Dict[str, Any]:
-    """Delegate multi-tenant text handling to shared single-tenant implementation."""
-    logger.info(
-        "Handling text trigger for agent %s with message: %s",
-        agent.slug,
-        (request.message[:50] + "...") if request.message else None,
-    )
-
+    api_keys: Dict[str, Optional[str]],
+) -> shared_trigger.TriggerAgentRequest:
     # Merge API keys from the connection manager into the platform client model so downstream logic sees them.
     if api_keys and getattr(platform_client, "settings", None) and getattr(platform_client.settings, "api_keys", None):
         for key, value in api_keys.items():
@@ -343,6 +346,11 @@ async def handle_text_trigger(
     # Ensure compatibility attributes expected by the shared handler are present.
     if getattr(platform_client, "supabase_project_url", None) and not getattr(platform_client, "supabase_url", None):
         setattr(platform_client, "supabase_url", platform_client.supabase_project_url)
+    if not getattr(platform_client, "additional_settings", None):
+        try:
+            setattr(platform_client, "additional_settings", platform_client.settings.additional_settings)
+        except Exception:
+            setattr(platform_client, "additional_settings", {})
 
     shared_request = shared_trigger.TriggerAgentRequest(
         agent_slug=request.agent_slug,
@@ -359,6 +367,46 @@ async def handle_text_trigger(
 
     if shared_tools_service is None:
         logger.warning("Shared ToolsService unavailable; text abilities will be skipped for multi-tenant request.")
+
+    return shared_request
+
+
+async def handle_text_trigger_via_livekit(
+    request: TriggerAgentRequest,
+    agent,
+    platform_client: PlatformClient,
+    api_keys: Dict[str, Optional[str]],
+) -> Dict[str, Any]:
+    """Route multi-tenant text mode through the LiveKit worker for unified tool execution."""
+    logger.info(
+        "Routing multi-tenant text request for agent %s via LiveKit worker",
+        agent.slug,
+    )
+
+    shared_request = _prepare_shared_text_request(request, platform_client, api_keys)
+
+    return await shared_trigger.handle_text_trigger_via_livekit(
+        shared_request,
+        agent,
+        platform_client,
+        shared_tools_service,
+    )
+
+
+async def handle_text_trigger(
+    request: TriggerAgentRequest,
+    agent,
+    platform_client: PlatformClient,
+    api_keys: Dict[str, Optional[str]]
+) -> Dict[str, Any]:
+    """Delegate multi-tenant text handling to shared single-tenant implementation."""
+    logger.info(
+        "Handling text trigger for agent %s with message: %s",
+        agent.slug,
+        (request.message[:50] + "...") if request.message else None,
+    )
+
+    shared_request = _prepare_shared_text_request(request, platform_client, api_keys)
 
     return await shared_trigger.handle_text_trigger(
         shared_request,

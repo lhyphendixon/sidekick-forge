@@ -30,7 +30,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         "/openapi.json",
         "/embed",
         "/api/embed/",
-        "/api/v1/voice-transcripts",  # SSE transcripts must be public for EventSource
         # TEMP: allow admin paths for debugging template routing
         "/admin",
         "/api/v1/auth/signup",

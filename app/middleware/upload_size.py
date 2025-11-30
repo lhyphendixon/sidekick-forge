@@ -7,12 +7,14 @@ from fastapi import HTTPException
 from starlette.responses import Response
 import logging
 
+from app.constants import DOCUMENT_MAX_UPLOAD_BYTES
+
 logger = logging.getLogger(__name__)
 
 class UploadSizeMiddleware(BaseHTTPMiddleware):
     """Middleware to set maximum upload size"""
     
-    def __init__(self, app, max_upload_size: int = 50 * 1024 * 1024):  # 50MB default
+    def __init__(self, app, max_upload_size: int = DOCUMENT_MAX_UPLOAD_BYTES):
         super().__init__(app)
         self.max_upload_size = max_upload_size
     
