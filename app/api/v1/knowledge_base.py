@@ -12,13 +12,19 @@ from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, BackgroundTasks, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.constants import (
+    DOCUMENT_MAX_UPLOAD_BYTES,
+    DOCUMENT_MAX_UPLOAD_MB,
+    KNOWLEDGE_BASE_ALLOWED_EXTENSIONS,
+)
 from app.services.document_processor import document_processor
 from app.core.dependencies import get_client_service
 from app.middleware.auth import require_user_auth
+from app.services.document_processor import document_processor
 
 router = APIRouter(prefix="/knowledge-base", tags=["knowledge-base"])
 
@@ -50,6 +56,7 @@ async def upload_document(
     description: str = Form(""),
     agent_ids: str = Form(""),  # Comma-separated list of agent IDs
     client_id: str = Form(...),
+    replace_existing: str = Form("false"),
     auth = Depends(require_user_auth)
 ):
     """Upload a single document for processing"""
@@ -59,7 +66,7 @@ async def upload_document(
             raise HTTPException(status_code=400, detail="No filename provided")
         
         file_extension = Path(file.filename).suffix.lower().lstrip('.')
-        allowed_types = ['pdf', 'doc', 'docx', 'txt', 'md']
+        allowed_types = KNOWLEDGE_BASE_ALLOWED_EXTENSIONS
         
         if file_extension not in allowed_types:
             raise HTTPException(
@@ -67,8 +74,8 @@ async def upload_document(
                 detail=f"Unsupported file type. Allowed: {', '.join(allowed_types)}"
             )
         
-        # Validate file size (50MB max)
-        max_size = 50 * 1024 * 1024
+        # Validate file size
+        max_size = DOCUMENT_MAX_UPLOAD_BYTES
         file_size = 0
         temp_file_path = None
         
@@ -87,7 +94,7 @@ async def upload_document(
                     if file_size > max_size:
                         raise HTTPException(
                             status_code=413, 
-                            detail=f"File too large. Maximum size is {max_size // (1024*1024)}MB"
+                            detail=f"File too large. Maximum size is {DOCUMENT_MAX_UPLOAD_MB}MB"
                         )
                     
                     temp_file.write(chunk)
@@ -104,7 +111,8 @@ async def upload_document(
                 description=description,
                 user_id=auth.user_id,
                 agent_ids=agent_id_list,
-                client_id=client_id
+                client_id=client_id,
+                replace_existing=replace_existing.lower() == "true"
             )
             
             if result['success']:
@@ -184,7 +192,7 @@ async def upload_documents_batch(
                     continue
                 
                 file_extension = Path(file.filename).suffix.lower().lstrip('.')
-                allowed_types = ['pdf', 'doc', 'docx', 'txt', 'md']
+                allowed_types = KNOWLEDGE_BASE_ALLOWED_EXTENSIONS
                 
                 if file_extension not in allowed_types:
                     results.append({
@@ -200,11 +208,11 @@ async def upload_documents_batch(
                     content = await file.read()
                     
                     # Check file size
-                    if len(content) > 50 * 1024 * 1024:  # 50MB
+                    if len(content) > DOCUMENT_MAX_UPLOAD_BYTES:
                         results.append({
                             'filename': file.filename,
                             'success': False,
-                            'error': 'File too large (50MB max)'
+                            'error': f'File too large ({DOCUMENT_MAX_UPLOAD_MB}MB max)'
                         })
                         os.unlink(temp_file_path)
                         continue
@@ -250,20 +258,34 @@ async def upload_documents_batch(
 
 @router.get("/documents", response_model=List[DocumentResponse])
 async def get_documents(
+    response: Response,
     client_id: Optional[str] = None,
     status: Optional[str] = None,
-    limit: int = 50,
+    page: int = 1,
+    page_size: int = 50,
     auth = Depends(require_user_auth)
 ):
     """Get list of documents"""
     try:
-        documents = await document_processor.get_documents(
+        safe_page = max(1, int(page or 1))
+        safe_page_size = max(1, int(page_size or 50))
+        offset = (safe_page - 1) * safe_page_size
+
+        documents, total_count, total_size, _all_filenames = await document_processor.get_documents(
             user_id=auth.user_id,
             client_id=client_id,
             status=status,
-            limit=limit
+            limit=safe_page_size,
+            offset=offset,
+            with_count=True,
         )
-        
+
+        # Expose pagination metadata via headers for compatibility
+        response.headers['X-Total-Count'] = str(total_count)
+        response.headers['X-Total-Size'] = str(total_size)
+        response.headers['X-Page'] = str(safe_page)
+        response.headers['X-Page-Size'] = str(safe_page_size)
+
         return [
             DocumentResponse(
                 id=doc['id'],
@@ -278,7 +300,7 @@ async def get_documents(
             )
             for doc in documents
         ]
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch documents: {str(e)}")
 
@@ -377,24 +399,30 @@ async def reprocess_document(
         metadata = document.get('metadata', {})
         file_path = metadata.get('file_path')
         
-        if not file_path or not os.path.exists(file_path):
-            raise HTTPException(status_code=400, detail="Original file not found")
-        
         # Update status to processing
         supabase_manager.admin_client.table('documents')\
             .update({'status': 'processing'})\
             .eq('id', document_id)\
             .execute()
-        
-        # Start reprocessing
-        import asyncio
-        asyncio.create_task(
-            document_processor._process_document_async(
-                document_id=document_id,
-                file_path=file_path,
-                agent_ids=[]  # Keep existing agent assignments
+
+        # If we have the original file, re-run normal processing, otherwise rebuild from chunks
+        if file_path and os.path.exists(file_path):
+            import asyncio
+            asyncio.create_task(
+                document_processor._process_document_async(
+                    document_id=document_id,
+                    file_path=file_path,
+                    agent_ids=[]  # Keep existing agent assignments
+                )
             )
-        )
+        else:
+            rebuilt = await document_processor.reprocess_from_chunks(
+                document_id=document_id,
+                client_id=document.get('client_id') or None,
+                supabase=supabase_manager.admin_client
+            )
+            if not rebuilt:
+                raise HTTPException(status_code=400, detail="Failed to reprocess document from stored chunks")
         
         return {"success": True, "message": "Document reprocessing started"}
         

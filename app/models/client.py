@@ -3,7 +3,7 @@ Client model for multi-tenant support
 """
 from typing import Optional, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, HttpUrl, validator
+from pydantic import BaseModel, Field, field_validator, field_serializer
 
 
 class SupabaseConfig(BaseModel):
@@ -12,7 +12,7 @@ class SupabaseConfig(BaseModel):
     anon_key: str = Field(..., description="Supabase anonymous key")
     service_role_key: str = Field(..., description="Supabase service role key")
     
-    @validator('url')
+    @field_validator('url')
     def validate_url(cls, v):
         # Allow empty URLs for clients without Supabase configured
         if v and not v.startswith(('http://', 'https://')):
@@ -26,7 +26,7 @@ class LiveKitConfig(BaseModel):
     api_key: str = Field(..., description="LiveKit API key")
     api_secret: str = Field(..., description="LiveKit API secret")
     
-    @validator('server_url')
+    @field_validator('server_url')
     def validate_url(cls, v):
         if not v.startswith(('http://', 'https://', 'wss://', 'ws://')):
             raise ValueError('URL must start with http://, https://, ws://, or wss://')
@@ -75,13 +75,29 @@ class RerankSettings(BaseModel):
     candidates: int = Field(default=20, description="Number of candidates to rerank")
 
 
+class TelegramChannelSettings(BaseModel):
+    """Telegram channel configuration for a client."""
+    enabled: bool = Field(default=False, description="Enable Telegram channel for this client")
+    bot_token: Optional[str] = Field(default=None, description="Bot token (optional override per client)")
+    webhook_secret: Optional[str] = Field(default=None, description="Secret token to validate incoming webhooks")
+    default_agent_slug: Optional[str] = Field(default=None, description="Default agent slug for Telegram")
+    reply_mode: str = Field(default="auto", description="auto|text|voice_on_voice")
+    transcribe_voice: bool = Field(default=True, description="Transcribe inbound voice notes to text for processing")
+
+
+class ChannelSettings(BaseModel):
+    """All channel configurations for a client."""
+    telegram: TelegramChannelSettings = Field(default_factory=TelegramChannelSettings)
+
+
 class ClientSettings(BaseModel):
     """All client-specific settings"""
     supabase: SupabaseConfig
-    livekit: LiveKitConfig
+    livekit: Optional[LiveKitConfig] = None
     api_keys: APIKeys = Field(default_factory=APIKeys)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     rerank: RerankSettings = Field(default_factory=RerankSettings)
+    channels: ChannelSettings = Field(default_factory=ChannelSettings)
     performance_monitoring: bool = Field(default=False, description="Enable performance monitoring")
     license_key: Optional[str] = None
 
@@ -89,7 +105,7 @@ class ClientSettings(BaseModel):
 class Client(BaseModel):
     """Client model for multi-tenant support"""
     id: str = Field(..., description="Unique client identifier")
-    slug: str = Field(..., description="URL-friendly identifier", pattern=r"^[a-z0-9\-]+$")
+    slug: Optional[str] = Field(None, description="URL-friendly identifier", pattern=r"^[a-z0-9\-]+$")
     name: str = Field(..., description="Client name")
     description: Optional[str] = Field(None, description="Client description")
     domain: Optional[str] = Field(None, description="Client's primary domain")
@@ -100,10 +116,16 @@ class Client(BaseModel):
     additional_settings: Dict[str, Any] = Field(default_factory=dict, description="Additional client-specific settings")
     perplexity_api_key: Optional[str] = Field(None, description="Perplexity API key at the client level")
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetimes(self, value: Optional[datetime], info) -> str:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if hasattr(value, "isoformat"):
+            try:
+                return value.isoformat()
+            except Exception:
+                pass
+        return value if value is None else str(value)
 
 
 class ClientCreate(BaseModel):

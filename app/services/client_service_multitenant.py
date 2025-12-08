@@ -64,11 +64,20 @@ class ClientService:
                 "api_secret": client_data.get("livekit_api_secret"),
             }
         
+        supabase_config = None
+        if client_data.get("supabase_url") or client_data.get("supabase_service_role_key"):
+            supabase_config = {
+                "url": client_data.get("supabase_url"),
+                "anon_key": client_data.get("supabase_anon_key"),
+                "service_role_key": client_data.get("supabase_service_role_key"),
+            }
+
         # Create PlatformClientSettings
         settings = PlatformClientSettings(
             api_keys=api_keys,
             livekit_config=livekit_config,
-            additional_settings=additional_settings
+            additional_settings=additional_settings,
+            supabase=supabase_config,
         )
         
         def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -112,6 +121,7 @@ class ClientService:
             id=client_data["id"],
             name=client_data["name"],
             supabase_project_url=client_data.get("supabase_url"),
+            supabase_url=client_data.get("supabase_url"),
             supabase_service_role_key=client_data.get("supabase_service_role_key"),
             supabase_project_ref=client_data.get("supabase_project_ref"),
             supabase_anon_key=client_data.get("supabase_anon_key"),

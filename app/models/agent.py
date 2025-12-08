@@ -3,8 +3,9 @@ Agent model for multi-tenant AI agent management
 """
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_serializer
 from enum import Enum
+from app.models.client import ChannelSettings  # Reuse channel schema
 
 
 class ProviderType(str, Enum):
@@ -42,6 +43,21 @@ class VoiceSettings(BaseModel):
     
     # Provider-specific settings
     provider_config: Dict[str, Any] = Field(default_factory=dict)
+    cartesia_emotions_enabled: Optional[bool] = Field(
+        default=False, description="Enable Cartesia Sonic-3 emotion tagging"
+    )
+    cartesia_emotion_style: Optional[str] = Field(
+        default=None, description="Default emotion style for Cartesia Sonic-3"
+    )
+    cartesia_emotion_intensity: Optional[int] = Field(
+        default=None, description="Default intensity (1-5) when using emotion tags"
+    )
+    cartesia_emotion_volume: Optional[str] = Field(
+        default=None, description="Default volume hint for Cartesia Sonic-3 emotion tags"
+    )
+    cartesia_emotion_speed: Optional[str] = Field(
+        default=None, description="Default speed hint for Cartesia Sonic-3 emotion tags"
+    )
 
 
 class WebhookSettings(BaseModel):
@@ -76,6 +92,7 @@ class Agent(BaseModel):
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    channels: Optional[ChannelSettings] = Field(default=None, description="Per-agent channel settings")
     
     # Tools configuration (stored as JSON)
     tools_config: Optional[Dict[str, Any]] = Field(None, description="Agent-specific tools configuration")
@@ -83,10 +100,22 @@ class Agent(BaseModel):
     # Citations feature flag
     show_citations: bool = Field(default=True, description="Whether to show RAG citations in responses")
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    # Generation model + context retention
+    model: Optional[str] = Field(default="gpt-4o-mini", description="LLM model to use for responses")
+    context_retention_minutes: Optional[int] = Field(default=30, description="How long to retain context for voice sessions")
+    max_context_messages: Optional[int] = Field(default=50, description="Number of past messages to keep in short-term memory")
+    rag_results_limit: Optional[int] = Field(default=5, description="Number of knowledge base results to include in RAG context")
+    
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetimes(self, value: Optional[datetime], info) -> str:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if hasattr(value, "isoformat"):
+            try:
+                return value.isoformat()
+            except Exception:
+                pass
+        return value if value is None else str(value)
 
 
 class AgentCreate(BaseModel):
@@ -102,6 +131,10 @@ class AgentCreate(BaseModel):
     enabled: bool = True
     tools_config: Optional[Dict[str, Any]] = None
     show_citations: Optional[bool] = None
+    model: Optional[str] = Field(default="gpt-4o-mini", description="LLM model to use for this agent")
+    context_retention_minutes: Optional[int] = Field(default=30, description="How long to retain conversation context")
+    max_context_messages: Optional[int] = Field(default=50, description="Max short-term memory length")
+    rag_results_limit: Optional[int] = Field(default=5, description="Number of knowledge base results to include in RAG context")
 
 
 class AgentUpdate(BaseModel):
@@ -115,6 +148,11 @@ class AgentUpdate(BaseModel):
     enabled: Optional[bool] = None
     tools_config: Optional[Dict[str, Any]] = None
     show_citations: Optional[bool] = None
+    model: Optional[str] = None
+    context_retention_minutes: Optional[int] = None
+    max_context_messages: Optional[int] = None
+    channels: Optional[ChannelSettings] = None
+    rag_results_limit: Optional[int] = None
 
 
 class AgentInDB(Agent):

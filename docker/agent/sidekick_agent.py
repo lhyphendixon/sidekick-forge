@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Optional, List, Dict, Any, AsyncIterable
+from typing import Optional, List, Dict, Any, AsyncIterable, AsyncGenerator
 import uuid
 import asyncio
 from datetime import datetime
@@ -8,6 +8,12 @@ from datetime import datetime
 from livekit import rtc
 from livekit.agents import llm
 from livekit.agents import voice
+
+try:
+    # livekit-agents >= 1.2.18
+    from livekit.agents.voice.io import TimedString
+except ImportError:  # pragma: no cover - fallback for older SDKs
+    from livekit.agents.voice.agent import TimedString
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +48,7 @@ class SidekickAgent(voice.Agent):
         # Citation tracking
         self._current_citations: List[Dict[str, Any]] = []
         self._current_message_id: Optional[str] = None
+        self._current_rerank_info: Dict[str, Any] = {}
         
         # Feature flag for citations (can be configured per agent)
         self._citations_enabled = self._agent_config.get('show_citations', True)
@@ -52,6 +59,7 @@ class SidekickAgent(voice.Agent):
         self._transcript_enabled = True
         self._supabase_client = None
         self._conversation_id = None
+        self._client_conversation_id = None
         self._agent_id = None
         self._current_turn_id: Optional[str] = None
         self._latest_tool_results: List[Dict[str, Any]] = []
@@ -59,6 +67,20 @@ class SidekickAgent(voice.Agent):
         self._suppress_on_assistant_transcript = True
         self._last_assistant_commit: str = ""
         self._last_committed_text: str = ""
+        self._last_user_commit: str = ""
+        self._pending_user_commit: bool = False
+        
+        # TTS-aligned transcript streaming
+        self._streaming_transcript_row_id: Optional[str] = None
+        self._streaming_transcript_text: str = ""
+        # Text-only mode response capture
+        self._text_mode_enabled: bool = False
+        self._text_response_collector: Optional[Any] = None
+
+    def attach_text_response_collector(self, collector: Any) -> None:
+        """Enable text-only mode response capture."""
+        self._text_mode_enabled = True
+        self._text_response_collector = collector
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
@@ -190,8 +212,7 @@ class SidekickAgent(voice.Agent):
 
             self._last_committed_text = user_text
             self._current_user_transcript = user_text
-            logger.info(f"Captured user text for transcript: {user_text[:100]}...")
-            await self._handle_user_transcript(user_text)
+            logger.info(f"Captured user text for transcript (context only): {user_text[:100]}...")
 
             if not self._context_manager:
                 logger.info("on_user_turn_completed: context manager not available; skipping RAG injection")
@@ -271,16 +292,73 @@ class SidekickAgent(voice.Agent):
             except Exception:
                 dataset_ids = []
 
+            # Determine retrieval limits from agent config (defaults: 10 with rerank safe limits)
+            rag_results_limit = 10
+            try:
+                rag_results_limit = int(self._agent_config.get('rag_results_limit', rag_results_limit))
+            except Exception:
+                rag_results_limit = 10
+            if rag_results_limit < 1:
+                rag_results_limit = 1
+            if rag_results_limit > 50:
+                rag_results_limit = 50
+
+            rerank_cfg = self._agent_config.get("rerank", {}) if isinstance(self._agent_config, dict) else {}
+            rerank_enabled = rerank_cfg.get("enabled", True)
+            # Default to the agent's rag_results_limit for both candidates and top_k so we don't silently truncate to 5.
+            rerank_candidates = rerank_cfg.get("candidates", rag_results_limit)
+            rerank_top_k = rerank_cfg.get("top_k")
+            if not rerank_top_k or rerank_top_k < 1:
+                rerank_top_k = rerank_candidates if rerank_candidates else rag_results_limit
+            rerank_provider = rerank_cfg.get("provider")
+            rerank_model = rerank_cfg.get("model")
+            rerank_fallback_info = {
+                "enabled": bool(rerank_enabled),
+                "provider": rerank_provider,
+                "model": rerank_model,
+                "candidates_configured": rerank_candidates,
+                "top_k_configured": rerank_top_k,
+            }
+
+            api_keys = {}
+            try:
+                if self._context_manager and hasattr(self._context_manager, "api_keys"):
+                    api_keys = self._context_manager.api_keys or {}
+            except Exception:
+                api_keys = {}
+            if not api_keys and isinstance(self._agent_config, dict):
+                api_keys = self._agent_config.get("api_keys", {}) or {}
+
+            # Broaden recall; when rerank is disabled, go even wider and allow more docs.
+            if rerank_enabled:
+                match_count = max(rag_results_limit * 2, rerank_candidates or rag_results_limit, 20)
+                if not rerank_candidates or rerank_candidates < match_count:
+                    rerank_candidates = match_count
+                rerank_top_k = min(rerank_top_k, rerank_candidates) if rerank_top_k else rag_results_limit
+                max_docs = rag_results_limit
+            else:
+                # No rerank: fetch even wider and allow more docs to avoid single-doc collapse.
+                match_count = max(rag_results_limit * 6, 60)
+                rerank_candidates = None
+                rerank_top_k = None
+                max_docs = max(rag_results_limit * 3, 15)
+
             # Perform RAG retrieval with citations
             result = await rag_citations_service.retrieve_with_citations(
                 query=user_text,
                 client_id=self._client_id,
                 agent_slug=agent_slug,
                 dataset_ids=dataset_ids,
-                top_k=12,
-                similarity_threshold=0.5,
-                max_documents=4,
-                max_chunks=8
+                top_k=match_count,
+                similarity_threshold=0.2,  # widen recall for sparse results
+                max_documents=max_docs,
+                max_chunks=match_count,
+                rerank_enabled=rerank_enabled,
+                rerank_candidates=rerank_candidates,
+                rerank_top_k=rerank_top_k,
+                rerank_provider=rerank_provider,
+                rerank_model=rerank_model,
+                api_keys=api_keys,
             )
             
             # Store citations for inclusion in the final response
@@ -299,6 +377,12 @@ class SidekickAgent(voice.Agent):
                 }
                 for citation in result.citations
             ]
+
+            # Store rerank info for downstream metadata
+            try:
+                self._current_rerank_info = result.rerank_info or rerank_fallback_info
+            except Exception:
+                self._current_rerank_info = rerank_fallback_info
             
             logger.info(f"Retrieved {len(self._current_citations)} citations for message {self._current_message_id}")
             
@@ -349,6 +433,80 @@ class SidekickAgent(voice.Agent):
 
         return super().tts_node(_apply_sanitizer(), model_settings)
 
+    async def transcription_node(
+        self, text: AsyncIterable[str | TimedString], model_settings
+    ) -> AsyncGenerator[str | TimedString, None]:
+        """
+        Intercept the TTS-aligned transcript stream to write incremental updates.
+        This enables word-by-word streaming on the frontend.
+        """
+        accumulated_text = ""
+        
+        async for chunk in text:
+            # Extract text from chunk (TimedString or plain str)
+            if isinstance(chunk, TimedString):
+                chunk_text = str(chunk)
+            else:
+                chunk_text = chunk
+            
+            # Accumulate text
+            accumulated_text += chunk_text
+            
+            # Write to database incrementally
+            if self._supabase_client and self._conversation_id and self._agent_id:
+                try:
+                    timestamp = datetime.utcnow().isoformat()
+                    
+                    if not self._streaming_transcript_row_id:
+                        # First chunk: INSERT a new row
+                        row = {
+                            "conversation_id": self._conversation_id,
+                            "session_id": self._conversation_id,
+                            "agent_id": self._agent_id,
+                            "user_id": self._user_id,
+                            "role": "assistant",
+                            "content": accumulated_text,
+                            "transcript": accumulated_text,
+                            "turn_id": self._current_turn_id or str(uuid.uuid4()),
+                            "created_at": timestamp,
+                            "source": "voice",
+                            "metadata": {}
+                        }
+                        
+                        # Add citations if available
+                        if self._current_citations:
+                            row["citations"] = self._current_citations
+                        
+                        result = await asyncio.to_thread(
+                            lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
+                        )
+                        
+                        if result.data and len(result.data) > 0:
+                            self._streaming_transcript_row_id = result.data[0].get("id")
+                            logger.debug(f"📝 Created streaming transcript row: {self._streaming_transcript_row_id}")
+                    else:
+                        # Subsequent chunks: UPDATE the existing row
+                        await asyncio.to_thread(
+                            lambda: self._supabase_client.table("conversation_transcripts")
+                            .update({
+                                "content": accumulated_text,
+                                "transcript": accumulated_text
+                            })
+                            .eq("id", self._streaming_transcript_row_id)
+                            .execute()
+                        )
+                        logger.debug(f"📝 Updated streaming transcript ({len(accumulated_text)} chars)")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to write streaming transcript: {e}")
+            
+            # Yield the chunk back to continue the pipeline
+            yield chunk
+        
+        # Clear streaming state at end of turn
+        self._streaming_transcript_row_id = None
+        self._streaming_transcript_text = ""
+
     @staticmethod
     def _normalize_spelled_words(text: str) -> str:
         """Collapse sequences of single-letter tokens into contiguous strings for better search."""
@@ -398,36 +556,15 @@ class SidekickAgent(voice.Agent):
         # are already set directly by entrypoint.py before this method is called,
         # so we don't need to extract them here
     
-    async def _handle_user_transcript(self, text: str) -> None:
-        """Store user transcript in real-time."""
-        try:
-            self._current_user_transcript = text
-            
-            # Log what we have available
-            logger.info(f"📝 User transcript captured: {text[:100]}...")
-            logger.info(f"   - Has supabase_client: {self._supabase_client is not None}")
-            logger.info(f"   - Has conversation_id: {self._conversation_id is not None}")
-            logger.info(f"   - Has agent_id: {self._agent_id is not None}")
-            
-            if self._supabase_client and self._conversation_id:
-                if not self._current_turn_id:
-                    self._current_turn_id = str(uuid.uuid4())
-                await self._store_transcript(
-                    role="user",
-                    content=text,
-                    citations=None,
-                    turn_id=self._current_turn_id
-                )
-                logger.info(f"✅ Stored user transcript to database")
-            else:
-                logger.warning(f"Cannot store transcript - missing: supabase={self._supabase_client is None}, conv_id={self._conversation_id is None}")
-        except Exception as e:
-            logger.error(f"Failed to store user transcript: {e}", exc_info=True)
-    
     async def _handle_assistant_transcript(self, text: str) -> None:
         """Store assistant transcript with citations if available."""
         try:
             self._current_assistant_transcript = text
+            
+            # Skip if we already wrote this via transcription_node streaming
+            if self._streaming_transcript_row_id:
+                logger.debug("Skipping duplicate assistant transcript (already streamed)")
+                return
             
             # Include citations if available
             citations = self._current_citations if self._citations_enabled else None
@@ -550,6 +687,9 @@ class SidekickAgent(voice.Agent):
                 row_metadata.setdefault("normalization", {})["user_id"] = normalization_details
             if role == "assistant" and tool_results:
                 row_metadata["tool_results"] = tool_results
+            client_conversation_id = getattr(self, "_client_conversation_id", None)
+            if client_conversation_id:
+                row_metadata.setdefault("client_context", {})["conversation_id"] = client_conversation_id
 
             row = {
                 "conversation_id": self._conversation_id,
@@ -628,6 +768,11 @@ class SidekickAgent(voice.Agent):
     async def store_transcript(self, role: str, content: str) -> None:
         """Public wrapper used by session event handlers."""
         try:
+            # Skip assistant transcript if we already wrote it via transcription_node streaming
+            if role == "assistant" and self._streaming_transcript_row_id:
+                logger.debug("Skipping duplicate assistant transcript (already streamed)")
+                return
+            
             citations = self._current_citations if (role == "assistant" and self._citations_enabled) else None
             tool_results = None
             if role == "assistant":
@@ -643,6 +788,15 @@ class SidekickAgent(voice.Agent):
                 turn_id=turn_id,
                 tool_results=tool_results,
             )
+            if role == "assistant" and self._text_response_collector:
+                try:
+                    self._text_response_collector.commit_response(
+                        content,
+                        citations=citations or [],
+                        tool_results=tool_results or [],
+                    )
+                except Exception as collector_err:
+                    logger.debug(f"Text response collector commit failed: {collector_err}")
             if role == "assistant":
                 self._current_turn_id = None
         except Exception as e:

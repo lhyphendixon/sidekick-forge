@@ -1,14 +1,26 @@
 from fastapi import APIRouter, HTTPException, status, Depends, Request
-from typing import Dict, Any
+from fastapi.responses import JSONResponse
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
+import json
+import time
+import hmac
+import hashlib
+import logging
 
+import httpx
+
+from app.config import settings
 from app.models.common import APIResponse, SuccessResponse
 from app.models.agent import Agent
 from app.middleware.auth import get_current_auth, require_site_auth
 from app.integrations.supabase_client import supabase_manager
 from app.utils.exceptions import NotFoundError
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+BRIDGE_MAX_SKEW_SECONDS = getattr(settings, "wordpress_bridge_max_skew", 300)
 
 @router.get("/agent-settings/{agent_slug}", response_model=APIResponse)
 async def get_agent_settings(
@@ -239,6 +251,266 @@ async def report_usage(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+def _encode_payload_for_signature(payload: Dict[str, Any]) -> str:
+    """Encode payload deterministically to match WordPress signature generation."""
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+
+async def _fetch_supabase_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Fetch Supabase auth user metadata by email via Admin API."""
+    url = f"{settings.supabase_url.rstrip('/')}/auth/v1/admin/users"
+    headers = {
+        "apikey": settings.supabase_service_role_key,
+        "Authorization": f"Bearer {settings.supabase_service_role_key}",
+    }
+    params = {"email": email}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, params=params, headers=headers)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        data = response.json()
+        users = []
+        if isinstance(data, dict):
+            users = data.get("users") or data.get("data") or []
+        elif isinstance(data, list):
+            users = data
+        if isinstance(users, list) and users:
+            return users[0]
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to fetch Supabase user by email: %s", exc)
+    return None
+
+
+def _derive_password(payload: Dict[str, Any]) -> str:
+    """Create deterministic password used solely for service-side sign-ins."""
+    raw = f"{settings.wordpress_bridge_secret}:{payload.get('site','')}:{payload.get('wp_user_id')}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _normalize_user(user_obj: Any) -> Dict[str, Any]:
+    if not user_obj:
+        return {}
+    if isinstance(user_obj, dict):
+        return user_obj
+    return {
+        "id": getattr(user_obj, "id", None),
+        "aud": getattr(user_obj, "aud", None),
+        "email": getattr(user_obj, "email", None),
+        "phone": getattr(user_obj, "phone", None),
+        "role": getattr(user_obj, "role", None),
+        "last_sign_in_at": getattr(user_obj, "last_sign_in_at", None),
+        "app_metadata": getattr(user_obj, "app_metadata", None),
+        "user_metadata": getattr(user_obj, "user_metadata", None),
+    }
+
+
+def _normalize_session(session_obj: Any, user_obj: Any) -> Dict[str, Any]:
+    if not session_obj:
+        return {}
+    return {
+        "access_token": getattr(session_obj, "access_token", None),
+        "token_type": getattr(session_obj, "token_type", None),
+        "expires_in": getattr(session_obj, "expires_in", None),
+        "refresh_token": getattr(session_obj, "refresh_token", None),
+        "provider_token": getattr(session_obj, "provider_token", None),
+        "provider_refresh_token": getattr(session_obj, "provider_refresh_token", None),
+        "user": _normalize_user(user_obj),
+    }
+
+
+async def _upsert_profile(user_id: str, email: str, display_name: Optional[str]):
+    profile_data = {
+        "user_id": user_id,
+        "email": email,
+        "full_name": display_name or email,
+        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    try:
+        await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("profiles").upsert(profile_data, on_conflict="user_id")
+        )
+    except Exception as exc:
+        logger.warning("Failed to upsert profile for %s: %s", user_id, exc)
+
+
+async def _upsert_wp_mapping(user_id: str, payload: Dict[str, Any]):
+    identifier = f"{payload.get('site','unknown')}::wp_user_{payload.get('wp_user_id')}"
+    mapping = {
+        "wp_identifier": identifier,
+        "site_url": payload.get("site"),
+        "wp_user_id": payload.get("wp_user_id"),
+        "email": payload.get("email"),
+        "display_name": payload.get("display_name"),
+        "roles": payload.get("roles"),
+        "user_id": user_id,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    try:
+        await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("wordpress_user_mappings").upsert(mapping, on_conflict="wp_identifier")
+        )
+    except Exception as exc:
+        logger.debug("wordpress_user_mappings upsert skipped or failed: %s", exc)
+
+
+async def _ensure_supabase_user(payload: Dict[str, Any]) -> str:
+    """Ensure a Supabase Auth user exists for the WordPress identity."""
+    email = payload.get("email")
+    display_name = payload.get("display_name") or email
+    roles = payload.get("roles") or []
+    derived_password = _derive_password(payload)
+    metadata = {
+        "wordpress_user_id": payload.get("wp_user_id"),
+        "wordpress_site": payload.get("site"),
+        "wordpress_roles": roles,
+        "display_name": display_name,
+    }
+
+    admin_auth = supabase_manager.admin_client.auth.admin
+    user_record = await _fetch_supabase_user_by_email(email)
+    user_id: Optional[str] = None
+
+    if user_record and user_record.get("id"):
+        user_id = user_record["id"]
+        try:
+            admin_auth.update_user_by_id(
+                user_id,
+                {
+                    "password": derived_password,
+                    "email_confirm": True,
+                    "user_metadata": metadata,
+                },
+            )
+        except Exception as exc:
+            logger.warning("Failed to update Supabase user %s: %s", user_id, exc)
+    else:
+        try:
+            create_response = admin_auth.create_user(
+                {
+                    "email": email,
+                    "password": derived_password,
+                    "email_confirm": True,
+                    "user_metadata": metadata,
+                }
+            )
+            created_user = getattr(create_response, "user", None)
+            if created_user:
+                user_id = getattr(created_user, "id", None)
+        except Exception as exc:
+            logger.error("Failed to create Supabase user for %s: %s", email, exc)
+            # Attempt to refetch in case of race
+            refreshed = await _fetch_supabase_user_by_email(email)
+            user_id = refreshed.get("id") if refreshed else None
+
+    if not user_id:
+        raise HTTPException(status_code=500, detail="Unable to provision Supabase user.")
+
+    await _upsert_profile(user_id, email, display_name)
+    await _upsert_wp_mapping(user_id, payload)
+    return user_id
+
+
+@router.post("/wordpress/session")
+async def issue_wordpress_session(request: Request):
+    """Exchange a signed WordPress session payload for Supabase Auth tokens."""
+    if not settings.wordpress_bridge_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="WordPress session bridge is not configured.",
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Request body must be valid JSON.",
+        )
+
+    payload = body.get("payload")
+    signature = body.get("signature") or request.headers.get("x-skf-signature")
+
+    if not isinstance(payload, dict) or not signature:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing payload or signature.",
+        )
+
+    timestamp = payload.get("timestamp")
+    if not isinstance(timestamp, int):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Payload missing timestamp.",
+        )
+
+    email = payload.get("email")
+    wp_user_id = payload.get("wp_user_id")
+    if not email or wp_user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Payload missing required fields.",
+        )
+
+    now = int(time.time())
+    if abs(now - timestamp) > BRIDGE_MAX_SKEW_SECONDS:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Payload timestamp is outside the allowed window.",
+        )
+
+    encoded_payload = _encode_payload_for_signature(payload)
+    expected_signature = hmac.new(
+        settings.wordpress_bridge_secret.encode("utf-8"),
+        encoded_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected_signature, signature):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid payload signature.",
+        )
+
+    user_id = await _ensure_supabase_user(payload)
+
+    derived_password = _derive_password(payload)
+    try:
+        login_response = supabase_manager.auth_client.auth.sign_in_with_password(
+            {"email": email, "password": derived_password}
+        )
+    except Exception as exc:
+        logger.error("Failed to create Supabase session for %s: %s", payload["email"], exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create Supabase session.",
+        )
+
+    if not getattr(login_response, "session", None):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Supabase did not return a session.",
+        )
+
+    session_payload = _normalize_session(login_response.session, login_response.user)
+    session_payload["user"]["id"] = session_payload["user"].get("id") or user_id
+
+    debug = {}
+    if settings.debug:
+        debug = {
+            "wp_user_id": payload.get("wp_user_id"),
+            "wp_site": payload.get("site"),
+            "roles": payload.get("roles"),
+        }
+
+    response_body = session_payload
+    if debug:
+        response_body = {**session_payload, "bridge_debug": debug}
+
+    return JSONResponse(response_body)
 
 @router.post("/webhook/test", response_model=APIResponse[SuccessResponse])
 async def test_webhook(

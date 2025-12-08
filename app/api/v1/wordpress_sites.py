@@ -3,12 +3,15 @@ from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
 
 from app.models.wordpress_site import (
     WordPressSite, WordPressSiteCreate, WordPressSiteUpdate,
     WordPressSiteAuth, WordPressSiteStats
 )
 from app.services.wordpress_site_service import WordPressSiteService
+from app.services.client_supabase_auth import generate_client_session_tokens
+from app.utils.supabase_credentials import SupabaseCredentialManager
 import logging
 import os
 
@@ -25,8 +28,10 @@ wordpress_service = None
 def get_wordpress_service() -> WordPressSiteService:
     """Get WordPress site service instance"""
     from app.services.wordpress_site_service_supabase import WordPressSiteService
-    supabase_url = os.getenv("SUPABASE_URL", "https://yuowazxcxwhczywurmmw.supabase.co")
-    supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY")
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not supabase_key:
+        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be configured for WordPress service")
     return WordPressSiteService(supabase_url, supabase_key)
 
 
@@ -242,4 +247,54 @@ async def test_wordpress_auth(
         "domain": site.domain,
         "client_id": site.client_id,
         "message": "Authentication successful"
+    }
+
+
+class WordPressSessionRequest(BaseModel):
+    """Request payload for issuing a Supabase session for a WP user"""
+    api_key: str
+    api_secret: Optional[str] = None
+    user_email: str
+    user_name: Optional[str] = None
+
+
+@router.post("/auth/session")
+async def issue_wordpress_session(
+    payload: WordPressSessionRequest,
+):
+    """
+    Exchange WordPress site credentials + user email for a client Supabase session.
+
+    This lets the embed skip a second login by minting a shadow Supabase user
+    scoped to the corresponding client.
+    """
+    service = get_wordpress_service()
+    site = service.validate_api_key(payload.api_key, payload.api_secret)
+    if not site:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    try:
+        supabase_url, supabase_anon = await SupabaseCredentialManager.get_frontend_credentials(site.client_id)
+    except Exception as exc:
+        logger.error(f"WordPress session: missing Supabase creds for client {site.client_id}: {exc}")
+        raise HTTPException(status_code=400, detail="Client Supabase configuration missing")
+
+    try:
+        tokens = await generate_client_session_tokens(site.client_id, payload.user_email)
+    except Exception as exc:
+        logger.error(f"WordPress session: failed to generate tokens for {payload.user_email} client {site.client_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to create session")
+
+    return {
+        "success": True,
+        "client_id": site.client_id,
+        "site_id": site.id,
+        "user_email": payload.user_email,
+        "user_id": tokens.get("user_id"),
+        "supabase_url": supabase_url,
+        "supabase_anon_key": supabase_anon,
+        "access_token": tokens.get("access_token"),
+        "refresh_token": tokens.get("refresh_token"),
+        "token_type": tokens.get("token_type", "bearer"),
+        "expires_in": tokens.get("expires_in"),
     }

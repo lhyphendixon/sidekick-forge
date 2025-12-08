@@ -165,9 +165,9 @@ class ClientService:
         # Check if the provided API key matches the client's license key
         return client.settings.license_key == api_key if client.settings else False
     
-    async def get_client_supabase_config(self, client_id: str) -> Optional[Dict[str, str]]:
+    async def get_client_supabase_config(self, client_id: str, auto_sync: bool = False) -> Optional[Dict[str, str]]:
         """Get Supabase configuration for a specific client"""
-        client = await self.get_client(client_id)
+        client = await self.get_client(client_id, auto_sync=auto_sync)
         if not client or not client.settings or not client.settings.supabase:
             return None
             
@@ -177,9 +177,9 @@ class ClientService:
             "service_role_key": client.settings.supabase.service_role_key
         }
     
-    async def get_client_supabase_client(self, client_id: str) -> Optional[SupabaseClient]:
+    async def get_client_supabase_client(self, client_id: str, auto_sync: bool = False) -> Optional[SupabaseClient]:
         """Get a Supabase client instance for a specific client"""
-        config = await self.get_client_supabase_config(client_id)
+        config = await self.get_client_supabase_config(client_id, auto_sync=auto_sync)
         if not config or not config["url"] or not config["service_role_key"]:
             return None
             

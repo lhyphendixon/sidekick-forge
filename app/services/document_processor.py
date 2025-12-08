@@ -6,6 +6,7 @@ Handles text extraction, chunking, and vectorization of uploaded documents
 
 import asyncio
 import hashlib
+import time
 import logging
 import os
 import uuid
@@ -33,6 +34,7 @@ except ImportError:
     HAS_TEXTRACT = False
     textract = None
 
+from app.constants import DOCUMENT_MAX_UPLOAD_BYTES
 from app.integrations.supabase_client import supabase_manager
 from app.services.ai_processor import ai_processor
 
@@ -57,10 +59,13 @@ class DocumentProcessor:
             'md': self._extract_text_file,
             'doc': self._extract_doc_text,
             'docx': self._extract_docx_text,
+            'srt': self._extract_srt_text,
         }
-        self.max_file_size = 50 * 1024 * 1024  # 50MB
+        self.max_file_size = DOCUMENT_MAX_UPLOAD_BYTES
         self.chunk_size = 500  # words
         self.chunk_overlap = 50  # words
+        # Default vector dimension expected by Supabase columns (use 1024 everywhere)
+        self.default_embedding_dim = int(os.getenv("EMBEDDING_VECTOR_DIM", "1024"))
 
         default_upload_root = Path(__file__).resolve().parents[2] / 'data' / 'uploads'
         upload_root = os.getenv("DOCUMENT_UPLOAD_ROOT", str(default_upload_root))
@@ -278,7 +283,8 @@ class DocumentProcessor:
         description: str = "",
         user_id: str = None,
         agent_ids: List[str] = None,
-        client_id: str = None
+        client_id: str = None,
+        replace_existing: bool = False
     ) -> Dict[str, Any]:
         """Process an uploaded file through the complete pipeline"""
         try:
@@ -291,6 +297,7 @@ class DocumentProcessor:
                 }
             
             file_info = validation_result['file_info']
+            file_name = file_info.get('name') or Path(file_path).name
             checksum = self._calculate_checksum(file_path)
 
             # Prepare Supabase client early for dedupe checks/assignments
@@ -314,30 +321,42 @@ class DocumentProcessor:
             )
 
             if existing_document:
-                logger.info(
-                    "Skipping upload for '%s' (duplicate ready document %s)",
-                    title,
-                    existing_document['id'],
-                )
-
-                if agent_ids:
-                    await self._assign_document_to_agents(
-                        str(existing_document['id']),
-                        agent_ids,
-                        client_id,
-                        supabase=supabase_client,
+                if replace_existing:
+                    try:
+                        supabase_client.table('documents').delete().eq('id', existing_document['id']).execute()
+                        logger.info("Deleted existing document %s to replace with new upload", existing_document['id'])
+                    except Exception as delete_error:
+                        logger.error(f"Failed to delete existing document {existing_document['id']}: {delete_error}")
+                        return {
+                            'success': False,
+                            'error': f'Failed to replace existing document: {delete_error}'
+                        }
+                else:
+                    logger.info(
+                        "Skipping upload for '%s' (duplicate ready document %s)",
+                        title,
+                        existing_document['id'],
                     )
 
-                self._remove_temp_file(file_path)
+                    if agent_ids:
+                        await self._assign_document_to_agents(
+                            str(existing_document['id']),
+                            agent_ids,
+                            client_id,
+                            supabase=supabase_client,
+                        )
 
-                return {
-                    'success': True,
-                    'document_id': str(existing_document['id']),
-                    'status': existing_document.get('status', 'ready'),
-                    'duplicate': True,
-                    'message': 'Document already processed; reusing existing copy',
-                    'queued': False,
-                }
+                    self._remove_temp_file(file_path)
+
+                    return {
+                        'success': True,
+                        'document_id': str(existing_document['id']),
+                        'status': existing_document.get('status', 'ready'),
+                        'duplicate': True,
+                        'skipped': True,
+                        'message': 'Document already processed; reusing existing copy',
+                        'queued': False,
+                    }
 
             try:
                 file_path = self._stage_file_for_processing(file_path, client_id)
@@ -396,6 +415,7 @@ class DocumentProcessor:
                 client_id=client_id,
                 checksum=checksum,
                 supabase=supabase_client,
+                file_name=file_name,
             )
             
             if not document_id:
@@ -483,12 +503,14 @@ class DocumentProcessor:
         client_id: str = None,
         checksum: str = '',
         supabase=None,
+        file_name: str = None,
     ) -> str:
         """Create document record in client-specific Supabase"""
         try:
+            file_name = file_name or file_info.get('name') or Path(file_path).name
             document_data = {
                 'title': title,
-                'file_name': file_info['name'],
+                'file_name': file_name,
                 'file_type': file_info['extension'],
                 'file_size': file_info['size'],
                 'user_id': user_id,
@@ -544,6 +566,7 @@ class DocumentProcessor:
             client_settings = None
             truncated_chunks = False
             total_chunks_before_truncation = 0
+            success = False
             try:
                 logger.info(f"Starting async processing for document {document_id}")
 
@@ -635,6 +658,7 @@ class DocumentProcessor:
                 )
 
                 logger.info(f"Completed processing for document {document_id}")
+                success = True
 
             except Exception as e:
                 logger.error(f"Error in async document processing for {document_id}: {e}")
@@ -646,10 +670,12 @@ class DocumentProcessor:
                     supabase=supabase_client,
                 )
             finally:
-                try:
-                    self._cleanup_staged_file(file_path)
-                except Exception as cleanup_error:
-                    logger.warning(f"Failed to clean up staged file {file_path}: {cleanup_error}")
+                # Only clean up staged file if processing succeeded so we can retry with the original file on failure
+                if success:
+                    try:
+                        self._cleanup_staged_file(file_path)
+                    except Exception as cleanup_error:
+                        logger.warning(f"Failed to clean up staged file {file_path}: {cleanup_error}")
     
     async def _extract_text(self, file_path: str) -> str:
         """Extract text from file based on type"""
@@ -731,6 +757,35 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"Error reading text file {file_path}: {e}")
             return ""
+
+    async def _extract_srt_text(self, file_path: str) -> str:
+        """Extract readable text from .srt subtitle files by stripping indices/timestamps."""
+        def _load_lines() -> List[str]:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return f.read().splitlines()
+            except UnicodeDecodeError:
+                with open(file_path, 'r', encoding='latin-1') as f:
+                    return f.read().splitlines()
+            except Exception as e:
+                logger.error(f"Error reading srt file {file_path}: {e}")
+                return []
+
+        lines = _load_lines()
+        cleaned_lines: List[str] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Skip numeric sequence lines
+            if line.isdigit():
+                continue
+            # Skip timestamp lines containing '-->'
+            if '-->' in line:
+                continue
+            cleaned_lines.append(line)
+
+        return '\n'.join(cleaned_lines)
     
     def _clean_text(self, text: str) -> str:
         """Clean extracted text"""
@@ -781,7 +836,7 @@ class DocumentProcessor:
             
             # Use AI processor to generate embeddings with client settings
             embeddings = await self.ai_processor.generate_embeddings(text, context='document', client_settings=client_settings)
-            return embeddings
+            return self._normalize_embedding_length(embeddings, client_settings)
             
         except Exception as e:
             logger.error(f"Error generating document embeddings: {e}")
@@ -794,12 +849,108 @@ class DocumentProcessor:
                 return None
             
             # Use AI processor to generate embeddings with client settings
-            embeddings = await self.ai_processor.generate_embeddings(chunk_text, context='document', client_settings=client_settings)
-            return embeddings
+            embeddings = await self.ai_processor.generate_embeddings(chunk_text, context='chunk', client_settings=client_settings)
+            return self._normalize_embedding_length(embeddings, client_settings)
             
         except Exception as e:
             logger.error(f"Error generating chunk embeddings: {e}")
             return None
+
+    async def reprocess_from_chunks(
+        self,
+        document_id: str,
+        client_id: Optional[str] = None,
+        supabase=None,
+    ) -> bool:
+        """Rebuild a document from stored chunks when original file is missing."""
+        supabase_client = supabase
+        if client_id and supabase_client is None:
+            supabase_client, _ = await self._get_client_context(client_id)
+        elif supabase_client is None:
+            supabase_client = self._ensure_supabase()
+
+        if supabase_client is None:
+            return False
+
+        try:
+            chunks_resp = supabase_client.table('document_chunks').select('id,content,chunk_index').eq('document_id', document_id).order('chunk_index').execute()
+            chunks = chunks_resp.data or []
+            if not chunks:
+                await self._update_document_status(
+                    document_id,
+                    'error',
+                    'Reprocess failed: no stored chunks to rebuild content',
+                    client_id,
+                    supabase=supabase_client,
+                )
+                return False
+
+            content = '\n'.join([(c.get('content') or '') for c in chunks])
+            cleaned = self._clean_text(content)
+            # Get client settings for embeddings
+            _, client_settings = await self._get_client_context(client_id) if client_id else (None, None)
+            doc_emb = await self._generate_document_embeddings(cleaned[:2000], client_settings)
+
+            # Refresh chunk embeddings
+            for c in chunks:
+                emb = await self._generate_chunk_embeddings(c.get('content') or '', client_settings)
+                supabase_client.table('document_chunks').update({'embeddings_vec': emb}).eq('id', c['id']).execute()
+
+            await self._finalize_document_processing(
+                document_id=document_id,
+                content=cleaned,
+                embeddings=doc_emb,
+                chunk_count=len(chunks),
+                agent_ids=[],
+                client_id=client_id,
+                supabase=supabase_client,
+                extra_metadata={'reembedded_from_chunks': True, 'recovered_at': time.time()},
+            )
+            return True
+        except Exception as e:
+            logger.error(f"reprocess_from_chunks failed for {document_id}: {e}")
+            await self._update_document_status(
+                document_id,
+                'error',
+                f'Reprocess failed: {e}',
+                client_id,
+                supabase=supabase_client,
+            )
+            return False
+
+    def _normalize_embedding_length(self, embeddings: Optional[List[float]], client_settings: Optional[Dict] = None) -> Optional[List[float]]:
+        """Pad or trim embeddings to match the expected vector dimension."""
+        if embeddings is None:
+            return None
+        try:
+            target_dim = self._get_target_embedding_dim(client_settings)
+            vec = list(embeddings)
+            if len(vec) == target_dim:
+                return vec
+            if len(vec) > target_dim:
+                return vec[:target_dim]
+            # Pad with zeros if shorter
+            vec.extend([0.0] * (target_dim - len(vec)))
+            return vec
+        except Exception as e:
+            logger.warning(f"Failed to normalize embedding length: {e}")
+            return embeddings
+
+    def _get_target_embedding_dim(self, client_settings: Optional[Dict]) -> int:
+        """Determine target embedding dimension from client settings or default."""
+        target = None
+        if client_settings:
+            # Handle both dict and object forms
+            try:
+                if isinstance(client_settings, dict):
+                    embedding_cfg = client_settings.get('embedding', {})
+                    target = embedding_cfg.get('dimension')
+                else:
+                    embedding_cfg = getattr(client_settings, 'embedding', None)
+                    target = getattr(embedding_cfg, 'dimension', None) if embedding_cfg else None
+            except Exception:
+                target = None
+        return int(target) if target else self.default_embedding_dim
     
     async def _store_document_chunk(
         self,
@@ -824,7 +975,7 @@ class DocumentProcessor:
                 'document_id': doc_id_for_chunk,
                 'content': chunk_text,
                 'chunk_index': chunk_index,
-                'embeddings': embeddings,
+                'embeddings_vec': embeddings,  # Store in vector column for pgvector similarity search
                 'chunk_metadata': {
                     'word_count': len(chunk_text.split()),
                     'character_count': len(chunk_text),
@@ -1099,13 +1250,15 @@ class DocumentProcessor:
             logger.error(f"Error updating document status: {e}")
     
     async def get_documents(
-        self, 
-        user_id: str = None, 
-        client_id: str = None, 
+        self,
+        user_id: str = None,
+        client_id: str = None,
         status: str = None,
-        limit: int = 50
+        limit: int = 50,
+        offset: int = 0,
+        with_count: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Get documents with optional filtering"""
+        """Get documents with optional filtering and pagination"""
         try:
             supabase = None
             if client_id:
@@ -1119,28 +1272,57 @@ class DocumentProcessor:
             else:
                 logger.info("No client_id provided, using platform Supabase")
                 supabase = self._ensure_supabase()
-            
-            query = supabase.table('documents').select('*')
-            
+
+            # Build base query
+            query = supabase.table('documents').select('*', count='exact')
+
             if user_id:
                 query = query.eq('user_id', user_id)
-            
+
             if status:
                 query = query.eq('status', status)
-            
-            result = query.order('created_at', desc=True).limit(limit).execute()
-            
-            # Add client_id to each document for frontend filtering
+
+            safe_offset = max(0, int(offset or 0))
+            safe_limit = max(1, int(limit or 50))
+            range_end = safe_offset + safe_limit - 1
+
+            result = query.order('created_at', desc=True).range(safe_offset, range_end).execute()
+
             documents = result.data if result.data else []
             if client_id:
                 for doc in documents:
                     doc['client_id'] = client_id
-            
-            return documents
-            
+
+            if not with_count:
+                return documents
+
+            total_count = getattr(result, 'count', None)
+            if total_count is None:
+                total_count = len(documents)
+
+            # Compute total size and collect all filenames separately (use generous range to avoid default limits)
+            size_query = supabase.table('documents').select('file_size,file_name')
+            if user_id:
+                size_query = size_query.eq('user_id', user_id)
+            if status:
+                size_query = size_query.eq('status', status)
+
+            size_result = size_query.range(0, 50000).execute()
+            total_size = 0
+            all_filenames = []
+            if size_result and getattr(size_result, 'data', None):
+                for row in size_result.data:
+                    if not isinstance(row, dict):
+                        continue
+                    total_size += (row.get('file_size') or 0)
+                    if row.get('file_name'):
+                        all_filenames.append(str(row['file_name']).lower())
+
+            return documents, total_count, total_size, all_filenames
+
         except Exception as e:
             logger.error(f"Error fetching documents: {e}")
-            return []
+            return [] if not with_count else ([], 0, 0, [])
     
     async def delete_document(self, document_id: str, user_id: str = None, client_id: str = None) -> bool:
         """Delete a document and its chunks from the appropriate client database"""

@@ -5,8 +5,9 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     APP_HOME=/app \
-    HF_HOME=/app/.cache \
-    TRANSFORMERS_CACHE=/app/.cache/huggingface
+    HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface \
+    HUGGINGFACE_HUB_CACHE=/app/.cache/huggingface
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -49,11 +50,12 @@ ENV LIVEKIT_URL="wss://dummy.livekit.cloud" \
 # Switch to root to download models with correct permissions
 USER root
 
-# Download necessary model weights for plugins
-# Skip model downloads; no local HF models used
-
-# Ensure agent user owns all downloaded files
-RUN chown -R agent:agent /app /home/agent
+# Create cache directories and download turn detector model from HuggingFace
+RUN mkdir -p /app/.cache/huggingface /home/agent/.cache/huggingface && \
+    python -c "from huggingface_hub import snapshot_download; path = snapshot_download('livekit/turn-detector', revision='v1.2.2-en', cache_dir='/app/.cache/huggingface'); print(f'Model downloaded to: {path}')" && \
+    ls -la /app/.cache/huggingface/ && \
+    chown -R agent:agent /app /home/agent && \
+    chmod -R 777 /app/.cache /home/agent/.cache
 
 # Switch back to non-root user
 USER agent

@@ -1,7 +1,7 @@
 """
 Agent trigger endpoint for WordPress plugin integration
 """
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple, Callable, Awaitable, AsyncIterator
 import copy
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -13,6 +13,7 @@ import uuid
 import time
 from datetime import datetime
 import traceback  # For detailed errors
+import re
 
 from app.services.agent_service_supabase import AgentService
 from app.services.client_service_supabase import ClientService
@@ -35,6 +36,21 @@ DATASET_ID_FALLBACKS: Dict[str, List[int]] = {
     "clarence-coherence": [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571],
     "able": list(range(7, 36)),
 }
+
+
+def _normalize_conversation_id_value(raw_value: str) -> Tuple[str, Optional[str]]:
+    """
+    Ensure conversation_id is a UUID string.
+    Returns (normalized_uuid, original_value_if_changed).
+    """
+    if not raw_value:
+        new_id = str(uuid.uuid4())
+        return new_id, None
+    try:
+        normalized = str(uuid.UUID(str(raw_value)))
+        return normalized, None
+    except (ValueError, TypeError, AttributeError):
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, str(raw_value))), str(raw_value)
 
 
 async def _resolve_agent_dataset_ids(client_id: str, agent) -> List[Any]:
@@ -129,6 +145,295 @@ def _extract_agent_tools_config(agent: Any) -> Dict[str, Any]:
     return tools_config
 
 
+def _voice_settings_dict(agent: Any) -> Dict[str, Any]:
+    voice_settings = getattr(agent, "voice_settings", None)
+    if not voice_settings:
+        return {}
+    if isinstance(voice_settings, dict):
+        return voice_settings
+    if hasattr(voice_settings, "model_dump"):
+        try:
+            return voice_settings.model_dump()
+        except Exception:
+            return {}
+    return {}
+
+
+def _apply_cartesia_emotion_prompt(prompt: str, agent: Any) -> str:
+    """
+    Append Cartesia Sonic-3 emotion instructions when enabled so the LLM knows
+    how to wrap responses with appropriate SSML tags.
+    """
+    voice_settings = _voice_settings_dict(agent)
+    if not voice_settings:
+        return prompt
+
+    provider = voice_settings.get("tts_provider") or voice_settings.get("provider")
+    model = voice_settings.get("model") or voice_settings.get("tts_model")
+    emotions_enabled = voice_settings.get("cartesia_emotions_enabled") or voice_settings.get("provider_config", {}).get("cartesia_emotions_enabled")
+
+    if provider != "cartesia" or model != "sonic-3" or not emotions_enabled:
+        return prompt
+
+    style = voice_settings.get("cartesia_emotion_style") or "neutral"
+    intensity = voice_settings.get("cartesia_emotion_intensity") or 3
+    volume = voice_settings.get("cartesia_emotion_volume") or "medium"
+    speed = voice_settings.get("cartesia_emotion_speed") or "medium"
+
+    instructions = (
+        "\n\nCartesia Sonic-3 emotion controls are enabled for this sidekick. When it improves clarity "
+        "or empathy, you may wrap short segments of your response in Cartesia's SSML <emotion> tags. "
+        "Use tags such as "
+        f"<emotion style=\"{style}\" intensity=\"{intensity}\" volume=\"{volume}\" speed=\"{speed}\">Your text</emotion>. "
+        "Only apply tags to the specific words or sentences that should carry the emotion, and choose emotion styles "
+        "that match the user's tone. Reference: https://docs.cartesia.ai/build-with-cartesia/sonic-3/volume-speed-emotion"
+    )
+
+    return prompt + instructions
+
+
+def _extract_delta_from_chunk(chunk: Any) -> Optional[str]:
+    """Best-effort extraction of text delta from various provider chunk shapes."""
+    delta = None
+    try:
+        if hasattr(chunk, "choices") and chunk.choices:
+            choice = chunk.choices[0]
+            part = getattr(choice, "delta", None) or getattr(choice, "message", None)
+            if part and hasattr(part, "content") and part.content:
+                delta = part.content
+        if not delta and hasattr(chunk, "content") and chunk.content:
+            delta = chunk.content
+        if not delta and hasattr(chunk, "text") and getattr(chunk, "text"):
+            delta = getattr(chunk, "text")
+        if not delta and isinstance(chunk, str):
+            delta = chunk if chunk.strip() else None
+    except Exception:
+        delta = None
+
+    if delta:
+        return str(delta)
+
+    # Regex fallback: try to extract content='...' fragments from stringified chunk
+    try:
+        s = str(chunk)
+        matches = re.findall(r"content='([^']*)'", s) or re.findall(r'content="([^"]*)"', s)
+        if matches:
+            return "".join(matches)
+    except Exception:
+        return None
+
+    return None
+
+
+async def _iter_llm_deltas(stream: Any) -> AsyncIterator[str]:
+    """Yield text deltas from an async LLM stream."""
+    async for chunk in stream:
+        delta = _extract_delta_from_chunk(chunk)
+        if not delta:
+            continue
+        yield delta
+
+
+def _extract_api_keys(client: Any) -> Dict[str, Any]:
+    """Collect API keys from client settings with graceful fallbacks."""
+    api_keys: Dict[str, Any] = {}
+    settings_obj = getattr(client, "settings", None)
+    if settings_obj and getattr(settings_obj, "api_keys", None):
+        api_keys = {
+            "openai_api_key": settings_obj.api_keys.openai_api_key,
+            "groq_api_key": settings_obj.api_keys.groq_api_key,
+            "cerebras_api_key": getattr(settings_obj.api_keys, "cerebras_api_key", None),
+            "deepgram_api_key": settings_obj.api_keys.deepgram_api_key,
+            "elevenlabs_api_key": settings_obj.api_keys.elevenlabs_api_key,
+            "cartesia_api_key": settings_obj.api_keys.cartesia_api_key,
+            "anthropic_api_key": getattr(settings_obj.api_keys, "anthropic_api_key", None),
+            "novita_api_key": settings_obj.api_keys.novita_api_key,
+            "cohere_api_key": settings_obj.api_keys.cohere_api_key,
+            "siliconflow_api_key": settings_obj.api_keys.siliconflow_api_key,
+            "jina_api_key": settings_obj.api_keys.jina_api_key,
+            "perplexity_api_key": getattr(settings_obj.api_keys, "perplexity_api_key", None),
+        }
+    else:
+        api_keys = {}
+
+    # Fallback to legacy locations on the client object itself
+    if getattr(client, "perplexity_api_key", None):
+        api_keys.setdefault("perplexity_api_key", client.perplexity_api_key)
+
+    return api_keys
+
+
+async def _get_agent_tools(
+    tools_service: Optional[ToolsService],
+    client_id: str,
+    agent_id: str,
+) -> List[Dict[str, Any]]:
+    """Fetch and normalize assigned tools for a given agent."""
+    if not tools_service:
+        return []
+
+    try:
+        assigned_tools = await tools_service.list_agent_tools(client_id, agent_id)
+    except Exception as exc:
+        logger.error(f"Unable to fetch tools for agent {agent_id}: {exc}")
+        return []
+
+    tools_payload: List[Dict[str, Any]] = []
+    for tool in assigned_tools:
+        tool_dict = tool.dict()
+        for ts_field in ("created_at", "updated_at"):
+            if ts_field in tool_dict and hasattr(tool_dict[ts_field], "isoformat"):
+                tool_dict[ts_field] = tool_dict[ts_field].isoformat()
+        tools_payload.append(tool_dict)
+    return tools_payload
+
+
+def _apply_tool_prompt_sections(agent_context: Dict[str, Any], tools_payload: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Append hidden tool instructions to the system prompt."""
+    if not tools_payload:
+        return []
+    try:
+        updated_prompt, appended_sections = apply_tool_prompt_instructions(
+            agent_context.get("system_prompt"), tools_payload
+        )
+        agent_context["system_prompt"] = updated_prompt
+        if appended_sections:
+            agent_context["tool_prompt_sections"] = appended_sections
+            try:
+                slugs = [section.get("slug") or section.get("name") for section in appended_sections]
+                logger.info(
+                    "🧠 Appended hidden tool instructions",
+                    extra={"count": len(appended_sections), "abilities": slugs},
+                )
+            except Exception:
+                pass
+        return appended_sections or []
+    except Exception:
+        logger.warning("Failed to apply hidden tool instructions to system prompt", exc_info=True)
+        return []
+
+
+async def _build_agent_context_for_dispatch(
+    *,
+    agent: Any,
+    client: Any,
+    conversation_id: str,
+    user_id: str,
+    session_id: Optional[str],
+    mode: str,
+    request_context: Optional[Dict[str, Any]] = None,
+    client_conversation_id: Optional[str] = None,
+) -> Tuple[Dict[str, Any], str, str, str]:
+    """Construct metadata payload shared with the worker for voice/text modes."""
+    if not agent.voice_settings or not agent.voice_settings.llm_provider:
+        raise HTTPException(status_code=400, detail="Agent voice settings with LLM provider are required")
+
+    voice_settings = agent.voice_settings.dict()
+    normalized_llm = voice_settings.get("llm_provider")
+    normalized_stt = voice_settings.get("stt_provider")
+    normalized_tts = voice_settings.get("tts_provider") or voice_settings.get("provider")
+
+    missing = []
+    if not normalized_llm:
+        missing.append("llm_provider")
+    if not normalized_stt:
+        missing.append("stt_provider")
+    if not normalized_tts:
+        missing.append("tts_provider")
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing voice settings: {', '.join(missing)}")
+
+    if normalized_tts == "cartesia":
+        tts_model_provided = voice_settings.get("model") or voice_settings.get("tts_model")
+        if not tts_model_provided:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cartesia TTS requires a model. Set voice_settings.model "
+                    "(e.g., 'sonic-english' or 'sonic-2')."
+                ),
+            )
+
+    embedding_cfg: Dict[str, Any] = {}
+    if getattr(client, "additional_settings", None) and client.additional_settings.get("embedding"):
+        embedding_cfg = client.additional_settings.get("embedding", {})
+    elif client.settings and getattr(client.settings, "embedding", None):
+        try:
+            embedding_cfg = client.settings.embedding.dict()
+        except Exception:
+            embedding_cfg = dict(client.settings.embedding) if isinstance(client.settings.embedding, dict) else {}
+    # Fallback: if embedding config is still empty, derive a safe default so the context manager can initialize
+    if not embedding_cfg:
+        embedding_cfg = {
+            "provider": "siliconflow",
+            "document_model": "Qwen/Qwen3-Embedding-0.6B",
+            "conversation_model": "Qwen/Qwen3-Embedding-0.6B",
+            "dimension": 1024,
+        }
+
+    tools_config = _extract_agent_tools_config(agent)
+    api_keys_map = _extract_api_keys(client)
+
+    # Rerank settings for downstream agent/worker
+    rerank_cfg: Dict[str, Any] = {}
+    additional_settings = getattr(client, "additional_settings", None) or getattr(getattr(client, "settings", None), "additional_settings", None)
+    if isinstance(additional_settings, str):
+        try:
+            additional_settings = json.loads(additional_settings)
+        except Exception:
+            additional_settings = {}
+
+    # Prefer explicit additional_settings override (platform UI stores JSONB here)
+    if isinstance(additional_settings, dict) and additional_settings.get("rerank"):
+        rerank_cfg = additional_settings.get("rerank", {}) or {}
+    else:
+        try:
+            if client.settings and getattr(client.settings, "rerank", None):
+                rerank_cfg = client.settings.rerank.dict()
+        except Exception:
+            try:
+                rerank_cfg = dict(client.settings.rerank) if getattr(client.settings, "rerank", None) else {}
+            except Exception:
+                rerank_cfg = {}
+
+    agent_context: Dict[str, Any] = {
+        "client_id": client.id,
+        "agent_slug": agent.slug,
+        "agent_id": agent.id,
+        "agent_name": agent.name,
+        "system_prompt": agent.system_prompt,
+        "voice_settings": voice_settings,
+        "webhooks": agent.webhooks.dict() if agent.webhooks else {},
+        "user_id": user_id,
+        "session_id": session_id,
+        "conversation_id": conversation_id,
+        "context": request_context or {},
+        "tools_config": tools_config,
+        "embedding": embedding_cfg,
+        "rerank": rerank_cfg,
+        "mode": mode,
+        "api_keys": api_keys_map,
+    }
+    if client_conversation_id:
+        agent_context["client_conversation_id"] = client_conversation_id
+
+    # Include Supabase credentials when available for worker-side context
+    if client.settings and getattr(client.settings, "supabase", None):
+        agent_context["supabase_url"] = client.settings.supabase.url
+        agent_context["supabase_anon_key"] = client.settings.supabase.anon_key
+        agent_context["supabase_service_role_key"] = client.settings.supabase.service_role_key
+    else:
+        agent_context["supabase_url"] = getattr(client, "supabase_url", None)
+        agent_context["supabase_anon_key"] = getattr(client, "supabase_anon_key", None)
+        agent_context["supabase_service_role_key"] = getattr(client, "supabase_service_role_key", None)
+
+    agent_dataset_ids = await _resolve_agent_dataset_ids(client.id, agent)
+    if agent_dataset_ids:
+        agent_context["dataset_ids"] = agent_dataset_ids
+
+    return agent_context, normalized_llm, normalized_stt, normalized_tts
+
+
 async def _gather_text_tool_outputs(
     *,
     agent: Any,
@@ -184,7 +489,31 @@ async def _gather_text_tool_outputs(
 
     try:
         tools_config = _extract_agent_tools_config(agent)
-        registry = ToolRegistry(tools_config=tools_config, api_keys=api_keys or {})
+        
+        # Get Supabase clients for abilities (e.g., Asana OAuth)
+        primary_supabase_client = None
+        platform_supabase_client = None
+        try:
+            # Get client's Supabase for OAuth connections
+            if hasattr(client, 'settings') and hasattr(client.settings, 'supabase'):
+                supabase_config = client.settings.supabase
+                if supabase_config and supabase_config.url and supabase_config.service_role_key:
+                    primary_supabase_client = create_client(
+                        str(supabase_config.url),
+                        str(supabase_config.service_role_key)
+                    )
+            
+            # Get platform Supabase client
+            platform_supabase_client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        except Exception as exc:
+            logger.warning(f"Could not initialize Supabase clients for abilities: {exc}")
+        
+        registry = ToolRegistry(
+            tools_config=tools_config,
+            api_keys=api_keys or {},
+            primary_supabase_client=primary_supabase_client,
+            platform_supabase_client=platform_supabase_client
+        )
         built_tools = registry.build(tools_payload)
     except Exception as exc:
         logger.error(f"Failed to initialize tool registry for agent {agent.slug}: {exc}")
@@ -453,7 +782,15 @@ async def trigger_agent(
                 logger.error(f"Validation error for voice result: {e}")
                 raise HTTPException(status_code=500, detail="Invalid voice trigger result")
         else:  # TEXT mode
-            result = await handle_text_trigger(request, agent, client, tools_service)
+            if settings.enable_livekit_text_dispatch:
+                logger.info("🔄 ENABLE_LIVEKIT_TEXT_DISPATCH=true -> routing via LiveKit worker")
+                result = await handle_text_trigger_via_livekit(request, agent, client, tools_service)
+            else:
+                logger.warning(
+                    "⚠️ Legacy text execution path in use (ENABLE_LIVEKIT_TEXT_DISPATCH=false). "
+                    "This mode is deprecated and will be removed soon."
+                )
+                result = await handle_text_trigger(request, agent, client, tools_service)
         
         request_total = time.time() - request_start
         logger.info(f"✅ COMPLETED trigger-agent request in {request_total:.2f}s")
@@ -589,165 +926,24 @@ async def handle_voice_trigger(
     
     logger.info(f"🏢 Using backend LiveKit infrastructure for thin client architecture")
     
-    # Prepare agent context first so we can pass it to room creation
-    # Build voice settings with NO DEFAULTS (enforce no-fallback policy)
-    voice_settings = agent.voice_settings.dict() if agent.voice_settings else {}
-    
-    # Normalize provider fields (admin may store TTS as 'provider')
-    normalized_llm = voice_settings.get("llm_provider")
-    normalized_stt = voice_settings.get("stt_provider")
-    normalized_tts = voice_settings.get("tts_provider") or voice_settings.get("provider")
+    raw_conversation_id = request.conversation_id or str(uuid.uuid4())
+    conversation_id, original_client_id = _normalize_conversation_id_value(raw_conversation_id)
+    client_conversation_id = original_client_id or raw_conversation_id
+    agent_context, normalized_llm, normalized_stt, normalized_tts = await _build_agent_context_for_dispatch(
+        agent=agent,
+        client=client,
+        conversation_id=conversation_id,
+        user_id=request.user_id,
+        session_id=request.session_id,
+        mode="voice",
+        request_context=request.context,
+        client_conversation_id=client_conversation_id,
+    )
 
-    # Validate required providers are configured
-    missing_vs = []
-    if not normalized_llm:
-        missing_vs.append("llm_provider")
-    if not normalized_stt:
-        missing_vs.append("stt_provider")
-    if not normalized_tts:
-        missing_vs.append("tts_provider")
-    if missing_vs:
-        raise HTTPException(status_code=400, detail=f"Missing voice settings: {', '.join(missing_vs)}")
-    
-    # Enforce Cartesia requires an explicit TTS model (no default/fallback)
-    if normalized_tts == "cartesia":
-        tts_model_provided = voice_settings.get("model") or voice_settings.get("tts_model")
-        if not tts_model_provided:
-            logger.error("Cartesia selected without TTS model. Rejecting trigger per no-fallback policy.")
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Cartesia TTS requires a model. Set voice_settings.model in the agent's voice settings "
-                    "(e.g., 'sonic-english' or 'sonic-2')."
-                ),
-            )
-        
-    # Build embedding config with robust fallback to legacy settings
-    embedding_cfg = {}
-    if client.additional_settings and client.additional_settings.get("embedding"):
-        embedding_cfg = client.additional_settings.get("embedding", {})
-    elif client.settings and hasattr(client.settings, 'embedding') and client.settings.embedding:
-        # settings.embedding may be a pydantic model; normalize to dict
-        try:
-            embedding_cfg = client.settings.embedding.dict()
-        except Exception:
-            embedding_cfg = dict(client.settings.embedding) if isinstance(client.settings.embedding, dict) else {}
-
-    # Generate conversation_id if not provided
-    conversation_id = request.conversation_id or str(uuid.uuid4())
-    
-    tools_config: Dict[str, Any] = {}
-    if getattr(agent, "tools_config", None):
-        if isinstance(agent.tools_config, str):
-            try:
-                tools_config = json.loads(agent.tools_config)
-            except Exception:
-                logger.warning("Failed to parse agent.tools_config string; defaulting to empty dict", exc_info=True)
-                tools_config = {}
-        elif isinstance(agent.tools_config, dict):
-            tools_config = agent.tools_config
-
-    agent_context = {
-        "client_id": client.id,  # Add client_id for API key lookup
-        "agent_slug": agent.slug,
-        "agent_id": agent.id,
-        "agent_name": agent.name,
-        "system_prompt": agent.system_prompt,
-        "voice_settings": voice_settings,
-        "webhooks": agent.webhooks.dict() if agent.webhooks else {},
-        "user_id": request.user_id,
-        "session_id": request.session_id,
-        "conversation_id": conversation_id,
-        "context": request.context or {},
-        "tools_config": tools_config,
-        # Include embedding configuration (prefer additional_settings, then settings.embedding)
-        "embedding": embedding_cfg,
-        # Include client's Supabase credentials for context system
-        "supabase_url": client.settings.supabase.url if client.settings and client.settings.supabase else None,
-        "supabase_anon_key": client.settings.supabase.anon_key if client.settings and client.settings.supabase else None,
-        "supabase_service_role_key": client.settings.supabase.service_role_key if client.settings and client.settings.supabase else None,
-        "api_keys": {
-            # LLM Providers
-            "openai_api_key": client.settings.api_keys.openai_api_key if client.settings and client.settings.api_keys else None,
-            "groq_api_key": client.settings.api_keys.groq_api_key if client.settings and client.settings.api_keys else None,
-            "cerebras_api_key": getattr(client.settings.api_keys, 'cerebras_api_key', None) if client.settings and client.settings.api_keys else None,
-            "deepinfra_api_key": client.settings.api_keys.deepinfra_api_key if client.settings and client.settings.api_keys else None,
-            "replicate_api_key": client.settings.api_keys.replicate_api_key if client.settings and client.settings.api_keys else None,
-            # Voice/Speech Providers
-            "deepgram_api_key": client.settings.api_keys.deepgram_api_key if client.settings and client.settings.api_keys else None,
-            "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key if client.settings and client.settings.api_keys else None,
-            "cartesia_api_key": client.settings.api_keys.cartesia_api_key if client.settings and client.settings.api_keys else None,
-            "speechify_api_key": client.settings.api_keys.speechify_api_key if client.settings and client.settings.api_keys else None,
-            # Embedding/Reranking Providers
-            "novita_api_key": client.settings.api_keys.novita_api_key if client.settings and client.settings.api_keys else None,
-            "cohere_api_key": client.settings.api_keys.cohere_api_key if client.settings and client.settings.api_keys else None,
-            "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key if client.settings and client.settings.api_keys else None,
-            "jina_api_key": client.settings.api_keys.jina_api_key if client.settings and client.settings.api_keys else None,
-            # Additional providers
-            "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None) if client.settings and client.settings.api_keys else None,
-            "perplexity_api_key": (
-                client.settings.api_keys.perplexity_api_key
-                if client.settings and client.settings.api_keys and getattr(client.settings.api_keys, 'perplexity_api_key', None)
-                else getattr(client, 'perplexity_api_key', None)
-            ),
-        } if client.settings and client.settings.api_keys else {
-            "perplexity_api_key": getattr(client, 'perplexity_api_key', None)
-        }
-    }
-
-    # Include assigned tools (Abilities) for this agent
-    tools_payload: List[Dict[str, Any]] = []
-    appended_sections: List[Dict[str, Any]] = []
-
-    try:
-        if tools_service is not None:
-            assigned_tools = await tools_service.list_agent_tools(client.id, agent.id)
-            # Normalize to JSON-safe dicts for transport (datetimes -> ISO strings)
-            tools_payload: List[Dict[str, Any]] = []
-            for tool in assigned_tools:
-                tool_dict = tool.dict()
-                for ts_field in ("created_at", "updated_at"):
-                    if ts_field in tool_dict and hasattr(tool_dict[ts_field], "isoformat"):
-                        tool_dict[ts_field] = tool_dict[ts_field].isoformat()
-                tools_payload.append(tool_dict)
-            agent_context["tools"] = tools_payload
-            try:
-                slugs = [t.slug for t in assigned_tools]
-                logger.info(f"🧰 Including {len(assigned_tools)} tools for agent {agent.slug}: {slugs}")
-            except Exception:
-                pass
-        else:
-            logger.warning("No ToolsService provided; skipping tools inclusion")
-    except Exception as e:
-        logger.warning(f"Failed to include tools for agent {agent.slug}: {e}")
-
-    try:
-        updated_prompt, appended_sections = apply_tool_prompt_instructions(
-            agent_context.get("system_prompt"), tools_payload
-        )
-        agent_context["system_prompt"] = updated_prompt
-        if appended_sections:
-            agent_context["tool_prompt_sections"] = appended_sections
-            try:
-                slugs = [section.get("slug") or section.get("name") for section in appended_sections]
-                logger.info(
-                    "🧠 Appended hidden tool instructions",
-                    extra={
-                        "count": len(appended_sections),
-                        "abilities": slugs,
-                    },
-                )
-            except Exception:
-                pass
-    except Exception:
-        logger.warning("Failed to apply hidden tool instructions to system prompt", exc_info=True)
-
-    agent_dataset_ids: List[Any] = await _resolve_agent_dataset_ids(client.id, agent)
-    if agent_dataset_ids:
-        agent_context["dataset_ids"] = agent_dataset_ids
-        logger.info(
-            f"📚 Added dataset_ids to voice agent_context for {agent.slug}: {len(agent_dataset_ids)} documents"
-        )
+    tools_payload = await _get_agent_tools(tools_service, client.id, agent.id)
+    if tools_payload:
+        agent_context["tools"] = tools_payload
+    appended_sections = _apply_tool_prompt_sections(agent_context, tools_payload)
     
     # Ensure the room exists (create if it doesn't)
     room_start = time.time()
@@ -889,7 +1085,7 @@ async def handle_voice_trigger(
         "mode": "voice",
         "room_name": request.room_name,
         "platform": request.platform,
-        "conversation_id": conversation_id,
+        "conversation_id": client_conversation_id,
         "agent_context": agent_context,
         "livekit_config": {
             "server_url": _normalize_ws_url(backend_livekit.url),
@@ -952,11 +1148,171 @@ async def _store_conversation_turn(
         logger.error(f"Assistant response: {agent_response[:100]}...")
 
 
+async def handle_text_trigger_via_livekit(
+    request: TriggerAgentRequest,
+    agent,
+    client,
+    tools_service: Optional[ToolsService] = None,
+) -> Dict[str, Any]:
+    """Route text mode through LiveKit worker for unified tool execution."""
+    logger.info(f"🛠️ Routing text request for {agent.slug} through LiveKit worker")
+    from app.integrations.livekit_client import livekit_manager
+
+    backend_livekit = livekit_manager
+    if not backend_livekit._initialized:
+        await backend_livekit.initialize()
+
+    raw_conversation_id = request.conversation_id or str(uuid.uuid4())
+    conversation_id, original_client_id = _normalize_conversation_id_value(raw_conversation_id)
+    client_conversation_id = original_client_id or raw_conversation_id
+    agent_context, normalized_llm, normalized_stt, normalized_tts = await _build_agent_context_for_dispatch(
+        agent=agent,
+        client=client,
+        conversation_id=conversation_id,
+        user_id=request.user_id,
+        session_id=request.session_id,
+        mode="text",
+        request_context=request.context,
+        client_conversation_id=client_conversation_id,
+    )
+    try:
+        logger.info("🔍 rerank config for dispatch: %s", agent_context.get("rerank"))
+    except Exception:
+        pass
+
+    tools_payload = await _get_agent_tools(tools_service, client.id, agent.id)
+    if tools_payload:
+        agent_context["tools"] = tools_payload
+    appended_sections = _apply_tool_prompt_sections(agent_context, tools_payload)
+
+    agent_context["user_message"] = request.message
+
+    reused_room = False
+    if request.conversation_id:
+        text_room_name, room_info, reused_room = await _get_or_create_text_room(
+            backend_livekit,
+            conversation_id=client_conversation_id,
+            agent_slug=agent.slug,
+            user_id=request.user_id,
+            agent_context=agent_context,
+        )
+    else:
+        text_room_name = f"text-{client_conversation_id}-{uuid.uuid4().hex[:8]}"
+        room_info = await ensure_livekit_room_exists(
+            backend_livekit,
+            text_room_name,
+            agent_name=settings.livekit_agent_name,
+            agent_slug=agent.slug,
+            user_id=request.user_id,
+            agent_config=agent_context,
+            enable_agent_dispatch=True,
+        )
+
+    dispatch_info = await dispatch_agent_job(
+        livekit_manager=backend_livekit,
+        room_name=text_room_name,
+        agent=agent,
+        client=client,
+        user_id=request.user_id,
+        conversation_id=conversation_id,
+        session_id=request.session_id,
+        tools=agent_context.get("tools"),
+        tools_config=agent_context.get("tools_config"),
+        api_keys=agent_context.get("api_keys"),
+        agent_context=agent_context,
+    )
+
+    response_text, citations, tool_results = await _poll_for_text_response(
+        backend_livekit,
+        text_room_name,
+    )
+    citations = citations or []
+    tool_results = tool_results or []
+
+    # TEMP: disable text room cleanup to allow metadata inspection
+    cleanup_status = "skipped (cleanup disabled)"
+
+    tools_response = {
+        "assigned": tools_payload,
+        "results": tool_results,
+        "context_summary": None,
+        "prompt_sections": appended_sections,
+    }
+
+    supabase_url = agent_context.get("supabase_url")
+    supabase_key = agent_context.get("supabase_service_role_key") or agent_context.get("supabase_service_key")
+    client_supabase = None
+    context_manager = None
+    if supabase_url and supabase_key:
+        try:
+            client_supabase = create_client(supabase_url, supabase_key)
+            from app.agent_modules.context import AgentContextManager
+
+            context_manager = AgentContextManager(
+                supabase_client=client_supabase,
+                agent_config=agent_context,
+                user_id=request.user_id,
+                client_id=client.id,
+                api_keys=agent_context.get("api_keys", {}),
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to initialize Supabase context manager for text mode: {exc}")
+
+    if response_text and client_supabase:
+        try:
+            turn_metadata: Dict[str, Any] = {
+                "agent_slug": agent.slug,
+                "tool_results": tool_results,
+                "tool_prompt_sections": appended_sections,
+            }
+            client_conv_id = agent_context.get("client_conversation_id")
+            if client_conv_id:
+                turn_metadata["client_conversation_id"] = client_conv_id
+            await _store_conversation_turn(
+                supabase_client=client_supabase,
+                user_id=request.user_id,
+                agent_id=agent.id,
+                conversation_id=conversation_id,
+                user_message=request.message,
+                agent_response=response_text,
+                session_id=request.session_id,
+                context_manager=context_manager,
+                citations=citations,
+                metadata=turn_metadata,
+            )
+        except Exception as store_err:
+            logger.error(f"Failed to store unified text conversation turn: {store_err}")
+
+    return {
+        "mode": "text_via_livekit",
+        "message_received": request.message,
+        "user_id": request.user_id,
+        "conversation_id": client_conversation_id,
+        "response": response_text,
+        "agent_response": response_text,
+        "ai_response": response_text,
+        "citations": citations,
+        "tools": tools_response,
+        "dispatch_info": dispatch_info,
+        "room_info": {
+            "name": text_room_name,
+            "status": room_info.get("status") if room_info else None,
+            "cleanup": cleanup_status,
+        },
+        "providers": {
+            "llm": normalized_llm,
+            "stt": normalized_stt,
+            "tts": normalized_tts,
+        },
+    }
+
+
 async def handle_text_trigger(
     request: TriggerAgentRequest,
     agent,
     client,
     tools_service: Optional[ToolsService] = None,
+    on_token: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> Dict[str, Any]:
     """
     Handle text mode agent triggering with full RAG support
@@ -966,11 +1322,16 @@ async def handle_text_trigger(
     """
     logger.info(f"🚀 Starting RAG-powered text trigger for agent {agent.slug}")
     logger.info(f"💬 User message: {request.message[:100]}...")
+    logger.warning(
+        "⚠️ handle_text_trigger() is deprecated. Enable ENABLE_LIVEKIT_TEXT_DISPATCH to use the unified worker path."
+    )
     
     # Initialize variables
     response_text = None
     user_id = request.user_id or "anonymous"
-    conversation_id = request.conversation_id or f"text_{request.session_id or uuid.uuid4().hex}"
+    raw_conversation_id = request.conversation_id or f"text_{request.session_id or uuid.uuid4().hex}"
+    conversation_id, original_client_id = _normalize_conversation_id_value(raw_conversation_id)
+    client_conversation_id = original_client_id or raw_conversation_id
     
     # Get LLM provider and model from agent voice settings - NO DEFAULTS
     if not agent.voice_settings or not agent.voice_settings.llm_provider:
@@ -995,6 +1356,20 @@ async def handle_text_trigger(
     elif client.settings and hasattr(client.settings, 'embedding') and client.settings.embedding:
         embedding_cfg = client.settings.embedding.dict()
     
+    # Rerank settings for voice/worker metadata
+    rerank_cfg = {}
+    if isinstance(additional_settings, dict) and additional_settings.get("rerank"):
+        rerank_cfg = additional_settings.get("rerank", {}) or {}
+    else:
+        try:
+            if client.settings and hasattr(client.settings, 'rerank') and client.settings.rerank:
+                rerank_cfg = client.settings.rerank.dict()
+        except Exception:
+            try:
+                rerank_cfg = dict(client.settings.rerank) if client.settings and getattr(client.settings, "rerank", None) else {}
+            except Exception:
+                rerank_cfg = {}
+
     metadata = {
         "agent_slug": agent.slug,
         "agent_name": agent.name,
@@ -1002,9 +1377,13 @@ async def handle_text_trigger(
         "system_prompt": agent.system_prompt,
         "user_id": user_id,
         "conversation_id": conversation_id,
+        "client_conversation_id": client_conversation_id,
         "client_id": client.id,
         "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
-        "embedding": embedding_cfg
+        "embedding": embedding_cfg,
+        "rerank": rerank_cfg,
+        "rag_results_limit": getattr(agent, "rag_results_limit", None),
+        "show_citations": getattr(agent, "show_citations", True),
     }
     
     agent_dataset_ids: List[Any] = await _resolve_agent_dataset_ids(client.id, agent)
@@ -1028,6 +1407,7 @@ async def handle_text_trigger(
             "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key,
             "jina_api_key": client.settings.api_keys.jina_api_key,
         }
+    metadata["api_keys"] = api_keys
 
     recent_rows: List[Dict[str, Any]] = []
 
@@ -1173,6 +1553,8 @@ async def handle_text_trigger(
             except Exception as tool_prompt_error:
                 logger.warning(f"Failed to apply hidden tool instructions to system prompt: {tool_prompt_error}")
 
+        enhanced_prompt = _apply_cartesia_emotion_prompt(enhanced_prompt, agent)
+
         ctx = lk_llm.ChatContext()
         ctx.add_message(role="system", content=enhanced_prompt)
 
@@ -1193,15 +1575,13 @@ async def handle_text_trigger(
         stream = llm_plugin.chat(chat_ctx=ctx)
 
         response_text = ""
-        async for chunk in stream:
-            if hasattr(chunk, 'choices') and chunk.choices:
-                for choice in chunk.choices:
-                    if hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'content') and choice.delta.content:
-                        response_text += choice.delta.content
-            elif hasattr(chunk, 'delta') and chunk.delta and hasattr(chunk.delta, 'content') and chunk.delta.content:
-                response_text += chunk.delta.content
-            elif hasattr(chunk, 'content') and chunk.content:
-                response_text += chunk.content
+        async for delta in _iter_llm_deltas(stream):
+            response_text += delta
+            if on_token:
+                try:
+                    await on_token(delta)
+                except Exception as callback_error:
+                    logger.warning("Streaming callback failed: %s", callback_error)
 
         if response_text:
             logger.info(f"✅ Generated response: {response_text[:100]}...")
@@ -1236,6 +1616,8 @@ async def handle_text_trigger(
         if response_text and client_supabase:
             try:
                 turn_metadata: Dict[str, Any] = {'agent_slug': agent.slug}
+                if client_conversation_id:
+                    turn_metadata['client_conversation_id'] = client_conversation_id
                 if tool_results:
                     turn_metadata['tool_results'] = tool_results
                 if tool_context_summary:
@@ -1279,7 +1661,7 @@ async def handle_text_trigger(
         "mode": "text",
         "message_received": request.message,
         "user_id": user_id,
-        "conversation_id": conversation_id,
+        "conversation_id": client_conversation_id,
         "llm_provider": llm_provider,
         "llm_model": llm_model,
         "rag_enabled": bool(context_manager),
@@ -1435,10 +1817,18 @@ async def dispatch_agent_job(
             # Include user_id if provided
             "user_id": user_id,
             # Include embedding configuration from client's additional_settings
-            "embedding": client.additional_settings.get("embedding", {}) if client.additional_settings else {},
+            "embedding": context_snapshot.get("embedding")
+            or (client.additional_settings.get("embedding", {}) if client.additional_settings else {}),
             # Include dataset_ids for RAG context (document IDs for this agent)
             "dataset_ids": context_dataset_ids,
             "api_keys": api_keys_map,
+            # Carry interaction mode so the worker can skip STT/TTS for text sessions
+            "mode": (
+                context_snapshot.get("mode")
+                or ("text" if context_snapshot.get("user_message") else "voice")
+            ),
+            "rerank": context_snapshot.get("rerank"),
+            "user_message": context_snapshot.get("user_message"),
         }
 
         tools_payload = tools if tools is not None else context_snapshot.get("tools") or []
@@ -1473,6 +1863,11 @@ async def dispatch_agent_job(
         api_duration = time.time() - api_start
         logger.info(f"⏱️ LiveKit API client creation took {api_duration:.2f}s")
         
+        preferred_worker = await livekit_manager.get_warm_worker()
+        if preferred_worker:
+            job_metadata["preferred_worker_id"] = preferred_worker
+            logger.info(f"♻️ Requesting warm worker {preferred_worker} for dispatch")
+
         # Dispatch the agent with job metadata using the correct API method
         dispatch_request = api.CreateAgentDispatchRequest(
             room=room_name,
@@ -1503,8 +1898,11 @@ async def dispatch_agent_job(
             dispatch_id = dispatch_response.agent_dispatch_id
         elif hasattr(dispatch_response, 'id'):
             dispatch_id = dispatch_response.id
-        
-        logger.info(f"✅ Agent dispatched successfully with dispatch_id: {dispatch_id}")
+
+        worker_id = getattr(dispatch_response, "worker_id", None)
+        if worker_id:
+            await livekit_manager.return_worker_to_pool(worker_id)
+        logger.info(f"✅ Agent dispatched successfully with dispatch_id: {dispatch_id}, worker_id={worker_id}")
         
         dispatch_total_duration = time.time() - dispatch_start
         logger.info(f"⏱️ Total dispatch process took {dispatch_total_duration:.2f}s")
@@ -1528,6 +1926,185 @@ async def dispatch_agent_job(
         raise HTTPException(status_code=502, detail=f"Explicit dispatch failed: {type(e).__name__}: {e}")
 
 
+async def _poll_for_text_response(
+    livekit_manager: LiveKitManager,
+    room_name: str,
+    *,
+    timeout: float = 90.0,  # Increased from 30s to 90s to allow for LLM streaming
+    poll_interval: float = 0.3,  # Slightly slower polling to reduce overhead
+) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Poll LiveKit room metadata until the text worker returns a final response."""
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        room_info = await livekit_manager.get_room(room_name)
+        if not room_info:
+            raise HTTPException(status_code=500, detail="Text mode room disappeared during processing")
+
+        metadata_raw = room_info.get("metadata")
+        if metadata_raw:
+            try:
+                metadata = (
+                    json.loads(metadata_raw)
+                    if isinstance(metadata_raw, str)
+                    else dict(metadata_raw)
+                )
+            except Exception:
+                logger.warning("Text response metadata is malformed; retrying")
+                metadata = {}
+        else:
+            metadata = {}
+
+        streaming_flag = metadata.get("streaming")
+        text_response = metadata.get("text_response")
+
+        # Only return when streaming is complete (or flag absent)
+        if text_response and streaming_flag is not True:
+            citations = metadata.get("citations") or []
+            tool_results = metadata.get("tool_results") or []
+            return text_response, citations, tool_results
+
+        await asyncio.sleep(poll_interval)
+
+    raise HTTPException(status_code=504, detail=f"Text response timeout after {timeout}s")
+
+
+async def poll_for_text_response_streaming(
+    livekit_manager: LiveKitManager,
+    room_name: str,
+    *,
+    timeout: float = 90.0,
+    poll_interval: float = 0.15,  # Faster polling for streaming
+) -> AsyncIterator[Dict[str, Any]]:
+    """
+    Poll LiveKit room metadata and yield streaming updates.
+    
+    Yields dicts with:
+      - {"delta": "..."} for partial text updates
+      - {"done": True, "full_text": "...", "citations": [...], "tool_results": [...]} when complete
+      - {"error": "..."} on error
+    """
+    start_time = time.time()
+    last_partial_len = 0
+    
+    while time.time() - start_time < timeout:
+        try:
+            room_info = await livekit_manager.get_room(room_name)
+        except Exception as e:
+            logger.warning(f"Error fetching room info: {e}")
+            await asyncio.sleep(poll_interval)
+            continue
+            
+        if not room_info:
+            yield {"error": "Room disappeared during processing"}
+            return
+
+        metadata_raw = room_info.get("metadata")
+        if not metadata_raw:
+            await asyncio.sleep(poll_interval)
+            continue
+            
+        try:
+            metadata = (
+                json.loads(metadata_raw)
+                if isinstance(metadata_raw, str)
+                else dict(metadata_raw)
+            )
+        except Exception:
+            await asyncio.sleep(poll_interval)
+            continue
+
+        # Check for partial streaming updates
+        partial_text = metadata.get("text_response_partial", "")
+        if partial_text and len(partial_text) > last_partial_len:
+            # Yield the new delta
+            delta = partial_text[last_partial_len:]
+            last_partial_len = len(partial_text)
+            yield {"delta": delta}
+
+        # Check if streaming is complete
+        streaming_flag = metadata.get("streaming")
+        text_response = metadata.get("text_response")
+
+        if text_response and streaming_flag is not True:
+            citations = metadata.get("citations") or []
+            tool_results = metadata.get("tool_results") or []
+            yield {
+                "done": True,
+                "full_text": text_response,
+                "citations": citations,
+                "tool_results": tool_results,
+            }
+            return
+
+        await asyncio.sleep(poll_interval)
+
+    yield {"error": f"Text response timeout after {timeout}s"}
+
+
+async def _get_or_create_text_room(
+    livekit_manager: LiveKitManager,
+    *,
+    conversation_id: str,
+    agent_slug: str,
+    user_id: str,
+    agent_context: Dict[str, Any],
+) -> Tuple[str, Dict[str, Any], bool]:
+    """
+    Get or create a persistent text room for a conversation.
+
+    This enables room reuse across multiple turns in the same conversation,
+    reducing overhead and improving performance for multi-turn text chats.
+
+    Returns:
+        Tuple of (room_name, room_info, was_reused)
+    """
+    room_name = f"text-conv-{conversation_id}"
+
+    # Check if an existing room already tracks this conversation
+    existing_room = await livekit_manager.get_room(room_name)
+    if existing_room:
+        logger.info(f"♻️ Reusing existing text room for conversation {conversation_id}")
+
+        merged_metadata: Dict[str, Any] = {}
+        existing_metadata_raw = existing_room.get("metadata")
+        if existing_metadata_raw:
+            try:
+                merged_metadata = (
+                    json.loads(existing_metadata_raw)
+                    if isinstance(existing_metadata_raw, str)
+                    else dict(existing_metadata_raw)
+                )
+            except Exception:
+                logger.warning("Failed to parse existing room metadata; using empty dict")
+                merged_metadata = {}
+
+        merged_metadata.update(agent_context or {})
+        try:
+            await livekit_manager.update_room_metadata(room_name, merged_metadata)
+        except Exception as e:
+            logger.warning(f"Failed to update room metadata for reuse: {e}")
+
+        room_info = {
+            "name": room_name,
+            "status": "existing",
+            "metadata": merged_metadata,
+        }
+        return room_name, room_info, True
+
+    # Otherwise create a new persistent text room
+    logger.info(f"🆕 Creating new text room for conversation {conversation_id}")
+    room_info = await ensure_livekit_room_exists(
+        livekit_manager,
+        room_name,
+        agent_name=settings.livekit_agent_name,
+        agent_slug=agent_slug,
+        user_id=user_id,
+        agent_config=agent_context,
+        enable_agent_dispatch=False,
+        empty_timeout=3600,  # 1 hour for multi-turn conversations
+    )
+    return room_name, room_info, False
 
 
 async def ensure_livekit_room_exists(
@@ -1538,6 +2115,7 @@ async def ensure_livekit_room_exists(
     user_id: str = None,
     agent_config: Dict[str, Any] = None,
     enable_agent_dispatch: bool = False,
+    empty_timeout: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Ensure a LiveKit room exists, creating it if necessary
@@ -1647,8 +2225,8 @@ async def ensure_livekit_room_exists(
         create_start = time.time()
         room_info = await livekit_manager.create_room(
             name=room_name,
-            empty_timeout=1800,  # 30 minutes - much longer timeout for agent rooms
-            max_participants=10,  # Allow multiple participants
+            empty_timeout=empty_timeout if empty_timeout is not None else 1800,
+            max_participants=10,
             metadata=metadata_json,
             enable_agent_dispatch=enable_agent_dispatch,
             agent_name=agent_name if enable_agent_dispatch else None,

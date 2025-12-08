@@ -6,6 +6,7 @@ upstream fastapi {
 server {
     listen 80;
     server_name ${DOMAIN_NAME} _;  # Accept both domain and catch-all
+    client_max_body_size 120m;
 
     # Force HTTPS even when behind a reverse proxy / load balancer
     if ($http_x_forwarded_proto = 'http') {

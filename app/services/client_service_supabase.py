@@ -212,7 +212,7 @@ class ClientService:
         if update_data.perplexity_api_key is not None:
             update_dict["perplexity_api_key"] = update_data.perplexity_api_key
 
-        # Fields that go in additional_settings JSONB
+        # Fields that go in additional_settings JSONB (we merge once at the end to avoid losing changes)
         additional_settings = {}
         if update_data.description is not None:
             additional_settings["description"] = update_data.description
@@ -220,24 +220,19 @@ class ClientService:
             additional_settings["domain"] = update_data.domain
         if update_data.active is not None:
             additional_settings["active"] = update_data.active
-            
-        # Add embedding and rerank settings to additional_settings
+
+        # Add embedding, rerank, and channel settings to additional_settings
         if update_data.settings:
             if update_data.settings.embedding:
                 additional_settings["embedding"] = update_data.settings.embedding.dict()
             if update_data.settings.rerank:
                 additional_settings["rerank"] = update_data.settings.rerank.dict()
-            
-        # If we have additional settings to update, add them to update_dict
-        if additional_settings:
-            # Get existing additional_settings
-            result = self.supabase.table(self.table_name).select("additional_settings").eq("id", client_id).execute()
-            existing_additional = result.data[0].get("additional_settings", {}) if result.data else {}
-            
-            # Merge with new settings
-            merged_additional = {**existing_additional, **additional_settings}
-            update_dict["additional_settings"] = merged_additional
-            
+            if getattr(update_data.settings, "channels", None):
+                try:
+                    additional_settings["channels"] = update_data.settings.channels.dict()
+                except Exception:
+                    pass
+
         # Handle settings update
         if update_data.settings:
             settings = update_data.settings
@@ -288,6 +283,16 @@ class ClientService:
             # Note: We don't have a settings column in the platform database
             # All settings are stored in individual columns
         
+        # Merge and persist additional_settings once, after all settings have been gathered
+        if additional_settings:
+            result = self.supabase.table(self.table_name).select("additional_settings").eq("id", client_id).execute()
+            existing_additional = result.data[0].get("additional_settings", {}) if result.data else {}
+            # Normalize nulls to dict to avoid TypeError on merge
+            if not isinstance(existing_additional, dict):
+                existing_additional = {}
+            merged_additional = {**existing_additional, **additional_settings}
+            update_dict["additional_settings"] = merged_additional
+
         if update_dict:
             update_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
             
@@ -649,14 +654,14 @@ class ClientService:
 
         # Prefer legacy supabase_url, fall back to the newer supabase_project_url set by the provisioning worker
         supabase_url = db_row.get("supabase_url") or db_row.get("supabase_project_url") or ""
-        settings_dict["supabase"]["url"] = supabase_url
+        settings_dict["supabase"]["url"] = supabase_url or ""
 
         # Pull anon key from dedicated column first, then from legacy additional settings
         supabase_anon = db_row.get("supabase_anon_key") or additional.get("supabase_anon_key", "")
         settings_dict["supabase"]["anon_key"] = supabase_anon
 
         # Service role key remains stored on the main row
-        settings_dict["supabase"]["service_role_key"] = db_row.get("supabase_service_role_key", "")
+        settings_dict["supabase"]["service_role_key"] = db_row.get("supabase_service_role_key") or ""
         
         # LiveKit config (required by model but may be empty)
         if "livekit" not in settings_dict:
@@ -697,6 +702,10 @@ class ClientService:
         # Get rerank settings from additional_settings
         if "rerank" in additional and additional["rerank"]:
             settings_dict["rerank"] = additional["rerank"]
+
+        # Channel settings (Telegram etc.) from additional_settings
+        if "channels" in additional and additional["channels"]:
+            settings_dict["channels"] = additional["channels"]
         
         # Compute slug from column, additional_settings, or name fallback
         raw_slug = db_row.get("slug") or additional.get("slug")

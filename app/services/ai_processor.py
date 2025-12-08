@@ -53,14 +53,30 @@ class AIProcessor:
             
             logger.info(f"Generating embeddings with provider={provider}, model={model}, context={context}")
             
+            def require_key(name: str) -> Optional[str]:
+                key = api_keys.get(name) or os.getenv(name.upper())
+                if not key:
+                    logger.error(f"No API key for provider={provider} (expected key '{name}')")
+                return key
+
             # Route to appropriate provider
             if provider == 'openai':
+                key = require_key('openai_api_key')
+                if not key:
+                    return None
                 return await self._generate_openai_embeddings(text, model, api_keys)
             elif provider == 'deepinfra':
                 return await self._generate_deepinfra_embeddings(text, model, api_keys, dimension)
             elif provider == 'novita':
+                key = require_key('novita_api_key')
+                if not key:
+                    return None
                 return await self._generate_novita_embeddings(text, model, api_keys)
             elif provider == 'siliconflow':
+                key = require_key('siliconflow_api_key')
+                if not key:
+                    # Do not silently fall back; fail so we notice missing keys
+                    return None
                 return await self._generate_siliconflow_embeddings(text, model, api_keys)
             else:
                 logger.error(f"Unsupported embedding provider: {provider}")
@@ -71,35 +87,28 @@ class AIProcessor:
             return None
     
     async def _get_api_key_from_settings(self, key_name: str, client_settings: Optional[Dict] = None) -> Optional[str]:
-        """Get API key from client settings or Supabase"""
+        """Get API key from client settings or Supabase (best-effort; used only as a fallback)."""
         try:
-            # First check if key is in client_settings
             if client_settings and 'api_keys' in client_settings:
                 api_keys = client_settings.get('api_keys', {})
                 if key_name in api_keys and api_keys[key_name]:
                     return api_keys[key_name]
-            
-            # If not in client settings, try to fetch from global_settings table
-            # This is for backward compatibility
+
+            # Global settings lookup is deprecated; ignore missing table gracefully
             from app.integrations.supabase_client import supabase_manager
-            
-            # Use the admin client from the manager
             if not supabase_manager.admin_client:
                 await supabase_manager.initialize()
-            
+
             result = supabase_manager.admin_client.table('global_settings')\
                 .select('setting_value')\
                 .eq('setting_key', key_name)\
                 .single()\
                 .execute()
-            
             if result.data:
                 return result.data['setting_value']
-            
             return None
-            
         except Exception as e:
-            logger.error(f"Error fetching API key from settings: {e}")
+            logger.warning(f"API key lookup fallback failed for {key_name}: {e}")
             return None
     
     async def generate_conversation_summary(self, messages: List[Dict]) -> Optional[str]:
@@ -281,8 +290,9 @@ class AIProcessor:
     
     async def _generate_siliconflow_embeddings(self, text: str, model: str, api_keys: Dict) -> Optional[List[float]]:
         """Generate embeddings using SiliconFlow"""
-        # Create a fresh HTTP client with longer timeout for SiliconFlow which can be slow
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+        # Create a fresh HTTP client with a bounded timeout; SiliconFlow can be slow.
+        # Increase the overall timeout to reduce spurious timeouts during bulk backfills.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=8.0)) as client:
             try:
                 logger.info(f"[DEBUG] _generate_siliconflow_embeddings called with model={model}")
                 logger.info(f"[DEBUG] API keys passed: {list(api_keys.keys())}")
@@ -344,11 +354,19 @@ class AIProcessor:
                     logger.error(f"SiliconFlow API error: {response.status_code} - {response.text}")
                 
                 return None
-                
+            
             except Exception as e:
                 import traceback
                 logger.error(f"SiliconFlow embedding error: {str(e)}")
                 logger.error(f"SiliconFlow traceback: {traceback.format_exc()}")
+
+                # Best-effort fallback: if SiliconFlow is unreachable and an OpenAI key is
+                # available in the same settings, try a small OpenAI model so we can keep
+                # the pipeline moving rather than stalling the backfill.
+                if api_keys.get('openai_api_key'):
+                    logger.warning("Falling back to OpenAI embeddings after SiliconFlow failure")
+                    return await self._generate_openai_embeddings(text, "text-embedding-3-small", api_keys)
+
                 return None
     
     async def close(self):

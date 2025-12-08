@@ -110,6 +110,7 @@ class AgentService:
             webhooks=webhooks,
             context_retention_minutes=agent_data.get("context_retention_minutes", 30),
             max_context_messages=agent_data.get("max_context_messages", 50),
+            rag_results_limit=agent_data.get("rag_results_limit", 5),
             created_at=created_at,
             updated_at=updated_at
         )
@@ -176,16 +177,17 @@ class AgentService:
                 "name": agent_data.name,
                 "description": agent_data.description,
                 "system_prompt": agent_data.system_prompt,
-                "model": agent_data.model,
                 "enabled": agent_data.enabled,
-                "tools_config": agent_data.tools_config or {},
                 "voice_settings": agent_data.voice_settings.dict() if agent_data.voice_settings else {},
-                "webhooks": agent_data.webhooks.dict() if agent_data.webhooks else {},
-                "context_retention_minutes": agent_data.context_retention_minutes,
-                "max_context_messages": agent_data.max_context_messages,
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
             }
+            if agent_data.agent_image is not None:
+                data["agent_image"] = agent_data.agent_image
+            if agent_data.show_citations is not None:
+                data["show_citations"] = agent_data.show_citations
+            if agent_data.rag_results_limit is not None:
+                data["rag_results_limit"] = agent_data.rag_results_limit
             
             # Insert into client's database
             result = client_db.table("agents").insert(data).execute()
@@ -217,20 +219,16 @@ class AgentService:
                 update_data["description"] = agent_update.description
             if agent_update.system_prompt is not None:
                 update_data["system_prompt"] = agent_update.system_prompt
-            if agent_update.model is not None:
-                update_data["model"] = agent_update.model
+            if agent_update.agent_image is not None:
+                update_data["agent_image"] = agent_update.agent_image
             if agent_update.enabled is not None:
                 update_data["enabled"] = agent_update.enabled
-            if agent_update.tools_config is not None:
-                update_data["tools_config"] = agent_update.tools_config
             if agent_update.voice_settings is not None:
                 update_data["voice_settings"] = agent_update.voice_settings.dict()
-            if agent_update.webhooks is not None:
-                update_data["webhooks"] = agent_update.webhooks.dict()
-            if agent_update.context_retention_minutes is not None:
-                update_data["context_retention_minutes"] = agent_update.context_retention_minutes
-            if agent_update.max_context_messages is not None:
-                update_data["max_context_messages"] = agent_update.max_context_messages
+            if agent_update.show_citations is not None:
+                update_data["show_citations"] = agent_update.show_citations
+            if agent_update.rag_results_limit is not None:
+                update_data["rag_results_limit"] = agent_update.rag_results_limit
             
             update_data["updated_at"] = datetime.utcnow().isoformat()
             

@@ -103,10 +103,11 @@ def check_voice_transcripts_api():
         content = f.read()
     
     checks = {
-        "source filter with try/except": 'query = query.eq("source", "voice")',
-        "exception handling for source": 'except Exception:',
-        "type-safe supabase access": "hasattr(client.settings, 'supabase')",
-        "include_citations parameter": 'include_citations: bool = Query'
+        "deprecation message defined": "DEPRECATION_MESSAGE",
+        "mentions Supabase Realtime": "Supabase Realtime",
+        "stream route exists": "async def stream_voice_transcripts",
+        "history route exists": "async def get_transcript_history",
+        "uses HTTP 410": "status.HTTP_410_GONE",
     }
     
     all_good = True

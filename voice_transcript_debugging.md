@@ -43,6 +43,10 @@
 - Agent type logging
 - Available events logging (if accessible)
 
+### 4. Turn Detection Tuning
+- `VOICE_TURN_COMMIT_DELAY` (default **1.4s**) controls how long the agent waits after LiveKit reports `user_stopped_speaking` before it finalizes a turn. Increase this if short pauses in a sentence are getting split into multiple turns.
+- `VOICE_TRANSCRIPT_TIMEOUT` (default **0.8s**) determines how long to wait after `commit_user_turn` before aborting if LiveKit still hasn’t flushed the transcript. Raise this slightly when commits continue to race a follow-up utterance.
+
 ## Double Agent Issue
 
 ### Possible Causes:

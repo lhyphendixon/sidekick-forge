@@ -79,6 +79,31 @@
             color: white;
             border: 1px solid rgba(1, 164, 166, 0.3);
         }
+
+        /* Glassmorphic surfaces */
+        .bg-dark-surface {
+            background: rgba(20, 20, 20, 0.55) !important;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-color: rgba(255, 255, 255, 0.08) !important;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+        }
+        .bg-dark-elevated {
+            background: rgba(28, 28, 28, 0.5) !important;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-color: rgba(255, 255, 255, 0.06) !important;
+        }
+        .border-dark-border {
+            border-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        /* Inputs on glass */
+        input.bg-dark-elevated, textarea.bg-dark-elevated, select.bg-dark-elevated {
+            background: rgba(32, 32, 32, 0.55) !important;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-color: rgba(255, 255, 255, 0.08) !important;
+        }
         
         /* Card hover effects */
         .client-card {
@@ -197,15 +222,21 @@
     {% block extra_head %}{% endblock %}
 </head>
 <body class="video-background-body text-dark-text">
-    <!-- Video Background -->
-    <video class="admin-video-background" autoplay muted loop>
-        <source src="/static/videos/background2.mp4" type="video/mp4">
-    </video>
+    <!-- Video Background - loaded after page load to prevent infinite loading indicator -->
+    <video class="admin-video-background" muted loop playsinline></video>
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
+        // Load video AFTER window.load (not DOMContentLoaded) to prevent browser loading indicator from spinning
+        window.addEventListener('load', function() {
             const video = document.querySelector('.admin-video-background');
             if (video) {
                 video.playbackRate = 0.50;
+                // Set the source after page load to prevent it from blocking page load completion
+                video.src = "/static/videos/sfbg-smallest.mp4";
+                video.load();
+                // Play with error handling (some browsers block autoplay)
+                video.play().catch(function(err) {
+                    console.log('Video autoplay prevented:', err.message);
+                });
             }
         });
     </script>
@@ -276,6 +307,11 @@
                     </div>
                 </div>
                 <div class="flex items-center gap-3">
+                    {% set avatar_initial = (user.first_name[:1] if user and user.first_name)
+                        or (user.full_name[:1] if user and user.full_name)
+                        or (user.email[:1] if user and user.email)
+                        or 'U' %}
+                    {% set avatar_url = user.avatar_url if user and user.avatar_url else '' %}
                     <div class="hidden lg:block text-sm text-gray-600">
                         Welcome, <span id="current-user-display" class="text-gray-900">{{
                             user.first_name
@@ -285,11 +321,22 @@
                             or 'Admin'
                         }}</span>
                     </div>
+                    <a href="/admin/user-settings"
+                       class="inline-flex items-center justify-center h-10 w-10 rounded-full border border-brand-teal bg-white hover:border-brand-orange hover:shadow-md transition-all"
+                       title="User Settings">
+                        {% if avatar_url %}
+                        <span class="h-10 w-10 rounded-full bg-center bg-cover border border-brand-teal" style="background-image: url('{{ avatar_url }}');"></span>
+                        {% else %}
+                        <span class="h-10 w-10 rounded-full bg-gradient-to-br from-brand-teal to-brand-orange text-white text-base font-semibold flex items-center justify-center shadow-sm">
+                            {{ avatar_initial }}
+                        </span>
+                        {% endif %}
+                    </a>
                     <button onclick="logout()"
                             class="hidden lg:inline-flex text-sm text-gray-700 hover:text-brand-teal transition-all px-3 py-1 rounded border border-gray-300 hover:border-brand-teal">
                         Logout
                     </button>
-                    <div class="htmx-indicator spinner" id="global-indicator"></div>
+                    <div id="global-indicator" style="display:none;"></div>
                 </div>
             </div>
         </div>
@@ -307,6 +354,10 @@
                     or 'Admin'
                 }}</span>
             </div>
+            <a href="/admin/user-settings"
+               class="block rounded-md px-3 py-2 text-sm font-medium transition-all text-gray-800 hover:text-brand-teal hover:bg-gray-100 border border-gray-200">
+                User Settings
+            </a>
             <div class="space-y-2">
                 {% if user.role in ['superadmin','admin'] %}
                 <a href="/admin/" onclick="closeMobileMenu()"
@@ -364,13 +415,16 @@
         {% block content %}{% endblock %}
     </main>
 
+    {% if not disable_stats_poll %}
     <!-- Global Auto-refresh Stats (every 30 seconds) -->
     <div hx-get="/admin/partials/stats" 
          hx-trigger="every 30s" 
          hx-target="#stats-container"
-         hx-swap="innerHTML"
-         hx-indicator="#global-indicator">
+         hx-swap="innerHTML">
     </div>
+    <!-- Hidden container to satisfy HTMX target on pages that don't render stats -->
+    <div id="stats-container" class="hidden"></div>
+    {% endif %}
 
     <!-- HTMX Configuration -->
     <script>

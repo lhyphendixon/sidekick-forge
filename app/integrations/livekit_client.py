@@ -1,10 +1,12 @@
-from livekit import api, rtc
-from typing import Optional, Dict, Any, List, Union
+import asyncio
+import os
+import json
 import logging
 import time
-import jwt
-import json
 from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List, Union
+
+from livekit import api, rtc
 
 from app.config import settings
 from app.utils.exceptions import ServiceUnavailableError
@@ -22,6 +24,9 @@ class LiveKitManager:
         self.url = None
         self._initialized = False
         self.livekit_api = None
+        self._worker_pool_enabled = os.getenv("LIVEKIT_WORKER_POOL", "false").lower() == "true"
+        self._worker_pool_size = int(os.getenv("LIVEKIT_WORKER_POOL_SIZE", "3"))
+        self._warm_workers: asyncio.Queue = asyncio.Queue(maxsize=self._worker_pool_size) if self._worker_pool_enabled else None
     
     async def initialize(self):
         """Initialize LiveKit connection"""
@@ -59,6 +64,27 @@ class LiveKitManager:
         if not self.livekit_api or not self._initialized:
             raise ServiceUnavailableError("LiveKitManager is not initialized. Call initialize() first.")
         return self.livekit_api
+
+    async def get_warm_worker(self) -> Optional[str]:
+        """Return a warmed worker id if pooling is enabled."""
+        if not self._worker_pool_enabled or not self._warm_workers:
+            return None
+        try:
+            worker_id = self._warm_workers.get_nowait()
+            logger.info(f"♻️ Reusing warm worker {worker_id}")
+            return worker_id
+        except asyncio.QueueEmpty:
+            return None
+
+    async def return_worker_to_pool(self, worker_id: Optional[str]) -> None:
+        """Return a worker id to the pool for future reuse."""
+        if not worker_id or not self._worker_pool_enabled or not self._warm_workers:
+            return
+        try:
+            self._warm_workers.put_nowait(worker_id)
+            logger.info(f"✅ Worker {worker_id} returned to warm pool")
+        except asyncio.QueueFull:
+            logger.debug("Worker pool full; discarding worker id")
 
     async def health_check(self) -> bool:
         """Check LiveKit service health"""

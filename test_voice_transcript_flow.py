@@ -73,17 +73,17 @@ def test_transcript_store():
 
 
 def test_voice_transcripts_api():
-    """Test voice transcripts API handles source field gracefully"""
+    """Test voice transcripts API now responds with a realtime deprecation notice."""
     print("\n" + "="*60)
     print("TEST: Voice Transcripts API")
     print("="*60)
     
     checks = {
-        "source filter try/except": 'query = query.eq("source", "voice")',
-        "source fallback": "Source column not available",
-        "include_citations param": "include_citations: bool = Query",
-        "turn_id in response": '"turn_id": transcript.get("turn_id")',
-        "type-safe supabase access": "hasattr(client.settings, 'supabase')"
+        "deprecation constant present": "DEPRECATION_MESSAGE",
+        "references Supabase Realtime": "Supabase Realtime",
+        "stream endpoint defined": "async def stream_voice_transcripts",
+        "history endpoint defined": "async def get_transcript_history",
+        "HTTP 410 status used": "status.HTTP_410_GONE",
     }
     
     return check_file('/root/sidekick-forge/app/api/v1/voice_transcripts.py', checks)

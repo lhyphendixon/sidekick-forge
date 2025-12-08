@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 class AsanaAPIError(RuntimeError):
     """Raised when the Asana API returns an error response."""
 
+    def __init__(self, message: str, *, status_code: Optional[int] = None, body: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
 
 class AsanaClient:
     """Lightweight async client for a subset of the Asana REST API."""
@@ -64,7 +69,9 @@ class AsanaClient:
                         },
                     )
                     raise AsanaAPIError(
-                        f"Asana API request failed ({response.status}): {text or 'no response body'}"
+                        f"Asana API request failed ({response.status}): {text or 'no response body'}",
+                        status_code=response.status,
+                        body=text,
                     )
                 if not text:
                     return {}
@@ -145,6 +152,30 @@ class AsanaClient:
         data = await self._request("POST", "/tasks", payload=payload)
         return data.get("data") or {}
 
+    async def create_subtask(
+        self,
+        parent_gid: str,
+        *,
+        name: str,
+        assignee: Optional[str] = None,
+        due_on: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "data": {
+                "name": name,
+            }
+        }
+        if assignee:
+            payload["data"]["assignee"] = assignee
+        if due_on:
+            payload["data"]["due_on"] = due_on
+        if notes:
+            payload["data"]["notes"] = notes
+
+        data = await self._request("POST", f"/tasks/{parent_gid}/subtasks", payload=payload)
+        return data.get("data") or {}
+
     async def update_task(
         self,
         task_gid: str,
@@ -154,6 +185,25 @@ class AsanaClient:
         payload = {"data": fields}
         data = await self._request("PUT", f"/tasks/{task_gid}", payload=payload)
         return data.get("data") or {}
+
+    async def list_task_subtasks(
+        self,
+        task_gid: str,
+        *,
+        limit: int = 50,
+        include_completed: bool = True,
+        opt_fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {
+            "limit": min(max(limit, 1), 100),
+        }
+        if not include_completed:
+            params["completed_since"] = "now"
+        if opt_fields:
+            params["opt_fields"] = ",".join(opt_fields)
+
+        data = await self._request("GET", f"/tasks/{task_gid}/subtasks", params=params)
+        return data.get("data") or []
 
     async def delete_task(self, task_gid: str) -> None:
         await self._request("DELETE", f"/tasks/{task_gid}")

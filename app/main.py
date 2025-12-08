@@ -19,15 +19,12 @@ from app.middleware.logging import LoggingMiddleware
 from app.utils.exceptions import APIException
 from app.integrations.supabase_client import supabase_manager
 from app.integrations.livekit_client import livekit_manager
-# Container manager removed - using worker pool architecture
-# Redis is deprecated; keep import removable
-import redis.asyncio as aioredis  # noqa: F401
 
 # Configure logging
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger("autonomite_saas")
 
-# Redis client removed (deprecated)
+# Redis unused in this deployment
 redis_client = None
 
 @asynccontextmanager
@@ -211,11 +208,16 @@ except Exception as e:
 
 # Mount static files
 import os
-static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.exists(static_dir):
+static_dir_candidates = [
+    "/app/static",  # container volume mount
+    os.path.join(os.path.dirname(__file__), "static"),  # relative to source
+]
+static_dir = next((d for d in static_dir_candidates if os.path.exists(d)), None)
+if static_dir:
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    logger.info(f"Mounted static directory at {static_dir}")
 else:
-    logger.warning(f"Static directory not found at {static_dir}, skipping static file mount")
+    logger.warning(f"Static directory not found at any of {static_dir_candidates}, skipping static file mount")
 
 # Include admin dashboard (full version with all features)
 # Temporarily disabled multi-tenant admin to restore original styling
@@ -254,9 +256,12 @@ async def auth_exception_handler(request: Request, exc):
 
 # Include webhook routers
 from app.api.webhooks import livekit_router, supabase_router
+from app.api.webhooks.telegram import router as telegram_router
 from app.api.embed import router as embed_router
+
 app.include_router(livekit_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(telegram_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(embed_router)
 
 # Lightweight debug endpoint to verify resolved LiveKit configuration quickly

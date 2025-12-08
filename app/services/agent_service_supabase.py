@@ -8,6 +8,7 @@ import logging
 import json
 
 from app.models.agent import Agent, AgentCreate, AgentUpdate, VoiceSettings, WebhookSettings
+from app.models.client import ChannelSettings, TelegramChannelSettings
 from app.services.client_service_supabase import ClientService
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,18 @@ class AgentService:
                 tools_config = {}
         else:
             tools_config = tools_config_raw or {}
+
+        # Channel settings are stored inside tools_config to avoid schema drift
+        channels_raw = {}
+        if isinstance(tools_config, dict):
+            channels_raw = tools_config.get("channels") or tools_config.get("_channels") or {}
+
+        channels = None
+        if channels_raw:
+            try:
+                channels = ChannelSettings(**channels_raw)
+            except Exception:
+                channels = None
         
         # Parse datetime fields
         created_at = agent_data.get("created_at")
@@ -107,7 +120,9 @@ class AgentService:
             show_citations=agent_data.get("show_citations", True),
             created_at=created_at,
             updated_at=updated_at,
-            tools_config=tools_config
+            tools_config=tools_config,
+            channels=channels,
+            rag_results_limit=agent_data.get("rag_results_limit", 5),
         )
     
     async def get_agent(self, client_id: str, agent_slug: str) -> Optional[Agent]:
@@ -365,6 +380,7 @@ class AgentService:
                 
                 # Remove fields that might not exist in the table
                 update_dict.pop("tools_config", None)  # Remove if not in table schema
+                update_dict.pop("channels", None)      # Channels are stored inside tools_config, not as a column
                 
                 # Ensure voice_settings is a plain dict (let Supabase handle JSONB)
                 if "voice_settings" in update_dict and update_dict["voice_settings"]:
@@ -421,7 +437,15 @@ class AgentService:
                     update_query = update_query.eq("id", agent_id)
                 else:
                     update_query = update_query.eq("slug", agent_slug)
-                # Execute the update (sync client doesn't support chaining .select())
+
+                # Request the updated row to avoid silent empty responses
+                try:
+                    update_query = update_query.select("*")
+                except Exception:
+                    # Some client versions may not support select() chaining; fall back to plain update
+                    pass
+
+                # Execute the update
                 result = update_query.execute()
                 try:
                     # Some clients expose result.error; log if present
@@ -431,12 +455,19 @@ class AgentService:
                 except Exception:
                     pass
                 
-                # If the update failed due to a non-existent column like show_citations,
-                # retry once without that field to avoid PostgREST 400s on tenants missing the column
-                if (not result.data) and ("show_citations" in update_dict):
+                # If the update failed due to a non-existent column like show_citations or rag_results_limit,
+                # retry once without those fields to avoid PostgREST 400s on tenants missing the column
+                retry_columns = []
+                if "show_citations" in update_dict:
+                    retry_columns.append("show_citations")
+                if "rag_results_limit" in update_dict:
+                    retry_columns.append("rag_results_limit")
+
+                if (not result.data) and retry_columns:
                     try:
                         update_dict_retry = dict(update_dict)
-                        update_dict_retry.pop("show_citations", None)
+                        for col in retry_columns:
+                            update_dict_retry.pop(col, None)
                         result = (
                             client_supabase
                             .table("agents")

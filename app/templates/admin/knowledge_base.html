@@ -211,34 +211,115 @@
     padding: 6px 12px;
     font-size: 12px;
 }
+
+/* Global processing banner */
+#processing-banner {
+    display: none;
+    width: 100%;
+    height: 80px;
+    background: linear-gradient(90deg, rgba(1,164,166,0.12), rgba(252,114,68,0.12));
+    border-top: 1px solid #2a2a2a;
+    border-bottom: 1px solid #2a2a2a;
+    padding: 14px 18px;
+    box-sizing: border-box;
+}
+
+#processing-banner .banner-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+#processing-banner .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 12px;
+    background: #1f1f1f;
+    border: 1px solid #2a2a2a;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+#processing-banner .banner-progress {
+    flex: 1;
+    min-width: 220px;
+}
+
+#processing-banner .banner-progress .progress-bar {
+    height: 8px;
+    margin: 6px 0 2px 0;
+}
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="container mx-auto px-4">
-    <!-- Page Header -->
-    <div class="mb-6">
-        <div class="flex items-center justify-between">
-            <div>
-                <h1 class="text-2xl font-bold text-dark-text">Knowledge Base</h1>
-                <p class="text-dark-text-secondary">Upload and manage documents for AI agent training</p>
-            </div>
-            <div class="flex gap-3">
-                <button id="refresh-btn" class="btn-secondary px-4 py-2 rounded text-sm font-medium transition-all">
-                    <i class="fas fa-sync-alt mr-2"></i>Refresh
-                </button>
-                <button id="stats-btn" class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all">
-                    <i class="fas fa-chart-bar mr-2"></i>Statistics
-                </button>
+    <!-- Page Header + Upload -->
+    <div class="mb-6 bg-dark-surface rounded-lg border border-dark-border">
+        <div class="border-b border-dark-border px-6 py-4 flex flex-col gap-2">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-dark-text">Knowledge Base</h1>
+                    <p class="text-dark-text-secondary">Upload and manage documents for AI agent training</p>
+                </div>
             </div>
         </div>
-    </div>
-
-    <!-- Upload Section -->
-    <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+        <div id="processing-banner">
+            <div class="banner-content text-sm text-dark-text h-full">
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-spinner fa-spin text-brand-orange"></i>
+                    <span id="processing-banner-text" class="font-semibold">Documents are processing…</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="badge text-brand-orange"><span class="w-2 h-2 rounded-full bg-brand-orange inline-block"></span><span id="banner-processing-count">0</span> processing</span>
+                    <span class="badge text-brand-teal"><span class="w-2 h-2 rounded-full bg-brand-teal inline-block"></span><span id="banner-ready-count">0</span> ready</span>
+                    <span class="badge text-brand-salmon"><span class="w-2 h-2 rounded-full bg-brand-salmon inline-block"></span><span id="banner-error-count">0</span> failed</span>
+                    <span class="badge text-brand-orange/80"><span class="w-2 h-2 rounded-full bg-brand-orange inline-block"></span><span id="banner-pending-embeddings">0</span> embedding</span>
+                    <button id="view-queue-btn" class="btn-secondary px-3 py-1 text-xs rounded whitespace-nowrap" onclick="kbManager.viewQueue()">
+                        <i class="fas fa-tasks mr-1"></i>View Queue
+                    </button>
+                </div>
+                <div class="banner-progress">
+                    <div class="progress-bar">
+                        <div id="banner-progress-fill" class="progress-fill"></div>
+                    </div>
+                    <div id="banner-progress-text" class="text-xs text-dark-text-secondary">Progress —</div>
+                </div>
+            </div>
+        </div>
         <div class="border-b border-dark-border px-6 py-4">
-            <h2 class="text-lg font-semibold text-dark-text">Upload Documents</h2>
-            <p class="text-sm text-dark-text-secondary">Supported formats: PDF, DOC, DOCX, TXT, MD (50MB max per file)</p>
+            <div class="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                    <h2 class="text-lg font-semibold text-dark-text">Upload Documents</h2>
+                    <p class="text-sm text-dark-text-secondary">Supported formats: {{ supported_formats }} ({{ max_upload_size_mb }}MB max per file)</p>
+                    <div id="doc-summary" class="mt-2 flex flex-wrap gap-4 text-sm text-dark-text-secondary">
+                        <div>Documents: <span id="doc-count" class="font-semibold text-dark-text">0</span></div>
+                        <div>Total Size: <span id="doc-total-size" class="font-semibold text-dark-text">0 Bytes</span></div>
+                    </div>
+                </div>
+                <div class="flex flex-col gap-2 items-end w-full md:w-auto">
+                    <div class="flex items-center gap-4 text-sm text-dark-text-secondary">
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-orange"></span><span id="status-processing">— processing</span></span>
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-teal"></span><span id="status-ready">— ready</span></span>
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-salmon"></span><span id="status-error">— failed</span></span>
+                    </div>
+                    <div class="flex items-center gap-3 w-full md:w-auto">
+                        <button id="retry-errors-btn" class="btn-secondary px-4 py-2 rounded text-sm font-medium transition-all">
+                            <i class="fas fa-redo mr-2"></i>Retry Failed
+                        </button>
+                    </div>
+                    <div id="retry-progress" class="w-full md:w-72" style="display:none;">
+                        <div class="progress-bar">
+                            <div id="retry-progress-fill" class="progress-fill"></div>
+                        </div>
+                        <p id="retry-progress-text" class="text-xs text-dark-text-secondary mt-1">Retrying failed documents...</p>
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="p-6">
             <!-- Client Selection (for admins with multiple client access) -->
@@ -274,7 +355,7 @@
                 </div>
                 <h3 class="text-lg font-medium text-dark-text mb-2">Drop files here or click to browse</h3>
                 <p class="text-sm text-dark-text-secondary mb-4">You can upload multiple files at once</p>
-                <input type="file" id="file-input" class="file-input" multiple accept=".pdf,.doc,.docx,.txt,.md">
+                <input type="file" id="file-input" class="file-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.srt">
                 <button id="browse-btn" class="btn-primary px-6 py-2 rounded transition-all">
                     Choose Files
                 </button>
@@ -339,6 +420,18 @@
                 <h3 class="text-lg font-medium text-dark-text mb-2">No Documents Yet</h3>
                 <p class="text-dark-text-secondary">Upload your first document to get started</p>
             </div>
+            <div id="pagination-controls" class="flex items-center justify-between mt-6 text-sm text-dark-text-secondary" style="display:none;">
+                <div id="pagination-summary">Page 1</div>
+                <div class="flex items-center gap-2">
+                    <button id="prev-page" class="btn-secondary px-3 py-1 rounded text-xs" disabled>
+                        <i class="fas fa-chevron-left mr-1"></i>Prev
+                    </button>
+                    <span id="page-display" class="text-dark-text font-semibold">1 / 1</span>
+                    <button id="next-page" class="btn-secondary px-3 py-1 rounded text-xs" disabled>
+                        Next<i class="fas fa-chevron-right ml-1"></i>
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -387,6 +480,12 @@
 
 {% block extra_scripts %}
 <script>
+window.KnowledgeBaseConfig = {
+    maxUploadBytes: {{ max_upload_size_mb * 1024 * 1024 }},
+    maxUploadLabel: "{{ max_upload_size_mb }}MB"
+};
+</script>
+<script>
 // Cache bust: {{ cache_bust }} - v7
 class KnowledgeBaseManager {
     constructor() {
@@ -394,7 +493,16 @@ class KnowledgeBaseManager {
         this.agents = [];
         this.clients = [];
         this.currentClient = null;
+        this.existingFiles = new Map(); // filename (lowercase) -> doc metadata
         this.isMultiClient = false;
+        this.page = 1;
+        this.pageSize = 25;
+        this.totalDocuments = 0;
+        this.totalSize = 0;
+        this.statusCounts = { processing: 0, ready: 0, error: 0 };
+        this.suppressRefreshDuringRetry = false;
+        this.maxUploadBytes = (window.KnowledgeBaseConfig && window.KnowledgeBaseConfig.maxUploadBytes) || ({{ max_upload_size_mb * 1024 * 1024 }});
+        this.maxUploadLabel = (window.KnowledgeBaseConfig && window.KnowledgeBaseConfig.maxUploadLabel) || '{{ max_upload_size_mb }}MB';
         this.init();
     }
 
@@ -514,6 +622,7 @@ class KnowledgeBaseManager {
         clientSelect.addEventListener('change', async (e) => {
             this.currentClient = e.target.value;
             console.log('Client changed to:', this.currentClient);
+            this.page = 1;
             await this.loadAgents();
             await this.loadDocuments();
         });
@@ -550,6 +659,9 @@ class KnowledgeBaseManager {
         const clearBtn = document.getElementById('clear-btn');
         const refreshBtn = document.getElementById('refresh-btn');
         const filterBtn = document.getElementById('filter-btn');
+        const prevPageBtn = document.getElementById('prev-page');
+        const nextPageBtn = document.getElementById('next-page');
+        const retryErrorsBtn = document.getElementById('retry-errors-btn');
 
         // Drag and drop
         uploadArea.addEventListener('dragover', (e) => {
@@ -574,8 +686,34 @@ class KnowledgeBaseManager {
         // Upload controls
         uploadBtn.addEventListener('click', () => this.uploadFiles());
         clearBtn.addEventListener('click', () => this.clearFiles());
-        refreshBtn.addEventListener('click', () => this.loadDocuments());
-        filterBtn.addEventListener('click', () => this.loadDocuments());
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => this.loadDocuments());
+        }
+        if (filterBtn) {
+            filterBtn.addEventListener('click', () => {
+                this.page = 1;
+                this.loadDocuments();
+            });
+        }
+        if (retryErrorsBtn) {
+            retryErrorsBtn.addEventListener('click', () => this.retryFailedDocuments());
+        }
+
+        if (prevPageBtn) {
+            prevPageBtn.addEventListener('click', () => {
+                if (this.page > 1) {
+                    this.page -= 1;
+                    this.loadDocuments();
+                }
+            });
+        }
+
+        if (nextPageBtn) {
+            nextPageBtn.addEventListener('click', () => {
+                this.page += 1;
+                this.loadDocuments();
+            });
+        }
 
         // Agent selection
         document.getElementById('all-agents').addEventListener('change', (e) => {
@@ -593,8 +731,8 @@ class KnowledgeBaseManager {
     }
 
     handleFiles(files) {
-        const allowedTypes = ['pdf', 'doc', 'docx', 'txt', 'md'];
-        const maxSize = 50 * 1024 * 1024; // 50MB
+        const allowedTypes = ['pdf', 'doc', 'docx', 'txt', 'md', 'srt'];
+        const maxSize = this.maxUploadBytes;
 
         Array.from(files).forEach(file => {
             const extension = file.name.split('.').pop().toLowerCase();
@@ -605,7 +743,7 @@ class KnowledgeBaseManager {
             }
 
             if (file.size > maxSize) {
-                this.showNotification(`File too large: ${file.name}`, 'error');
+                this.showNotification(`File too large: ${file.name} (limit: ${this.maxUploadLabel})`, 'error');
                 return;
             }
 
@@ -797,16 +935,31 @@ class KnowledgeBaseManager {
 
             const totalFiles = this.selectedFiles.length;
             let completed = 0;
+            let skipped = 0;
 
             for (let i = 0; i < this.selectedFiles.length; i++) {
                 const fileObj = this.selectedFiles[i];
+                const fileName = fileObj.file.name;
                 progressText.textContent = `Uploading ${fileObj.file.name} (${i + 1}/${totalFiles})...`;
+
+                // Duplicate detection by filename
+                const existing = this.existingFiles.get(fileName.toLowerCase());
+                let replaceExisting = false;
+                if (existing) {
+                    const wantReplace = confirm(`"${fileName}" already exists. Click OK to update it, or Cancel to skip this file.`);
+                    if (!wantReplace) {
+                        skipped++;
+                        continue;
+                    }
+                    replaceExisting = true;
+                }
 
                 const formData = new FormData();
                 formData.append('file', fileObj.file);
                 formData.append('title', fileObj.title || fileObj.file.name);
                 formData.append('description', fileObj.description || '');
                 formData.append('client_id', this.currentClient);
+                formData.append('replace_existing', replaceExisting ? 'true' : 'false');
                 
                 if (allAgents) {
                     formData.append('agent_ids', 'all');
@@ -825,6 +978,7 @@ class KnowledgeBaseManager {
                     this.showNotification(`Failed to upload ${fileObj.file.name}: ${result.message}`, 'error');
                 } else {
                     completed++;
+                    this.existingFiles.set(fileName.toLowerCase(), { id: result.document_id, status: result.status });
                 }
 
                 // Update progress
@@ -832,7 +986,7 @@ class KnowledgeBaseManager {
                 progressFill.style.width = `${progress}%`;
             }
 
-            progressText.textContent = `Upload complete! ${completed}/${totalFiles} files uploaded successfully.`;
+            progressText.textContent = `Upload complete! ${completed}/${totalFiles} files uploaded successfully${skipped ? `, ${skipped} skipped.` : '.'}`;
             
             if (completed > 0) {
                 this.showNotification(`Successfully uploaded ${completed} documents`, 'success');
@@ -851,6 +1005,163 @@ class KnowledgeBaseManager {
         }
     }
 
+    updateDocumentSummary(documents, totalSizeOverride = null) {
+        const summaryRow = document.getElementById('doc-summary');
+        const countEl = document.getElementById('doc-count');
+        const sizeEl = document.getElementById('doc-total-size');
+
+        if (!summaryRow || !countEl || !sizeEl) return;
+
+        const docArray = Array.isArray(documents) ? documents : [];
+        const totalSizeBytes = docArray.reduce((sum, doc) => {
+            const size = Number(doc.file_size);
+            return sum + (Number.isFinite(size) ? size : 0);
+        }, 0) || 0;
+
+        if (!this.currentClient) {
+            countEl.textContent = '—';
+            sizeEl.textContent = '—';
+        } else {
+            const effectiveSize = Number.isFinite(totalSizeOverride) ? totalSizeOverride : totalSizeBytes;
+            countEl.textContent = this.totalDocuments || docArray.length;
+            sizeEl.textContent = this.formatFileSize(effectiveSize);
+        }
+
+        summaryRow.style.display = 'flex';
+    }
+
+    updatePaginationControls(currentPageCount = 0) {
+        const wrapper = document.getElementById('pagination-controls');
+        const pageDisplay = document.getElementById('page-display');
+        const summary = document.getElementById('pagination-summary');
+        const prevBtn = document.getElementById('prev-page');
+        const nextBtn = document.getElementById('next-page');
+
+        if (!wrapper || !pageDisplay || !summary || !prevBtn || !nextBtn) return;
+
+        if (!this.currentClient) {
+            wrapper.style.display = 'none';
+            return;
+        }
+
+        const total = this.totalDocuments || currentPageCount;
+        const totalPages = Math.max(1, Math.ceil(total / this.pageSize));
+        const currentPage = Math.min(this.page, totalPages);
+
+        pageDisplay.textContent = `${currentPage} / ${totalPages}`;
+        const hasTotalSize = Number.isFinite(this.totalSize);
+        summary.textContent = `Total documents: ${total}${hasTotalSize ? ` • Total size: ${this.formatFileSize(this.totalSize)}` : ''}`;
+
+        prevBtn.disabled = currentPage <= 1;
+        // If we have a total count, use that to determine if next exists. Otherwise, assume there is a next page if this page is full.
+        const hasMore = total ? currentPage < totalPages : currentPageCount >= this.pageSize;
+        nextBtn.disabled = !hasMore;
+
+        wrapper.style.display = 'flex';
+    }
+
+    updateProcessingBanner() {
+        const banner = document.getElementById('processing-banner');
+        const bannerText = document.getElementById('processing-banner-text');
+        const processingCountEl = document.getElementById('banner-processing-count');
+        const readyCountEl = document.getElementById('banner-ready-count');
+        const errorCountEl = document.getElementById('banner-error-count');
+        const progressFill = document.getElementById('banner-progress-fill');
+        const progressText = document.getElementById('banner-progress-text');
+
+        if (!banner || !bannerText || !processingCountEl || !readyCountEl || !errorCountEl || !progressFill || !progressText) {
+            return;
+        }
+
+        const { processing = 0, ready = 0, error = 0, pending_embeddings = 0 } = this.statusCounts || {};
+        const total = processing + ready + error + pending_embeddings;
+        const completed = ready + error;
+        const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        processingCountEl.textContent = processing;
+        readyCountEl.textContent = ready;
+        errorCountEl.textContent = error;
+        progressFill.style.width = `${percent}%`;
+        progressText.textContent = total > 0
+            ? `Progress: ${percent}% • ${completed}/${total} done`
+            : 'No documents processing';
+        const pendingEl = document.getElementById('banner-pending-embeddings');
+        if (pendingEl) pendingEl.textContent = pending_embeddings || 0;
+
+        // Only show when there are processing docs; hide otherwise
+        if (processing > 0 || pending_embeddings > 0) {
+            const queueCount = processing + pending_embeddings;
+            if (this.currentClient) {
+                bannerText.textContent = `Documents are processing for this client (${queueCount} in queue)`;
+            } else if (this.isMultiClient) {
+                bannerText.textContent = `Documents are processing across clients (${queueCount} in queue)`;
+            } else {
+                bannerText.textContent = `Documents are processing (${queueCount} in queue)`;
+            }
+            banner.style.display = 'block';
+        } else {
+            banner.style.display = 'none';
+        }
+    }
+
+    async updateStatusCounts() {
+        const processingEl = document.getElementById('status-processing');
+        const readyEl = document.getElementById('status-ready');
+        const errorEl = document.getElementById('status-error');
+        if (!processingEl || !readyEl || !errorEl) return;
+
+        try {
+            const token = localStorage.getItem('admin_token');
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+
+            // If superadmin without a selected client, aggregate across all clients in view
+            if (!this.currentClient && this.isMultiClient && Array.isArray(this.clients) && this.clients.length > 0) {
+                let agg = { processing: 0, ready: 0, error: 0, pending_embeddings: 0 };
+                for (const client of this.clients) {
+                    if (!client || !client.id) continue;
+                    const resp = await fetch(`/admin/knowledge-base/document-stats?client_id=${client.id}`, { headers });
+                    if (!resp.ok) continue;
+                    const stats = await resp.json();
+                    agg.processing += Number(stats.processing) || 0;
+                    agg.ready += Number(stats.ready) || 0;
+                    agg.error += Number(stats.error) || 0;
+                    agg.pending_embeddings += Number(stats.pending_embeddings) || 0;
+                }
+                this.statusCounts = agg;
+                processingEl.textContent = `${agg.processing} processing`;
+                readyEl.textContent = `${agg.ready} ready`;
+                errorEl.textContent = `${agg.error} failed`;
+                this.updateProcessingBanner();
+                return;
+            }
+
+            if (!this.currentClient) {
+                processingEl.textContent = '— processing';
+                readyEl.textContent = '— ready';
+                errorEl.textContent = '— failed';
+                this.statusCounts = { processing: 0, ready: 0, error: 0, pending_embeddings: 0 };
+                this.updateProcessingBanner();
+                return;
+            }
+
+            const resp = await fetch(`/admin/knowledge-base/document-stats?client_id=${this.currentClient}`, { headers });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const stats = await resp.json();
+            const processingCount = Number(stats.processing) || 0;
+            const readyCount = Number(stats.ready) || 0;
+            const errorCount = Number(stats.error) || 0;
+            const pendingEmbCount = Number(stats.pending_embeddings) || 0;
+            this.statusCounts = { processing: processingCount, ready: readyCount, error: errorCount, pending_embeddings: pendingEmbCount };
+            processingEl.textContent = `${processingCount} processing`;
+            readyEl.textContent = `${readyCount} ready`;
+            errorEl.textContent = `${errorCount} failed`;
+            this.updateProcessingBanner();
+        } catch (err) {
+            console.warn('Failed to update status counts', err);
+        }
+    }
+
     async loadDocuments(silent = false) {
         const container = document.getElementById('documents-container');
         const loading = document.getElementById('documents-loading');
@@ -858,6 +1169,9 @@ class KnowledgeBaseManager {
 
         // Check if a client is selected
         if (!this.currentClient) {
+            this.totalDocuments = 0;
+            this.totalSize = 0;
+            this.updateDocumentSummary([]);
             loading.style.display = 'none';
             container.style.display = 'none';
             empty.style.display = 'block';
@@ -878,7 +1192,7 @@ class KnowledgeBaseManager {
 
         try {
             const statusFilter = document.getElementById('status-filter').value;
-            let url = `/admin/knowledge-base/documents?client_id=${this.currentClient}`;
+            let url = `/admin/knowledge-base/documents?client_id=${this.currentClient}&page=${this.page}&page_size=${this.pageSize}`;
             if (statusFilter) {
                 url += `&status=${statusFilter}`;
             }
@@ -915,7 +1229,47 @@ class KnowledgeBaseManager {
                 throw new Error('Server returned an unexpected response format while loading documents.');
             }
 
-            const documentArray = Array.isArray(documents) ? documents : [];
+            let documentArray = [];
+            let totalCount = null;
+            let totalSize = null;
+            let allFileNames = [];
+
+            if (Array.isArray(documents)) {
+                documentArray = documents;
+                totalCount = Number(response.headers.get('X-Total-Count')) || documents.length;
+                totalSize = Number(response.headers.get('X-Total-Size'));
+            } else if (documents && Array.isArray(documents.documents)) {
+                documentArray = documents.documents;
+                totalCount = Number(documents.total_count);
+                totalSize = Number(documents.total_size);
+                this.page = Number(documents.page) || this.page;
+                this.pageSize = Number(documents.page_size) || this.pageSize;
+                if (Array.isArray(documents.all_file_names)) {
+                    allFileNames = documents.all_file_names;
+                }
+            }
+
+            // Track totals for pagination/summary
+            this.totalDocuments = Number.isFinite(totalCount) ? totalCount : documentArray.length;
+            this.totalSize = Number.isFinite(totalSize) ? totalSize : null;
+
+            // Cache filenames for duplicate detection
+            this.existingFiles.clear();
+            allFileNames.forEach(name => {
+                if (typeof name === 'string') {
+                    this.existingFiles.set(name.toLowerCase(), { file_name: name });
+                }
+            });
+            documentArray.forEach(doc => {
+                if (doc.file_name) {
+                    this.existingFiles.set(String(doc.file_name).toLowerCase(), doc);
+                }
+            });
+
+            // Update summary row with latest totals
+            this.updateDocumentSummary(documentArray, this.totalSize);
+            this.updatePaginationControls(documentArray.length);
+            this.updateStatusCounts();
 
             // Only hide loading if it was shown (not silent refresh)
             if (!silent) {
@@ -926,6 +1280,7 @@ class KnowledgeBaseManager {
                 if (!silent) {
                     empty.style.display = 'block';
                 }
+                container.style.display = 'none';
                 return;
             }
 
@@ -956,6 +1311,7 @@ class KnowledgeBaseManager {
         const statusClass = `status-${doc.status}`;
         const fileSize = this.formatFileSize(doc.file_size);
         const uploadDate = new Date(doc.created_at).toLocaleDateString();
+        const errorMessage = (doc.processing_metadata && doc.processing_metadata.error_message) ? doc.processing_metadata.error_message : '';
         
         // Determine agent access display
         let agentAccessText = '';
@@ -980,10 +1336,11 @@ class KnowledgeBaseManager {
                     <div>Uploaded: ${uploadDate}</div>
                     <div>Chunks: ${doc.chunk_count || 0}</div>
                     <div class="mt-1">${agentAccessText}</div>
+                    ${doc.status === 'error' && errorMessage ? `<div class="text-brand-salmon mt-2">Error: ${errorMessage}</div>` : ''}
                 </div>
             </div>
             <div class="document-actions">
-                ${doc.status === 'processing' ? `
+                ${doc.status === 'processing' || doc.status === 'error' ? `
                     <button class="btn-secondary btn-small" onclick="kbManager.reprocessDocument('${doc.id}')">
                         <i class="fas fa-redo mr-1"></i>Retry
                     </button>
@@ -1049,7 +1406,7 @@ class KnowledgeBaseManager {
                 headers['Authorization'] = `Bearer ${token}`;
             }
             
-            const response = await fetch(`/admin/knowledge-base/documents/${documentId}/reprocess`, {
+            const response = await fetch(`/admin/knowledge-base/documents/${documentId}/reprocess?client_id=${this.currentClient || ''}`, {
                 method: 'POST',
                 headers: headers
             });
@@ -1058,12 +1415,80 @@ class KnowledgeBaseManager {
             
             if (result.success) {
                 this.showNotification('Document reprocessing started', 'success');
-                this.loadDocuments();
+                if (!this.suppressRefreshDuringRetry) {
+                    this.loadDocuments();
+                }
             } else {
                 this.showNotification('Failed to reprocess document', 'error');
             }
         } catch (error) {
             this.showNotification('Error reprocessing document: ' + error.message, 'error');
+        }
+    }
+
+    async retryFailedDocuments() {
+        if (!this.currentClient) {
+            this.showNotification('Select a client first', 'warning');
+            return;
+        }
+        this.showNotification('Retrying failed documents...', 'info');
+        const progressBar = document.getElementById('retry-progress');
+        const progressFill = document.getElementById('retry-progress-fill');
+        const progressText = document.getElementById('retry-progress-text');
+        if (progressBar) progressBar.style.display = 'block';
+        if (progressFill) progressFill.style.width = '0%';
+        if (progressText) progressText.textContent = 'Starting...';
+
+        try {
+            this.suppressRefreshDuringRetry = true;
+            const token = localStorage.getItem('admin_token');
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+
+            // First fetch total error count
+            const statsResp = await fetch(`/admin/knowledge-base/document-stats?client_id=${this.currentClient}`, { headers });
+            let totalErrors = 0;
+            if (statsResp.ok) {
+                const stats = await statsResp.json();
+                totalErrors = Number(stats.error) || 0;
+            }
+
+            let processed = 0;
+            let page = 1;
+            const pageSize = 50;
+
+            while (true) {
+                const url = `/admin/knowledge-base/documents?client_id=${this.currentClient}&status=error&page=${page}&page_size=${pageSize}`;
+                const response = await fetch(url, { headers });
+                if (!response.ok) break;
+                const body = await response.json();
+                const docs = Array.isArray(body) ? body : (body.documents || []);
+                if (!docs.length) break;
+
+                for (const doc of docs) {
+                    await this.reprocessDocument(doc.id);
+                    processed += 1;
+                    const pct = totalErrors ? (processed / totalErrors) * 100 : (processed / (page * pageSize)) * 100;
+                    if (progressFill) progressFill.style.width = `${Math.min(100, pct)}%`;
+                    if (progressText) progressText.textContent = `Retried ${processed}${totalErrors ? ` / ${totalErrors}` : ''}`;
+                }
+
+                if (docs.length < pageSize) break;
+                page += 1;
+            }
+
+            this.showNotification(`Retried ${processed} failed documents`, 'success');
+            await this.loadDocuments();
+            await this.updateStatusCounts();
+        } catch (err) {
+            this.showNotification('Retry failed: ' + err.message, 'error');
+        } finally {
+            this.suppressRefreshDuringRetry = false;
+            setTimeout(() => {
+                if (progressBar) progressBar.style.display = 'none';
+                if (progressFill) progressFill.style.width = '0%';
+                if (progressText) progressText.textContent = 'Retrying failed documents...';
+            }, 2000);
         }
     }
 
@@ -1158,11 +1583,12 @@ class KnowledgeBaseManager {
     }
 
     formatFileSize(bytes) {
-        if (bytes === 0) return '0 Bytes';
+        const value = Number(bytes) || 0;
+        if (value <= 0) return '0 Bytes';
         const k = 1024;
         const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        const i = Math.floor(Math.log(value) / Math.log(k));
+        return parseFloat((value / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
     showNotification(message, type = 'info') {
@@ -1199,6 +1625,21 @@ class KnowledgeBaseManager {
             clearInterval(this.refreshInterval);
             this.refreshInterval = null;
         }
+    }
+
+    viewQueue() {
+        // Focus the documents list and apply a processing filter if available
+        const statusFilter = document.getElementById('status-filter');
+        if (statusFilter) {
+            statusFilter.value = 'processing';
+        }
+        // Smooth scroll to documents section
+        const documentsSection = document.getElementById('documents-container');
+        if (documentsSection) {
+            documentsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        // Reload documents with the processing filter
+        this.loadDocuments();
     }
 }
 

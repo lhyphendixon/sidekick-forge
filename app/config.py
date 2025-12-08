@@ -1,5 +1,5 @@
-from pydantic_settings import BaseSettings
-from pydantic import validator, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator, Field, AliasChoices
 from typing import List, Optional
 import os
 import json
@@ -8,130 +8,164 @@ from dotenv import dotenv_values
 
 class Settings(BaseSettings):
     # Application Settings
-    app_name: str = Field(default="sidekick-forge", env="APP_NAME")
-    platform_name: str = Field(default="Sidekick Forge", env="PLATFORM_NAME")
-    app_env: str = Field(default="production", env="APP_ENV")
-    debug: bool = Field(default=False, env="DEBUG")
-    log_level: str = Field(default="INFO", env="LOG_LEVEL")
+    app_name: str = Field(default="sidekick-forge")
+    platform_name: str = Field(default="Sidekick Forge")
+    app_env: str = Field(default="production")
+    debug: bool = Field(default=False)
+    log_level: str = Field(default="INFO")
     
     # API Configuration
-    api_host: str = Field(default="0.0.0.0", env="API_HOST")
-    api_port: int = Field(default=8000, env="API_PORT")
-    api_workers: int = Field(default=4, env="API_WORKERS")
+    api_host: str = Field(default="0.0.0.0")
+    api_port: int = Field(default=8000)
+    api_workers: int = Field(default=4)
     
     # Security
-    secret_key: str = Field(default="dev-secret-key", env="SECRET_KEY")
-    jwt_secret_key: str = Field(default="dev-jwt-secret", env="JWT_SECRET_KEY")
-    jwt_algorithm: str = Field(default="HS256", env="JWT_ALGORITHM")
-    jwt_expiration_minutes: int = Field(default=1440, env="JWT_EXPIRATION_MINUTES")
+    secret_key: str = Field(default="dev-secret-key")
+    jwt_secret_key: str = Field(default="dev-jwt-secret")
+    jwt_algorithm: str = Field(default="HS256")
+    jwt_expiration_minutes: int = Field(default=1440)
+    wordpress_bridge_secret: Optional[str] = Field(default=None)
+    wordpress_bridge_max_skew: int = Field(default=300)
     
     # Supabase Configuration (CRITICAL: Both service and anon keys needed)
     # IMPORTANT: No defaults - must be loaded from environment to avoid credential mismatches
-    supabase_url: str = Field(..., env="SUPABASE_URL")
-    supabase_service_role_key: str = Field(..., env="SUPABASE_SERVICE_ROLE_KEY")
-    supabase_anon_key: str = Field(..., env="SUPABASE_ANON_KEY")
+    supabase_url: str = Field(...)
+    supabase_service_role_key: str = Field(...)
+    supabase_anon_key: str = Field(...)
     
     # Supabase Auth Configuration
-    supabase_auth_enabled: bool = Field(default=True, env="SUPABASE_AUTH_ENABLED")
-    supabase_jwt_secret: str = Field(default="demo-jwt", env="SUPABASE_JWT_SECRET")
+    supabase_auth_enabled: bool = Field(default=True)
+    supabase_jwt_secret: str = Field(default="demo-jwt")
     
     # Database (using Supabase)
-    database_url: Optional[str] = Field(None, env="DATABASE_URL")
+    database_url: Optional[str] = Field(None)
     
     # LiveKit Configuration (primary platform)
     # IMPORTANT: No defaults - credentials are loaded dynamically from database if not in env
-    livekit_url: Optional[str] = Field(None, env="LIVEKIT_URL")
-    livekit_api_key: Optional[str] = Field(None, env="LIVEKIT_API_KEY")
-    livekit_api_secret: Optional[str] = Field(None, env="LIVEKIT_API_SECRET")
-    livekit_agent_name: str = Field(default="sidekick-agent", env=["LIVEKIT_AGENT_NAME", "AGENT_NAME"])
+    livekit_url: Optional[str] = Field(None)
+    livekit_api_key: Optional[str] = Field(None)
+    livekit_api_secret: Optional[str] = Field(None)
+    livekit_agent_name: str = Field(
+        default="sidekick-agent",
+        validation_alias=AliasChoices("LIVEKIT_AGENT_NAME", "AGENT_NAME"),
+    )
     
     # AI Provider API Keys
-    openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")
-    anthropic_api_key: Optional[str] = Field(None, env="ANTHROPIC_API_KEY")
-    groq_api_key: Optional[str] = Field(None, env="GROQ_API_KEY")
+    openai_api_key: Optional[str] = Field(None)
+    anthropic_api_key: Optional[str] = Field(None)
+    groq_api_key: Optional[str] = Field(None)
     
     # Voice Provider API Keys
-    elevenlabs_api_key: Optional[str] = Field(None, env="ELEVENLABS_API_KEY")
-    cartesia_api_key: Optional[str] = Field(None, env="CARTESIA_API_KEY")
-    deepgram_api_key: Optional[str] = Field(None, env="DEEPGRAM_API_KEY")
+    elevenlabs_api_key: Optional[str] = Field(None)
+    cartesia_api_key: Optional[str] = Field(None)
+    deepgram_api_key: Optional[str] = Field(None)
     
     # Tool Webhooks (n8n integration)
-    n8n_text_webhook_url: Optional[str] = Field(None, env="N8N_TEXT_WEBHOOK_URL")
-    n8n_rag_webhook_url: Optional[str] = Field(None, env="N8N_RAG_WEBHOOK_URL")
+    n8n_text_webhook_url: Optional[str] = Field(None)
+    n8n_rag_webhook_url: Optional[str] = Field(None)
     
     # Redis Configuration
-    redis_host: str = Field(default="localhost", env="REDIS_HOST")
-    redis_port: int = Field(default=6379, env="REDIS_PORT")
-    redis_db: int = Field(default=0, env="REDIS_DB")
+    redis_host: str = Field(default="localhost")
+    redis_port: int = Field(default=6379)
+    redis_db: int = Field(default=0)
     
     # CORS Settings
     cors_allowed_origins: List[str] = Field(
-        default=["http://localhost:3000"],
-        env="CORS_ALLOWED_ORIGINS"
+        default=["http://localhost:3000"]
     )
     
     # Rate Limiting
-    rate_limit_per_minute: int = Field(default=60, env="RATE_LIMIT_PER_MINUTE")
-    rate_limit_per_hour: int = Field(default=1000, env="RATE_LIMIT_PER_HOUR")
+    rate_limit_per_minute: int = Field(default=60)
+    rate_limit_per_hour: int = Field(default=1000)
     
     # Feature Flags
-    enable_transcripts: bool = Field(default=True, env="ENABLE_TRANSCRIPTS")
-    enable_supabase: bool = Field(default=True, env="ENABLE_SUPABASE")
-    benchmark_enabled: bool = Field(default=False, env="BENCHMARK_ENABLED")
-    performance_monitoring: bool = Field(default=False, env="PERFORMANCE_MONITORING")
+    enable_transcripts: bool = Field(default=True)
+    enable_supabase: bool = Field(default=True)
+    benchmark_enabled: bool = Field(default=False)
+    performance_monitoring: bool = Field(default=False)
+    enable_livekit_text_dispatch: bool = Field(default=True)
     
     # SSL/Domain Configuration
-    domain_name: str = Field(env="DOMAIN_NAME")  # Required - no default
-    ssl_email: str = Field(default="admin@sidekickforge.com", env="SSL_EMAIL")
+    domain_name: str = Field(...)
+    ssl_email: str = Field(default="admin@sidekickforge.com")
     
     # Monitoring
-    sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN")
-    prometheus_enabled: bool = Field(default=False, env="PROMETHEUS_ENABLED")
+    sentry_dsn: Optional[str] = Field(None)
+    prometheus_enabled: bool = Field(default=False)
 
     # Mailjet transactional email
-    mailjet_api_key: Optional[str] = Field(default=None, env="MAILJET_API_KEY")
-    mailjet_api_secret: Optional[str] = Field(default=None, env="MAILJET_API_SECRET")
-    mailjet_sender_email: Optional[str] = Field(default=None, env="MAILJET_SENDER_EMAIL")
-    mailjet_sender_name: Optional[str] = Field(default=None, env="MAILJET_SENDER_NAME")
-    mailjet_notification_recipients_raw: Optional[str] = Field(default=None, env="MAILJET_NOTIFICATION_RECIPIENTS")
+    mailjet_api_key: Optional[str] = Field(default=None)
+    mailjet_api_secret: Optional[str] = Field(default=None)
+    mailjet_sender_email: Optional[str] = Field(default=None)
+    mailjet_sender_name: Optional[str] = Field(default=None)
+    mailjet_notification_recipients_raw: Optional[str] = Field(default=None)
+
+    # Telegram channel integration
+    telegram_bot_token: Optional[str] = Field(default=None, description="Bot token for Telegram channel")
+    telegram_default_agent_slug: Optional[str] = Field(default="farah-qubit", description="Default sidekick to route Telegram messages to")
+    telegram_default_client_id: Optional[str] = Field(default=None, description="Optional client override for Telegram routing")
+    telegram_webhook_secret: Optional[str] = Field(default=None, description="Optional shared secret to validate Telegram webhook path")
+    telegram_verification_bot_token: Optional[str] = Field(default=None, description="Token for verification bot")
+    telegram_verification_bot_username: Optional[str] = Field(default=None, description="Username (without @) for verification bot")
 
     # Perplexity MCP container configuration
-    perplexity_mcp_image: str = Field(default="perplexity-mcp:latest", env="PERPLEXITY_MCP_IMAGE")
-    perplexity_mcp_container_name: str = Field(default="perplexity-mcp", env="PERPLEXITY_MCP_CONTAINER_NAME")
-    perplexity_mcp_port: int = Field(default=8081, env="PERPLEXITY_MCP_PORT")
-    perplexity_mcp_host: str = Field(default="perplexity-mcp", env="PERPLEXITY_MCP_HOST")
-    perplexity_mcp_network: Optional[str] = Field(default=None, env="PERPLEXITY_MCP_NETWORK")
+    perplexity_mcp_image: str = Field(default="perplexity-mcp:latest")
+    perplexity_mcp_container_name: str = Field(default="perplexity-mcp")
+    perplexity_mcp_port: int = Field(default=8081)
+    perplexity_mcp_host: str = Field(default="perplexity-mcp")
+    perplexity_mcp_network: Optional[str] = Field(default=None)
 
     # Asana OAuth configuration
-    asana_oauth_client_id: Optional[str] = Field(default=None, env="ASANA_OAUTH_CLIENT_ID")
-    asana_oauth_client_secret: Optional[str] = Field(default=None, env="ASANA_OAUTH_CLIENT_SECRET")
-    asana_oauth_redirect_uri: Optional[str] = Field(default=None, env="ASANA_OAUTH_REDIRECT_URI")
-    asana_oauth_scopes: str = Field(default="default", env="ASANA_OAUTH_SCOPES")
+    asana_oauth_client_id: Optional[str] = Field(default=None)
+    asana_oauth_client_secret: Optional[str] = Field(default=None)
+    asana_oauth_redirect_uri: Optional[str] = Field(default=None)
+    asana_oauth_scopes: str = Field(default="default")
+    asana_token_preferred_store: str = Field(default="platform")
+    asana_token_mirror_stores: bool = Field(default=False)
+    asana_token_refresh_margin_seconds: int = Field(default=300)
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"  # Ignore extra fields to prevent validation errors
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
         
-    @validator('app_name', pre=True, always=True)
+    @field_validator('app_name', mode='before')
     def normalize_app_name(cls, v):
         if isinstance(v, str) and v.strip():
             return v.strip()
         return "sidekick-forge"
 
-    @validator('perplexity_mcp_network', pre=True, always=True)
+    @field_validator('perplexity_mcp_network', mode='before')
     def normalize_perplexity_network(cls, v):
         if isinstance(v, str) and not v.strip():
             return None
         return v
 
-    @validator('supabase_anon_key')
+    @field_validator('asana_token_preferred_store', mode='before')
+    def normalize_asana_token_store(cls, v):
+        if not isinstance(v, str):
+            return "platform"
+        candidate = v.strip().lower()
+        if candidate not in {"platform", "primary"}:
+            return "platform"
+        return candidate
+
+    @field_validator('asana_token_refresh_margin_seconds', mode='before')
+    def clamp_refresh_margin(cls, v):
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 300
+        return max(0, value)
+
+    @field_validator('supabase_anon_key')
     def validate_supabase_anon_key(cls, v):
         if not v:
             raise ValueError('Supabase anon key is required for Supabase Auth')
         return v
     
-    @validator('cors_allowed_origins', pre=True)
+    @field_validator('cors_allowed_origins', mode='before')
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(',')]
