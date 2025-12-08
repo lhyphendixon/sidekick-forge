@@ -110,6 +110,7 @@ class AgentService:
             webhooks=webhooks,
             context_retention_minutes=agent_data.get("context_retention_minutes", 30),
             max_context_messages=agent_data.get("max_context_messages", 50),
+            rag_results_limit=agent_data.get("rag_results_limit", 5),
             created_at=created_at,
             updated_at=updated_at
         )
@@ -185,6 +186,8 @@ class AgentService:
                 data["agent_image"] = agent_data.agent_image
             if agent_data.show_citations is not None:
                 data["show_citations"] = agent_data.show_citations
+            if agent_data.rag_results_limit is not None:
+                data["rag_results_limit"] = agent_data.rag_results_limit
             
             # Insert into client's database
             result = client_db.table("agents").insert(data).execute()
@@ -224,6 +227,8 @@ class AgentService:
                 update_data["voice_settings"] = agent_update.voice_settings.dict()
             if agent_update.show_citations is not None:
                 update_data["show_citations"] = agent_update.show_citations
+            if agent_update.rag_results_limit is not None:
+                update_data["rag_results_limit"] = agent_update.rag_results_limit
             
             update_data["updated_at"] = datetime.utcnow().isoformat()
             

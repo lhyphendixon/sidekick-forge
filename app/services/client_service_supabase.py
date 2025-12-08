@@ -221,12 +221,17 @@ class ClientService:
         if update_data.active is not None:
             additional_settings["active"] = update_data.active
 
-        # Add embedding and rerank settings to additional_settings
+        # Add embedding, rerank, and channel settings to additional_settings
         if update_data.settings:
             if update_data.settings.embedding:
                 additional_settings["embedding"] = update_data.settings.embedding.dict()
             if update_data.settings.rerank:
                 additional_settings["rerank"] = update_data.settings.rerank.dict()
+            if getattr(update_data.settings, "channels", None):
+                try:
+                    additional_settings["channels"] = update_data.settings.channels.dict()
+                except Exception:
+                    pass
 
         # Handle settings update
         if update_data.settings:
@@ -697,6 +702,10 @@ class ClientService:
         # Get rerank settings from additional_settings
         if "rerank" in additional and additional["rerank"]:
             settings_dict["rerank"] = additional["rerank"]
+
+        # Channel settings (Telegram etc.) from additional_settings
+        if "channels" in additional and additional["channels"]:
+            settings_dict["channels"] = additional["channels"]
         
         # Compute slug from column, additional_settings, or name fallback
         raw_slug = db_row.get("slug") or additional.get("slug")

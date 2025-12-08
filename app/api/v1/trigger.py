@@ -1,7 +1,7 @@
 """
 Agent trigger endpoint for WordPress plugin integration
 """
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Callable, Awaitable, AsyncIterator
 import copy
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -13,6 +13,7 @@ import uuid
 import time
 from datetime import datetime
 import traceback  # For detailed errors
+import re
 
 from app.services.agent_service_supabase import AgentService
 from app.services.client_service_supabase import ClientService
@@ -191,6 +192,48 @@ def _apply_cartesia_emotion_prompt(prompt: str, agent: Any) -> str:
     return prompt + instructions
 
 
+def _extract_delta_from_chunk(chunk: Any) -> Optional[str]:
+    """Best-effort extraction of text delta from various provider chunk shapes."""
+    delta = None
+    try:
+        if hasattr(chunk, "choices") and chunk.choices:
+            choice = chunk.choices[0]
+            part = getattr(choice, "delta", None) or getattr(choice, "message", None)
+            if part and hasattr(part, "content") and part.content:
+                delta = part.content
+        if not delta and hasattr(chunk, "content") and chunk.content:
+            delta = chunk.content
+        if not delta and hasattr(chunk, "text") and getattr(chunk, "text"):
+            delta = getattr(chunk, "text")
+        if not delta and isinstance(chunk, str):
+            delta = chunk if chunk.strip() else None
+    except Exception:
+        delta = None
+
+    if delta:
+        return str(delta)
+
+    # Regex fallback: try to extract content='...' fragments from stringified chunk
+    try:
+        s = str(chunk)
+        matches = re.findall(r"content='([^']*)'", s) or re.findall(r'content="([^"]*)"', s)
+        if matches:
+            return "".join(matches)
+    except Exception:
+        return None
+
+    return None
+
+
+async def _iter_llm_deltas(stream: Any) -> AsyncIterator[str]:
+    """Yield text deltas from an async LLM stream."""
+    async for chunk in stream:
+        delta = _extract_delta_from_chunk(chunk)
+        if not delta:
+            continue
+        yield delta
+
+
 def _extract_api_keys(client: Any) -> Dict[str, Any]:
     """Collect API keys from client settings with graceful fallbacks."""
     api_keys: Dict[str, Any] = {}
@@ -331,6 +374,28 @@ async def _build_agent_context_for_dispatch(
     tools_config = _extract_agent_tools_config(agent)
     api_keys_map = _extract_api_keys(client)
 
+    # Rerank settings for downstream agent/worker
+    rerank_cfg: Dict[str, Any] = {}
+    additional_settings = getattr(client, "additional_settings", None) or getattr(getattr(client, "settings", None), "additional_settings", None)
+    if isinstance(additional_settings, str):
+        try:
+            additional_settings = json.loads(additional_settings)
+        except Exception:
+            additional_settings = {}
+
+    # Prefer explicit additional_settings override (platform UI stores JSONB here)
+    if isinstance(additional_settings, dict) and additional_settings.get("rerank"):
+        rerank_cfg = additional_settings.get("rerank", {}) or {}
+    else:
+        try:
+            if client.settings and getattr(client.settings, "rerank", None):
+                rerank_cfg = client.settings.rerank.dict()
+        except Exception:
+            try:
+                rerank_cfg = dict(client.settings.rerank) if getattr(client.settings, "rerank", None) else {}
+            except Exception:
+                rerank_cfg = {}
+
     agent_context: Dict[str, Any] = {
         "client_id": client.id,
         "agent_slug": agent.slug,
@@ -345,6 +410,7 @@ async def _build_agent_context_for_dispatch(
         "context": request_context or {},
         "tools_config": tools_config,
         "embedding": embedding_cfg,
+        "rerank": rerank_cfg,
         "mode": mode,
         "api_keys": api_keys_map,
     }
@@ -1109,6 +1175,10 @@ async def handle_text_trigger_via_livekit(
         request_context=request.context,
         client_conversation_id=client_conversation_id,
     )
+    try:
+        logger.info("🔍 rerank config for dispatch: %s", agent_context.get("rerank"))
+    except Exception:
+        pass
 
     tools_payload = await _get_agent_tools(tools_service, client.id, agent.id)
     if tools_payload:
@@ -1135,7 +1205,7 @@ async def handle_text_trigger_via_livekit(
             agent_slug=agent.slug,
             user_id=request.user_id,
             agent_config=agent_context,
-            enable_agent_dispatch=False,
+            enable_agent_dispatch=True,
         )
 
     dispatch_info = await dispatch_agent_job(
@@ -1159,14 +1229,8 @@ async def handle_text_trigger_via_livekit(
     citations = citations or []
     tool_results = tool_results or []
 
-    cleanup_status = "reused" if reused_room else "skipped"
-    if not reused_room:
-        try:
-            await backend_livekit.delete_room(text_room_name)
-            cleanup_status = "deleted"
-        except Exception as cleanup_err:
-            cleanup_status = f"cleanup_failed:{cleanup_err}"
-            logger.warning(f"Failed to delete text room {text_room_name}: {cleanup_err}")
+    # TEMP: disable text room cleanup to allow metadata inspection
+    cleanup_status = "skipped (cleanup disabled)"
 
     tools_response = {
         "assigned": tools_payload,
@@ -1248,6 +1312,7 @@ async def handle_text_trigger(
     agent,
     client,
     tools_service: Optional[ToolsService] = None,
+    on_token: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> Dict[str, Any]:
     """
     Handle text mode agent triggering with full RAG support
@@ -1291,6 +1356,20 @@ async def handle_text_trigger(
     elif client.settings and hasattr(client.settings, 'embedding') and client.settings.embedding:
         embedding_cfg = client.settings.embedding.dict()
     
+    # Rerank settings for voice/worker metadata
+    rerank_cfg = {}
+    if isinstance(additional_settings, dict) and additional_settings.get("rerank"):
+        rerank_cfg = additional_settings.get("rerank", {}) or {}
+    else:
+        try:
+            if client.settings and hasattr(client.settings, 'rerank') and client.settings.rerank:
+                rerank_cfg = client.settings.rerank.dict()
+        except Exception:
+            try:
+                rerank_cfg = dict(client.settings.rerank) if client.settings and getattr(client.settings, "rerank", None) else {}
+            except Exception:
+                rerank_cfg = {}
+
     metadata = {
         "agent_slug": agent.slug,
         "agent_name": agent.name,
@@ -1301,7 +1380,10 @@ async def handle_text_trigger(
         "client_conversation_id": client_conversation_id,
         "client_id": client.id,
         "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
-        "embedding": embedding_cfg
+        "embedding": embedding_cfg,
+        "rerank": rerank_cfg,
+        "rag_results_limit": getattr(agent, "rag_results_limit", None),
+        "show_citations": getattr(agent, "show_citations", True),
     }
     
     agent_dataset_ids: List[Any] = await _resolve_agent_dataset_ids(client.id, agent)
@@ -1325,6 +1407,7 @@ async def handle_text_trigger(
             "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key,
             "jina_api_key": client.settings.api_keys.jina_api_key,
         }
+    metadata["api_keys"] = api_keys
 
     recent_rows: List[Dict[str, Any]] = []
 
@@ -1492,15 +1575,13 @@ async def handle_text_trigger(
         stream = llm_plugin.chat(chat_ctx=ctx)
 
         response_text = ""
-        async for chunk in stream:
-            if hasattr(chunk, 'choices') and chunk.choices:
-                for choice in chunk.choices:
-                    if hasattr(choice, 'delta') and choice.delta and hasattr(choice.delta, 'content') and choice.delta.content:
-                        response_text += choice.delta.content
-            elif hasattr(chunk, 'delta') and chunk.delta and hasattr(chunk.delta, 'content') and chunk.delta.content:
-                response_text += chunk.delta.content
-            elif hasattr(chunk, 'content') and chunk.content:
-                response_text += chunk.content
+        async for delta in _iter_llm_deltas(stream):
+            response_text += delta
+            if on_token:
+                try:
+                    await on_token(delta)
+                except Exception as callback_error:
+                    logger.warning("Streaming callback failed: %s", callback_error)
 
         if response_text:
             logger.info(f"✅ Generated response: {response_text[:100]}...")
@@ -1736,10 +1817,18 @@ async def dispatch_agent_job(
             # Include user_id if provided
             "user_id": user_id,
             # Include embedding configuration from client's additional_settings
-            "embedding": client.additional_settings.get("embedding", {}) if client.additional_settings else {},
+            "embedding": context_snapshot.get("embedding")
+            or (client.additional_settings.get("embedding", {}) if client.additional_settings else {}),
             # Include dataset_ids for RAG context (document IDs for this agent)
             "dataset_ids": context_dataset_ids,
             "api_keys": api_keys_map,
+            # Carry interaction mode so the worker can skip STT/TTS for text sessions
+            "mode": (
+                context_snapshot.get("mode")
+                or ("text" if context_snapshot.get("user_message") else "voice")
+            ),
+            "rerank": context_snapshot.get("rerank"),
+            "user_message": context_snapshot.get("user_message"),
         }
 
         tools_payload = tools if tools is not None else context_snapshot.get("tools") or []
@@ -1841,10 +1930,10 @@ async def _poll_for_text_response(
     livekit_manager: LiveKitManager,
     room_name: str,
     *,
-    timeout: float = 30.0,
-    poll_interval: float = 0.2,
+    timeout: float = 90.0,  # Increased from 30s to 90s to allow for LLM streaming
+    poll_interval: float = 0.3,  # Slightly slower polling to reduce overhead
 ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Poll LiveKit room metadata until the text worker returns a response."""
+    """Poll LiveKit room metadata until the text worker returns a final response."""
     start_time = time.time()
 
     while time.time() - start_time < timeout:
@@ -1866,8 +1955,11 @@ async def _poll_for_text_response(
         else:
             metadata = {}
 
+        streaming_flag = metadata.get("streaming")
         text_response = metadata.get("text_response")
-        if text_response:
+
+        # Only return when streaming is complete (or flag absent)
+        if text_response and streaming_flag is not True:
             citations = metadata.get("citations") or []
             tool_results = metadata.get("tool_results") or []
             return text_response, citations, tool_results
@@ -1875,6 +1967,79 @@ async def _poll_for_text_response(
         await asyncio.sleep(poll_interval)
 
     raise HTTPException(status_code=504, detail=f"Text response timeout after {timeout}s")
+
+
+async def poll_for_text_response_streaming(
+    livekit_manager: LiveKitManager,
+    room_name: str,
+    *,
+    timeout: float = 90.0,
+    poll_interval: float = 0.15,  # Faster polling for streaming
+) -> AsyncIterator[Dict[str, Any]]:
+    """
+    Poll LiveKit room metadata and yield streaming updates.
+    
+    Yields dicts with:
+      - {"delta": "..."} for partial text updates
+      - {"done": True, "full_text": "...", "citations": [...], "tool_results": [...]} when complete
+      - {"error": "..."} on error
+    """
+    start_time = time.time()
+    last_partial_len = 0
+    
+    while time.time() - start_time < timeout:
+        try:
+            room_info = await livekit_manager.get_room(room_name)
+        except Exception as e:
+            logger.warning(f"Error fetching room info: {e}")
+            await asyncio.sleep(poll_interval)
+            continue
+            
+        if not room_info:
+            yield {"error": "Room disappeared during processing"}
+            return
+
+        metadata_raw = room_info.get("metadata")
+        if not metadata_raw:
+            await asyncio.sleep(poll_interval)
+            continue
+            
+        try:
+            metadata = (
+                json.loads(metadata_raw)
+                if isinstance(metadata_raw, str)
+                else dict(metadata_raw)
+            )
+        except Exception:
+            await asyncio.sleep(poll_interval)
+            continue
+
+        # Check for partial streaming updates
+        partial_text = metadata.get("text_response_partial", "")
+        if partial_text and len(partial_text) > last_partial_len:
+            # Yield the new delta
+            delta = partial_text[last_partial_len:]
+            last_partial_len = len(partial_text)
+            yield {"delta": delta}
+
+        # Check if streaming is complete
+        streaming_flag = metadata.get("streaming")
+        text_response = metadata.get("text_response")
+
+        if text_response and streaming_flag is not True:
+            citations = metadata.get("citations") or []
+            tool_results = metadata.get("tool_results") or []
+            yield {
+                "done": True,
+                "full_text": text_response,
+                "citations": citations,
+                "tool_results": tool_results,
+            }
+            return
+
+        await asyncio.sleep(poll_interval)
+
+    yield {"error": f"Text response timeout after {timeout}s"}
 
 
 async def _get_or_create_text_room(

@@ -36,7 +36,7 @@
     .btn-loading::after { content:""; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:16px; height:16px; border:2px solid #2a2a2a; border-top-color:#01a4a6; border-radius:9999px; animation: spin 0.9s linear infinite; }
     @keyframes spin { 0%{transform:translate(-50%,-50%) rotate(0deg);} 100%{transform:translate(-50%,-50%) rotate(360deg);} }
     /* Force black background on everything */
-    body, html, .video-background-body {
+    body, html {
       background: #000000 !important;
       background-color: #000000 !important;
     }
@@ -46,24 +46,9 @@
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
   <link rel="stylesheet" href="/static/css/citations.css">
-  <link rel="stylesheet" href="/static/css/video-background.css">
   <script src="/static/js/citations.js"></script>
 </head>
-<body class="video-background-body">
-  <!-- Video Background -->
-  <video class="embed-video-background" autoplay muted loop>
-    <source src="/static/videos/background2.mp4" type="video/mp4">
-  </video>
-  <script>
-    document.addEventListener('DOMContentLoaded', function() {
-      const video = document.querySelector('.embed-video-background');
-      if (video) {
-        video.playbackRate = 0.50;
-      }
-    });
-  </script>
-  <!-- 95% Opacity Overlay -->
-  <div class="embed-video-overlay"></div>
+<body style="background: #000000;">
   <div class="mx-auto p-3 h-full" style="max-width: 800px;">
     <div class="bg-dark-bg border border-dark-border rounded-lg h-full flex flex-col">
       <div id="auth" class="p-4 space-y-2">

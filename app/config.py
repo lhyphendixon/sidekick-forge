@@ -100,6 +100,14 @@ class Settings(BaseSettings):
     mailjet_sender_name: Optional[str] = Field(default=None)
     mailjet_notification_recipients_raw: Optional[str] = Field(default=None)
 
+    # Telegram channel integration
+    telegram_bot_token: Optional[str] = Field(default=None, description="Bot token for Telegram channel")
+    telegram_default_agent_slug: Optional[str] = Field(default="farah-qubit", description="Default sidekick to route Telegram messages to")
+    telegram_default_client_id: Optional[str] = Field(default=None, description="Optional client override for Telegram routing")
+    telegram_webhook_secret: Optional[str] = Field(default=None, description="Optional shared secret to validate Telegram webhook path")
+    telegram_verification_bot_token: Optional[str] = Field(default=None, description="Token for verification bot")
+    telegram_verification_bot_username: Optional[str] = Field(default=None, description="Username (without @) for verification bot")
+
     # Perplexity MCP container configuration
     perplexity_mcp_image: str = Field(default="perplexity-mcp:latest")
     perplexity_mcp_container_name: str = Field(default="perplexity-mcp")

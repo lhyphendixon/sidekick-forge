@@ -33,6 +33,9 @@
         </div>
     </div>
 
+    {% set channels = client.get('additional_settings', {}).get('channels', {}) if client.get('additional_settings') else {} %}
+    {% set telegram = channels.get('telegram', {}) %}
+
     <form id="clientForm" action="/admin/clients/{{ client.id }}/update" method="POST">
         <!-- Basic Information -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
@@ -137,6 +140,39 @@
                             </button>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Channels -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Channels</h5>
+            </div>
+            <div class="p-6">
+                {% set telegram_enabled = telegram.get('enabled') %}
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <label for="telegramEnabled"
+                           class="block cursor-pointer rounded-lg border transition-all duration-200 bg-dark-elevated px-4 py-3 flex items-center space-x-3
+                           {% if telegram_enabled %}border-brand-teal shadow-[0_0_16px_rgba(45,212,191,0.35)]{% else %}border-dark-border hover:border-brand-teal/60{% endif %}">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-full bg-sky-500/20 border border-sky-400/40">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" class="h-6 w-6 text-sky-400 fill-current">
+                                <path d="M120 0C53.8 0 0 53.8 0 120s53.8 120 120 120 120-53.8 120-120S186.2 0 120 0zm58.3 83.7l-19.6 92.4c-1.5 6.7-5.7 8.3-11.5 5.2l-31.8-23.5-15.3 14.8c-1.7 1.7-3.1 3.1-6.3 3.1l2.3-32.6 59.4-53.6c2.6-2.3-0.6-3.6-4-1.3l-73.5 46.2-31.7-9.9c-6.9-2.2-7.1-6.9 1.5-10.2l124.1-47.8c5.7-2.1 10.7 1.3 8.9 10.1z"/>
+                            </svg>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-sm font-semibold text-dark-text">Telegram</span>
+                                <span class="text-[10px] px-2 py-0.5 rounded-full {% if telegram_enabled %}bg-brand-teal/20 text-brand-teal{% else %}bg-dark-elevated text-dark-text-secondary{% endif %}">
+                                    {% if telegram_enabled %}Enabled{% else %}Disabled{% endif %}
+                                </span>
+                            </div>
+                            <p class="text-xs text-dark-text-secondary mt-1">Toggle availability for sidekicks in this workspace. Bot tokens are set per sidekick.</p>
+                        </div>
+                        <input type="checkbox" id="telegramEnabled" name="telegram_enabled"
+                               {% if telegram_enabled %}checked{% endif %}
+                               class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal">
+                    </label>
                 </div>
             </div>
         </div>

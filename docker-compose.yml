@@ -44,6 +44,7 @@ services:
       - DOCUMENT_PROCESSOR_MAX_FILE_MB=${DOCUMENT_PROCESSOR_MAX_FILE_MB:-100}
       - WORDPRESS_BRIDGE_SECRET=${WORDPRESS_BRIDGE_SECRET:-}
       - WORDPRESS_BRIDGE_MAX_SKEW=${WORDPRESS_BRIDGE_MAX_SKEW:-300}
+      - ENABLE_LIVEKIT_TEXT_DISPATCH=true
       # Remove duplicate DEVELOPMENT_MODE to avoid conflicting overrides
     volumes:
       - ./app:/app/app
@@ -140,6 +141,9 @@ services:
       - ASANA_OAUTH_REDIRECT_URI=${ASANA_OAUTH_REDIRECT_URI}
       - ASANA_OAUTH_SCOPES=${ASANA_OAUTH_SCOPES}
       - VOICE_ITEM_COMMIT_FALLBACK=${VOICE_ITEM_COMMIT_FALLBACK:-true}
+      # RAG context settings - increase results and lower threshold for better retrieval
+      - CONTEXT_MAX_KNOWLEDGE_RESULTS=${CONTEXT_MAX_KNOWLEDGE_RESULTS:-10}
+      - CONTEXT_MATCH_THRESHOLD=${CONTEXT_MATCH_THRESHOLD:-0.3}
     networks:
       - platform-network
 

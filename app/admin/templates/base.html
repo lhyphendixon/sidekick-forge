@@ -29,8 +29,21 @@
                         </a>
                     </div>
                 </div>
-                <div class="flex items-center">
-                    <span class="text-sm text-gray-500">{{ admin_user.username }}</span>
+                <div class="flex items-center space-x-3">
+                    <span class="text-sm text-gray-600">Welcome, {{ admin_user.username }}</span>
+                    {% set avatar_initial = (admin_user.username[:1] if admin_user and admin_user.username) or 'U' %}
+                    {% set avatar_url = admin_user.avatar_url if admin_user and admin_user.avatar_url else '' %}
+                    <a href="/admin/user-settings"
+                       class="inline-flex items-center justify-center h-10 w-10 rounded-full border border-gray-300 bg-white hover:border-indigo-500 hover:shadow transition"
+                       title="User Settings">
+                        {% if avatar_url %}
+                        <span class="h-10 w-10 rounded-full bg-center bg-cover border border-gray-200" style="background-image: url('{{ avatar_url }}');"></span>
+                        {% else %}
+                        <span class="h-10 w-10 rounded-full bg-gradient-to-br from-indigo-500 to-blue-500 text-white text-base font-semibold flex items-center justify-center">
+                            {{ avatar_initial }}
+                        </span>
+                        {% endif %}
+                    </a>
                 </div>
             </div>
         </div>

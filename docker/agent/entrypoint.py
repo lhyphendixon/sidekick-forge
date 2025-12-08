@@ -18,6 +18,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from livekit import agents, rtc
+from livekit import api as livekit_api
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
 from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
 from livekit.plugins.turn_detector.english import EnglishModel
@@ -146,9 +147,21 @@ def _initialize_tts_plugin(
         elevenlabs_key = api_keys.get("elevenlabs_api_key")
         if not elevenlabs_key:
             raise ConfigurationError("ElevenLabs API key required for TTS but not found")
+
+        # Get model from provider_config or use default
+        model = provider_config.get("model") or "eleven_turbo_v2_5"
+
+        # Optimized streaming latency for faster response
+        streaming_latency = provider_config.get("streaming_latency", 3)
+
+        logger.info(f"🔊 Initializing ElevenLabs TTS with model={model}, streaming_latency={streaming_latency}")
+
         tts_plugin = elevenlabs.TTS(
             voice_id=voice_settings.get("voice_id", "Xb7hH8MSUJpSbSDYk0k2"),
+            model=model,
+            streaming_latency=streaming_latency,
             api_key=elevenlabs_key,
+            enable_logging=True,
         )
     else:
         cartesia_key = api_keys.get("cartesia_api_key")
@@ -262,6 +275,71 @@ def _extract_text_from_chat_items(items: List[Any]) -> str:
     return ""
 
 
+async def _merge_and_update_room_metadata(
+    *,
+    room_name: str,
+    payload: Dict[str, Any],
+    logger: logging.Logger,
+    retries: int = 2,
+) -> None:
+    """Persist payload into LiveKit room metadata, merging with existing metadata."""
+    livekit_url = os.getenv("LIVEKIT_URL")
+    livekit_key = os.getenv("LIVEKIT_API_KEY")
+    livekit_secret = os.getenv("LIVEKIT_API_SECRET")
+    if not all([livekit_url, livekit_key, livekit_secret]):
+        logger.warning("⚠️ LiveKit credentials missing; skipping metadata update")
+        return
+
+    attempt = 0
+    while attempt <= retries:
+        attempt += 1
+        lk_client = None
+        try:
+            lk_client = livekit_api.LiveKitAPI(
+                url=livekit_url,
+                api_key=livekit_key,
+                api_secret=livekit_secret,
+            )
+            existing = {}
+            try:
+                rooms = await lk_client.room.list_rooms(
+                    livekit_api.ListRoomsRequest(names=[room_name])
+                )
+                if rooms.rooms and rooms.rooms[0].metadata:
+                    existing_raw = rooms.rooms[0].metadata
+                    existing = json.loads(existing_raw) if isinstance(existing_raw, str) else dict(existing_raw)
+            except Exception as read_err:
+                logger.debug("Text-mode: unable to read existing metadata (attempt %s): %s", attempt, read_err)
+
+            merged = existing or {}
+            merged.update(payload)
+
+            await lk_client.room.update_room_metadata(
+                livekit_api.UpdateRoomMetadataRequest(
+                    room=room_name,
+                    metadata=json.dumps(merged),
+                )
+            )
+            logger.info("✅ Text response stored in LiveKit room metadata via API (attempt %s)", attempt)
+            return
+        except Exception as meta_err:
+            logger.warning(
+                "⚠️ Failed to update LiveKit metadata (attempt %s/%s): %s",
+                attempt,
+                retries + 1,
+                meta_err,
+                exc_info=True,
+            )
+            if attempt > retries:
+                return
+        finally:
+            try:
+                if lk_client:
+                    await lk_client.aclose()
+            except Exception:
+                pass
+
+
 async def _run_text_mode_interaction(
     *,
     session: voice.AgentSession,
@@ -275,108 +353,148 @@ async def _run_text_mode_interaction(
     if not user_message or not user_message.strip():
         raise ConfigurationError("Text mode requests require 'user_message' in metadata")
 
-    logger.info("📝 Text-only mode: generating reply for provided user message")
-    speech_handle = session.generate_reply(
-        user_input=user_message,
-        allow_interruptions=False,
-    )
-    await speech_handle.wait_for_playout()
+    logger.info("📝 Text-only mode: direct LLM path (bypass TTS pipeline)")
+    # Proactively retrieve citations/rerank context for text mode (on_user_turn_completed may not fire)
     try:
-        logger.info(
-            "📝 Text mode speech_handle returned with %s chat items",
-            len(getattr(speech_handle, "chat_items", []) or []),
-        )
-    except Exception:
-        pass
+        if hasattr(agent, "_retrieve_with_citations") and callable(getattr(agent, "_retrieve_with_citations")):
+            await agent._retrieve_with_citations(user_message)
+            logger.info("📚 Text-mode: pre-fetched citations for user message (count=%s)", len(getattr(agent, "_current_citations", []) or []))
+    except Exception as cite_err:
+        logger.warning("Text-mode citation prefetch failed: %s", cite_err)
 
-    # Allow time for asynchronous tool execution / follow-up responses
-    max_tool_wait_iterations = 20  # ~10 seconds total
-    wait_iteration = 0
-    while wait_iteration < max_tool_wait_iterations:
-        wait_iteration += 1
-        pending_tool_results: List[Dict[str, Any]] = []
-        if collector and collector.tool_results:
-            pending_tool_results = collector.tool_results
+    # Call LLM directly (no TTS) to avoid LiveKit TTS failures in text-only mode
+    try:
+        # Build ChatContext (matches what voice path uses)
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(role="user", content=user_message)
+
+        llm_result = agent.llm.chat(chat_ctx=chat_ctx)
+        response_text = ""
+
+        # Streaming path: accumulate deltas and emit BATCHED partial metadata
+        # to avoid per-token API calls which cause massive delays
+        stream_chunks: List[str] = []
+        chunk_size_env = os.getenv("TEXT_STREAM_CHUNK_SIZE")
+        chunk_size = int(chunk_size_env) if chunk_size_env and chunk_size_env.isdigit() else 80
+        # Batch updates: only emit metadata every N tokens to reduce API overhead
+        stream_batch_size = int(os.getenv("TEXT_STREAM_BATCH_SIZE", "50"))
+        if hasattr(llm_result, "__aiter__"):
+            assembled = ""
+            chunk_index = 0
+            last_update_index = 0
+            async for chunk in llm_result:
+                delta = None
+                try:
+                    if hasattr(chunk, "delta") and getattr(chunk.delta, "content", None):
+                        delta = chunk.delta.content
+                    elif hasattr(chunk, "message") and getattr(chunk.message, "content", None):
+                        delta = chunk.message.content
+                    elif hasattr(chunk, "content"):
+                        delta = getattr(chunk, "content")
+                    elif isinstance(chunk, str):
+                        delta = chunk
+                except Exception:
+                    delta = None
+
+                if not delta:
+                    continue
+
+                delta = str(delta)
+                assembled += delta
+                stream_chunks.append(delta)
+                chunk_index += 1
+
+                # Emit partial stream updates for UI - BATCHED to reduce API overhead
+                # Only update every stream_batch_size tokens
+                if chunk_index - last_update_index >= stream_batch_size:
+                    last_update_index = chunk_index
+                    try:
+                        await _merge_and_update_room_metadata(
+                            room_name=room.name,
+                            payload={
+                                "mode": "text",
+                                "conversation_id": conversation_id,
+                                "text_response_partial": assembled,
+                                "text_response_stream": list(stream_chunks),
+                                "text_stream_token": delta,
+                                "streaming": True,
+                                "stream_progress": {
+                                    "current": chunk_index,
+                                },
+                            },
+                            logger=logger,
+                            retries=1,
+                        )
+                    except Exception as partial_err:
+                        logger.debug(f"Streaming metadata update skipped: {partial_err}")
+
+            response_text = assembled.strip()
         else:
-            pending_tool_results = getattr(agent, "_latest_tool_results", None) or []
+            # Non-streaming response object
+            llm_response = llm_result
+            text = None
+            if hasattr(llm_response, "message") and getattr(llm_response.message, "content", None):
+                text = llm_response.message.content
+            elif hasattr(llm_response, "content"):
+                text = getattr(llm_response, "content")
+            elif hasattr(llm_response, "choices") and llm_response.choices:
+                choice = llm_response.choices[0]
+                msg = getattr(choice, "message", None)
+                if msg and getattr(msg, "content", None):
+                    text = msg.content
+            response_text = (text or "").strip()
+    except Exception as llm_err:
+        logger.error(f"Direct LLM call failed in text mode: {type(llm_err).__name__}: {llm_err}")
+        raise
 
-        candidate_response = _extract_text_from_chat_items(speech_handle.chat_items)
-        try:
-            logger.info(
-                "🕑 text-mode poll iteration=%s response_len=%s tool_results=%s",
-                wait_iteration,
-                len(candidate_response or ""),
-                len(pending_tool_results),
-            )
-        except Exception:
-            pass
-        if pending_tool_results:
-            logger.info(
-                "🧰 Detected %s tool results in text mode (iteration=%s); allowing LLM to incorporate them",
-                len(pending_tool_results),
-                wait_iteration,
-            )
-            await asyncio.sleep(0.5)
-            break
-
-        if candidate_response:
-            break
-
-        await asyncio.sleep(0.5)
-
-    collector_timeout = min(
-        timeout,
-        float(os.getenv("TEXT_RESPONSE_COLLECTOR_TIMEOUT", "4.0")),
-    )
-    collector_response: Optional[str] = None
-    collector_citations: List[Dict[str, Any]] = []
-    collector_results: List[Dict[str, Any]] = []
+    citations = list(getattr(agent, "_current_citations", []) or [])
+    tool_results: List[Dict[str, Any]] = []
 
     if collector:
         try:
-            collector_response = await collector.wait_for_response(timeout=collector_timeout)
-            collector_citations = collector.citations
-            collector_results = collector.tool_results
-            logger.info(
-                "📝 Text collector response received len=%s citations=%s tool_results=%s",
-                len(collector_response or ""),
-                len(collector_citations),
-                len(collector_results),
-            )
-        except asyncio.TimeoutError:
-            logger.info(
-                "⌛ Text collector inactive after %.1fs; using speech_handle output",
-                collector_timeout,
-            )
-
-    response_text = collector_response or _extract_text_from_chat_items(speech_handle.chat_items)
-    if not response_text:
-        raise RuntimeError("Worker generated no assistant text for text-only job")
-
-    citations = collector_citations or list(getattr(agent, "_current_citations", []) or [])
-    tool_results: List[Dict[str, Any]] = []
-    if collector_results:
-        tool_results = list(collector_results)
-    else:
-        tool_results = list(getattr(agent, "_latest_tool_results", []) or [])
-    if tool_results and hasattr(agent, "_latest_tool_results"):
-        try:
-            agent._latest_tool_results = []
+            collector.commit_response(response_text, citations=citations, tool_results=tool_results)
         except Exception:
             pass
-    buffer_ref = getattr(agent, "_tool_results_buffer", None)
-    if isinstance(buffer_ref, list):
-        buffer_ref.clear()
+
+    # NOTE: Removed redundant "simulated chunking" loop that was causing massive delays
+    # Real streaming updates already happen during LLM generation above
+
+    # Truncate citations for LiveKit metadata (65KB limit)
+    # Keep only top 15 citations and truncate content to 500 chars each
+    # Make a deep copy to avoid modifying the original citations
+    metadata_citations = []
+    for citation in (citations[:15] if citations else []):
+        if isinstance(citation, dict):
+            citation_copy = dict(citation)
+            content = citation_copy.get("content", "")
+            if len(content) > 500:
+                citation_copy["content"] = content[:500] + "... [truncated]"
+            metadata_citations.append(citation_copy)
+        else:
+            metadata_citations.append(citation)
+
     payload = {
         "mode": "text",
         "conversation_id": conversation_id,
         "text_response": response_text,
-        "citations": citations,
+        "text_response_stream": stream_chunks if 'stream_chunks' in locals() else [],
+        "citations": metadata_citations,
         "tool_results": tool_results,
+        "rerank": (
+            getattr(agent, "_current_rerank_info", None)
+            or (getattr(agent, "_agent_config", {}) or {}).get("rerank", {})
+            or {}
+        ),
+        "streaming": False,
         "generated_at": datetime.utcnow().isoformat(),
     }
-    await room.update_metadata(json.dumps(payload))
-    logger.info("✅ Text response stored in room metadata")
+    # Persist response via LiveKit server metadata so the API can poll it
+    await _merge_and_update_room_metadata(
+        room_name=room.name,
+        payload=payload,
+        logger=logger,
+        retries=2,
+    )
     return payload
 
 
@@ -813,7 +931,13 @@ async def agent_job_handler(ctx: JobContext):
             }
             
         # Detect requested interaction mode (voice default)
-        requested_mode = str(metadata.get("mode") or metadata.get("conversation_mode") or "voice").strip().lower()
+        raw_mode = metadata.get("mode") or metadata.get("conversation_mode")
+        requested_mode = str(raw_mode or "").strip().lower()
+        if not requested_mode and metadata.get("user_message"):
+            requested_mode = "text"
+        if requested_mode not in ("text", "voice"):
+            logger.warning(f"Mode not provided or unrecognized ({requested_mode!r}); defaulting to voice")
+            requested_mode = "voice"
         is_text_mode = requested_mode == "text"
         metadata["mode"] = "text" if is_text_mode else "voice"
         logger.info(f"🎯 Agent job running in {'TEXT' if is_text_mode else 'VOICE'} mode")
@@ -952,12 +1076,19 @@ async def agent_job_handler(ctx: JobContext):
                     logger.error(f"❌ Failed to load VAD: {e}", exc_info=True)
                     raise
             else:
-                logger.info("📝 Text-only mode: skipping STT/VAD initialization (TTS still enabled for session parity)")
-                tts_plugin = _initialize_tts_plugin(
-                    tts_provider=tts_provider,
-                    voice_settings=voice_settings,
-                    api_keys=api_keys,
-                )
+                logger.info("📝 Text-only mode: skipping STT/VAD; keeping TTS to satisfy LiveKit pipeline")
+                try:
+                    tts_plugin = _initialize_tts_plugin(
+                        tts_provider=tts_provider,
+                        voice_settings=voice_settings,
+                        api_keys=api_keys,
+                    )
+                except Exception as tts_err:
+                    logger.warning(
+                        "⚠️ Text-mode TTS setup failed (%s); proceeding without TTS (will force LLM fallback)",
+                        tts_err,
+                    )
+                    tts_plugin = None
             
             # Remove multilingual turn detector to avoid heavy HF model load/crash
             turn_detect = None
@@ -1136,7 +1267,15 @@ async def agent_job_handler(ctx: JobContext):
                 context_manager=context_manager,
                 user_id=ctx.user_id,
                 client_id=client_id,
-                agent_config={'id': agent_id, 'agent_slug': agent_slug, 'show_citations': show_citations, 'dataset_ids': dataset_ids},
+                agent_config={
+                    'id': agent_id,
+                    'agent_slug': agent_slug,
+                    'show_citations': show_citations,
+                    'dataset_ids': dataset_ids,
+                    'rag_results_limit': metadata.get("rag_results_limit"),
+                    'rerank': metadata.get("rerank"),
+                    'api_keys': metadata.get("api_keys"),
+                },
             )
             logger.info("✅ Voice agent created with single-layer architecture")
             if is_text_mode and text_response_collector:
@@ -1316,6 +1455,11 @@ async def agent_job_handler(ctx: JobContext):
                 discard_audio_if_uninterruptible=True   # Always discard audio on interruption
             )
             logger.info("✅ AgentSession created with %s tools available to LLM", len(agent.tools))
+            # Preserve the TTS plugin reference for text-mode diagnostics
+            try:
+                session._text_tts_plugin = tts_plugin
+            except Exception:
+                pass
             
             # Log and capture STT transcripts; commit turn on finals
             commit_delay = float(os.getenv("VOICE_TURN_COMMIT_DELAY", "1.4"))

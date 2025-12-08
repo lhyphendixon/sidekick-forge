@@ -182,6 +182,23 @@ class AgentContextManager:
         # - match_conversation_transcripts_secure (without unsafe COALESCE)
         
         # No schema detection needed - fail fast if functions don't exist
+
+    def _rag_limit(self) -> int:
+        """Return sanitized per-agent RAG result limit."""
+        raw_limit = None
+        try:
+            raw_limit = self.agent_config.get("rag_results_limit")
+        except Exception:
+            raw_limit = None
+        try:
+            limit_int = int(raw_limit) if raw_limit is not None else 5
+        except Exception:
+            limit_int = 5
+        if limit_int < 1:
+            return 1
+        if limit_int > 50:
+            return 50
+        return limit_int
     
     async def build_initial_context(self, user_id: str) -> Dict[str, Any]:
         """
@@ -409,6 +426,8 @@ class AgentContextManager:
             if not agent_slug:
                 raise ValueError("agent_slug is required for knowledge RAG.")
                 
+            match_count = self._rag_limit()
+
             # Generate embeddings using remote service
             query_embedding = await self.embedder.create_embedding(user_message)
             # Convert to pgvector string format
@@ -419,7 +438,7 @@ class AgentContextManager:
                 "p_query_embedding": emb_vec,          # Pass as pgvector string
                 "p_agent_slug": agent_slug,            # Database function expects p_ prefix
                 "p_match_threshold": 0.3,              # Lowered from 0.5 for better recall
-                "p_match_count": 5
+                "p_match_count": match_count
             }).execute()
             
             match_rows = list(result.data or [])
@@ -457,7 +476,7 @@ class AgentContextManager:
             if match_rows:
                 # Sort combined rows by similarity (desc) and cap to RPC limit (default 5)
                 match_rows.sort(key=lambda row: row.get("similarity", 0.0), reverse=True)
-                match_rows = match_rows[:5]
+                match_rows = match_rows[:match_count]
 
                 logger.info(f"✅ match_documents returned {len(match_rows)} results (after fallback).")
 
@@ -592,10 +611,12 @@ class AgentContextManager:
             except ValueError:
                 logger.error(f"Invalid UUID format for user_id: {user_id}")
                 raise ValueError(f"user_id must be a valid UUID, got: {user_id}")
+
+            match_count = self._rag_limit()
                 
             result = self.supabase.rpc("match_conversation_transcripts_secure", {
                 "query_embeddings": emb_vec,  # Pass as pgvector string
-                "match_count": 5,  # Put match_count before other params to match function signature
+                "match_count": match_count,  # Put match_count before other params to match function signature
                 "agent_slug_param": self.agent_config.get("slug"),
                 "user_id_param": user_id_uuid  # Pass as UUID string
             }).execute()
@@ -604,7 +625,8 @@ class AgentContextManager:
                 logger.info(f"✅ match_conversation_transcripts_secure returned {len(result.data)} results.")
                 # Format the RPC results
                 conversation_results = []
-                for match in result.data:
+                capped = list(result.data)[:match_count]
+                for match in capped:
                     conversation_results.append({
                         "user_message": match.get("user_message", ""),
                         "agent_response": match.get("agent_response", ""),

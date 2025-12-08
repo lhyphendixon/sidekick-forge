@@ -48,6 +48,7 @@ class SidekickAgent(voice.Agent):
         # Citation tracking
         self._current_citations: List[Dict[str, Any]] = []
         self._current_message_id: Optional[str] = None
+        self._current_rerank_info: Dict[str, Any] = {}
         
         # Feature flag for citations (can be configured per agent)
         self._citations_enabled = self._agent_config.get('show_citations', True)
@@ -291,16 +292,73 @@ class SidekickAgent(voice.Agent):
             except Exception:
                 dataset_ids = []
 
+            # Determine retrieval limits from agent config (defaults: 10 with rerank safe limits)
+            rag_results_limit = 10
+            try:
+                rag_results_limit = int(self._agent_config.get('rag_results_limit', rag_results_limit))
+            except Exception:
+                rag_results_limit = 10
+            if rag_results_limit < 1:
+                rag_results_limit = 1
+            if rag_results_limit > 50:
+                rag_results_limit = 50
+
+            rerank_cfg = self._agent_config.get("rerank", {}) if isinstance(self._agent_config, dict) else {}
+            rerank_enabled = rerank_cfg.get("enabled", True)
+            # Default to the agent's rag_results_limit for both candidates and top_k so we don't silently truncate to 5.
+            rerank_candidates = rerank_cfg.get("candidates", rag_results_limit)
+            rerank_top_k = rerank_cfg.get("top_k")
+            if not rerank_top_k or rerank_top_k < 1:
+                rerank_top_k = rerank_candidates if rerank_candidates else rag_results_limit
+            rerank_provider = rerank_cfg.get("provider")
+            rerank_model = rerank_cfg.get("model")
+            rerank_fallback_info = {
+                "enabled": bool(rerank_enabled),
+                "provider": rerank_provider,
+                "model": rerank_model,
+                "candidates_configured": rerank_candidates,
+                "top_k_configured": rerank_top_k,
+            }
+
+            api_keys = {}
+            try:
+                if self._context_manager and hasattr(self._context_manager, "api_keys"):
+                    api_keys = self._context_manager.api_keys or {}
+            except Exception:
+                api_keys = {}
+            if not api_keys and isinstance(self._agent_config, dict):
+                api_keys = self._agent_config.get("api_keys", {}) or {}
+
+            # Broaden recall; when rerank is disabled, go even wider and allow more docs.
+            if rerank_enabled:
+                match_count = max(rag_results_limit * 2, rerank_candidates or rag_results_limit, 20)
+                if not rerank_candidates or rerank_candidates < match_count:
+                    rerank_candidates = match_count
+                rerank_top_k = min(rerank_top_k, rerank_candidates) if rerank_top_k else rag_results_limit
+                max_docs = rag_results_limit
+            else:
+                # No rerank: fetch even wider and allow more docs to avoid single-doc collapse.
+                match_count = max(rag_results_limit * 6, 60)
+                rerank_candidates = None
+                rerank_top_k = None
+                max_docs = max(rag_results_limit * 3, 15)
+
             # Perform RAG retrieval with citations
             result = await rag_citations_service.retrieve_with_citations(
                 query=user_text,
                 client_id=self._client_id,
                 agent_slug=agent_slug,
                 dataset_ids=dataset_ids,
-                top_k=12,
-                similarity_threshold=0.5,
-                max_documents=4,
-                max_chunks=8
+                top_k=match_count,
+                similarity_threshold=0.2,  # widen recall for sparse results
+                max_documents=max_docs,
+                max_chunks=match_count,
+                rerank_enabled=rerank_enabled,
+                rerank_candidates=rerank_candidates,
+                rerank_top_k=rerank_top_k,
+                rerank_provider=rerank_provider,
+                rerank_model=rerank_model,
+                api_keys=api_keys,
             )
             
             # Store citations for inclusion in the final response
@@ -319,6 +377,12 @@ class SidekickAgent(voice.Agent):
                 }
                 for citation in result.citations
             ]
+
+            # Store rerank info for downstream metadata
+            try:
+                self._current_rerank_info = result.rerank_info or rerank_fallback_info
+            except Exception:
+                self._current_rerank_info = rerank_fallback_info
             
             logger.info(f"Retrieved {len(self._current_citations)} citations for message {self._current_message_id}")
             

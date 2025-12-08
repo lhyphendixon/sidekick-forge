@@ -323,16 +323,15 @@ def _normalize_session(session_obj: Any, user_obj: Any) -> Dict[str, Any]:
 
 async def _upsert_profile(user_id: str, email: str, display_name: Optional[str]):
     profile_data = {
-        "id": user_id,
+        "user_id": user_id,
         "email": email,
         "full_name": display_name or email,
-        "role": "user",
         "updated_at": datetime.utcnow().isoformat(),
         "created_at": datetime.utcnow().isoformat(),
     }
     try:
         await supabase_manager.execute_query(
-            supabase_manager.admin_client.table("profiles").upsert(profile_data, on_conflict="id")
+            supabase_manager.admin_client.table("profiles").upsert(profile_data, on_conflict="user_id")
         )
     except Exception as exc:
         logger.warning("Failed to upsert profile for %s: %s", user_id, exc)

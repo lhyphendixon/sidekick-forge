@@ -214,10 +214,7 @@ async def handle_voice_trigger(
         "agent_slug": agent.slug,
         "agent_name": agent.name,
         "system_prompt": agent.system_prompt,
-        "voice_settings": {
-            **(agent.voice_settings.dict() if agent.voice_settings else {}),
-            "tts_provider": agent.voice_settings.provider if agent.voice_settings else "cartesia"
-        },
+        "voice_settings": (agent.voice_settings.dict() if agent.voice_settings else {}),
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": request.user_id,
         "session_id": request.session_id,
@@ -227,9 +224,37 @@ async def handle_voice_trigger(
         "api_keys": {k: v for k, v in api_keys.items() if v}  # Include all available API keys
     }
 
+    # Attach rerank settings (client-level)
+    try:
+        rerank_cfg = {}
+        if hasattr(platform_client.settings, "rerank") and platform_client.settings.rerank:
+            rerank_cfg = platform_client.settings.rerank.dict()
+        elif isinstance(getattr(platform_client, "additional_settings", None), dict):
+            rerank_cfg = platform_client.additional_settings.get("rerank", {}) or {}
+        if rerank_cfg:
+            agent_context["rerank"] = rerank_cfg
+    except Exception as rerank_err:
+        logger.warning("Voice trigger: failed to attach rerank settings: %s", rerank_err)
+
+    # Ensure tts_provider is set if missing (do not overwrite explicit settings)
+    if "voice_settings" in agent_context:
+        vs = agent_context["voice_settings"] or {}
+        if not vs.get("tts_provider"):
+            vs["tts_provider"] = vs.get("provider") or "cartesia"
+        agent_context["voice_settings"] = vs
+
     agent_id_value = getattr(agent, "id", None)
     if agent_id_value:
         agent_context["agent_id"] = str(agent_id_value)
+
+    # Include agent-level RAG settings
+    rag_results_limit = getattr(agent, "rag_results_limit", None)
+    if rag_results_limit is not None:
+        agent_context["rag_results_limit"] = rag_results_limit
+
+    show_citations = getattr(agent, "show_citations", None)
+    if show_citations is not None:
+        agent_context["show_citations"] = show_citations
 
     # Provide Supabase credentials to the worker so transcripts can be stored
     supabase_url = getattr(platform_client, "supabase_project_url", None) or getattr(platform_client, "supabase_url", None)

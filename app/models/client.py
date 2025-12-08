@@ -75,6 +75,21 @@ class RerankSettings(BaseModel):
     candidates: int = Field(default=20, description="Number of candidates to rerank")
 
 
+class TelegramChannelSettings(BaseModel):
+    """Telegram channel configuration for a client."""
+    enabled: bool = Field(default=False, description="Enable Telegram channel for this client")
+    bot_token: Optional[str] = Field(default=None, description="Bot token (optional override per client)")
+    webhook_secret: Optional[str] = Field(default=None, description="Secret token to validate incoming webhooks")
+    default_agent_slug: Optional[str] = Field(default=None, description="Default agent slug for Telegram")
+    reply_mode: str = Field(default="auto", description="auto|text|voice_on_voice")
+    transcribe_voice: bool = Field(default=True, description="Transcribe inbound voice notes to text for processing")
+
+
+class ChannelSettings(BaseModel):
+    """All channel configurations for a client."""
+    telegram: TelegramChannelSettings = Field(default_factory=TelegramChannelSettings)
+
+
 class ClientSettings(BaseModel):
     """All client-specific settings"""
     supabase: SupabaseConfig
@@ -82,6 +97,7 @@ class ClientSettings(BaseModel):
     api_keys: APIKeys = Field(default_factory=APIKeys)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     rerank: RerankSettings = Field(default_factory=RerankSettings)
+    channels: ChannelSettings = Field(default_factory=ChannelSettings)
     performance_monitoring: bool = Field(default=False, description="Enable performance monitoring")
     license_key: Optional[str] = None
 

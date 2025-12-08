@@ -37,6 +37,15 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# In-memory pending Telegram verification codes (ephemeral)
+_pending_telegram_codes: Dict[str, Dict[str, Any]] = {}
+
+# In-memory profile cache fallback when Supabase profile/auth records are unavailable (dev/superadmin)
+_profile_cache: Dict[str, Dict[str, Any]] = {}
+
+def _pending_key(user_id: Optional[str], email: Optional[str]) -> str:
+    return str(user_id or email or "unknown").lower()
+
 # Simple compatibility class for container operations
 class ContainerOrchestrator:
     """Compatibility layer for worker pool architecture"""
@@ -1510,6 +1519,7 @@ async def debug_agent_data(
                 "webhooks": agent.get("webhooks", {}),
                 "tools_config": agent.get("tools_config", {}),
                 "show_citations": agent.get("show_citations", True),
+                "rag_results_limit": agent.get("rag_results_limit", 5),
                 "client_id": client_id,
                 "client_name": client.get("name", "Unknown") if isinstance(client, dict) else (getattr(client, 'name', 'Unknown') if client else "Unknown")
             }
@@ -1529,6 +1539,7 @@ async def debug_agent_data(
                 "webhooks": agent.webhooks,
                 "tools_config": agent.tools_config or {},
                 "show_citations": getattr(agent, 'show_citations', True),
+                "rag_results_limit": getattr(agent, "rag_results_limit", 5),
                 "client_id": client_id,
                 "client_name": client.name if client else "Unknown"
             }
@@ -2109,6 +2120,7 @@ async def agent_detail(
                 "webhooks": agent.get("webhooks", {}),
                 "tools_config": agent.get("tools_config", {}),
                 "show_citations": agent.get("show_citations", True),
+                "rag_results_limit": agent.get("rag_results_limit", 5),
                 "client_id": client_id,
                 "client_name": client.get("name", "Unknown") if isinstance(client, dict) else (getattr(client, 'name', 'Unknown') if client else "Unknown")
             }
@@ -2129,6 +2141,7 @@ async def agent_detail(
                 "webhooks": agent.webhooks,
                 "tools_config": agent.tools_config or {},
                 "show_citations": getattr(agent, 'show_citations', True),
+                "rag_results_limit": getattr(agent, "rag_results_limit", 5),
                 "client_id": client_id,
                 "client_name": client.name if client else "Unknown"
             }
@@ -2162,6 +2175,15 @@ async def agent_detail(
             # Fallback to empty dict
             voice_settings_data = {}
         
+        provider_config = voice_settings_data.get("provider_config", {}) if isinstance(voice_settings_data.get("provider_config", {}), dict) else {}
+        effective_tts_provider = voice_settings_data.get("tts_provider", voice_settings_data.get("provider", "openai"))
+        openai_voice = voice_settings_data.get("openai_voice", None)
+        if not openai_voice and effective_tts_provider == "openai":
+            openai_voice = voice_settings_data.get("voice_id", "alloy")
+        elevenlabs_voice_id = voice_settings_data.get("elevenlabs_voice_id", None)
+        if not elevenlabs_voice_id and effective_tts_provider == "elevenlabs":
+            elevenlabs_voice_id = voice_settings_data.get("voice_id") or provider_config.get("elevenlabs_voice_id", "")
+
         latest_config = {
             "last_updated": "",
             "enabled": agent_data.get("enabled", True),
@@ -2172,11 +2194,11 @@ async def agent_detail(
             "temperature": voice_settings_data.get("temperature", 0.7),
             "stt_provider": voice_settings_data.get("stt_provider", "deepgram"),
             "stt_model": voice_settings_data.get("stt_model", "nova-2"),
-            "tts_provider": voice_settings_data.get("tts_provider", "openai"),
+            "tts_provider": effective_tts_provider or "openai",
             "tts_model": voice_settings_data.get("model", "sonic-english"),
-            "openai_voice": voice_settings_data.get("openai_voice", "alloy"),
-            "elevenlabs_voice_id": voice_settings_data.get("elevenlabs_voice_id", ""),
-            "cartesia_voice_id": voice_settings_data.get("voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d") if voice_settings_data.get("tts_provider") == "cartesia" else voice_settings_data.get("provider_config", {}).get("cartesia_voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d")
+            "openai_voice": openai_voice or "alloy",
+            "elevenlabs_voice_id": elevenlabs_voice_id or "",
+            "cartesia_voice_id": voice_settings_data.get("voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d") if effective_tts_provider == "cartesia" else provider_config.get("cartesia_voice_id", "248be419-c632-4f23-adf1-5324ed7dbf1d")
         }
         latest_config_json = None
         
@@ -2269,6 +2291,7 @@ async def agent_detail(
                 "agent": cleaned_agent_data,  # Use cleaned data
                 "client": client,
                 "user": admin_user,
+                "disable_stats_poll": True,
                 "latest_config": latest_config,
                 "latest_config_json": latest_config_json,
                 "has_config_updates": bool(agent_config) if agent_config else False
@@ -4639,6 +4662,7 @@ async def admin_update_agent(
         
         # Prepare update data
         from app.models.agent import AgentUpdate, VoiceSettings, WebhookSettings
+        from app.models.client import ChannelSettings, TelegramChannelSettings
         
         # Build update object
         update_data = AgentUpdate(
@@ -4648,7 +4672,8 @@ async def admin_update_agent(
             system_prompt=data.get("system_prompt", agent.system_prompt),
             enabled=data.get("enabled", agent.enabled),
             tools_config=data.get("tools_config", agent.tools_config),
-            show_citations=data.get("show_citations", getattr(agent, 'show_citations', True))
+            show_citations=data.get("show_citations", getattr(agent, 'show_citations', True)),
+            rag_results_limit=data.get("rag_results_limit", getattr(agent, "rag_results_limit", 5)),
         )
         
         # Handle voice settings if provided
@@ -4658,6 +4683,51 @@ async def admin_update_agent(
         # Handle webhooks if provided
         if "webhooks" in data:
             update_data.webhooks = WebhookSettings(**data["webhooks"])
+
+        # Handle channels (Telegram) and enforce token requirement for non-global sidekicks
+        existing_tools = {}
+        try:
+            if hasattr(agent, "tools_config"):
+                existing_tools = agent.tools_config or {}
+            elif isinstance(agent, dict):
+                existing_tools = agent.get("tools_config", {}) or {}
+        except Exception:
+            existing_tools = {}
+        tools_config = data.get("tools_config") or existing_tools or {}
+        channels_payload = data.get("channels") or {}
+        telegram_payload = channels_payload.get("telegram") if isinstance(channels_payload, dict) else None
+
+        if telegram_payload and isinstance(telegram_payload, dict):
+            telegram_enabled = bool(telegram_payload.get("enabled"))
+            telegram_token = telegram_payload.get("bot_token")
+
+            if client_id != "global" and telegram_enabled and not telegram_token:
+                return {
+                    "error": "Telegram is enabled but no bot token was provided for this sidekick.",
+                    "status": 400,
+                }
+
+            # Global sidekicks cannot override platform token
+            if client_id == "global":
+                telegram_token = None
+
+            telegram_cfg = TelegramChannelSettings(
+                enabled=telegram_enabled,
+                bot_token=telegram_token,
+                webhook_secret=telegram_payload.get("webhook_secret"),
+                default_agent_slug=telegram_payload.get("default_agent_slug") or agent_slug,
+                reply_mode=telegram_payload.get("reply_mode", "auto"),
+                transcribe_voice=bool(telegram_payload.get("transcribe_voice", True)),
+            )
+            channels_obj = ChannelSettings(telegram=telegram_cfg)
+            channels_dict = channels_obj.dict()
+            if not isinstance(tools_config, dict):
+                tools_config = {}
+            tools_config["channels"] = channels_dict
+            update_data.channels = channels_obj
+            update_data.tools_config = tools_config
+        elif tools_config:
+            update_data.tools_config = tools_config
         
         # Update agent
         updated_agent = await agent_service.update_agent(client_id, agent_slug, update_data)
@@ -4676,6 +4746,180 @@ def get_redis_client_admin():
     """Get Redis client for admin operations"""
     import redis
     return redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+
+@router.get("/user-settings", response_class=HTMLResponse)
+async def user_settings(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """User settings page (profile + security + channel handles)."""
+    profile = None
+    try:
+        user_id = admin_user.get("id") or admin_user.get("user_id")
+        user_email = (admin_user.get("email") or admin_user.get("username") or "").strip().lower()
+        if user_id:
+            profile = await supabase_manager.get_user_profile(user_id)
+        if (not profile) and user_email:
+            auth_user = await supabase_manager.find_auth_user_by_email(user_email)
+            if auth_user:
+                meta = getattr(auth_user, "user_metadata", None) or auth_user.get("user_metadata", {}) or {}
+                profile = {
+                    "user_id": getattr(auth_user, "id", None) or auth_user.get("id"),
+                    "email": getattr(auth_user, "email", user_email) or auth_user.get("email", user_email),
+                    "full_name": meta.get("full_name"),
+                    "company": meta.get("company"),
+                    "phone": meta.get("phone"),
+                    "telegram_username": meta.get("telegram_username"),
+                }
+        # Fallback to cache if still missing
+        if (not profile) and user_email and user_email in _profile_cache:
+            profile = _profile_cache[user_email]
+    except Exception as e:
+        logger.warning(f"Failed to load user profile for settings: {e}")
+
+    return templates.TemplateResponse(
+        "admin/user_settings.html",
+        {
+            "request": request,
+            "user": admin_user,
+            "profile": profile or {},
+            "telegram_bot_username": os.getenv("TELEGRAM_BOT_USERNAME", ""),
+        },
+    )
+
+
+@router.post("/user-settings", response_class=HTMLResponse)
+async def update_user_settings(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Handle profile updates."""
+    form = await request.form()
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+    user_email = admin_user.get("email") or admin_user.get("username")
+
+    updates = {
+        "full_name": form.get("full_name") or None,
+        "email": form.get("email") or user_email,
+        "company": form.get("company") or None,
+        "phone": form.get("phone") or None,
+        "telegram_username": form.get("telegram_username") or None,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+    # Ensure supabase_manager initialized
+    try:
+        if not supabase_manager._initialized:
+            await supabase_manager.initialize()
+    except Exception:
+        pass
+
+    try:
+        if user_id:
+            profile = await supabase_manager.update_user_profile(user_id, updates)
+            if not profile:
+                auth_user = await supabase_manager.get_auth_user(user_id)
+                if auth_user:
+                    meta = getattr(auth_user, "user_metadata", None) or auth_user.get("user_metadata", {}) or {}
+                    profile = {
+                        "user_id": user_id,
+                        "email": getattr(auth_user, "email", user_email) or auth_user.get("email", user_email),
+                        "full_name": updates.get("full_name") or meta.get("full_name"),
+                        "company": updates.get("company") or meta.get("company"),
+                        "phone": updates.get("phone") or meta.get("phone"),
+                        "telegram_username": updates.get("telegram_username") or meta.get("telegram_username"),
+                    }
+        else:
+            # Try to resolve auth user by email to get id
+            auth_user = await supabase_manager.find_auth_user_by_email(user_email)
+            if auth_user:
+                found_id = getattr(auth_user, "id", None) or auth_user.get("id")
+                if found_id:
+                    profile = await supabase_manager.update_user_profile(found_id, updates)
+                else:
+                    profile = await supabase_manager.upsert_profile_by_email(user_email, updates)
+            else:
+                profile = await supabase_manager.upsert_profile_by_email(user_email, updates)
+        if not profile:
+            raise ValueError("Profile update returned empty result")
+        # Cache fallback so it sticks even if backing store is absent
+        if user_email:
+            _profile_cache[user_email] = profile
+    except Exception as e:
+        logger.error(f"Failed to update user profile: {e}", exc_info=True)
+        return templates.TemplateResponse(
+            "admin/user_settings.html",
+            {
+                "request": request,
+                "user": admin_user,
+                "profile": updates,
+                "error": f"Failed to update profile: {e}",
+            },
+        )
+
+    return templates.TemplateResponse(
+        "admin/user_settings.html",
+        {
+            "request": request,
+            "user": admin_user,
+            "profile": profile or updates,
+            "pending_code": None,
+            "success": "Profile updated",
+        },
+    )
+
+
+@router.post("/user-settings/telegram/start", response_class=HTMLResponse)
+async def start_telegram_verification(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Generate a one-time verification code for Telegram linking."""
+    import random
+    import string
+
+    code = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+    user_email = (admin_user.get("email") or admin_user.get("username") or "").strip().lower()
+    key = _pending_key(user_id, user_email)
+    _pending_telegram_codes[key] = {
+        "code": code,
+        "user_id": user_id,
+        "email": user_email,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    profile = None
+    try:
+        if user_id:
+            profile = await supabase_manager.get_user_profile(user_id)
+        if not profile and user_email:
+            auth_user = await supabase_manager.find_auth_user_by_email(user_email)
+            if auth_user:
+                meta = getattr(auth_user, "user_metadata", None) or auth_user.get("user_metadata", {}) or {}
+                profile = {
+                    "user_id": getattr(auth_user, "id", None) or auth_user.get("id"),
+                    "email": getattr(auth_user, "email", user_email) or auth_user.get("email", user_email),
+                    "full_name": meta.get("full_name"),
+                    "company": meta.get("company"),
+                    "phone": meta.get("phone"),
+                    "telegram_username": meta.get("telegram_username"),
+                }
+    except Exception:
+        profile = profile or {}
+
+    return templates.TemplateResponse(
+        "admin/user_settings.html",
+        {
+            "request": request,
+            "user": admin_user,
+            "profile": profile or {},
+            "pending_code": code,
+            "telegram_bot_username": os.getenv("TELEGRAM_VERIFICATION_BOT_USERNAME", os.getenv("TELEGRAM_BOT_USERNAME", "")),
+            "success": f"Verification code generated: {code}. Open Telegram and tap the deep link to verify.",
+        },
+    )
 
 @router.get("/clients/{client_id}/edit", response_class=HTMLResponse)
 async def edit_client_modal(client_id: str, request: Request, admin_user: Dict[str, Any] = Depends(get_admin_user)):
@@ -4749,7 +4993,17 @@ async def admin_update_client(
             )
         
         # Prepare update data
-        from app.models.client import ClientUpdate, ClientSettings, SupabaseConfig, LiveKitConfig, APIKeys, EmbeddingSettings, RerankSettings
+        from app.models.client import (
+            ClientUpdate,
+            ClientSettings,
+            SupabaseConfig,
+            LiveKitConfig,
+            APIKeys,
+            EmbeddingSettings,
+            RerankSettings,
+            ChannelSettings,
+            TelegramChannelSettings,
+        )
         
         # Get current settings - handle both dict and object formats
         if hasattr(client, 'settings'):
@@ -4761,6 +5015,7 @@ async def admin_update_client(
             current_rerank = current_settings.rerank if hasattr(current_settings, 'rerank') else None
             current_perf_monitoring = current_settings.performance_monitoring if hasattr(current_settings, 'performance_monitoring') else False
             current_license_key = current_settings.license_key if hasattr(current_settings, 'license_key') else None
+            current_channels = current_settings.channels if hasattr(current_settings, 'channels') else None
         else:
             # Client is a dict
             current_settings = client.get('settings', {})
@@ -4771,6 +5026,27 @@ async def admin_update_client(
             current_rerank = current_settings.get('rerank', {})
             current_perf_monitoring = current_settings.get('performance_monitoring', False)
             current_license_key = current_settings.get('license_key')
+            current_channels = current_settings.get('channels', {})
+
+        if not current_channels and getattr(client, "additional_settings", None):
+            try:
+                current_channels = client.additional_settings.get("channels", {})
+            except Exception:
+                current_channels = {}
+
+        def _get_current_telegram(field: str, default=None):
+            """Helper to fetch current telegram channel field from either object or dict."""
+            try:
+                if hasattr(current_channels, "telegram") and hasattr(current_channels.telegram, field):
+                    return getattr(current_channels.telegram, field)
+            except Exception:
+                pass
+            try:
+                if isinstance(current_channels, dict):
+                    return current_channels.get("telegram", {}).get(field, default)
+            except Exception:
+                pass
+            return default
         
         # Build settings update with proper defaults
         settings_update = ClientSettings(
@@ -4812,6 +5088,16 @@ async def admin_update_client(
                 model=form.get("rerank_model", current_rerank.model if hasattr(current_rerank, 'model') else current_rerank.get('model', 'BAAI/bge-reranker-base') if current_rerank else 'BAAI/bge-reranker-base'),
                 top_k=int(form.get("rerank_top_k", current_rerank.top_k if hasattr(current_rerank, 'top_k') else current_rerank.get('top_k', 5) if current_rerank else 5)),
                 candidates=int(form.get("rerank_candidates", current_rerank.candidates if hasattr(current_rerank, 'candidates') else current_rerank.get('candidates', 20) if current_rerank else 20))
+            ),
+            channels=ChannelSettings(
+                telegram=TelegramChannelSettings(
+                    enabled=str(form.get("telegram_enabled", _get_current_telegram("enabled", False))).lower() in {"on", "true", "1"},
+                    bot_token=_get_current_telegram("bot_token"),
+                    webhook_secret=_get_current_telegram("webhook_secret"),
+                    default_agent_slug=_get_current_telegram("default_agent_slug"),
+                    reply_mode=_get_current_telegram("reply_mode", "auto"),
+                    transcribe_voice=str(form.get("telegram_transcribe_voice", _get_current_telegram("transcribe_voice", True))).lower() in {"on", "true", "1"},
+                )
             ),
             performance_monitoring=current_perf_monitoring,
             license_key=current_license_key

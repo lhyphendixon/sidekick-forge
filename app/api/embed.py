@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse
-from typing import Optional
+from typing import Optional, Dict, Any
 import asyncio
 import json
 import logging
@@ -154,35 +154,123 @@ async def embed_text_stream(
             )
             tools_service = ToolsService(client_service=supabase_client_service)
 
-            # Use the handle_text_trigger that works with multitenant architecture
-            result = await trigger_api.handle_text_trigger(
-                trigger_request,
-                agent,
-                platform_client,
-                tools_service,  # Pass ToolsService to enable Asana and other abilities
-            )
+            # Set up the LiveKit room and dispatch the agent job
+            try:
+                from app.integrations.livekit_client import livekit_manager
+                from app.config import settings
+                
+                backend_livekit = livekit_manager
+                if not backend_livekit._initialized:
+                    await backend_livekit.initialize()
 
-            response_text = (
-                result.get("response")
-                or result.get("agent_response")
-                or "(No response from the model.)"
-            )
-            tools_payload = result.get("tools") or {}
-            citations = result.get("citations") or []
+                # Build agent context and room
+                agent_context, _, _, _ = await trigger_api._build_agent_context_for_dispatch(
+                    agent=agent,
+                    client=platform_client,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    mode="text",
+                    request_context=None,
+                    client_conversation_id=conversation_id,
+                )
+                
+                # Add tools and user message to context
+                tools_payload = await trigger_api._get_agent_tools(tools_service, platform_client.id, agent.id)
+                if tools_payload:
+                    agent_context["tools"] = tools_payload
+                trigger_api._apply_tool_prompt_sections(agent_context, tools_payload)
+                agent_context["user_message"] = message
 
-            for token in response_text.split():
-                delta = token + " "
-                yield f"data: {json.dumps({'delta': delta})}\n\n"
-                await asyncio.sleep(0)
+                # Create room and dispatch
+                text_room_name = f"text-{conversation_id}-{uuid.uuid4().hex[:8]}"
+                await trigger_api.ensure_livekit_room_exists(
+                    backend_livekit,
+                    text_room_name,
+                    agent_name=settings.livekit_agent_name,
+                    agent_slug=agent.slug,
+                    user_id=user_id,
+                    agent_config=agent_context,
+                    enable_agent_dispatch=True,
+                )
 
-            final_payload = {
-                "done": True,
-                "full_text": response_text,
-                "conversation_id": conversation_id,
-                "citations": citations,
-                "tools": tools_payload,
-            }
-            yield f"data: {json.dumps(final_payload)}\n\n"
+                await trigger_api.dispatch_agent_job(
+                    livekit_manager=backend_livekit,
+                    room_name=text_room_name,
+                    agent=agent,
+                    client=platform_client,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    session_id=session_id,
+                    tools=agent_context.get("tools"),
+                    tools_config=agent_context.get("tools_config"),
+                    api_keys=agent_context.get("api_keys"),
+                    agent_context=agent_context,
+                )
+
+                # Stream responses from the worker
+                async for update in trigger_api.poll_for_text_response_streaming(
+                    backend_livekit,
+                    text_room_name,
+                ):
+                    if "error" in update:
+                        yield f"data: {json.dumps({'error': update['error']})}\n\n"
+                        return
+                    elif "delta" in update:
+                        yield f"data: {json.dumps({'delta': update['delta']})}\n\n"
+                    elif update.get("done"):
+                        final_payload = {
+                            "done": True,
+                            "full_text": update.get("full_text", ""),
+                            "conversation_id": conversation_id,
+                            "citations": update.get("citations", []),
+                            "tools": {"results": update.get("tool_results", [])},
+                        }
+                        yield f"data: {json.dumps(final_payload)}\n\n"
+                        return
+
+            except Exception as livekit_err:
+                logger.error(f"[embed-stream] livekit streaming failed: {livekit_err}; falling back to non-streaming")
+                try:
+                    final_result = await trigger_api.handle_text_trigger_via_livekit(
+                        trigger_request,
+                        agent,
+                        platform_client,
+                        tools_service,
+                    )
+                except Exception:
+                    try:
+                        final_result = await trigger_api.handle_text_trigger(
+                            trigger_request,
+                            agent,
+                            platform_client,
+                            tools_service,
+                        )
+                    except Exception:
+                        yield f"data: {json.dumps({'error': 'stream failed'})}\n\n"
+                        return
+                        
+                if not final_result:
+                    yield f"data: {json.dumps({'error': 'stream failed'})}\n\n"
+                    return
+
+                response_text = (
+                    final_result.get("response")
+                    or final_result.get("agent_response")
+                    or "(No response from the model.)"
+                )
+                tools_payload = final_result.get("tools") or {}
+                citations = final_result.get("citations") or []
+
+                final_payload = {
+                    "done": True,
+                    "full_text": response_text,
+                    "conversation_id": conversation_id,
+                    "citations": citations,
+                    "tools": tools_payload,
+                }
+                yield f"data: {json.dumps(final_payload)}\n\n"
+
         except Exception as exc:
             logger.error("embed_text_stream error: %s", exc, exc_info=True)
             yield f"data: {json.dumps({'error': 'stream failed'})}\n\n"

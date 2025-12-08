@@ -168,11 +168,16 @@ app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-bas
 app.include_router(embed_router.router)
 
 # Mount static files
-static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.exists(static_dir):
+static_dir_candidates = [
+    "/app/static",  # container volume mount
+    os.path.join(os.path.dirname(__file__), "static"),  # relative to source
+]
+static_dir = next((d for d in static_dir_candidates if os.path.exists(d)), None)
+if static_dir:
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    logger.info(f"Mounted static directory at {static_dir}")
 else:
-    logger.warning(f"Static directory not found at {static_dir}, skipping static file mount")
+    logger.warning(f"Static directory not found at any of {static_dir_candidates}, skipping static file mount")
 
 # Include admin dashboard (will need updating for multi-tenant)
 from app.admin.routes import router as admin_router

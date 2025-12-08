@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from pydantic import BaseModel, Field, field_serializer
 from enum import Enum
+from app.models.client import ChannelSettings  # Reuse channel schema
 
 
 class ProviderType(str, Enum):
@@ -91,6 +92,7 @@ class Agent(BaseModel):
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    channels: Optional[ChannelSettings] = Field(default=None, description="Per-agent channel settings")
     
     # Tools configuration (stored as JSON)
     tools_config: Optional[Dict[str, Any]] = Field(None, description="Agent-specific tools configuration")
@@ -102,6 +104,7 @@ class Agent(BaseModel):
     model: Optional[str] = Field(default="gpt-4o-mini", description="LLM model to use for responses")
     context_retention_minutes: Optional[int] = Field(default=30, description="How long to retain context for voice sessions")
     max_context_messages: Optional[int] = Field(default=50, description="Number of past messages to keep in short-term memory")
+    rag_results_limit: Optional[int] = Field(default=5, description="Number of knowledge base results to include in RAG context")
     
     @field_serializer('created_at', 'updated_at')
     def serialize_datetimes(self, value: Optional[datetime], info) -> str:
@@ -131,6 +134,7 @@ class AgentCreate(BaseModel):
     model: Optional[str] = Field(default="gpt-4o-mini", description="LLM model to use for this agent")
     context_retention_minutes: Optional[int] = Field(default=30, description="How long to retain conversation context")
     max_context_messages: Optional[int] = Field(default=50, description="Max short-term memory length")
+    rag_results_limit: Optional[int] = Field(default=5, description="Number of knowledge base results to include in RAG context")
 
 
 class AgentUpdate(BaseModel):
@@ -147,6 +151,8 @@ class AgentUpdate(BaseModel):
     model: Optional[str] = None
     context_retention_minutes: Optional[int] = None
     max_context_messages: Optional[int] = None
+    channels: Optional[ChannelSettings] = None
+    rag_results_limit: Optional[int] = None
 
 
 class AgentInDB(Agent):

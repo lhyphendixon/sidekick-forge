@@ -107,13 +107,12 @@ async def handle_user_updated(event_data: dict):
     metadata = user_data.get("user_metadata", {})
     if "full_name" in metadata:
         profile_update["full_name"] = metadata["full_name"]
-    if "company" in metadata:
-        profile_update["company"] = metadata["company"]
+    # company is not in profiles table as text, only company_id
     
     await supabase_manager.execute_query(
         supabase_manager.admin_client.table("profiles")
         .update(profile_update)
-        .eq("id", user_data["id"])
+        .eq("user_id", user_data["id"])
     )
 
 async def handle_user_deleted(event_data: dict):

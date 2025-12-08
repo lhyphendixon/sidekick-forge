@@ -894,7 +894,7 @@ class DocumentProcessor:
             # Refresh chunk embeddings
             for c in chunks:
                 emb = await self._generate_chunk_embeddings(c.get('content') or '', client_settings)
-                supabase_client.table('document_chunks').update({'embeddings': emb}).eq('id', c['id']).execute()
+                supabase_client.table('document_chunks').update({'embeddings_vec': emb}).eq('id', c['id']).execute()
 
             await self._finalize_document_processing(
                 document_id=document_id,
@@ -975,7 +975,7 @@ class DocumentProcessor:
                 'document_id': doc_id_for_chunk,
                 'content': chunk_text,
                 'chunk_index': chunk_index,
-                'embeddings': embeddings,
+                'embeddings_vec': embeddings,  # Store in vector column for pgvector similarity search
                 'chunk_metadata': {
                     'word_count': len(chunk_text.split()),
                     'character_count': len(chunk_text),
