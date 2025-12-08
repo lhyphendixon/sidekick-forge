@@ -219,7 +219,7 @@ class Settings(BaseSettings):
         if not raw:
             raw = os.getenv("MAILJET_NOTIFICATION_RECIPIENTS")
         if not raw:
-            env_file = getattr(self.Config, "env_file", ".env")
+            env_file = getattr(self.model_config, "env_file", ".env")
             try:
                 path = Path(env_file)
                 if not path.is_absolute():
