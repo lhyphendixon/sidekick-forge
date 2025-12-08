@@ -578,12 +578,18 @@ async def ensure_livekit_room_exists(
         )
         
         # Explicit agent dispatch (prevents dual dispatch issue)
+        logger.info(f"🚀 Dispatching agent to room {room_name} with agent_name={agent_name or settings.livekit_agent_name}")
         dispatch_request = api.CreateAgentDispatchRequest(
             room=room_name,
             metadata=json.dumps(room_metadata),
             agent_name=agent_name or settings.livekit_agent_name
         )
-        dispatch_response = await livekit_manager.livekit_api.agent_dispatch.create_dispatch(dispatch_request)
+        try:
+            dispatch_response = await livekit_manager.livekit_api.agent_dispatch.create_dispatch(dispatch_request)
+            logger.info(f"✅ Agent dispatched successfully to room {room_name}: {dispatch_response}")
+        except Exception as dispatch_err:
+            logger.error(f"❌ Failed to dispatch agent to room {room_name}: {dispatch_err}", exc_info=True)
+            raise
         
         logger.info(f"✅ Created room {room_name} successfully")
         
