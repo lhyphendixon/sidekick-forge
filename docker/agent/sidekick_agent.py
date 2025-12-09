@@ -1,5 +1,6 @@
 import logging
 import re
+import unicodedata
 from typing import Optional, List, Dict, Any, AsyncIterable, AsyncGenerator
 import uuid
 import asyncio
@@ -8,6 +9,7 @@ from datetime import datetime
 from livekit import rtc
 from livekit.agents import llm
 from livekit.agents import voice
+from livekit.agents.llm import StopResponse
 
 try:
     # livekit-agents >= 1.2.18
@@ -17,6 +19,18 @@ except ImportError:  # pragma: no cover - fallback for older SDKs
 
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_text(value: str) -> str:
+    """Normalize text for comparison (used for deduplication)."""
+    if not value:
+        return ""
+    text = unicodedata.normalize("NFKC", value)
+    text = text.replace("\u2019", "'")
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = " ".join(text.split())
+    return text
 
 
 class SidekickAgent(voice.Agent):
@@ -73,6 +87,9 @@ class SidekickAgent(voice.Agent):
         # TTS-aligned transcript streaming
         self._streaming_transcript_row_id: Optional[str] = None
         self._streaming_transcript_text: str = ""
+        # Raw LLM output (before TTS sanitization) for markdown-preserved transcripts
+        self._raw_llm_text: str = ""
+        self._raw_llm_chunks: List[str] = []
         # Text-only mode response capture
         self._text_mode_enabled: bool = False
         self._text_response_collector: Optional[Any] = None
@@ -86,29 +103,127 @@ class SidekickAgent(voice.Agent):
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
         try:
+            # EARLY EXIT: Check for echo (agent's own speech picked up by mic)
+            # The SDK's internal pipeline may bypass our on_user_input_transcribed handler
+            try:
+                user_text_raw = None
+                if hasattr(new_message, "text_content") and callable(getattr(new_message, "text_content")):
+                    user_text_raw = new_message.text_content()
+                elif hasattr(new_message, "content"):
+                    content = new_message.content
+                    if isinstance(content, str):
+                        user_text_raw = content
+                    elif isinstance(content, list) and content and isinstance(content[0], str):
+                        user_text_raw = max(content, key=len)
+
+                if user_text_raw:
+                    # Normalize for comparison
+                    user_norm = _normalize_text(user_text_raw).lower().strip()
+
+                    # Check against recent greeting
+                    recent_greeting = getattr(self, '_agent_session', None)
+                    if recent_greeting:
+                        greeting_norm = getattr(recent_greeting, '_recent_greeting_norm', '')
+                        if greeting_norm and greeting_norm in user_norm:
+                            logger.info(f"🚫 on_user_turn_completed: Blocking echo - user text matches greeting: '{user_text_raw[:50]}'")
+                            raise StopResponse()
+
+                    # Check against last assistant commit
+                    last_assistant = getattr(self, '_last_assistant_commit', '')
+                    if last_assistant:
+                        assistant_norm = _normalize_text(last_assistant).lower().strip()
+                        # Check if the user text is substantially similar to the last assistant response
+                        if assistant_norm and (user_norm in assistant_norm or assistant_norm in user_norm):
+                            logger.info(f"🚫 on_user_turn_completed: Blocking echo - user text matches last assistant: '{user_text_raw[:50]}'")
+                            raise StopResponse()
+                        # Also check common greeting phrases
+                        common_greetings = ['how can i help you', 'hi there', 'hello', 'how may i assist']
+                        for phrase in common_greetings:
+                            if phrase in user_norm and len(user_norm) < len(phrase) + 10:
+                                logger.info(f"🚫 on_user_turn_completed: Blocking echo - matches common greeting: '{user_text_raw[:50]}'")
+                                raise StopResponse()
+            except StopResponse:
+                raise  # Re-raise to exit
+            except Exception as echo_check_err:
+                logger.debug(f"Echo check failed (continuing): {echo_check_err}")
+
             # Generate unique message ID for this turn
             self._current_message_id = str(uuid.uuid4())
             self._current_citations = []
-            
-            # Debug log the turn context to find the user's message (reduced logging)
-            
-            # Try to get the last user message from the turn context
+
+            # DEBUG: Log full conversation context being sent to LLM
+            try:
+                items = getattr(turn_ctx, 'items', None) or getattr(turn_ctx, 'messages', [])
+                logger.info(f"📊 DEBUG: turn_ctx has {len(items)} items")
+                for i, item in enumerate(items[-5:]):  # Log last 5 items
+                    item_role = getattr(item, 'role', 'unknown')
+                    item_type = getattr(item, 'type', 'unknown')
+                    item_content = getattr(item, 'content', None)
+                    content_preview = ""
+                    if isinstance(item_content, str):
+                        content_preview = item_content[:80]
+                    elif isinstance(item_content, list):
+                        content_preview = f"list({len(item_content)} items): {str(item_content)[:80]}"
+                    logger.info(f"📊 turn_ctx[{i}]: role={item_role}, type={item_type}, content={content_preview}")
+                # Also log the new_message structure
+                logger.info(f"📊 new_message: role={new_message.role}, content_type={type(new_message.content)}, content={str(new_message.content)[:100]}")
+            except Exception as ctx_log_err:
+                logger.debug(f"Could not log turn_ctx: {ctx_log_err}")
+
+            # Try to get user text from new_message first (most reliable)
             user_text = None
-            if hasattr(turn_ctx, 'messages'):
+            
+            # 1. Try new_message (helper method)
+            if hasattr(new_message, "text_content") and callable(getattr(new_message, "text_content")):
+                user_text = new_message.text_content()
+                if user_text:
+                    logger.info(f"DEBUG: Extracted user text from new_message.text_content(): {user_text[:100]}")
+
+            # 2. Try new_message content directly
+            if not user_text:
+                content = getattr(new_message, "content", None)
+                if isinstance(content, str):
+                    user_text = content
+                elif isinstance(content, list):
+                    # Check if it's a list of strings
+                    if content and isinstance(content[0], str):
+                        # Take the longest string - STT often sends overlapping chunks
+                        # where later chunks contain the full text plus fragments
+                        user_text = max(content, key=len) if content else ""
+                        try:
+                            # IMPORTANT: Set content as a list with a single string, not a bare string
+                            # ChatMessage.content expects list[ChatContent] (list of strings/ImageContent/AudioContent)
+                            new_message.content = [user_text]
+                            logger.info(f"DEBUG: Coerced new_message.content to single-item list")
+                        except Exception:
+                            logger.debug("Unable to coerce new_message.content to list")
+                        logger.info(f"DEBUG: Extracted user text from string list (longest): {user_text[:100]}")
+                    else:
+                        # Handle structured content (list of dicts)
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                user_text = part.get("text")
+                                break
+            
+            # 3. Fallback to turn_ctx only if new_message failed
+            if not user_text and hasattr(turn_ctx, 'messages'):
                 # Look for the last user message in the context
                 for msg in reversed(turn_ctx.messages):
                     if msg.role == "user":
                         if isinstance(msg.content, str):
                             user_text = msg.content
                         elif isinstance(msg.content, list):
-                            # Check if it's a list of strings (as seen in logs)
+                            # Check if it's a list of strings
                             if msg.content and isinstance(msg.content[0], str):
-                                user_text = " ".join(msg.content)
+                                # UPDATED: Use same logic as new_message (longest string) instead of joining with space
+                                # Joining with space caused "s p a c e d" text if chunks were characters/tokens
+                                user_text = max(msg.content, key=len) if msg.content else ""
                                 try:
-                                    msg.content = user_text
+                                    # IMPORTANT: Set content as a list with a single string, not a bare string
+                                    msg.content = [user_text]
                                 except Exception:
-                                    logger.debug("Unable to coerce turn_ctx message content to string")
-                                logger.info(f"DEBUG: Extracted user text from turn_ctx string list: {user_text[:100]}")
+                                    logger.debug("Unable to coerce turn_ctx message content to list")
+                                logger.info(f"DEBUG: Extracted user text from turn_ctx string list (longest): {user_text[:100]}")
                             else:
                                 # Handle structured content (list of dicts)
                                 for part in msg.content:
@@ -118,33 +233,6 @@ class SidekickAgent(voice.Agent):
                         if user_text:
                             logger.info(f"DEBUG: Found user text from turn_ctx: {user_text[:100]}")
                             break
-            
-            
-            # If we didn't find user text in turn_ctx, try new_message
-            if not user_text:
-                # Prefer the helper if available
-                if hasattr(new_message, "text_content") and callable(getattr(new_message, "text_content")):
-                    user_text = new_message.text_content()
-                else:
-                    # Fallback: handle simple string or structured content
-                    content = getattr(new_message, "content", None)
-                    if isinstance(content, str):
-                        user_text = content
-                    elif isinstance(content, list):
-                        # Check if it's a list of strings (as seen in logs)
-                        if content and isinstance(content[0], str):
-                            user_text = " ".join(content)  # Join all strings in the list
-                            try:
-                                new_message.content = user_text
-                            except Exception:
-                                logger.debug("Unable to coerce new_message.content to string")
-                            logger.info(f"DEBUG: Extracted user text from string list: {user_text[:100]}")
-                        else:
-                            # Handle structured content (list of dicts)
-                            for part in content:
-                                if isinstance(part, dict) and part.get("type") == "text":
-                                    user_text = part.get("text")
-                                    break
 
             session_last = None
             try:
@@ -198,7 +286,7 @@ class SidekickAgent(voice.Agent):
             if not user_text:
                 logger.info("on_user_turn_completed: no user text to enrich; skipping RAG injection (LLM may skip reply)")
                 return
-            
+
             # Store user transcript
             normalized_text = self._normalize_spelled_words(user_text)
             if normalized_text != user_text:
@@ -206,7 +294,8 @@ class SidekickAgent(voice.Agent):
                 user_text = normalized_text
                 try:
                     if hasattr(new_message, "content"):
-                        new_message.content = normalized_text
+                        # IMPORTANT: Set content as a list with a single string, not a bare string
+                        new_message.content = [normalized_text]
                 except Exception:
                     logger.debug("Failed to update new_message.content with normalized text")
 
@@ -250,9 +339,18 @@ class SidekickAgent(voice.Agent):
         This method populates self._current_citations for use in the response.
         """
         try:
+            # Debug: Log agent_config state
+            logger.info(f"_retrieve_with_citations: agent_config type={type(self._agent_config)}, is_none={self._agent_config is None}")
+
+            # Ensure agent_config is a dict
+            if not isinstance(self._agent_config, dict):
+                logger.warning(f"_retrieve_with_citations: agent_config is not a dict, skipping citations")
+                self._current_citations = []
+                return
+
             # Use local citations service
             from citations_service import initialize_citations_service
-            
+
             # Initialize the service if needed
             if not hasattr(self, '_citations_service_initialized'):
                 # Use the context manager's supabase client and embedder if available
@@ -261,7 +359,7 @@ class SidekickAgent(voice.Agent):
                     embedder = None
                     if hasattr(self._context_manager, 'embedder'):
                         embedder = self._context_manager.embedder
-                    
+
                     # Get agent_slug from agent config
                     agent_slug = self._agent_config.get('agent_slug') or self._agent_config.get('agent_id')
                     
@@ -304,6 +402,9 @@ class SidekickAgent(voice.Agent):
                 rag_results_limit = 50
 
             rerank_cfg = self._agent_config.get("rerank", {}) if isinstance(self._agent_config, dict) else {}
+            # Ensure rerank_cfg is a dict (could be None if key exists with None value)
+            if not isinstance(rerank_cfg, dict):
+                rerank_cfg = {}
             rerank_enabled = rerank_cfg.get("enabled", True)
             # Default to the agent's rag_results_limit for both candidates and top_k so we don't silently truncate to 5.
             rerank_candidates = rerank_cfg.get("candidates", rag_results_limit)
@@ -387,8 +488,10 @@ class SidekickAgent(voice.Agent):
             logger.info(f"Retrieved {len(self._current_citations)} citations for message {self._current_message_id}")
             
         except Exception as e:
+            import traceback
             logger.error(f"Citations retrieval failed: {e}")
             logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Full traceback:\n{traceback.format_exc()}")
             # Don't silently fail - let the error propagate if it's critical
             if "embedder" in str(e).lower() or "no agent_slug" in str(e).lower():
                 logger.error("Critical configuration error in citations service - cannot proceed")
@@ -405,6 +508,132 @@ class SidekickAgent(voice.Agent):
         return self._current_message_id
 
     # ------------------------------------------------------------------
+    # LLM output capture for markdown-preserved transcripts
+    # ------------------------------------------------------------------
+
+    # NOTE: llm_node override disabled - was causing pipeline issues
+    # The _enhance_text_for_display function will work on the accumulated TTS text instead
+    # def llm_node(self, chat_ctx, tools, model_settings):
+    #     ... disabled ...
+
+    # ------------------------------------------------------------------
+    # Text formatting for display
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _enhance_text_for_display(text: str) -> str:
+        """
+        Add markdown formatting to plain speech text for better display.
+        Applies formatting progressively as text streams in.
+
+        Key formatting:
+        - Double line breaks between paragraphs (every 2 sentences)
+        - Bold for key terms and transition words
+        - Proper list formatting
+        """
+        if not text:
+            return text
+
+        enhanced = text
+
+        # Normalize multiple spaces to single space
+        enhanced = re.sub(r'  +', ' ', enhanced)
+
+        # =================================================================
+        # PARAGRAPH BREAKS - Every 2 sentences gets a double newline
+        # =================================================================
+
+        # Add paragraph breaks after sentence-ending punctuation followed by space and capital
+        # Also handle cases with no space (just punctuation followed by capital)
+        enhanced = re.sub(r'([.!?])\s*([A-Z])', r'\1\n\n\2', enhanced)
+
+        # =================================================================
+        # LISTS - Format numbered and bullet lists
+        # =================================================================
+
+        # Numbered lists: "1. " "2. " etc - ensure they're on their own line
+        enhanced = re.sub(r'\n\n(\d+)\.\s+', r'\n\n\1. ', enhanced)
+        enhanced = re.sub(r'^(\d+)\.\s+', r'\1. ', enhanced)
+
+        # Bullet points
+        enhanced = re.sub(r'\n\n[-•]\s+', r'\n\n- ', enhanced)
+
+        # =================================================================
+        # BOLD - Emphasize key terms and phrases
+        # =================================================================
+
+        # Bold transition words ANYWHERE in text (not just after paragraph breaks)
+        # Match: sentence boundary or paragraph start, then transition word, then comma or space
+        bold_transitions = (
+            r'Additionally|Moreover|However|Furthermore|Nevertheless|'
+            r'Consequently|Therefore|Meanwhile|Alternatively|'
+            r'First|Second|Third|Finally|Lastly|Next|'
+            r'For example|For instance|In summary|In conclusion|In fact|As a result|'
+            r'Essentially|Specifically|Importantly|Interestingly|Notably'
+        )
+        # Bold these words when they appear after newlines or at start
+        enhanced = re.sub(
+            rf'(^|\n\n)({bold_transitions})(,?\s)',
+            r'\1**\2,** ',
+            enhanced
+        )
+
+        # Bold "Label:" patterns (e.g., "Key Point:" or "Note:")
+        enhanced = re.sub(
+            r'(^|\n\n)([A-Z][a-zA-Z\s]{2,20}):\s+',
+            r'\1**\2:** ',
+            enhanced
+        )
+
+        # Bold the FIRST key phrase at the start of each paragraph
+        # This creates visual anchors for skimming
+        # Match: after \n\n, capture 2-4 words before the first comma/colon or end of first clause
+        enhanced = re.sub(
+            r'(\n\n)([A-Z][a-z]+(?:\s+[a-z]+){0,3})([,:]|\s+(?:is|are|was|were|can|could|would|will|has|have|had|involves?|means?|refers?))',
+            r'\1**\2**\3',
+            enhanced
+        )
+
+        # Also bold opening phrase of the text if not already bold
+        if not enhanced.startswith('**'):
+            enhanced = re.sub(
+                r'^([A-Z][a-z]+(?:\s+[a-z]+){0,3})([,:]|\s+(?:is|are|was|were|can|could|would|will|has|have|had|involves?|means?|refers?))',
+                r'**\1**\2',
+                enhanced
+            )
+
+        # Bold quoted terms (e.g., "remote viewing" -> "**remote viewing**")
+        enhanced = re.sub(
+            r'"([^"]{3,30})"',
+            r'"**\1**"',
+            enhanced
+        )
+
+        # =================================================================
+        # CLEANUP
+        # =================================================================
+
+        # Clean up triple+ newlines to double
+        enhanced = re.sub(r'\n{3,}', '\n\n', enhanced)
+
+        # Remove leading newlines
+        enhanced = enhanced.lstrip('\n')
+
+        # Ensure no double-bold (from multiple passes)
+        enhanced = re.sub(r'\*\*\*\*', '**', enhanced)
+
+        # Fix any malformed bold (like **word** ** or ** **word**)
+        enhanced = re.sub(r'\*\*\s+\*\*', '** **', enhanced)
+
+        # Log final result (after all transformations)
+        has_double_newline = '\n\n' in enhanced
+        logger.info(f"📝 _enhance_text_for_display: in_len={len(text)}, out_len={len(enhanced)}, has_newlines={has_double_newline}")
+        if has_double_newline:
+            logger.debug(f"📝 _enhance output sample: {repr(enhanced[:150])}")
+
+        return enhanced
+
+    # ------------------------------------------------------------------
     # Speech output sanitization
     # ------------------------------------------------------------------
 
@@ -415,8 +644,9 @@ class SidekickAgent(voice.Agent):
             return text
 
         # Collapse Markdown emphasis markers while keeping the inner content
-        text = re.sub(r"\*\*(.+?)\*\*", r"\\1", text)
-        text = re.sub(r"\*(.+?)\*", r"\\1", text)
+        # Note: Use r"\1" (single backslash) for proper backreference, not r"\\1"
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+        text = re.sub(r"\*(.+?)\*", r"\1", text)
 
         # Convert bullet markers to a hyphen separator that reads naturally
         text = re.sub(r"(^|\n)\s*\*\s+", r"\1- ", text)
@@ -440,8 +670,38 @@ class SidekickAgent(voice.Agent):
         Intercept the TTS-aligned transcript stream to write incremental updates.
         This enables word-by-word streaming on the frontend.
         """
+        import traceback
+        call_id = str(uuid.uuid4())[:8]
+        caller_info = ''.join(traceback.format_stack()[-4:-1])  # Get caller info
+        logger.info("📝 transcription_node STARTED [%s] - streaming_row_id=%s, streaming_text_len=%d",
+                   call_id,
+                   self._streaming_transcript_row_id[:8] if self._streaming_transcript_row_id else None,
+                   len(self._streaming_transcript_text) if self._streaming_transcript_text else 0)
+        logger.debug("📝 transcription_node caller stack [%s]:\n%s", call_id, caller_info)
+
+        # ALWAYS clear previous streaming state when starting a new response
+        # This handles the case where a previous response was interrupted mid-stream
+        if self._streaming_transcript_row_id:
+            logger.info("📝 transcription_node: Clearing stale row_id=%s from previous (possibly interrupted) response [%s]",
+                       self._streaming_transcript_row_id[:8] if self._streaming_transcript_row_id else None, call_id)
+            self._streaming_transcript_row_id = None
+
+        # Clear any previous transcript text for the new response
+        if self._streaming_transcript_text:
+            logger.info("📝 transcription_node: Clearing previous transcript text (%d chars) for new response",
+                       len(self._streaming_transcript_text))
+            self._streaming_transcript_text = ""
+
+        # IMPORTANT: Reset the user turn_id when assistant starts a new response
+        # This ensures that any subsequent user interruption gets a NEW turn_id
+        # instead of being merged with the previous user utterance
+        if self._current_turn_id:
+            logger.info("📝 transcription_node: Resetting user turn_id (was %s) for new conversation turn",
+                       self._current_turn_id[:8] if self._current_turn_id else None)
+            self._current_turn_id = None
+
         accumulated_text = ""
-        
+
         async for chunk in text:
             # Extract text from chunk (TimedString or plain str)
             if isinstance(chunk, TimedString):
@@ -451,61 +711,97 @@ class SidekickAgent(voice.Agent):
             
             # Accumulate text
             accumulated_text += chunk_text
-            
-            # Write to database incrementally
+
+            # Apply formatting incrementally for better UX
+            # This formats the text as it streams rather than waiting for the end
+            formatted_text = self._enhance_text_for_display(accumulated_text)
+
+            # Write to database incrementally with formatted text
+            # DEBUG: Log the condition check
+            logger.debug(f"📝 DB write check: supabase={bool(self._supabase_client)}, conv_id={bool(self._conversation_id)}, agent_id={bool(self._agent_id)}")
             if self._supabase_client and self._conversation_id and self._agent_id:
                 try:
                     timestamp = datetime.utcnow().isoformat()
-                    
+
                     if not self._streaming_transcript_row_id:
                         # First chunk: INSERT a new row
+                        # Generate turn_id once and store it for deduplication
+                        if not self._current_turn_id:
+                            self._current_turn_id = str(uuid.uuid4())
+
+                        # DIAGNOSTIC: Log INSERT operation
+                        logger.info(f"📝 INSERT transcript: call_id={call_id}, turn_id={self._current_turn_id[:8]}, text='{formatted_text[:50]}...'")
+
                         row = {
                             "conversation_id": self._conversation_id,
                             "session_id": self._conversation_id,
                             "agent_id": self._agent_id,
                             "user_id": self._user_id,
                             "role": "assistant",
-                            "content": accumulated_text,
-                            "transcript": accumulated_text,
-                            "turn_id": self._current_turn_id or str(uuid.uuid4()),
+                            "content": formatted_text,
+                            "transcript": formatted_text,
+                            "turn_id": self._current_turn_id,
                             "created_at": timestamp,
                             "source": "voice",
                             "metadata": {}
                         }
-                        
+
                         # Add citations if available
                         if self._current_citations:
                             row["citations"] = self._current_citations
-                        
+
                         result = await asyncio.to_thread(
                             lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
                         )
-                        
+
                         if result.data and len(result.data) > 0:
                             self._streaming_transcript_row_id = result.data[0].get("id")
-                            logger.debug(f"📝 Created streaming transcript row: {self._streaming_transcript_row_id}")
+                            logger.info(f"📝 INSERT SUCCESS: row_id={self._streaming_transcript_row_id}, call_id={call_id}")
                     else:
-                        # Subsequent chunks: UPDATE the existing row
+                        # Subsequent chunks: UPDATE the existing row with formatted text
+                        # DEBUG: Check if newlines are present in the text we're writing
+                        has_newlines = '\n\n' in formatted_text
+                        logger.info(f"📝 UPDATE transcript: row_id={self._streaming_transcript_row_id}, has_newlines={has_newlines}, len={len(formatted_text)}")
+                        if has_newlines:
+                            # Log first occurrence of newline to verify
+                            nl_pos = formatted_text.find('\n\n')
+                            logger.info(f"📝 UPDATE newline context: ...{repr(formatted_text[max(0,nl_pos-20):nl_pos+20])}...")
+
                         await asyncio.to_thread(
                             lambda: self._supabase_client.table("conversation_transcripts")
                             .update({
-                                "content": accumulated_text,
-                                "transcript": accumulated_text
+                                "content": formatted_text,
+                                "transcript": formatted_text
                             })
                             .eq("id", self._streaming_transcript_row_id)
                             .execute()
                         )
-                        logger.debug(f"📝 Updated streaming transcript ({len(accumulated_text)} chars)")
-                    
+                        logger.debug(f"📝 Updated streaming transcript ({len(formatted_text)} chars)")
+
                 except Exception as e:
                     logger.warning(f"Failed to write streaming transcript: {e}")
-            
+            else:
+                # Log why we're not writing to database
+                logger.warning(f"📝 DB write SKIPPED: supabase={bool(self._supabase_client)}, conv_id={self._conversation_id}, agent_id={self._agent_id}")
+
             # Yield the chunk back to continue the pipeline
             yield chunk
-        
-        # Clear streaming state at end of turn
+
+        # At end of stream, ensure final content is formatted
+        # (formatting is already applied incrementally, this is a safety net)
+        final_content = self._enhance_text_for_display(accumulated_text)
+        logger.info(f"📝 transcription_node FINISHED, accumulated: {len(accumulated_text)} chars, enhanced: {len(final_content)} chars")
+
+        # Store final streamed text for deduplication, then clear streaming row ID
+        # Keep _streaming_transcript_text for deduplication check, clear row_id
+        self._streaming_transcript_text = final_content
         self._streaming_transcript_row_id = None
-        self._streaming_transcript_text = ""
+        # Also set _last_assistant_commit for content-based deduplication in store_transcript
+        try:
+            self._last_assistant_commit = final_content
+        except Exception:
+            pass
+        logger.info(f"📝 transcription_node FINISHED, accumulated: {len(accumulated_text)} chars, enhanced: {len(final_content)} chars")
 
     @staticmethod
     def _normalize_spelled_words(text: str) -> str:
@@ -722,7 +1018,7 @@ class SidekickAgent(voice.Agent):
                 return (
                     self._supabase_client
                     .table("conversation_transcripts")
-                    .select("id")
+                    .select("id, content")
                     .eq("turn_id", turn_id)
                     .eq("role", role)
                     .limit(1)
@@ -732,6 +1028,30 @@ class SidekickAgent(voice.Agent):
             existing = await asyncio.to_thread(_select_existing)
 
             if existing and getattr(existing, "data", None):
+                existing_row = existing.data[0]
+                existing_content = existing_row.get("content", "") or ""
+
+                # For user transcripts, MERGE content instead of replacing
+                # This handles STT sending multiple final chunks for the same utterance
+                if role == "user" and existing_content and content:
+                    # Merge logic: if new content doesn't already contain existing, append
+                    content_stripped = content.strip()
+                    existing_stripped = existing_content.strip()
+
+                    if content_stripped in existing_stripped:
+                        # New content is already part of existing - keep existing
+                        merged_content = existing_content
+                    elif existing_stripped in content_stripped:
+                        # Existing is subset of new - use new (STT sent full transcript)
+                        merged_content = content
+                    else:
+                        # Disjoint chunks - append new to existing
+                        merged_content = f"{existing_stripped} {content_stripped}".strip()
+
+                    logger.info(f"📝 Merging user transcript: existing={len(existing_content)} chars + new={len(content)} chars → merged={len(merged_content)} chars")
+                    row["content"] = merged_content
+                    row["transcript"] = merged_content
+
                 update_payload = {k: v for k, v in row.items() if k != "created_at"}
 
                 def _update():
@@ -768,10 +1088,26 @@ class SidekickAgent(voice.Agent):
     async def store_transcript(self, role: str, content: str) -> None:
         """Public wrapper used by session event handlers."""
         try:
+            logger.info(f"📝 store_transcript called: role={role}, content_len={len(content)}")
             # Skip assistant transcript if we already wrote it via transcription_node streaming
-            if role == "assistant" and self._streaming_transcript_row_id:
-                logger.debug("Skipping duplicate assistant transcript (already streamed)")
-                return
+            if role == "assistant":
+                # Check if currently streaming
+                if self._streaming_transcript_row_id:
+                    logger.info("📝 store_transcript: SKIPPING - currently streaming")
+                    return
+                # Check if we just finished streaming (with raw LLM text already in DB)
+                # The transcription_node already wrote the final transcript with markdown-preserved text
+                if self._streaming_transcript_text:
+                    # Always skip for assistant if we have streaming text set
+                    # The transcription_node already updated DB with raw LLM text
+                    logger.info(f"📝 store_transcript: SKIPPING - transcription_node already wrote final content ({len(self._streaming_transcript_text)} chars)")
+                    self._streaming_transcript_text = ""  # Clear after check
+                    return
+                # Content-based deduplication: skip if content matches last commit
+                last_commit = getattr(self, "_last_assistant_commit", "")
+                if last_commit and content and last_commit.strip() == content.strip():
+                    logger.info(f"📝 store_transcript: SKIPPING - content matches last_assistant_commit ({len(content)} chars)")
+                    return
             
             citations = self._current_citations if (role == "assistant" and self._citations_enabled) else None
             tool_results = None

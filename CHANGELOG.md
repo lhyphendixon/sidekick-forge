@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2025-12-09
+
+### Added
+- Embed text chat delta streaming plus markdown/citation rendering in the dark embed UI.
+- Multi-tenant trigger propagation of embedding/rerank/tool settings for LiveKit dispatch.
+
+### Changed
+- Voice agent proactive greeting is locked per room and delayed to prevent double greetings.
+- Enhanced formatting pipeline for transcripts (markdown-aware bubbles and paragraph breaks).
+- Agent/health version surfaces now report 2.2.1.
+
+### Fixed
+- Echo suppression now drops/strips the agent's own speech from STT before committing turns.
+- RAG citations fetch more documents by truncating oversized chunks and expanding context budgets.
+- Admin media assets load lazily to eliminate infinite loading on Sidekick configuration pages.
+
 ## [2.1.6] - 2024-10-05
 
 ### Fixed

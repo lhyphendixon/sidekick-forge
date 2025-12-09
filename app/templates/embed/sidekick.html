@@ -40,6 +40,17 @@
       background: #000000 !important;
       background-color: #000000 !important;
     }
+    /* Override prose paragraph spacing for better readability in voice transcripts */
+    .prose p {
+      margin-top: 1em;
+      margin-bottom: 1em;
+    }
+    .prose p:first-child {
+      margin-top: 0;
+    }
+    .prose p:last-child {
+      margin-bottom: 0;
+    }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.47.10/dist/umd/supabase.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -850,14 +861,34 @@ function clearVoiceTranscriptError(){
 
     let __roomConn = null;
     let __seenTranscriptIds = new Set();
-    function updateVoiceTranscript(id, text) {
+    function updateVoiceTranscript(id, text, role) {
       try {
         if (!id) return;
         const existing = document.querySelector(`[data-transcript-id="${id}"]`);
         if (existing) {
           const bubble = existing.querySelector('[data-transcript-text]');
           if (bubble) {
-            bubble.textContent = text || '';
+            const isUser = role === 'user';
+            const newText = text || '';
+
+            // For user messages: only update if new text is longer
+            // This prevents out-of-order STT updates from overwriting the full message
+            if (isUser) {
+              const currentText = bubble.textContent || '';
+              if (newText.length >= currentText.length) {
+                bubble.textContent = newText;
+              }
+              // else: skip update - probably an out-of-order interim result
+            } else {
+              // For assistant messages: always update with markdown rendering
+              // Debug: log what we're receiving
+              console.log('[voice] UPDATE raw text has newlines:', newText.includes('\n'), 'double:', newText.includes('\n\n'));
+              const rawText = newText.replace(/\\n/g, '\n');
+              console.log('[voice] UPDATE after replace has newlines:', rawText.includes('\n'), 'double:', rawText.includes('\n\n'));
+              bubble.innerHTML = (window.marked && window.DOMPurify)
+                ? DOMPurify.sanitize(marked.parse(rawText))
+                : rawText;
+            }
             // Auto-scroll to bottom
             const container = document.getElementById('voiceTranscriptList');
             if (container) {
@@ -872,7 +903,11 @@ function clearVoiceTranscriptError(){
 
     function appendVoiceTranscript(role, text, createdAt, citations, id){
       try {
-        if (id && markTranscriptSeen(id)) { return; }
+        if (id && markTranscriptSeen(id)) {
+          try { console.log('[voice] appendVoiceTranscript SKIPPED (already seen):', id?.slice(0,8), role); } catch {}
+          return;
+        }
+        try { console.log('[voice] appendVoiceTranscript ADDING:', id?.slice(0,8), role, text?.slice(0,30)); } catch {}
         const container = document.getElementById('voiceTranscriptList');
         if (!container) return;
         const wrap = document.createElement('div');
@@ -883,8 +918,20 @@ function clearVoiceTranscriptError(){
         bubble.setAttribute('data-transcript-text', 'true'); // Add attribute for finding text element
         bubble.className = (isUser
           ? 'max-w-[80%] px-4 py-2 rounded-lg bg-brand-teal text-white'
-          : 'max-w-[80%] px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap');
-        bubble.textContent = text || '';
+          : 'max-w-[80%] px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border prose prose-invert prose-sm max-w-none');
+        // Render markdown for assistant messages, plain text for user
+        if (isUser) {
+          bubble.textContent = text || '';
+        } else {
+          // Use marked + DOMPurify for markdown rendering (same as text mode)
+          // Debug: log what we're receiving
+          console.log('[voice] INSERT raw text has newlines:', (text || '').includes('\n'), 'double:', (text || '').includes('\n\n'));
+          const rawText = (text || '').replace(/\\n/g, '\n');
+          console.log('[voice] INSERT after replace has newlines:', rawText.includes('\n'), 'double:', rawText.includes('\n\n'));
+          bubble.innerHTML = (window.marked && window.DOMPurify)
+            ? DOMPurify.sanitize(marked.parse(rawText))
+            : rawText;
+        }
         wrap.appendChild(bubble);
         container.appendChild(wrap);
         if (citations && Array.isArray(citations) && citations.length > 0) {
@@ -902,19 +949,28 @@ function clearVoiceTranscriptError(){
       } catch {}
     }
 
+    let _transcriptStreamStarting = false; // Guard against concurrent calls
     async function startVoiceTranscriptStream(conversationId, clientId, agentId){
       try {
+        // Skip if already starting for same conversation (prevents race condition duplicates)
+        if (_transcriptStreamStarting && transcriptConversationId === conversationId) {
+          try { console.log('[voice] startVoiceTranscriptStream SKIPPED (already starting):', conversationId?.slice(0,8)); } catch {}
+          return;
+        }
         if (!conversationId || !clientId) {
           try { console.warn('[voice] missing conversation/client id for transcript stream'); } catch {}
           showVoiceTranscriptError('Conversation metadata missing; transcripts cannot be loaded.');
           return;
         }
+        try { console.log('[voice] startVoiceTranscriptStream BEGIN:', conversationId?.slice(0,8)); } catch {}
+        _transcriptStreamStarting = true;
         const supabaseClient = getTranscriptSupabase();
-        if (!supabaseClient) { return; }
+        if (!supabaseClient) { _transcriptStreamStarting = false; return; }
         const authorized = await ensureTranscriptSupabaseAuth();
         if (!authorized) {
           try { console.warn('[voice] transcript Supabase auth unavailable'); } catch {}
           pendingTranscriptStart = { conversationId, clientId, agentId };
+          _transcriptStreamStarting = false;
           return;
         }
         pendingTranscriptStart = null;
@@ -938,6 +994,7 @@ function clearVoiceTranscriptError(){
               if (!row) { return; }
               const txt = row.content || row.transcript || '';
               if (!txt) { return; }
+              try { console.log('[voice] INSERT event for', row.id?.slice(0,8), row.role, 'seen:', __seenTranscriptIds?.has(row.id)); } catch {}
               appendVoiceTranscript(row.role, txt, row.created_at, row.citations, row.id);
             }
           )
@@ -954,7 +1011,7 @@ function clearVoiceTranscriptError(){
               if (!row) { return; }
               const txt = row.content || row.transcript || '';
               if (!txt) { return; }
-              updateVoiceTranscript(row.id, txt);
+              updateVoiceTranscript(row.id, txt, row.role);
             }
           )
           .subscribe((status) => {
@@ -971,9 +1028,12 @@ function clearVoiceTranscriptError(){
           });
         await loadVoiceTranscriptHistory(conversationId);
         clearVoiceTranscriptError();
+        try { console.log('[voice] startVoiceTranscriptStream COMPLETE:', conversationId?.slice(0,8)); } catch {}
       } catch (err) {
         try { console.warn('[voice] failed to start transcript stream', err); } catch {}
         showVoiceTranscriptError('Unable to start transcript stream. Please refresh and try again.');
+      } finally {
+        _transcriptStreamStarting = false;
       }
     }
 
@@ -983,6 +1043,7 @@ function clearVoiceTranscriptError(){
       const authorized = await ensureTranscriptSupabaseAuth();
       if (!authorized) { return; }
       try {
+        try { console.log('[voice] loadVoiceTranscriptHistory START for', conversationId?.slice(0,8)); } catch {}
         const { data, error } = await supabaseClient
           .from('conversation_transcripts')
           .select('*')
@@ -994,9 +1055,11 @@ function clearVoiceTranscriptError(){
           showVoiceTranscriptError('Unable to load transcript history. Please refresh to try again.');
           return;
         }
+        try { console.log('[voice] loadVoiceTranscriptHistory got', data?.length || 0, 'rows'); } catch {}
         (data || []).forEach((t) => {
           const txt = t.content || t.transcript || '';
           if (txt) {
+            try { console.log('[voice] history row:', t.id?.slice(0,8), t.role, txt?.slice(0,30)); } catch {}
             appendVoiceTranscript(t.role, txt, t.created_at, t.citations, t.id);
           }
         });
@@ -1423,8 +1486,15 @@ function clearVoiceTranscriptError(){
       }
 
       try {
-        await roomConn.localParticipant.setMicrophoneEnabled(true, undefined, { preConnectBuffer: true });
-        try { console.log('[voice] Microphone enabled via setMicrophoneEnabled'); } catch {}
+        // Enable microphone with echo cancellation and noise suppression to prevent
+        // agent's TTS output from being picked up and transcribed as user speech
+        const audioCaptureOptions = {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        };
+        await roomConn.localParticipant.setMicrophoneEnabled(true, audioCaptureOptions, { preConnectBuffer: true });
+        try { console.log('[voice] Microphone enabled with echo cancellation via setMicrophoneEnabled'); } catch {}
         if (status) {
           status.textContent = 'Microphone enabled. You can speak now.';
         }

@@ -224,6 +224,27 @@ async def handle_voice_trigger(
         "api_keys": {k: v for k, v in api_keys.items() if v}  # Include all available API keys
     }
 
+    # Attach embedding settings (client-level) - required for RAG context
+    try:
+        embedding_cfg = {}
+        if hasattr(platform_client.settings, "embedding") and platform_client.settings.embedding:
+            embedding_cfg = platform_client.settings.embedding.dict()
+        elif isinstance(getattr(platform_client, "additional_settings", None), dict):
+            embedding_cfg = platform_client.additional_settings.get("embedding", {}) or {}
+        # Fallback: if embedding config is still empty, derive a safe default so the context manager can initialize
+        if not embedding_cfg:
+            embedding_cfg = {
+                "provider": "siliconflow",
+                "document_model": "Qwen/Qwen3-Embedding-0.6B",
+                "conversation_model": "Qwen/Qwen3-Embedding-0.6B",
+                "dimension": 1024,
+            }
+            logger.info("Voice trigger: using default embedding config (siliconflow)")
+        agent_context["embedding"] = embedding_cfg
+        logger.info(f"Voice trigger: attached embedding config - provider={embedding_cfg.get('provider')}")
+    except Exception as embedding_err:
+        logger.warning("Voice trigger: failed to attach embedding settings: %s", embedding_err)
+
     # Attach rerank settings (client-level)
     try:
         rerank_cfg = {}
@@ -547,13 +568,20 @@ async def ensure_livekit_room_exists(
         )
         
         # Explicit agent dispatch (prevents dual dispatch issue)
+        dispatch_agent_name = agent_name or settings.livekit_agent_name
+        logger.info(f"🤖 Dispatching agent '{dispatch_agent_name}' to room {room_name}")
         dispatch_request = api.CreateAgentDispatchRequest(
             room=room_name,
             metadata=json.dumps(room_metadata),
-            agent_name=agent_name or settings.livekit_agent_name
+            agent_name=dispatch_agent_name
         )
-        dispatch_response = await livekit_manager.livekit_api.agent_dispatch.create_dispatch(dispatch_request)
-        
+        try:
+            dispatch_response = await livekit_manager.livekit_api.agent_dispatch.create_dispatch(dispatch_request)
+            logger.info(f"✅ Agent dispatch successful for room {room_name}: {dispatch_response}")
+        except Exception as dispatch_err:
+            logger.error(f"❌ Agent dispatch FAILED for room {room_name}: {dispatch_err}", exc_info=True)
+            raise
+
         logger.info(f"✅ Created room {room_name} successfully")
         
         return {
