@@ -684,11 +684,21 @@ class AgentContextManager:
         Returns:
             Enhanced system prompt
         """
+        # Response formatting guidelines that apply to all prompts
+        formatting_guidelines = """
+## Response Formatting Guidelines
+
+When speaking, structure your responses for clarity:
+- Use paragraph breaks between distinct ideas or topics
+- Bold key terms, important concepts, and names using **double asterisks**
+- Use transition phrases to guide the listener through your explanation
+- Keep individual sentences clear and conversational"""
+
         if not context_markdown or context_markdown.strip() == "# Agent Context":
-            # No meaningful context to add
-            return original_prompt
+            # No meaningful context to add, but still include formatting guidelines
+            return f"{original_prompt}\n\n---\n{formatting_guidelines}"
         
-        # Build the enhanced prompt
+        # Build the enhanced prompt with formatting guidance
         enhanced_prompt = f"""{original_prompt}
 
 ---
@@ -696,9 +706,10 @@ class AgentContextManager:
 {context_markdown}
 
 ---
+{formatting_guidelines}
 
 Remember to use this context appropriately in your responses while maintaining your core personality and instructions."""
-        
+
         return enhanced_prompt
     
     async def close(self):

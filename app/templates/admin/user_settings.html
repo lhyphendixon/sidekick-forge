@@ -1,0 +1,137 @@
+{% extends "admin/base.html" %}
+
+{% block title %}User Settings{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-6">
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold text-dark-text">User Settings</h1>
+        <p class="text-dark-text-secondary mt-2">Update your profile, security, and channel preferences.</p>
+    </div>
+
+    <form action="/admin/user-settings" method="POST">
+        <!-- Profile -->
+        <div class="bg-dark-surface border border-dark-border rounded-lg mb-6">
+            <div class="px-6 py-4 border-b border-dark-border flex items-center justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-dark-text">Profile</h2>
+                    <p class="text-sm text-dark-text-secondary">Basic info used across the platform.</p>
+                </div>
+                <button class="btn-primary px-4 py-2 rounded-md text-sm" type="submit">Save</button>
+            </div>
+            <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-dark-text-secondary mb-1">Full Name</label>
+                    <input name="full_name" type="text" value="{{ profile.get('full_name') or user.full_name or '' }}" class="w-full px-3 py-2 rounded bg-dark-elevated border border-dark-border text-dark-text">
+                </div>
+                <div>
+                    <label class="block text-sm text-dark-text-secondary mb-1">Email</label>
+                    <input name="email" type="email" value="{{ profile.get('email') or user.email or '' }}" class="w-full px-3 py-2 rounded bg-dark-elevated border border-dark-border text-dark-text">
+                </div>
+                <div>
+                    <label class="block text-sm text-dark-text-secondary mb-1">Company</label>
+                    <input name="company" type="text" value="{{ profile.get('company') or '' }}" class="w-full px-3 py-2 rounded bg-dark-elevated border border-dark-border text-dark-text">
+                </div>
+                <div>
+                    <label class="block text-sm text-dark-text-secondary mb-1">Phone</label>
+                    <input name="phone" type="text" value="{{ profile.get('phone') or '' }}" class="w-full px-3 py-2 rounded bg-dark-elevated border border-dark-border text-dark-text">
+                </div>
+                <div>
+                    <label class="block text-sm text-dark-text-secondary mb-1">Telegram Username</label>
+                    <div class="flex">
+                        <span class="inline-flex items-center px-3 bg-dark-elevated border border-dark-border border-r-0 rounded-l text-dark-text-secondary">@</span>
+                        <input name="telegram_username" type="text" placeholder="yourhandle" value="{{ profile.get('telegram_username') or '' }}" class="w-full px-3 py-2 rounded-r bg-dark-elevated border border-dark-border text-dark-text">
+                    </div>
+                    <p class="text-xs text-dark-text-secondary mt-1">We will use this to show your handle; ownership is verified via Telegram deep link.</p>
+                </div>
+            </div>
+            {% if success %}
+            <div class="px-6 pb-4 text-sm text-green-400">{{ success }}</div>
+            {% endif %}
+            {% if error %}
+            <div class="px-6 pb-4 text-sm text-red-400">{{ error }}</div>
+            {% endif %}
+        </div>
+
+    <!-- Channels -->
+    <div class="bg-dark-surface border border-dark-border rounded-lg mb-6">
+        <div class="px-6 py-4 border-b border-dark-border flex items-center justify-between">
+            <div>
+                <h2 class="text-lg font-semibold text-dark-text">Channels</h2>
+                <p class="text-sm text-dark-text-secondary">Link your Telegram for bot interactions.</p>
+            </div>
+            <button class="btn-primary px-4 py-2 rounded-md text-sm"
+                    type="submit"
+                    formaction="/admin/user-settings/telegram/start"
+                    formmethod="post">
+                Verify Telegram
+            </button>
+        </div>
+        <div class="p-6 space-y-3">
+                <div class="flex items-center justify-between bg-dark-elevated border border-dark-border rounded-lg p-4">
+                    <div class="flex items-center space-x-3">
+                        <div class="h-10 w-10 rounded-full bg-sky-500/20 border border-sky-400/40 flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" class="h-6 w-6 text-sky-400 fill-current">
+                                <path d="M120 0C53.8 0 0 53.8 0 120s53.8 120 120 120 120-53.8 120-120S186.2 0 120 0zm58.3 83.7l-19.6 92.4c-1.5 6.7-5.7 8.3-11.5 5.2l-31.8-23.5-15.3 14.8c-1.7 1.7-3.1 3.1-6.3 3.1l2.3-32.6 59.4-53.6c2.6-2.3-0.6-3.6-4-1.3l-73.5 46.2-31.7-9.9c-6.9-2.2-7.1-6.9 1.5-10.2l124.1-47.8c5.7-2.1 10.7 1.3 8.9 10.1z"/>
+                            </svg>
+                    </div>
+                    <div>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-sm font-semibold text-dark-text">Telegram</span>
+                            <span class="text-[10px] px-2 py-0.5 rounded-full {% if pending_code %}bg-brand-teal/20 text-brand-teal{% else %}bg-dark-elevated text-dark-text-secondary{% endif %}">
+                                {% if pending_code %}Awaiting confirmation{% else %}Not linked{% endif %}
+                            </span>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary">
+                            {% if pending_code %}
+                                Open Telegram and tap the deep link below to verify.
+                            {% else %}
+                                Generate a code to link without typing commands.
+                            {% endif %}
+                        </p>
+                    </div>
+                </div>
+                {% if pending_code %}
+                <div class="flex flex-col items-end space-y-2">
+                    <code class="text-sm text-brand-teal bg-dark-surface border border-brand-teal/40 rounded px-3 py-1">/start {{ pending_code }}</code>
+                    <a href="https://t.me/{{ telegram_bot_username or '' }}?start={{ pending_code }}" target="_blank"
+                       class="btn-primary px-4 py-2 rounded-md text-sm">Open in Telegram</a>
+                </div>
+                {% else %}
+                <div class="flex items-center space-x-2 text-dark-text-secondary text-xs">
+                    <span>No pending code</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Security -->
+    <div class="bg-dark-surface border border-dark-border rounded-lg">
+        <div class="px-6 py-4 border-b border-dark-border flex items-center justify-between">
+            <div>
+                <h2 class="text-lg font-semibold text-dark-text">Security</h2>
+                <p class="text-sm text-dark-text-secondary">Change your password and manage sessions.</p>
+            </div>
+            <button class="btn-primary px-4 py-2 rounded-md text-sm opacity-70 cursor-not-allowed">Update</button>
+        </div>
+        <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm text-dark-text-secondary mb-1">Current Password</label>
+                <input type="password" class="w-full px-3 py-2 rounded bg-dark-elevated border border-dark-border text-dark-text" disabled>
+            </div>
+            <div>
+                <label class="block text-sm text-dark-text-secondary mb-1">New Password</label>
+                <input type="password" class="w-full px-3 py-2 rounded bg-dark-elevated border border-dark-border text-dark-text" disabled>
+            </div>
+            <div>
+                <label class="block text-sm text-dark-text-secondary mb-1">Confirm New Password</label>
+                <input type="password" class="w-full px-3 py-2 rounded bg-dark-elevated border border-dark-border text-dark-text" disabled>
+            </div>
+        </div>
+        <div class="px-6 pb-6">
+            <p class="text-xs text-dark-text-secondary">Password resets and session management will be enabled in a future update.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -162,7 +162,7 @@ class RAGCitationsService:
                 "candidates_evaluated": len(result.data),
                 "returned": 0,
                 "top_doc_ids": [],
-                "pre_titles": [r.get("title") for r in result.data[:10]],
+                "pre_titles": [r.get("title") for r in result.data[:10] if r and isinstance(r, dict)],
             }
             if rerank_enabled and rerank_provider and rerank_model:
                 try:
@@ -181,12 +181,16 @@ class RAGCitationsService:
                     logger.info(f"Model rerank returned {len(reranked)} items")
                 except Exception as rerank_err:
                     logger.warning(f"Model rerank failed ({type(rerank_err).__name__}): {rerank_err}. Falling back to similarity sort.")
-                    reranked = sorted(result.data, key=lambda x: x.get("similarity", 0.0), reverse=True)[:candidates_limit]
+                    # Filter out None items before sorting
+                    valid_data = [x for x in result.data if x and isinstance(x, dict)]
+                    reranked = sorted(valid_data, key=lambda x: x.get("similarity", 0.0), reverse=True)[:candidates_limit]
             else:
-                reranked = sorted(result.data, key=lambda x: x.get("similarity", 0.0), reverse=True)[:candidates_limit]
+                # Filter out None items before sorting
+                valid_data = [x for x in result.data if x and isinstance(x, dict)]
+                reranked = sorted(valid_data, key=lambda x: x.get("similarity", 0.0), reverse=True)[:candidates_limit]
             rerank_debug["returned"] = len(reranked)
             if reranked:
-                rerank_debug["post_titles"] = [r.get("title") for r in reranked[:10]]
+                rerank_debug["post_titles"] = [r.get("title") for r in reranked[:10] if r and isinstance(r, dict)]
             else:
                 rerank_debug["post_titles"] = []
 
@@ -196,6 +200,9 @@ class RAGCitationsService:
             max_chunks_per_doc = 6
 
             for chunk in reranked[:max_chunks]:
+                # Skip None or invalid chunks
+                if not chunk or not isinstance(chunk, dict):
+                    continue
                 # Skip if we've hit document limit
                 doc_id = chunk.get("document_id")
                 if doc_id not in seen_docs:

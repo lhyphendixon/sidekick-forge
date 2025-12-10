@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Sidekick Forge Platform API",
     description="Multi-tenant AI Agent management platform with LiveKit integration",
-    version="2.0.0",
+    version="2.2.1",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -142,6 +142,7 @@ from app.api.v1 import (
 )
 from app.api import embed as embed_router
 from app.marketing import routes as marketing_routes
+from app.api import admin_preview_standalone
 
 # Mount multi-tenant routes
 app.include_router(trigger_multitenant.router, prefix="/api/v1", tags=["trigger"])
@@ -167,6 +168,8 @@ app.include_router(documents_proxy.router, prefix="/api/v1", tags=["documents"])
 app.include_router(text_chat_proxy.router, prefix="/api/v1", tags=["text-chat"])
 app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-base"])
 app.include_router(embed_router.router)
+# Expose admin preview helper endpoints (used by preview modal)
+app.include_router(admin_preview_standalone.router)
 
 # Marketing site routes (must be before WordPress to catch root path)
 app.include_router(marketing_routes.router)
@@ -215,7 +218,7 @@ app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
 async def root():
     return {
         "service": "Sidekick Forge Platform",
-        "version": "2.0.0",
+        "version": "2.2.1",
         "status": "operational",
         "timestamp": datetime.utcnow().isoformat()
     }

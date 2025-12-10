@@ -17,6 +17,11 @@ import unicodedata
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
+# Build version - updated automatically or manually when deploying
+# This helps verify which code version is actually running
+AGENT_BUILD_VERSION = "2025-12-09T20:15:25Z"
+AGENT_BUILD_HASH = "v1.5.9-fix-rerank-none"
+
 from livekit import agents, rtc
 from livekit import api as livekit_api
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
@@ -38,6 +43,20 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Track rooms that already received a proactive greeting to avoid duplicates
+_greeted_rooms = set()
+
+def _normalize_for_compare(text: str) -> str:
+    if not text:
+        return ""
+    try:
+        t = text.lower()
+        t = re.sub(r"[^\w\s]", " ", t)
+        t = " ".join(t.split())
+        return t
+    except Exception:
+        return text or ""
 
 # Initialize shared platform Supabase client for OAuth-backed tools (best-effort)
 PLATFORM_SUPABASE = None
@@ -1065,13 +1084,16 @@ async def agent_job_handler(ctx: JobContext):
                 )
 
                 try:
+                    # VAD parameters tuned to reduce false positives from ambient noise/music
+                    # min_speech_duration: 0.25s - requires sustained speech, filters brief sounds
+                    # min_silence_duration: 0.5s - standard pause detection
                     vad = silero.VAD.load(
-                        min_speech_duration=0.1,
-                        min_silence_duration=5.0,
+                        min_speech_duration=0.25,
+                        min_silence_duration=0.5,
                     )
                     logger.info("✅ VAD loaded successfully with optimized parameters")
                     logger.info(f"📊 DIAGNOSTIC: VAD type: {type(vad)}")
-                    logger.info("📊 DIAGNOSTIC: VAD params: min_speech=0.1s, min_silence=5.0s")
+                    logger.info("📊 DIAGNOSTIC: VAD params: min_speech=0.25s, min_silence=0.5s")
                 except Exception as e:
                     logger.error(f"❌ Failed to load VAD: {e}", exc_info=True)
                     raise
@@ -1186,6 +1208,23 @@ async def agent_job_handler(ctx: JobContext):
             
             # Keep the original enhanced prompt without hardcoded greeting
             # The proactive greeting will be handled via generate_reply() after session.start()
+
+            # Add voice-specific instructions for formatting and behavior
+            # This ensures the LLM outputs well-formatted responses and doesn't comment on message format
+            voice_instruction = (
+                "\n\n## Response Guidelines\n\n"
+                "**Voice Conversation:** This is a voice conversation. The user is speaking, not typing. "
+                "Never comment on how the user is 'typing' or the 'format' of their messages. "
+                "If a previous response was interrupted, continue naturally without mentioning it.\n\n"
+                "**Formatting:** Structure your responses for readability:\n"
+                "- Use **bold** for key terms, names, and important concepts\n"
+                "- Use headers (##) for major topics when giving longer explanations\n"
+                "- Use numbered lists (1. 2. 3.) for steps or sequences\n"
+                "- Use bullet points (-) for listing items or features\n"
+                "- Add clear paragraph breaks between distinct ideas\n"
+                "- Keep sentences concise and easy to follow when spoken aloud"
+            )
+            enhanced_prompt = enhanced_prompt + voice_instruction
             greeting_enhanced_prompt = enhanced_prompt
             
             # Extract the user profile from initial context if available
@@ -1440,15 +1479,15 @@ async def agent_job_handler(ctx: JobContext):
                 stt=stt_plugin,
                 llm=llm_plugin,
                 tts=tts_plugin,
-                turn_detection=EnglishModel(),           # ML-based turn detection instead of "stt"
+                turn_detection=EnglishModel(),           # ML-based turn detection
                 # TTS-aligned transcriptions for better frontend synchronization
                 use_tts_aligned_transcript=True,         # Enable word-level transcription timing (Cartesia/ElevenLabs)
                 # Endpointing parameters for turn detection model
-                min_endpointing_delay=0.5,               # Min wait (seconds) before considering turn complete
-                max_endpointing_delay=6.0,               # Max wait (seconds) if model thinks user will continue
+                min_endpointing_delay=2.0,               # INCREASED: Allow 2s pause before considering turn complete
+                max_endpointing_delay=10.0,              # INCREASED: Allow longer thoughtful pauses
                 # Interruption settings that prevent scheduler from getting stuck
                 allow_interruptions=True,
-                min_interruption_duration=0.3,           # 300ms to interrupt - still responsive but more deliberate
+                min_interruption_duration=0.5,           # Increased to avoid accidental interruptions
                 min_interruption_words=0,                # Duration-based, not word-based
                 resume_false_interruption=False,         # CRITICAL: Never try to resume - treat all interruptions as final
                 false_interruption_timeout=10.0,         # Very high timeout - essentially disable false interruption detection
@@ -1576,12 +1615,58 @@ async def agent_job_handler(ctx: JobContext):
                 # Otherwise append with a space separator
                 return f"{existing.rstrip()} {incoming}".strip()
 
+
+            def _strip_assistant_echo(txt_raw: str, txt_norm: str, recent_greet: str, last_assistant: str):
+                """
+                Remove assistant/greeting phrases that leaked into the mic.
+                Returns (clean_raw, clean_norm). If everything is stripped, returns ("", "").
+                """
+                clean_raw = txt_raw or ""
+                clean_norm = txt_norm or ""
+
+                echo_candidates = []
+                if recent_greet:
+                    echo_candidates.append(recent_greet)
+                if last_assistant:
+                    echo_candidates.append(last_assistant)
+                echo_candidates.append("how can i help you")  # common greeting phrase
+
+                for phrase in echo_candidates:
+                    if not phrase:
+                        continue
+                    p_norm = _normalize_for_compare(phrase)
+                    if not p_norm:
+                        continue
+                    if p_norm in clean_norm:
+                        clean_norm = clean_norm.replace(p_norm, "").strip()
+                        try:
+                            import re
+                            clean_raw = re.sub(re.escape(phrase), "", clean_raw, flags=re.IGNORECASE).strip()
+                        except Exception:
+                            pass
+
+                return clean_raw, clean_norm
+
             @session.on("user_input_transcribed")
             def on_user_input_transcribed(ev):
                 try:
                     txt = getattr(ev, 'transcript', '') or ''
                     is_final = bool(getattr(ev, 'is_final', False))
-                    logger.info(f"📝 STT transcript: '{txt[:200]}' final={is_final}")
+                    logger.info(f"📝 STT transcript (raw): '{txt[:200]}' final={is_final}")
+
+                    # Drop/strip transcripts that include the agent's recent greeting/response (echo)
+                    txt_norm = _normalize_for_compare(txt)
+                    recent_greet = getattr(session, "_recent_greeting_norm", "")
+                    last_assistant = _normalize_for_compare(getattr(agent, "_last_assistant_commit", ""))
+                    if txt_norm:
+                        stripped_raw, stripped_norm = _strip_assistant_echo(txt, txt_norm, recent_greet, last_assistant)
+                        if stripped_norm != txt_norm:
+                            logger.info("🔇 Stripped assistant echo from transcript (remaining='%s')", stripped_raw[:120])
+                        txt, txt_norm = stripped_raw, stripped_norm
+                    if not txt_norm:
+                        logger.info("🚫 Dropping transcript that matches recent assistant speech (echo suppression)")
+                        return
+
                     if txt:
                         prev_turn_text = getattr(session, "_current_turn_text", "")
                         if not prev_turn_text:
@@ -1604,6 +1689,64 @@ async def agent_job_handler(ctx: JobContext):
                             should_skip_duplicate = _should_skip_user_commit(agent, merged)
                             if not should_skip_duplicate:
                                 try:
+                                    current_speech = getattr(session, 'current_speech', None)
+                                    logger.info("🔊 Attempting interrupt: current_speech=%s, merged_text=%s",
+                                               current_speech is not None, merged[:50] if merged else "")
+
+                                    # WORKAROUND: The SDK's current_speech may be None even when audio is playing
+                                    # This happens because _current_speech is cleared after _wait_for_generation()
+                                    # but audio playout continues. We need to aggressively clear all audio buffers.
+                                    audio_buffer_cleared = False
+                                    try:
+                                        if session.output and session.output.audio:
+                                            # Traverse the entire audio output chain and clear all buffers
+                                            audio_output = session.output.audio
+                                            chain_depth = 0
+                                            while audio_output and chain_depth < 10:
+                                                chain_depth += 1
+                                                output_type = type(audio_output).__name__
+
+                                                # Clear buffer if available
+                                                if hasattr(audio_output, 'clear_buffer'):
+                                                    audio_output.clear_buffer()
+                                                    logger.info(f"🔇 Cleared buffer on {output_type}")
+                                                    audio_buffer_cleared = True
+
+                                                # Also clear the underlying rtc.AudioSource queue if accessible
+                                                if hasattr(audio_output, '_audio_source'):
+                                                    src = audio_output._audio_source
+                                                    if hasattr(src, 'clear_queue'):
+                                                        src.clear_queue()
+                                                        logger.info(f"🔇 Cleared rtc.AudioSource queue on {output_type}")
+
+                                                # Also clear any internal buffers
+                                                if hasattr(audio_output, '_audio_buf'):
+                                                    buf = audio_output._audio_buf
+                                                    # Drain the channel
+                                                    try:
+                                                        while True:
+                                                            buf.recv_nowait()
+                                                    except Exception:
+                                                        pass
+                                                    logger.info(f"🔇 Drained _audio_buf on {output_type}")
+
+                                                # Move to next in chain
+                                                audio_output = getattr(audio_output, '_next_in_chain', None)
+                                    except Exception as audio_clear_err:
+                                        logger.warning("⚠️ Audio buffer clear error: %s", audio_clear_err)
+
+                                    # WORKAROUND #2: Directly interrupt the speech handle if we stored one
+                                    # The SDK's _current_speech may be None, but we track our own handle
+                                    try:
+                                        active_handle = getattr(session, '_active_speech_handle', None)
+                                        if active_handle and not active_handle.done() and not active_handle.interrupted:
+                                            logger.info("🔇 Directly interrupting stored speech handle")
+                                            active_handle.interrupt(force=True)
+                                            # Clear our reference
+                                            session._active_speech_handle = None
+                                    except Exception as handle_err:
+                                        logger.debug("Could not interrupt stored handle: %s", handle_err)
+
                                     fut = session.interrupt(force=True)
                                     if fut:
                                         if asyncio.iscoroutine(fut) or isinstance(fut, asyncio.Future):
@@ -1612,11 +1755,17 @@ async def agent_job_handler(ctx: JobContext):
                                                     await task
                                                     logger.info("⛔ Assistant speech interrupted due to user transcript final chunk")
                                                 except Exception as interrupt_err:
-                                                    logger.debug("Interrupt future raised %s: %s", type(interrupt_err).__name__, interrupt_err)
+                                                    logger.warning("⚠️ Interrupt future raised %s: %s", type(interrupt_err).__name__, interrupt_err)
 
                                             asyncio.create_task(_await_interrupt(fut))
+                                        else:
+                                            logger.info("⛔ Assistant speech interrupted (sync) due to user transcript final chunk")
+                                    elif audio_buffer_cleared:
+                                        logger.info("⛔ Audio interrupted via buffer clear (no active speech handle)")
+                                    else:
+                                        logger.debug("🔊 Interrupt returned None (no speech to interrupt)")
                                 except Exception as interrupt_exc:
-                                    logger.debug("Interrupt call failed: %s: %s", type(interrupt_exc).__name__, interrupt_exc)
+                                    logger.warning("⚠️ Interrupt call failed: %s: %s", type(interrupt_exc).__name__, interrupt_exc)
                             else:
                                 logger.info("⏭️  Skipping interruption for duplicate final transcript (turn_id=%s)", getattr(agent, "_current_turn_id", None))
                             # Final chunk marks end of this user utterance; clear buffer immediately
@@ -1672,6 +1821,8 @@ async def agent_job_handler(ctx: JobContext):
                     logger.error(f"Failed to capture user speech: {e}")
 
             # Deterministic finalize: commit assistant transcript on agent_speech_committed
+            # NOTE: For voice mode, transcription_node handles all assistant transcript storage
+            # This handler is now a NO-OP for assistant transcripts to prevent duplicates
             @session.on("agent_speech_committed")
             def on_agent_speech(msg: llm.ChatMessage):
                 try:
@@ -1686,16 +1837,18 @@ async def agent_job_handler(ctx: JobContext):
                                     break
                     if not agent_text:
                         return
-                    # Deduplicate by last commit
-                    if getattr(agent, "_last_assistant_commit", "") == agent_text:
-                        return
+
+                    # ALWAYS skip assistant transcript storage here - transcription_node handles it
+                    # The transcription_node provides better streaming UX and is the authoritative source
+                    logger.debug(f"📝 agent_speech_committed received ({len(agent_text)} chars) - skipping storage (transcription_node handles it)")
+
+                    # Just track for deduplication in case store_transcript is called elsewhere
                     try:
                         agent._last_assistant_commit = agent_text
                     except Exception:
                         pass
-                    if hasattr(agent, 'store_transcript'):
-                        logger.info("📝 Committing assistant transcript on agent_speech_committed")
-                        asyncio.create_task(agent.store_transcript('assistant', agent_text))
+
+                    # Reset user transcript state for next turn
                     try:
                         session._user_transcript_committed = False
                         session._user_transcript_committed_text = ""
@@ -1703,7 +1856,7 @@ async def agent_job_handler(ctx: JobContext):
                     except Exception:
                         pass
                 except Exception as e:
-                    logger.error(f"Failed to commit assistant transcript: {e}")
+                    logger.error(f"Failed in agent_speech_committed handler: {e}")
 
             # Store session reference on agent for access in on_user_turn_completed
             agent._agent_session = session
@@ -1908,7 +2061,6 @@ async def agent_job_handler(ctx: JobContext):
 
             # Additional diagnostics: speaking and error events
             try:
-                # Keep minimal speaking diagnostics; no transcript writes here
                 @session.on("agent_started_speaking")
                 def _on_agent_started():
                     logger.info("🔈 agent_started_speaking")
@@ -1963,6 +2115,20 @@ async def agent_job_handler(ctx: JobContext):
                             getattr(ev, "user_initiated", None),
                             handle_id,
                         )
+                        # Store the speech handle so we can interrupt it even when SDK's _current_speech is None
+                        if sh:
+                            try:
+                                session._active_speech_handle = sh
+                                # Also add a done callback to clear it when speech finishes
+                                def _clear_handle(_):
+                                    try:
+                                        if getattr(session, '_active_speech_handle', None) is sh:
+                                            session._active_speech_handle = None
+                                    except Exception:
+                                        pass
+                                sh.add_done_callback(_clear_handle)
+                            except Exception:
+                                pass
                     except Exception:
                         logger.info("🔊 speech_created (unable to serialize event)")
 
@@ -1973,7 +2139,31 @@ async def agent_job_handler(ctx: JobContext):
                     if pending and not pending.done():
                         pending.cancel()
 
-                    # Attempt to barge-in by interrupting any active assistant speech
+                    # WORKAROUND: Directly interrupt our stored speech handle
+                    # The SDK's _current_speech may be None even when audio is playing
+                    try:
+                        active_handle = getattr(session, '_active_speech_handle', None)
+                        if active_handle and not active_handle.done() and not active_handle.interrupted:
+                            logger.info("🔇 Directly interrupting stored speech handle on user_started_speaking")
+                            active_handle.interrupt(force=True)
+                    except Exception as handle_err:
+                        logger.debug("Could not interrupt stored handle: %s", handle_err)
+
+                    # Also clear audio buffers immediately
+                    try:
+                        if session.output and session.output.audio:
+                            audio_output = session.output.audio
+                            while audio_output:
+                                if hasattr(audio_output, 'clear_buffer'):
+                                    audio_output.clear_buffer()
+                                if hasattr(audio_output, '_audio_source') and hasattr(audio_output._audio_source, 'clear_queue'):
+                                    audio_output._audio_source.clear_queue()
+                                audio_output = getattr(audio_output, '_next_in_chain', None)
+                            logger.info("🔇 Audio buffers cleared on user_started_speaking")
+                    except Exception as buf_err:
+                        logger.debug("Could not clear audio buffers: %s", buf_err)
+
+                    # Attempt to barge-in by interrupting any active assistant speech via SDK
                     try:
                         interrupt_future = session.interrupt(force=True)
 
@@ -2112,40 +2302,76 @@ async def agent_job_handler(ctx: JobContext):
             # Proactive greeting: trigger only when a user is present per LiveKit specs
             if (not is_text_mode) and os.getenv("ENABLE_PROACTIVE_GREETING", "false").lower() == "true":
                 greeting_message = f"Hi {user_name}, how can I help you?"
+                greeting_norm = _normalize_for_compare(greeting_message)
                 greeted_flag = {"done": False}
-                async def greet_now():
-                    if greeted_flag["done"]:
-                        return
-                    greeted_flag["done"] = True
-                    try:
-                        if 'session' in locals() and hasattr(session, "say") and callable(getattr(session, "say")):
-                            await asyncio.wait_for(session.say(greeting_message), timeout=6.0)
-                            logger.info("✅ Proactive greeting delivered via session.say()")
-                            # Conversation events will capture the greeting transcript; no manual store needed
-                        else:
-                            logger.info("⚠️ No greeting method available on session; skipping proactive greeting")
-                    except Exception as e:
-                        logger.warning(f"Proactive greeting failed or timed out: {type(e).__name__}: {e}")
+                greet_lock = asyncio.Lock()
+                room_name = getattr(ctx, "room", None)
+                room_id = getattr(room_name, "name", None) if room_name else None
+                if room_id and room_id in _greeted_rooms:
+                    logger.info(f"🚫 Proactive greeting skipped: already greeted room {room_id}")
+                else:
+                    async def greet_now():
+                        async with greet_lock:
+                            if greeted_flag["done"]:
+                                logger.info("🚫 Proactive greeting skipped: already greeted")
+                                return
+                            greeted_flag["done"] = True
+                        
+                        logger.info(f"👋 Initiating proactive greeting for {user_name}...")
+                        try:
+                            if 'session' in locals() and hasattr(session, "say") and callable(getattr(session, "say")):
+                                # IMPORTANT: Store greeting text BEFORE calling say()
+                                # This ensures echo stripping can filter it out if user speaks during greeting
+                                try:
+                                    session._recent_greeting_text = greeting_message
+                                    session._recent_greeting_norm = greeting_norm
+                                    logger.info(f"📝 Stored greeting for echo suppression: '{greeting_norm}'")
+                                except Exception:
+                                    pass
 
-                # If a participant is already in the room, greet immediately
-                try:
-                    participants = []
-                    if hasattr(ctx.room, 'remote_participants'):
-                        participants = list(ctx.room.remote_participants.values())
-                    elif hasattr(ctx.room, 'participants'):
-                        participants = [p for p in ctx.room.participants.values() if getattr(p, 'is_local', False) is False]
-                    if participants:
-                        asyncio.create_task(greet_now())
-                    else:
-                        # Otherwise, greet on first participant_connected
-                        @ctx.room.on("participant_connected")
-                        def _on_participant_connected(_participant):
-                            try:
-                                asyncio.create_task(greet_now())
-                            except Exception:
-                                pass
-                except Exception as e:
-                    logger.warning(f"Could not wire participant_connected for greeting: {type(e).__name__}: {e}")
+                                # Wait briefly for session/audio to be fully ready
+                                await asyncio.sleep(0.5)
+                                # Get the speech handle so we can interrupt it later
+                                greeting_speech_handle = session.say(greeting_message)
+                                # Store the handle for interrupt tracking
+                                try:
+                                    session._active_speech_handle = greeting_speech_handle
+                                except Exception:
+                                    pass
+                                await asyncio.wait_for(greeting_speech_handle, timeout=6.0)
+                                # Clear the stored handle after playout completes
+                                try:
+                                    session._active_speech_handle = None
+                                except Exception:
+                                    pass
+                                logger.info("✅ Proactive greeting delivered via session.say()")
+                                if room_id:
+                                    _greeted_rooms.add(room_id)
+                                # Conversation events will capture the greeting transcript; no manual store needed
+                            else:
+                                logger.info("⚠️ No greeting method available on session; skipping proactive greeting")
+                        except Exception as e:
+                            logger.warning(f"Proactive greeting failed or timed out: {type(e).__name__}: {e}")
+
+                    # If a participant is already in the room, greet immediately
+                    try:
+                        participants = []
+                        if hasattr(ctx.room, 'remote_participants'):
+                            participants = list(ctx.room.remote_participants.values())
+                        elif hasattr(ctx.room, 'participants'):
+                            participants = [p for p in ctx.room.participants.values() if getattr(p, 'is_local', False) is False]
+                        if participants:
+                            asyncio.create_task(greet_now())
+                        else:
+                            # Otherwise, greet on first participant_connected
+                            @ctx.room.on("participant_connected")
+                            def _on_participant_connected(_participant):
+                                try:
+                                    asyncio.create_task(greet_now())
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        logger.warning(f"Could not wire participant_connected for greeting: {type(e).__name__}: {e}")
             else:
                 logger.info("Proactive greeting disabled (ENABLE_PROACTIVE_GREETING=false)")
 
@@ -2295,6 +2521,7 @@ if __name__ == "__main__":
         agent_name = os.getenv("AGENT_NAME", "sidekick-agent")
         
         logger.info(f"Starting agent worker...")
+        logger.info(f"🏷️  BUILD VERSION: {AGENT_BUILD_VERSION} ({AGENT_BUILD_HASH})")
         logger.info(f"LiveKit URL: {url}")
         logger.info(f"Agent mode: EXPLICIT DISPATCH")
         logger.info(f"Agent name: {agent_name}")
