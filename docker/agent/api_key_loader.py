@@ -2,44 +2,86 @@
 """
 API Key Loader for Agent Worker
 Loads API keys from metadata, environment, or Supabase
+Supports platform-managed keys for Adventurer tier clients
 """
 import os
 import logging
 import json
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
+
 class APIKeyLoader:
     """Handles loading API keys from various sources"""
-    
+
+    # Default provider configuration for Adventurer tier (platform-managed)
+    PLATFORM_DEFAULT_CONFIG = {
+        "llm": {
+            "provider": "cerebras",
+            "model": "glm-4-9b-chat",  # GLM 4.6
+        },
+        "stt": {
+            "provider": "cartesia",
+        },
+        "tts": {
+            "provider": "cartesia",
+        },
+        "embedding": {
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen3-Embedding-4B",
+        },
+        "rerank": {
+            "enabled": True,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen3-Reranker-2B",
+        }
+    }
+
     @staticmethod
     def load_api_keys(metadata: Dict[str, Any]) -> Dict[str, str]:
         """
         Load API keys following the Dynamic API Key Loading Policy:
-        1. From Supabase (if client_id is available) - PRIMARY SOURCE
-        2. From metadata (if provided in job/room) - SECONDARY SOURCE
-        3. FAIL with clear error if required keys are missing
-        
+        1. Check if client uses platform keys (Adventurer tier)
+        2. If platform keys: load from platform_api_keys table
+        3. Otherwise: Start with metadata api_keys, merge with client's Supabase keys
+        4. FAIL with clear error if required keys are missing
+
         NO FALLBACK to environment variables except for Supabase connection itself
         """
-        api_keys = {}
+        # Start with metadata api_keys (includes livekit_url, livekit_api_key, livekit_api_secret)
+        api_keys = dict(metadata.get('api_keys', {}))
         client_id = metadata.get('client_id')
-        
-        # Try to load from Supabase FIRST (primary source)
+
         if client_id:
-            logger.info(f"Loading API keys from Supabase for client {client_id} (primary source)")
-            supabase_keys = APIKeyLoader._load_from_supabase(client_id)
-            if supabase_keys:
-                api_keys = supabase_keys
-                logger.info(f"Successfully loaded {len(api_keys)} API keys from Supabase")
+            # Check if client uses platform keys (Adventurer tier)
+            uses_platform, client_tier = APIKeyLoader._check_uses_platform_keys(client_id)
+
+            if uses_platform:
+                logger.info(f"Client {client_id} uses platform keys (tier: {client_tier})")
+                platform_keys = APIKeyLoader._load_platform_keys()
+                if platform_keys:
+                    api_keys.update(platform_keys)
+                    logger.info(f"Loaded {len(platform_keys)} platform API keys for Adventurer tier")
+                else:
+                    logger.warning("Failed to load platform API keys - falling back to client keys")
+                    # Fall back to client keys if platform keys not available
+                    supabase_keys = APIKeyLoader._load_from_supabase(client_id)
+                    if supabase_keys:
+                        api_keys.update(supabase_keys)
             else:
-                logger.warning(f"Failed to load API keys from Supabase for client {client_id}")
-        
-        # If no Supabase keys or no client_id, try metadata (secondary source)
-        if not api_keys and metadata.get('api_keys'):
-            logger.info("Loading API keys from metadata (secondary source)")
-            api_keys = metadata['api_keys']
+                # Not using platform keys - load client's own keys
+                logger.info(f"Loading API keys from Supabase for client {client_id} (tier: {client_tier})")
+                supabase_keys = APIKeyLoader._load_from_supabase(client_id)
+                if supabase_keys:
+                    api_keys.update(supabase_keys)
+                    logger.info(f"Merged {len(supabase_keys)} API keys from Supabase")
+                else:
+                    logger.warning(f"Failed to load API keys from Supabase for client {client_id}")
+
+        # Log if we only have metadata keys
+        if not client_id and api_keys:
+            logger.info("Using API keys from metadata only (no client_id)")
             
         # NO ENVIRONMENT VARIABLE FALLBACK - This violates the Dynamic API Key Loading Policy
         # Environment variables should only be used for initial bootstrap (Supabase connection)
@@ -50,7 +92,8 @@ class APIKeyLoader:
                 "This usually happens when:\n"
                 "1. Supabase authentication failed (check SUPABASE_SERVICE_ROLE_KEY)\n"
                 "2. The client has no API keys configured in their settings\n"
-                "3. The job metadata doesn't include API keys\n"
+                "3. Platform API keys are not configured (for Adventurer tier)\n"
+                "4. The job metadata doesn't include API keys\n"
                 f"Client ID: {client_id}"
             )
             # Return empty dict - the agent will fail fast with ConfigurationError
@@ -118,9 +161,10 @@ class APIKeyLoader:
                 'anthropic_api_key'
             ]
             
-            columns_str = ', '.join(api_key_columns)
+            # Also fetch additional_settings for keys stored there (like bithuman_api_secret)
+            columns_str = ', '.join(api_key_columns) + ', additional_settings'
             result = supabase.table('clients').select(columns_str).eq('id', client_id).single().execute()
-            
+
             if result.data:
                 # Convert database columns to api_keys dict
                 api_keys = {}
@@ -128,7 +172,17 @@ class APIKeyLoader:
                     value = result.data.get(key)
                     if value and value != '<needs-actual-key>':
                         api_keys[key] = value
-                
+
+                # Also extract API keys from additional_settings.api_keys (e.g., bithuman_api_secret)
+                additional_settings = result.data.get('additional_settings') or {}
+                if isinstance(additional_settings, dict):
+                    additional_api_keys = additional_settings.get('api_keys') or {}
+                    if isinstance(additional_api_keys, dict):
+                        for key, value in additional_api_keys.items():
+                            if value and value != '<needs-actual-key>':
+                                api_keys[key] = value
+                                logger.info(f"Loaded {key} from additional_settings.api_keys")
+
                 if api_keys:
                     logger.info(f"Successfully loaded {len(api_keys)} API keys from platform database for client {client_id}")
                     return api_keys
@@ -152,7 +206,103 @@ class APIKeyLoader:
             else:
                 logger.error(f"Failed to load API keys from Supabase: {e}")
             return {}
-    
+
+    @staticmethod
+    def _check_uses_platform_keys(client_id: str) -> Tuple[bool, str]:
+        """
+        Check if a client should use platform API keys.
+        Returns (uses_platform_keys, tier)
+        """
+        try:
+            from supabase import create_client, Client
+
+            supabase_url = os.getenv('SUPABASE_URL')
+            supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+
+            if not supabase_url or not supabase_key:
+                return (False, 'unknown')
+
+            supabase: Client = create_client(supabase_url, supabase_key)
+
+            # Get client's tier and uses_platform_keys flag
+            result = supabase.table('clients').select(
+                'tier, uses_platform_keys'
+            ).eq('id', client_id).single().execute()
+
+            if result.data:
+                tier = result.data.get('tier', 'champion')
+                uses_platform = result.data.get('uses_platform_keys')
+
+                # If explicitly set, use that value
+                if uses_platform is not None:
+                    return (uses_platform, tier)
+
+                # Otherwise, default based on tier
+                # Adventurer tier defaults to platform keys, others don't
+                if tier == 'adventurer':
+                    return (True, tier)
+                else:
+                    return (False, tier)
+
+            return (False, 'unknown')
+
+        except Exception as e:
+            logger.warning(f"Failed to check uses_platform_keys for client {client_id}: {e}")
+            return (False, 'unknown')
+
+    @staticmethod
+    def _load_platform_keys() -> Dict[str, str]:
+        """
+        Load platform API keys from the platform_api_keys table.
+        These are shared keys managed by Sidekick Forge for Adventurer tier clients.
+        """
+        try:
+            from supabase import create_client, Client
+
+            supabase_url = os.getenv('SUPABASE_URL')
+            supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+
+            if not supabase_url or not supabase_key:
+                logger.error("Supabase credentials not available - cannot load platform keys")
+                return {}
+
+            supabase: Client = create_client(supabase_url, supabase_key)
+
+            # Get all active platform API keys
+            result = supabase.table('platform_api_keys').select(
+                'key_name, key_value'
+            ).eq('is_active', True).execute()
+
+            if result.data:
+                api_keys = {}
+                for row in result.data:
+                    key_name = row.get('key_name')
+                    key_value = row.get('key_value')
+                    if key_name and key_value:
+                        api_keys[key_name] = key_value
+
+                if api_keys:
+                    logger.info(f"Successfully loaded {len(api_keys)} platform API keys")
+                    return api_keys
+                else:
+                    logger.warning("No active platform API keys found")
+                    return {}
+            else:
+                logger.warning("platform_api_keys table returned no data")
+                return {}
+
+        except Exception as e:
+            logger.error(f"Failed to load platform API keys: {e}")
+            return {}
+
+    @staticmethod
+    def get_platform_config() -> Dict[str, Any]:
+        """
+        Get the default provider configuration for Adventurer tier.
+        This defines which providers and models to use with platform keys.
+        """
+        return APIKeyLoader.PLATFORM_DEFAULT_CONFIG.copy()
+
     @staticmethod
     def validate_api_key(key: str, value: str) -> bool:
         """Validate that an API key looks real (not a test key)"""

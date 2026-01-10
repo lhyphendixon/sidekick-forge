@@ -5,7 +5,7 @@
 
 class CitationsComponent {
     constructor() {
-        this.maxDocumentsShown = 3; // Maximum unique documents to show
+        this.maxDocumentsShown = 1; // Show only 1 source by default (collapsed)
         this.maxChunksPerDoc = 3;   // Maximum chunks per document in tooltip
     }
 
@@ -59,9 +59,9 @@ class CitationsComponent {
 
         container.appendChild(citationsList);
 
-        // Add expand/collapse functionality if there are more citations
-        if (citations.length > this.maxDocumentsShown) {
-            this.addExpandButton(container, citations, messageId);
+        // Add expand/collapse functionality if there are more documents than shown
+        if (docGroups.length > this.maxDocumentsShown) {
+            this.addExpandButton(container, citations, docGroups.length, messageId);
         }
 
         return container;
@@ -232,26 +232,28 @@ class CitationsComponent {
      * Add expand/collapse button for hidden citations
      * @param {HTMLElement} container - Citations container
      * @param {Array} allCitations - All citations array
+     * @param {number} totalDocCount - Total number of unique documents
      * @param {string} messageId - Message ID
      */
-    addExpandButton(container, allCitations, messageId) {
+    addExpandButton(container, allCitations, totalDocCount, messageId) {
+        const hiddenCount = totalDocCount - this.maxDocumentsShown;
         const expandButton = document.createElement('button');
         expandButton.className = 'citations-expand-btn';
-        expandButton.textContent = `Show ${allCitations.length - this.maxDocumentsShown} more sources`;
-        
+        expandButton.textContent = `+${hiddenCount} more source${hiddenCount > 1 ? 's' : ''}`;
+
         expandButton.addEventListener('click', () => {
             // Toggle expanded state
             const isExpanded = container.classList.contains('citations-expanded');
-            
+
             if (isExpanded) {
                 // Collapse
-                this.collapsecitations(container, allCitations, messageId);
+                this.collapseCitations(container, allCitations, totalDocCount, messageId);
             } else {
                 // Expand
                 this.expandCitations(container, allCitations, messageId);
             }
         });
-        
+
         container.appendChild(expandButton);
     }
 
@@ -284,28 +286,30 @@ class CitationsComponent {
      * Collapse citations to show only top documents
      * @param {HTMLElement} container - Citations container
      * @param {Array} allCitations - All citations array
+     * @param {number} totalDocCount - Total number of unique documents
      * @param {string} messageId - Message ID
      */
-    collapseCitations(container, allCitations, messageId) {
+    collapseCitations(container, allCitations, totalDocCount, messageId) {
         const docGroups = this.groupCitationsByDocument(allCitations);
         const topDocuments = docGroups
             .sort((a, b) => b.bestSimilarity - a.bestSimilarity)
             .slice(0, this.maxDocumentsShown);
-            
+
         const citationsList = container.querySelector('.citations-list');
         const expandBtn = container.querySelector('.citations-expand-btn');
-        
+
         // Clear current list
         citationsList.innerHTML = '';
-        
+
         // Add top documents only
         topDocuments.forEach((docGroup, index) => {
             const citationItem = this.createCitationItem(docGroup, index + 1);
             citationsList.appendChild(citationItem);
         });
-        
+
         // Update button
-        expandBtn.textContent = `Show ${allCitations.length - this.maxDocumentsShown} more sources`;
+        const hiddenCount = totalDocCount - this.maxDocumentsShown;
+        expandBtn.textContent = `+${hiddenCount} more source${hiddenCount > 1 ? 's' : ''}`;
         container.classList.remove('citations-expanded');
     }
 

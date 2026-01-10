@@ -196,6 +196,74 @@
                     <p class="mt-1 text-xs text-gray-500">Controls creativity (0.0 - 2.0)</p>
                 </div>
 
+                <!-- Video Avatar Settings -->
+                <div class="md:col-span-2 border-t pt-6">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Video Avatar Settings</h3>
+                    <p class="text-sm text-gray-500 mb-4">Configure video chat avatar. Requires appropriate API key in client settings.</p>
+                </div>
+
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-medium text-gray-700">Avatar Provider</label>
+                    <select id="avatarProvider" onchange="toggleAvatarProviderSettings()"
+                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                        <option value="bithuman" {% if agent.voice_settings.avatar_provider == 'bithuman' or not agent.voice_settings.avatar_provider %}selected{% endif %}>Bithuman (custom image upload)</option>
+                        <option value="beyondpresence" {% if agent.voice_settings.avatar_provider == 'beyondpresence' %}selected{% endif %}>Beyond Presence (pre-built avatars)</option>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500">Choose your video avatar provider</p>
+                </div>
+
+                <!-- Bithuman-specific settings -->
+                <div id="bithumanSettings" class="contents">
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700">Bithuman Mode</label>
+                        <select id="bithumanMode" onchange="toggleBithumanMode()"
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            <option value="local" {% if agent.voice_settings.avatar_model_path %}selected{% endif %}>Local/Self-Hosted (IMX model file)</option>
+                            <option value="cloud" {% if not agent.voice_settings.avatar_model_path %}selected{% endif %}>Cloud (image URL)</option>
+                        </select>
+                        <p class="mt-1 text-xs text-gray-500">Local mode uses a downloaded .imx model (faster, runs on CPU). Cloud mode uses Bithuman's API.</p>
+                    </div>
+
+                    <!-- Local mode: IMX model path -->
+                    <div id="bithumanLocalSettings" class="md:col-span-2" {% if not agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
+                        <label class="block text-sm font-medium text-gray-700">IMX Model Path</label>
+                        <input type="text" id="avatarModelPath" value="{{ agent.voice_settings.avatar_model_path or '/app/models/farah_qubit.imx' }}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="/app/models/your_avatar.imx">
+                        <p class="mt-1 text-xs text-gray-500">Path to the .imx model file inside the agent container. Models are stored in /app/models/</p>
+                    </div>
+
+                    <!-- Cloud mode: Image URL -->
+                    <div id="bithumanCloudSettings" {% if agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
+                        <label class="block text-sm font-medium text-gray-700">Avatar Image URL</label>
+                        <input type="text" id="avatarImageUrl" value="{{ agent.voice_settings.avatar_image_url or '' }}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="https://example.com/avatar.jpg">
+                        <p class="mt-1 text-xs text-gray-500">URL to a portrait image for the video avatar (512x512 or larger recommended)</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Avatar Model Type</label>
+                        <select id="avatarModelType"
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            <option value="expression" {% if agent.voice_settings.avatar_model_type == 'expression' or not agent.voice_settings.avatar_model_type %}selected{% endif %}>Expression (dynamic emotions)</option>
+                            <option value="essence" {% if agent.voice_settings.avatar_model_type == 'essence' %}selected{% endif %}>Essence (consistent expression)</option>
+                        </select>
+                        <p class="mt-1 text-xs text-gray-500">Expression adapts emotions dynamically; Essence maintains a consistent look</p>
+                    </div>
+                </div>
+
+                <!-- Beyond Presence-specific settings -->
+                <div id="beyondPresenceSettings" class="contents" style="display: none;">
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700">Avatar ID</label>
+                        <input type="text" id="avatarId" value="{{ agent.voice_settings.avatar_id or '' }}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="b9be11b8-89fb-4227-8f86-4a881393cbdb">
+                        <p class="mt-1 text-xs text-gray-500">Beyond Presence avatar ID (leave empty for default avatar)</p>
+                    </div>
+                </div>
+
                 <!-- Features -->
                 <div class="md:col-span-2 border-t pt-6">
                     <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Features</h3>
@@ -325,6 +393,41 @@ function initCartesiaDefaults() {
     updateCartesiaEmotionControls();
 }
 
+function toggleAvatarProviderSettings() {
+    const avatarProvider = document.getElementById('avatarProvider').value;
+    const bithumanSettings = document.getElementById('bithumanSettings');
+    const beyondPresenceSettings = document.getElementById('beyondPresenceSettings');
+
+    if (avatarProvider === 'beyondpresence') {
+        bithumanSettings.style.display = 'none';
+        beyondPresenceSettings.style.display = 'contents';
+    } else {
+        bithumanSettings.style.display = 'contents';
+        beyondPresenceSettings.style.display = 'none';
+        toggleBithumanMode();  // Also initialize Bithuman mode display
+    }
+}
+
+function toggleBithumanMode() {
+    const mode = document.getElementById('bithumanMode').value;
+    const localSettings = document.getElementById('bithumanLocalSettings');
+    const cloudSettings = document.getElementById('bithumanCloudSettings');
+
+    if (mode === 'local') {
+        localSettings.style.display = 'block';
+        cloudSettings.style.display = 'none';
+    } else {
+        localSettings.style.display = 'none';
+        cloudSettings.style.display = 'block';
+    }
+}
+
+// Initialize avatar provider settings on page load
+document.addEventListener('DOMContentLoaded', function() {
+    toggleAvatarProviderSettings();
+    toggleBithumanMode();
+});
+
 async function saveAgent() {
     const form = document.getElementById('agentEditForm');
     if (!form.checkValidity()) {
@@ -336,11 +439,30 @@ async function saveAgent() {
     const selectedModel = document.getElementById('ttsModel') ? document.getElementById('ttsModel').value : '';
 
     // Merge with existing voice settings to avoid dropping required fields
+    const avatarProvider = document.getElementById('avatarProvider').value;
+    const bithumanMode = document.getElementById('bithumanMode')?.value || 'cloud';
+
+    // For Bithuman, set either model_path (local) OR image_url (cloud), not both
+    let avatarModelPath = null;
+    let avatarImageUrl = null;
+    if (avatarProvider === 'bithuman') {
+        if (bithumanMode === 'local') {
+            avatarModelPath = document.getElementById('avatarModelPath').value || null;
+        } else {
+            avatarImageUrl = document.getElementById('avatarImageUrl').value || null;
+        }
+    }
+
     const mergedVoiceSettings = Object.assign({}, existingVoiceSettings || {}, {
         provider: selectedProvider,
         tts_provider: selectedProvider,
         voice_id: document.getElementById('voiceId').value,
-        temperature: parseFloat(document.getElementById('temperature').value)
+        temperature: parseFloat(document.getElementById('temperature').value),
+        avatar_provider: avatarProvider,
+        avatar_model_path: avatarModelPath,
+        avatar_image_url: avatarImageUrl,
+        avatar_model_type: document.getElementById('avatarModelType').value || 'expression',
+        avatar_id: document.getElementById('avatarId').value || null
     });
     if (selectedProvider === 'cartesia') {
         mergedVoiceSettings.model = selectedModel || null;

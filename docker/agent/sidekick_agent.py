@@ -63,6 +63,7 @@ class SidekickAgent(voice.Agent):
         self._current_citations: List[Dict[str, Any]] = []
         self._current_message_id: Optional[str] = None
         self._current_rerank_info: Dict[str, Any] = {}
+        self._current_rag_context: str = ""  # RAG context text for LLM injection
         
         # Feature flag for citations (can be configured per agent)
         self._citations_enabled = self._agent_config.get('show_citations', True)
@@ -133,15 +134,18 @@ class SidekickAgent(voice.Agent):
                     if last_assistant:
                         assistant_norm = _normalize_text(last_assistant).lower().strip()
                         # Check if the user text is substantially similar to the last assistant response
-                        if assistant_norm and (user_norm in assistant_norm or assistant_norm in user_norm):
-                            logger.info(f"🚫 on_user_turn_completed: Blocking echo - user text matches last assistant: '{user_text_raw[:50]}'")
-                            raise StopResponse()
-                        # Also check common greeting phrases
-                        common_greetings = ['how can i help you', 'hi there', 'hello', 'how may i assist']
-                        for phrase in common_greetings:
-                            if phrase in user_norm and len(user_norm) < len(phrase) + 10:
-                                logger.info(f"🚫 on_user_turn_completed: Blocking echo - matches common greeting: '{user_text_raw[:50]}'")
+                        # Must be a substantial overlap, not just a single word match
+                        if assistant_norm and len(user_norm) > 5:
+                            if user_norm in assistant_norm or assistant_norm in user_norm:
+                                logger.info(f"🚫 on_user_turn_completed: Blocking echo - user text matches last assistant: '{user_text_raw[:50]}'")
                                 raise StopResponse()
+                        # Only block common greeting echoes if user text is EXACTLY the greeting phrase
+                        # (with minor variations). Don't block legitimate user greetings like "Hello?"
+                        # We only want to block if the STT picked up the TTS audio
+                        recent_greeting_text = getattr(recent_greeting, '_recent_greeting_norm', '') if recent_greeting else ''
+                        if recent_greeting_text and user_norm == recent_greeting_text:
+                            logger.info(f"🚫 on_user_turn_completed: Blocking exact greeting echo: '{user_text_raw[:50]}'")
+                            raise StopResponse()
             except StopResponse:
                 raise  # Re-raise to exit
             except Exception as echo_check_err:
@@ -308,16 +312,25 @@ class SidekickAgent(voice.Agent):
                 return
 
             # Perform RAG retrieval with citations if enabled
+            # NO FALLBACK POLICY: If RAG retrieval fails, we fail the request rather than hallucinating
             if self._citations_enabled and self._client_id:
-                try:
-                    await self._retrieve_with_citations(user_text)
-                except Exception as e:
-                    logger.error(f"Citation retrieval failed: {e}")
-                    # Continue with regular RAG if citations fail (graceful degradation)
+                await self._retrieve_with_citations(user_text)
+                # Check if we got any RAG context
+                rag_context = getattr(self, "_current_rag_context", "") or ""
+                if not rag_context:
+                    logger.error("❌ RAG context retrieval returned empty - NO FALLBACK POLICY prevents hallucination")
+                    raise ValueError("RAG context retrieval failed - empty context returned. Check document indexing and embeddings.")
 
             logger.info("on_user_turn_completed: building RAG context for current turn")
+            # Skip knowledge RAG if citations_service already did it (avoid duplicate searches)
+            skip_knowledge = self._citations_enabled and self._client_id
+            # Reuse cached embedding from citations_service if available (saves ~1s API call)
+            cached_embedding = getattr(self, '_cached_query_embedding', None) if skip_knowledge else None
             ctx = await self._context_manager.build_complete_context(
-                user_message=user_text, user_id=self._user_id or "unknown"
+                user_message=user_text,
+                user_id=self._user_id or "unknown",
+                skip_knowledge_rag=skip_knowledge,
+                cached_query_embedding=cached_embedding
             )
 
             enhanced = ctx.get("enhanced_system_prompt") if isinstance(ctx, dict) else None
@@ -329,9 +342,13 @@ class SidekickAgent(voice.Agent):
                 )
                 logger.info("✅ RAG context injected into turn_ctx for this turn")
             else:
-                logger.info("on_user_turn_completed: no enhanced prompt returned; nothing injected")
+                # NO FALLBACK POLICY: If no enhanced prompt is available, this is a critical error
+                logger.error("❌ on_user_turn_completed: no enhanced prompt returned - NO FALLBACK POLICY prevents hallucination")
+                raise ValueError("RAG context building failed - no enhanced prompt returned. Check RAG configuration.")
         except Exception as e:
-            logger.error(f"on_user_turn_completed: RAG injection failed: {type(e).__name__}: {e}")
+            # NO FALLBACK POLICY: Let RAG errors propagate up rather than silently continuing
+            logger.error(f"❌ on_user_turn_completed: RAG processing failed - NO FALLBACK POLICY: {type(e).__name__}: {e}")
+            raise  # Re-raise the exception to prevent hallucinated responses
 
     async def _retrieve_with_citations(self, user_text: str) -> None:
         """
@@ -430,19 +447,21 @@ class SidekickAgent(voice.Agent):
             if not api_keys and isinstance(self._agent_config, dict):
                 api_keys = self._agent_config.get("api_keys", {}) or {}
 
-            # Broaden recall; when rerank is disabled, go even wider and allow more docs.
+            # Use configured values - don't override with hardcoded multipliers
+            # rerank_candidates: how many chunks to fetch for reranking
+            # rerank_top_k: how many to return after reranking
+            # rag_results_limit: final limit on results
             if rerank_enabled:
-                match_count = max(rag_results_limit * 2, rerank_candidates or rag_results_limit, 20)
-                if not rerank_candidates or rerank_candidates < match_count:
-                    rerank_candidates = match_count
-                rerank_top_k = min(rerank_top_k, rerank_candidates) if rerank_top_k else rag_results_limit
+                # Use configured rerank_candidates, or default to rag_results_limit if not set
+                match_count = rerank_candidates if rerank_candidates else rag_results_limit
+                rerank_top_k = rerank_top_k if rerank_top_k else rag_results_limit
                 max_docs = rag_results_limit
             else:
-                # No rerank: fetch even wider and allow more docs to avoid single-doc collapse.
-                match_count = max(rag_results_limit * 6, 60)
+                # No rerank: just fetch what we need
+                match_count = rag_results_limit
                 rerank_candidates = None
                 rerank_top_k = None
-                max_docs = max(rag_results_limit * 3, 15)
+                max_docs = rag_results_limit
 
             # Perform RAG retrieval with citations
             result = await rag_citations_service.retrieve_with_citations(
@@ -462,6 +481,12 @@ class SidekickAgent(voice.Agent):
                 api_keys=api_keys,
             )
             
+            # Store RAG context for LLM injection (this is the actual document content)
+            self._current_rag_context = result.context_for_llm or ""
+
+            # Cache the query embedding for reuse in conversation RAG (saves ~1s API call)
+            self._cached_query_embedding = result.query_embedding
+
             # Store citations for inclusion in the final response
             self._current_citations = [
                 {
@@ -484,8 +509,8 @@ class SidekickAgent(voice.Agent):
                 self._current_rerank_info = result.rerank_info or rerank_fallback_info
             except Exception:
                 self._current_rerank_info = rerank_fallback_info
-            
-            logger.info(f"Retrieved {len(self._current_citations)} citations for message {self._current_message_id}")
+
+            logger.info(f"Retrieved {len(self._current_citations)} citations for message {self._current_message_id} (context: {len(self._current_rag_context)} chars)")
             
         except Exception as e:
             import traceback
@@ -1031,24 +1056,31 @@ class SidekickAgent(voice.Agent):
                 existing_row = existing.data[0]
                 existing_content = existing_row.get("content", "") or ""
 
-                # For user transcripts, MERGE content instead of replacing
-                # This handles STT sending multiple final chunks for the same utterance
+                # For user transcripts, use LONGEST content to handle STT updates
+                # STT often sends: partial → more complete → final, all for same turn_id
+                # We should ALWAYS use the longer/more complete version, not merge
                 if role == "user" and existing_content and content:
-                    # Merge logic: if new content doesn't already contain existing, append
                     content_stripped = content.strip()
                     existing_stripped = existing_content.strip()
 
-                    if content_stripped in existing_stripped:
-                        # New content is already part of existing - keep existing
-                        merged_content = existing_content
-                    elif existing_stripped in content_stripped:
-                        # Existing is subset of new - use new (STT sent full transcript)
-                        merged_content = content
-                    else:
-                        # Disjoint chunks - append new to existing
-                        merged_content = f"{existing_stripped} {content_stripped}".strip()
+                    # Normalize for comparison (lowercase, collapse whitespace)
+                    def normalize(s):
+                        return ' '.join(s.lower().split())
 
-                    logger.info(f"📝 Merging user transcript: existing={len(existing_content)} chars + new={len(content)} chars → merged={len(merged_content)} chars")
+                    content_norm = normalize(content_stripped)
+                    existing_norm = normalize(existing_stripped)
+
+                    # For user transcripts, we're now receiving pre-merged content from entrypoint.py
+                    # The entrypoint concatenates STT chunks, so new content should always be >= existing
+                    # Simple rule: ALWAYS use whichever is longer (the merged result)
+                    if len(content_stripped) >= len(existing_stripped):
+                        merged_content = content
+                        logger.info(f"📝 User transcript: using new ({len(content)} chars) - longer/equal to existing ({len(existing_content)} chars)")
+                    else:
+                        # This shouldn't happen with proper merge logic, but handle gracefully
+                        merged_content = existing_content
+                        logger.info(f"📝 User transcript: keeping existing ({len(existing_content)} chars) - unexpectedly longer than new ({len(content)} chars)")
+
                     row["content"] = merged_content
                     row["transcript"] = merged_content
 

@@ -34,6 +34,10 @@ async def lifespan(app: FastAPI):
 
     worker = None
     worker_task = None
+    ambient_worker = None
+    ambient_worker_task = None
+    learning_worker = None
+    learning_worker_task = None
 
     try:
         # Startup
@@ -109,12 +113,48 @@ async def lifespan(app: FastAPI):
         except RuntimeError as e:
             logger.warning(f"Provisioning worker disabled: {e}")
 
+        # Start ambient ability worker for background processing
+        try:
+            from app.services.ambient_ability_worker import ambient_ability_worker
+
+            ambient_worker = ambient_ability_worker
+            ambient_worker_task = asyncio.create_task(ambient_worker.start())
+            logger.info("✅ Ambient ability worker started")
+        except Exception as e:
+            logger.warning(f"Ambient ability worker failed to start: {e}")
+
+        # Start UserSense learning worker for initial learning jobs
+        try:
+            from app.services.usersense_learning_worker import usersense_learning_worker
+
+            learning_worker = usersense_learning_worker
+            learning_worker_task = asyncio.create_task(learning_worker.start())
+            logger.info("✅ UserSense learning worker started")
+        except Exception as e:
+            logger.warning(f"UserSense learning worker failed to start: {e}")
+
         yield
     finally:
         if worker:
             worker.stop()
         if worker_task:
             await worker_task
+
+        # Stop ambient ability worker
+        if ambient_worker:
+            try:
+                await ambient_worker.stop()
+                logger.info("Ambient ability worker stopped")
+            except Exception as e:
+                logger.error(f"Error stopping ambient ability worker: {e}")
+
+        # Stop UserSense learning worker
+        if learning_worker:
+            try:
+                await learning_worker.stop()
+                logger.info("UserSense learning worker stopped")
+            except Exception as e:
+                logger.error(f"Error stopping UserSense learning worker: {e}")
 
         # Shutdown
         logger.info("Shutting down Autonomite SaaS Backend")

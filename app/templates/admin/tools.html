@@ -24,15 +24,41 @@
       <option value="sidekick">Sidekick</option>
       <option value="code">Code</option>
       <option value="asana">Asana</option>
+      <option value="builtin">Built-in</option>
     </select>
     <select id="scopeFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
       <option value="">All scopes</option>
       <option value="global">Global</option>
       <option value="client">Client</option>
     </select>
+    <select id="phaseFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
+      <option value="">All phases</option>
+      <option value="active">Active</option>
+      <option value="ambient">Ambient</option>
+    </select>
   </div>
 
-  <div id="toolsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+  <!-- Active Abilities Section -->
+  <div class="mb-8">
+    <div class="flex items-center gap-2 mb-4">
+      <h2 class="text-xl font-semibold text-dark-text">Active Abilities</h2>
+      <span class="text-xs px-2 py-1 rounded bg-brand-teal/20 text-brand-teal">During Conversation</span>
+    </div>
+    <p class="text-sm text-dark-text-secondary mb-4">Tools that sidekicks can invoke during active conversations with users.</p>
+    <div id="activeToolsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+    <div id="activeToolsEmpty" class="hidden text-sm text-dark-text-secondary py-4">No active abilities found for the current filters.</div>
+  </div>
+
+  <!-- Ambient Abilities Section -->
+  <div class="mb-8">
+    <div class="flex items-center gap-2 mb-4">
+      <h2 class="text-xl font-semibold text-dark-text">Ambient Abilities</h2>
+      <span class="text-xs px-2 py-1 rounded bg-brand-salmon/20 text-brand-salmon">Background Processing</span>
+    </div>
+    <p class="text-sm text-dark-text-secondary mb-4">Background processes triggered after sessions end, on schedules, or by events. These run without user interaction.</p>
+    <div id="ambientToolsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+    <div id="ambientToolsEmpty" class="hidden text-sm text-dark-text-secondary py-4">No ambient abilities found for the current filters.</div>
+  </div>
 </div>
 
 <div id="createToolModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50">
@@ -75,6 +101,15 @@
           </select>
         </div>
         <div>
+          <label class="text-sm text-dark-text">Execution Phase</label>
+          <select id="ct_execution_phase" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="toggleTriggerConfig('ct')">
+            <option value="active">Active (During Conversation)</option>
+            <option value="ambient">Ambient (Background)</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-3 mt-3">
+        <div>
           <label class="text-sm text-dark-text">Icon URL</label>
           <input id="ct_icon" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
         </div>
@@ -87,6 +122,32 @@
             {% endfor %}
           </select>
         </div>
+      </div>
+      <!-- Trigger Configuration (for Ambient abilities) -->
+      <div id="ct_trigger_config" class="hidden mt-3 p-3 bg-dark-elevated rounded border border-dark-border">
+        <label class="text-sm font-medium text-dark-text mb-2 block">Ambient Trigger Configuration</label>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-dark-text-secondary">Trigger Type</label>
+            <select id="ct_trigger_type" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text">
+              <option value="post_session">Post-Session</option>
+              <option value="scheduled">Scheduled (Cron)</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Min Messages (for post-session)</label>
+            <input type="number" id="ct_trigger_min_messages" value="3" min="1" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Delay (seconds)</label>
+            <input type="number" id="ct_trigger_delay" value="30" min="0" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Agent Slugs (comma-separated, optional)</label>
+            <input id="ct_trigger_agents" placeholder="agent-1, agent-2" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+        </div>
+        <p class="text-xs text-dark-text-secondary mt-2">Post-session triggers run after conversations end. Scheduled triggers run on a cron schedule.</p>
       </div>
       <div id="ct_typeFields" class="space-y-2">
         <!-- Dynamic config inputs per type -->
@@ -132,6 +193,7 @@
             <option value="sidekick">Sidekick</option>
             <option value="code">Code</option>
             <option value="asana">Asana</option>
+            <option value="builtin">Built-in</option>
           </select>
         </div>
         <div>
@@ -141,6 +203,15 @@
             <option value="global">Global</option>
           </select>
         </div>
+        <div>
+          <label class="text-sm text-dark-text">Execution Phase</label>
+          <select id="et_execution_phase" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="toggleTriggerConfig('et')">
+            <option value="active">Active (During Conversation)</option>
+            <option value="ambient">Ambient (Background)</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-3 mt-3">
         <div>
           <label class="text-sm text-dark-text">Icon URL</label>
           <input id="et_icon" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
@@ -154,6 +225,32 @@
           <option value="{{ client.id }}">{{ client.name }}</option>
           {% endfor %}
         </select>
+      </div>
+      <!-- Trigger Configuration (for Ambient abilities) -->
+      <div id="et_trigger_config" class="hidden mt-3 p-3 bg-dark-elevated rounded border border-dark-border">
+        <label class="text-sm font-medium text-dark-text mb-2 block">Ambient Trigger Configuration</label>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-dark-text-secondary">Trigger Type</label>
+            <select id="et_trigger_type" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text">
+              <option value="post_session">Post-Session</option>
+              <option value="scheduled">Scheduled (Cron)</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Min Messages (for post-session)</label>
+            <input type="number" id="et_trigger_min_messages" value="3" min="1" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Delay (seconds)</label>
+            <input type="number" id="et_trigger_delay" value="30" min="0" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Agent Slugs (comma-separated, optional)</label>
+            <input id="et_trigger_agents" placeholder="agent-1, agent-2" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+        </div>
+        <p class="text-xs text-dark-text-secondary mt-2">Post-session triggers run after conversations end. Scheduled triggers run on a cron schedule.</p>
       </div>
       <div id="et_typeFields" class="space-y-2"></div>
       <div id="et_perplexity_client_panel" class="hidden space-y-2">
@@ -214,11 +311,61 @@ function openCreateToolModal(){
   document.getElementById('ct_icon').value = '';
   document.getElementById('ct_type').value = 'mcp';
   document.getElementById('ct_scope').value = 'client';
+  document.getElementById('ct_execution_phase').value = 'active';
   handleScopeChange('ct');
   renderTypeFields('ct', 'mcp');
   togglePerplexityClientPanel('ct', false);
+  toggleTriggerConfig('ct');
   document.getElementById('createToolModal').classList.remove('hidden');
   document.getElementById('createToolModal').classList.add('flex');
+}
+
+function toggleTriggerConfig(prefix){
+  const phaseSelect = document.getElementById(`${prefix}_execution_phase`);
+  const triggerConfigDiv = document.getElementById(`${prefix}_trigger_config`);
+  if(!phaseSelect || !triggerConfigDiv) return;
+  if(phaseSelect.value === 'ambient'){
+    triggerConfigDiv.classList.remove('hidden');
+  } else {
+    triggerConfigDiv.classList.add('hidden');
+  }
+}
+
+function getTriggerConfig(prefix){
+  const phaseSelect = document.getElementById(`${prefix}_execution_phase`);
+  if(!phaseSelect || phaseSelect.value !== 'ambient') return null;
+
+  const triggerType = document.getElementById(`${prefix}_trigger_type`)?.value || 'post_session';
+  const minMessages = parseInt(document.getElementById(`${prefix}_trigger_min_messages`)?.value || '3', 10);
+  const delay = parseInt(document.getElementById(`${prefix}_trigger_delay`)?.value || '30', 10);
+  const agentsRaw = document.getElementById(`${prefix}_trigger_agents`)?.value || '';
+  const agents = agentsRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+  const config = {
+    trigger: triggerType,
+    min_messages: minMessages,
+    delay_seconds: delay
+  };
+  if(agents.length > 0) config.agents = agents;
+  return config;
+}
+
+function setTriggerConfig(prefix, triggerConfig){
+  if(!triggerConfig) {
+    toggleTriggerConfig(prefix);
+    return;
+  }
+  const typeEl = document.getElementById(`${prefix}_trigger_type`);
+  const minMessagesEl = document.getElementById(`${prefix}_trigger_min_messages`);
+  const delayEl = document.getElementById(`${prefix}_trigger_delay`);
+  const agentsEl = document.getElementById(`${prefix}_trigger_agents`);
+
+  if(typeEl) typeEl.value = triggerConfig.trigger || 'post_session';
+  if(minMessagesEl) minMessagesEl.value = triggerConfig.min_messages || 3;
+  if(delayEl) delayEl.value = triggerConfig.delay_seconds || 30;
+  if(agentsEl) agentsEl.value = (triggerConfig.agents || []).join(', ');
+
+  toggleTriggerConfig(prefix);
 }
 
 function closeCreateToolModal(){
@@ -834,13 +981,25 @@ async function refreshTools(){
   const search = document.getElementById('searchInput').value.trim();
   const type = document.getElementById('typeFilter').value;
   const scope = document.getElementById('scopeFilter').value;
+  const phase = document.getElementById('phaseFilter').value;
   const clientSelect = document.getElementById('clientFilter');
   const clientId = clientSelect ? clientSelect.value : '';
-  const grid = document.getElementById('toolsGrid');
-  grid.innerHTML = '';
+
+  const activeGrid = document.getElementById('activeToolsGrid');
+  const ambientGrid = document.getElementById('ambientToolsGrid');
+  const activeEmpty = document.getElementById('activeToolsEmpty');
+  const ambientEmpty = document.getElementById('ambientToolsEmpty');
+
+  activeGrid.innerHTML = '';
+  ambientGrid.innerHTML = '';
+  activeEmpty.classList.add('hidden');
+  ambientEmpty.classList.add('hidden');
 
   if(scope === 'client' && !clientId){
-    grid.innerHTML = '<div class="col-span-full text-sm text-dark-text-secondary">Select a client to view client-scoped abilities.</div>';
+    activeEmpty.textContent = 'Select a client to view client-scoped abilities.';
+    activeEmpty.classList.remove('hidden');
+    ambientEmpty.textContent = 'Select a client to view client-scoped abilities.';
+    ambientEmpty.classList.remove('hidden');
     return;
   }
 
@@ -849,6 +1008,7 @@ async function refreshTools(){
   if(type) qs.set('type', type);
   if(scope) qs.set('scope', scope);
   if(clientId) qs.set('client_id', clientId);
+  // Note: phase filtering is done client-side to show both sections
 
   let data = [];
   try{
@@ -856,38 +1016,100 @@ async function refreshTools(){
     const url = `${ADMIN_TOOLS_BASE}${query ? `?${query}` : ''}`;
     data = await fetchJSON(url);
   }catch(err){
-    grid.innerHTML = `<div class="col-span-full text-sm text-brand-salmon">Failed to load abilities: ${err.message}</div>`;
+    activeEmpty.textContent = `Failed to load abilities: ${err.message}`;
+    activeEmpty.classList.remove('hidden');
+    activeEmpty.classList.add('text-brand-salmon');
     return;
   }
 
-  if(!Array.isArray(data) || data.length === 0){
-    grid.innerHTML = '<div class="col-span-full text-sm text-dark-text-secondary">No abilities found for the current filters.</div>';
-    return;
+  if(!Array.isArray(data)){
+    data = [];
   }
 
   Object.keys(toolsCache).forEach(k => delete toolsCache[k]);
 
-  for(const t of data){
-    toolsCache[t.id] = t;
-    const card = document.createElement('div');
-    card.className = 'bg-dark-surface border border-dark-border rounded p-4 flex gap-3 items-start';
-    const icon = document.createElement('img');
-    icon.src = t.icon_url || '/static/images/ability-default.png';
-    icon.className = 'w-10 h-10 rounded';
-    const body = document.createElement('div');
-    body.className = 'flex-1';
-    body.innerHTML = `<div class="flex items-center gap-2"><span class="text-dark-text font-semibold">${t.name}</span><span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.type}</span><span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.scope}</span></div><div class="text-sm text-dark-text-secondary mt-1">${t.description||''}</div>`;
-    const actions = document.createElement('div');
+  // Split tools by execution phase
+  const activeTools = data.filter(t => (t.execution_phase || 'active') === 'active');
+  const ambientTools = data.filter(t => t.execution_phase === 'ambient');
+
+  // Apply phase filter if set
+  const showActive = !phase || phase === 'active';
+  const showAmbient = !phase || phase === 'ambient';
+
+  // Render active tools
+  if(showActive){
+    if(activeTools.length === 0){
+      activeEmpty.classList.remove('hidden');
+    } else {
+      for(const t of activeTools){
+        toolsCache[t.id] = t;
+        activeGrid.appendChild(createToolCard(t));
+      }
+    }
+  }
+
+  // Render ambient tools
+  if(showAmbient){
+    if(ambientTools.length === 0){
+      ambientEmpty.classList.remove('hidden');
+    } else {
+      for(const t of ambientTools){
+        toolsCache[t.id] = t;
+        ambientGrid.appendChild(createToolCard(t));
+      }
+    }
+  }
+
+  // Hide sections if phase filter is set
+  document.querySelector('#activeToolsGrid').parentElement.style.display = showActive ? '' : 'none';
+  document.querySelector('#ambientToolsGrid').parentElement.style.display = showAmbient ? '' : 'none';
+}
+
+function createToolCard(t){
+  const card = document.createElement('div');
+  card.className = 'bg-dark-surface border border-dark-border rounded p-4 flex gap-3 items-start';
+  const icon = document.createElement('img');
+  icon.src = t.icon_url || '/static/images/ability-default.png';
+  icon.className = 'w-10 h-10 rounded';
+  icon.onerror = function(){ this.src = '/static/images/ability-default.png'; };
+  const body = document.createElement('div');
+  body.className = 'flex-1';
+
+  // Show trigger info for ambient abilities
+  let triggerBadge = '';
+  if(t.execution_phase === 'ambient' && t.trigger_config){
+    const trigger = t.trigger_config.trigger || 'post_session';
+    triggerBadge = `<span class="text-xs px-2 py-0.5 rounded bg-brand-salmon/20 text-brand-salmon">${trigger === 'post_session' ? 'Post-Session' : 'Scheduled'}</span>`;
+  }
+
+  body.innerHTML = `
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-dark-text font-semibold">${escapeHtml(t.name)}</span>
+      <span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.type}</span>
+      <span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.scope}</span>
+      ${triggerBadge}
+    </div>
+    <div class="text-sm text-dark-text-secondary mt-1">${escapeHtml(t.description||'')}</div>`;
+  const actions = document.createElement('div');
+
+  // Check if this is a built-in ability (non-editable)
+  const isBuiltin = t.type === 'builtin';
+  if(isBuiltin){
+    actions.innerHTML = `
+      <div class="flex flex-col gap-2">
+        <span class="text-xs text-dark-text-secondary">Built-in</span>
+      </div>`;
+  } else {
     actions.innerHTML = `
       <div class="flex flex-col gap-2">
         <button class="text-sm text-brand-teal" onclick="openEditToolModal('${t.id}')">Edit</button>
         <button class="text-sm text-brand-salmon" onclick="deleteTool('${t.id}', '${t.scope}', '${t.client_id || ''}')">Remove</button>
       </div>`;
-    card.appendChild(icon);
-    card.appendChild(body);
-    card.appendChild(actions);
-    grid.appendChild(card);
   }
+  card.appendChild(icon);
+  card.appendChild(body);
+  card.appendChild(actions);
+  return card;
 }
 
 async function createTool(){
@@ -896,6 +1118,7 @@ async function createTool(){
   const description = document.getElementById('ct_desc').value.trim();
   const type = document.getElementById('ct_type').value;
   const scope = document.getElementById('ct_scope').value;
+  const execution_phase = document.getElementById('ct_execution_phase').value;
   const icon_url = document.getElementById('ct_icon').value.trim();
   const clientSelect = document.getElementById('ct_client_id');
   const clientId = clientSelect ? clientSelect.value : '';
@@ -910,9 +1133,16 @@ async function createTool(){
     alert('Select a client for client-scoped abilities.');
     return;
   }
-  const body = { name, slug, description, type, scope, icon_url, config, enabled: true };
+  const body = { name, slug, description, type, scope, icon_url, config, enabled: true, execution_phase };
   if(scope === 'client'){
     body.client_id = clientId;
+  }
+  // Add trigger_config for ambient abilities
+  if(execution_phase === 'ambient'){
+    const triggerConfig = getTriggerConfig('ct');
+    if(triggerConfig){
+      body.trigger_config = triggerConfig;
+    }
   }
   const response = await fetch(ADMIN_TOOLS_BASE, {
     method: 'POST',
@@ -953,11 +1183,14 @@ function openEditToolModal(id){
   document.getElementById('et_icon').value = tool.icon_url || '';
   document.getElementById('et_type').value = tool.type || 'mcp';
   document.getElementById('et_scope').value = tool.scope || 'client';
+  document.getElementById('et_execution_phase').value = tool.execution_phase || 'active';
   document.getElementById('et_enabled').checked = tool.enabled !== false;
   const clientSelect = document.getElementById('et_client_id');
   if(clientSelect){ clientSelect.value = tool.client_id || ''; }
   handleScopeChange('et');
   renderTypeFields('et', tool.type || 'mcp', tool.config || {});
+  // Set trigger config for ambient abilities
+  setTriggerConfig('et', tool.trigger_config);
   const providerSelect = document.getElementById('et_mcp_provider');
   if(providerSelect){ togglePerplexityClientPanel('et', providerSelect.value === 'perplexity'); }
   if(tool.type === 'asana'){
@@ -980,6 +1213,7 @@ async function updateTool(){
   const description = document.getElementById('et_desc').value.trim();
   const icon_url = document.getElementById('et_icon').value.trim();
   const enabled = document.getElementById('et_enabled').checked;
+  const execution_phase = document.getElementById('et_execution_phase').value;
   let config = {};
   try{
     config = buildConfigFromForm('et', tool.type);
@@ -987,7 +1221,16 @@ async function updateTool(){
     alert(err.message);
     return;
   }
-  const payload = { name, description, icon_url, config, enabled };
+  const payload = { name, description, icon_url, config, enabled, execution_phase };
+  // Add trigger_config for ambient abilities
+  if(execution_phase === 'ambient'){
+    const triggerConfig = getTriggerConfig('et');
+    if(triggerConfig){
+      payload.trigger_config = triggerConfig;
+    }
+  } else {
+    payload.trigger_config = null;
+  }
   const clientFilter = document.getElementById('clientFilter');
   const inlineClientSelect = document.getElementById('et_perplexity_client_select');
   const selectedClientId = (clientFilter && clientFilter.value) ? clientFilter.value : (inlineClientSelect ? inlineClientSelect.value : '');

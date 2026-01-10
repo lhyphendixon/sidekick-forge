@@ -28,6 +28,7 @@ from livekit import api
 import os
 from app.config import settings
 from app.utils.tool_prompts import apply_tool_prompt_instructions
+from app.services.usage_tracking import usage_tracking_service, QuotaType
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class TriggerMode(str, Enum):
     """Agent trigger modes"""
     VOICE = "voice"
     TEXT = "text"
+    VIDEO = "video"
 
 
 class TriggerAgentRequest(BaseModel):
@@ -100,7 +102,10 @@ async def trigger_agent(request: TriggerAgentRequest) -> TriggerAgentResponse:
         # Validate mode-specific requirements
         if request.mode == TriggerMode.VOICE and not request.room_name:
             raise HTTPException(status_code=400, detail="room_name is required for voice mode")
-        
+
+        if request.mode == TriggerMode.VIDEO and not request.room_name:
+            raise HTTPException(status_code=400, detail="room_name is required for video mode")
+
         if request.mode == TriggerMode.TEXT and not request.message:
             raise HTTPException(status_code=400, detail="message is required for text mode")
         
@@ -144,7 +149,7 @@ async def trigger_agent(request: TriggerAgentRequest) -> TriggerAgentResponse:
         api_keys = await agent_service.get_client_api_keys(client_id)
         
         # Process based on mode
-        if request.mode == TriggerMode.VOICE:
+        if request.mode == TriggerMode.VOICE or request.mode == TriggerMode.VIDEO:
             result = await handle_voice_trigger(request, agent, client_info, api_keys, platform_client)
         else:  # TEXT mode
             if settings.enable_livekit_text_dispatch:
@@ -188,7 +193,7 @@ async def trigger_agent(request: TriggerAgentRequest) -> TriggerAgentResponse:
 
 
 async def handle_voice_trigger(
-    request: TriggerAgentRequest, 
+    request: TriggerAgentRequest,
     agent,
     client_info: Dict[str, Any],
     api_keys: Dict[str, Optional[str]],
@@ -198,7 +203,40 @@ async def handle_voice_trigger(
     Handle voice mode agent triggering with multi-tenant support
     """
     logger.info(f"Handling voice trigger for agent {agent.slug} in room {request.room_name}")
-    
+
+    # Pre-flight voice quota check - reject if already exceeded
+    try:
+        await usage_tracking_service.initialize()
+        is_allowed, quota_status = await usage_tracking_service.check_agent_quota(
+            client_id=str(client_info['id']),
+            agent_id=str(agent.id),
+            quota_type=QuotaType.VOICE,
+        )
+        if not is_allowed:
+            logger.warning(
+                "Voice quota already exceeded for agent %s (client %s): %d/%d seconds (%.1f min)",
+                agent.slug, client_info['id'], quota_status.used, quota_status.limit,
+                quota_status.used / 60
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "quota_exceeded",
+                    "message": f"Voice minutes quota exceeded. Used {quota_status.used // 60} of {quota_status.limit // 60} minutes this month.",
+                    "quota": {
+                        "used_seconds": quota_status.used,
+                        "limit_seconds": quota_status.limit,
+                        "used_minutes": round(quota_status.used / 60, 1),
+                        "limit_minutes": round(quota_status.limit / 60, 1),
+                        "percent_used": quota_status.percent_used,
+                    }
+                }
+            )
+    except HTTPException:
+        raise
+    except Exception as quota_check_err:
+        logger.warning("Failed to check voice quota (allowing request): %s", quota_check_err)
+
     # Use backend's LiveKit credentials (platform owns the infrastructure)
     from app.integrations.livekit_client import livekit_manager
     backend_livekit = livekit_manager
@@ -235,11 +273,11 @@ async def handle_voice_trigger(
         if not embedding_cfg:
             embedding_cfg = {
                 "provider": "siliconflow",
-                "document_model": "Qwen/Qwen3-Embedding-0.6B",
-                "conversation_model": "Qwen/Qwen3-Embedding-0.6B",
+                "document_model": "Qwen/Qwen3-Embedding-4B",
+                "conversation_model": "Qwen/Qwen3-Embedding-4B",
                 "dimension": 1024,
             }
-            logger.info("Voice trigger: using default embedding config (siliconflow)")
+            logger.info("Voice trigger: using default embedding config (siliconflow 4B)")
         agent_context["embedding"] = embedding_cfg
         logger.info(f"Voice trigger: attached embedding config - provider={embedding_cfg.get('provider')}")
     except Exception as embedding_err:
@@ -267,6 +305,9 @@ async def handle_voice_trigger(
     agent_id_value = getattr(agent, "id", None)
     if agent_id_value:
         agent_context["agent_id"] = str(agent_id_value)
+
+    # Pass the requested mode so the agent worker can detect video mode
+    agent_context["mode"] = request.mode.value
 
     # Include agent-level RAG settings
     rag_results_limit = getattr(agent, "rag_results_limit", None)
@@ -359,7 +400,7 @@ async def handle_voice_trigger(
         pass
 
     return {
-        "mode": "voice",
+        "mode": request.mode.value,
         "room_name": request.room_name,
         "platform": request.platform,
         "conversation_id": client_conversation_id,
@@ -374,7 +415,7 @@ async def handle_voice_trigger(
             "status": "automatic",
             "message": "Agent will be automatically dispatched when participant joins"
         },
-        "status": "voice_agent_triggered"
+        "status": f"{request.mode.value}_agent_triggered"
     }
 
 

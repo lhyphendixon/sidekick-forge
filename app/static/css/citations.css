@@ -149,34 +149,32 @@
     color: #9ca3af;
 }
 
-/* Expand Button */
+/* Expand Button - compact inline style */
 .citations-expand-btn {
-    margin-top: 8px;
-    padding: 6px 12px;
+    margin-top: 4px;
+    padding: 2px 8px;
     background: transparent;
-    border: 1px solid rgba(1, 164, 166, 0.3);
-    border-radius: 4px;
-    color: #01a4a6;
+    border: none;
+    color: rgba(1, 164, 166, 0.8);
     font-size: 0.75rem;
     cursor: pointer;
     transition: all 0.2s ease;
-    width: 100%;
+    text-align: left;
 }
 
 .dark .citations-expand-btn,
 [data-theme="dark"] .citations-expand-btn {
-    color: #01c4c6;
-    border-color: rgba(1, 164, 166, 0.4);
+    color: rgba(1, 196, 198, 0.8);
 }
 
 .citations-expand-btn:hover {
-    background: rgba(1, 164, 166, 0.1);
-    border-color: rgba(1, 164, 166, 0.5);
+    color: #01a4a6;
+    text-decoration: underline;
 }
 
 .dark .citations-expand-btn:hover,
 [data-theme="dark"] .citations-expand-btn:hover {
-    background: rgba(1, 164, 166, 0.15);
+    color: #01c4c6;
 }
 
 /* Citation Tooltip */

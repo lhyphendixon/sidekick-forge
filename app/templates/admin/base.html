@@ -218,7 +218,7 @@
     </style>
     
     <!-- Video Background CSS -->
-    <link rel="stylesheet" href="/static/css/video-background.css">
+    <link rel="stylesheet" href="/static/css/video-background.css?v=2">
     {% block extra_head %}{% endblock %}
 </head>
 <body class="video-background-body text-dark-text">
@@ -263,6 +263,30 @@
                     </div>
                     <div class="hidden lg:block">
                         <div class="ml-6 flex flex-wrap items-baseline gap-1 xl:gap-2">
+                            {# Adventurer users get simplified navigation (no Dashboard, Clients, Monitoring) #}
+                            {% if user.is_adventurer_only %}
+                            <a href="/admin/agents" onclick="closeMobileMenu()"
+                               class="{% if '/admin/agents' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                My Sidekick
+                            </a>
+                            <a href="/admin/users" onclick="closeMobileMenu()"
+                               class="{% if '/admin/users' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Users
+                            </a>
+                            <a href="/admin/knowledge-base" onclick="closeMobileMenu()"
+                               class="{% if '/admin/knowledge-base' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Knowledge Base
+                            </a>
+                            <a href="/admin/tools" onclick="closeMobileMenu()"
+                               class="{% if '/admin/tools' in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Abilities
+                            </a>
+                            <a href="/admin/clients/{{ user.primary_client_id }}" onclick="closeMobileMenu()"
+                               class="{% if '/admin/clients/' in request.url.path and user.primary_client_id in request.url.path %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
+                                Settings
+                            </a>
+                            {% else %}
+                            {# Full navigation for Champion/Paragon/SuperAdmin #}
                             {% if user.role in ['superadmin','admin'] %}
                             <a href="/admin/" onclick="closeMobileMenu()"
                                class="{% if request.url.path == '/admin/' %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
@@ -303,6 +327,7 @@
                                 Monitoring
                             </a>
                             {% endif %}
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -332,10 +357,11 @@
                         </span>
                         {% endif %}
                     </a>
-                    <button onclick="logout()"
-                            class="hidden lg:inline-flex text-sm text-gray-700 hover:text-brand-teal transition-all px-3 py-1 rounded border border-gray-300 hover:border-brand-teal">
+                    <a href="/admin/login" id="logout-btn-desktop"
+                            class="hidden lg:inline-flex text-sm text-gray-700 hover:text-brand-teal transition-all px-3 py-1 rounded border border-gray-300 hover:border-brand-teal"
+                            style="cursor: pointer;">
                         Logout
-                    </button>
+                    </a>
                     <div id="global-indicator" style="display:none;"></div>
                 </div>
             </div>
@@ -359,6 +385,30 @@
                 User Settings
             </a>
             <div class="space-y-2">
+                {# Adventurer users get simplified mobile navigation (no Dashboard, Clients, Monitoring) #}
+                {% if user.is_adventurer_only %}
+                <a href="/admin/agents" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/agents' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    My Sidekick
+                </a>
+                <a href="/admin/users" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/users' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Users
+                </a>
+                <a href="/admin/knowledge-base" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/knowledge-base' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Knowledge Base
+                </a>
+                <a href="/admin/tools" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/tools' in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Abilities
+                </a>
+                <a href="/admin/clients/{{ user.primary_client_id }}" onclick="closeMobileMenu()"
+                   class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if '/admin/clients/' in request.url.path and user.primary_client_id in request.url.path %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
+                    Settings
+                </a>
+                {% else %}
+                {# Full mobile navigation for Champion/Paragon/SuperAdmin #}
                 {% if user.role in ['superadmin','admin'] %}
                 <a href="/admin/" onclick="closeMobileMenu()"
                    class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if request.url.path == '/admin/' %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
@@ -399,11 +449,13 @@
                     Monitoring
                 </a>
                 {% endif %}
+                {% endif %}
             </div>
-            <button onclick="logout()"
-                    class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:text-brand-teal hover:border-brand-teal hover:bg-gray-100 transition-all">
+            <a href="/admin/login" id="logout-btn-mobile"
+                    class="block w-full text-center rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:text-brand-teal hover:border-brand-teal hover:bg-gray-100 transition-all"
+                    style="cursor: pointer;">
                 Logout
-            </button>
+            </a>
         </div>
     </div>
 
@@ -445,10 +497,26 @@
         });
         
         // Loading states disabled - removed to fix infinite loading issue
-        document.addEventListener('htmx:afterRequest', function(event) {
+        document.addEventListener('htmx:afterRequest', async function(event) {
             // Handle errors
             if (event.detail.xhr && event.detail.xhr.status >= 400) {
                 console.error('HTMX request failed:', event.detail.xhr.status);
+
+                // On 401/403, try to refresh token and retry, or redirect to login
+                if (event.detail.xhr.status === 401 || event.detail.xhr.status === 403) {
+                    // Try to refresh the token
+                    if (window.refreshAdminToken) {
+                        const newToken = await window.refreshAdminToken();
+                        if (newToken) {
+                            console.log('[auth] Token refreshed after 401, please retry');
+                            // Token was refreshed, next request should work
+                            return;
+                        }
+                    }
+                    // Token refresh failed - redirect to login
+                    console.log('[auth] Token refresh failed, redirecting to login');
+                    window.location.href = '/admin/login?redirect=session_expired';
+                }
             }
         });
 
@@ -458,38 +526,118 @@
         }
         window.hideGlobalLoading = function() {
             // Disabled
-        }
-        
+        };
+
         // Initialize Supabase client for logout
-        const supabaseUrl = '{{ supabase_url }}';
-        const supabaseKey = '{{ supabase_anon_key }}';
-        const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
-        // Expose the admin Supabase client for child iframes (embed preview) to read session
-        try { window.__adminSupabaseClient = supabase; } catch (e) { }
-        
-        // Logout function
-        async function logout() {
+        // Use window._adminSupabase to avoid conflicts with Supabase SDK's global export
+        ;(function() {
+            const supabaseUrl = '{{ supabase_url }}';
+            const supabaseKey = '{{ supabase_anon_key }}';
             try {
-                // Sign out from Supabase
-                await supabase.auth.signOut();
-                
-                // Clear local storage
-                localStorage.removeItem('admin_token');
-                
-                // Clear admin token cookie
-                document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-                
-                // Redirect to login page
-                window.location.href = '/admin/login';
-            } catch (error) {
-                console.error('Logout error:', error);
-                // Still redirect even if there's an error
-                localStorage.removeItem('admin_token');
-                document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-                window.location.href = '/admin/login';
+                if (window.supabase && supabaseUrl && supabaseKey) {
+                    window._adminSupabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+                    // Expose the admin Supabase client for child iframes (embed preview) to read session
+                    window.__adminSupabaseClient = window._adminSupabase;
+                } else {
+                    console.warn('[auth] Supabase client not initialized - missing URL or key');
+                }
+            } catch (e) {
+                console.error('[auth] Failed to create Supabase client:', e);
+            }
+        })();
+
+        // Token refresh helper - gets fresh token from Supabase and updates storage
+        async function refreshAdminToken() {
+            if (!window._adminSupabase || !window._adminSupabase.auth) {
+                console.log('[auth] Supabase client not ready for token refresh');
+                return null;
+            }
+            try {
+                const { data: { session }, error } = await window._adminSupabase.auth.getSession();
+                if (error) {
+                    // Network or API error - don't clear tokens, just log
+                    console.warn('[auth] Session fetch error (keeping existing tokens):', error.message);
+                    return null;
+                }
+                if (!session) {
+                    // No session in Supabase - this is a real logout, check if we have an existing token
+                    const existingToken = document.cookie.split('; ').find(row => row.startsWith('admin_token='));
+                    if (existingToken && existingToken.split('=')[1]) {
+                        // User has a token but Supabase doesn't have a session
+                        // This can happen if the session expired - don't clear yet, let backend verify
+                        console.log('[auth] No Supabase session but token exists - letting backend verify');
+                        return null;
+                    }
+                    console.log('[auth] No valid session and no existing token');
+                    return null;
+                }
+                // Update stored token with fresh one from Supabase
+                const token = session.access_token;
+                localStorage.setItem('admin_token', token);
+                document.cookie = `admin_token=${token}; path=/; max-age=3600`;
+                return token;
+            } catch (e) {
+                console.error('[auth] Token refresh failed (keeping existing tokens):', e);
+                return null;
             }
         }
+
+        // Expose globally for use in other templates
+        window.refreshAdminToken = refreshAdminToken;
+
+        // Auto-refresh token every 5 minutes to prevent expiration
+        setInterval(async () => {
+            const token = await refreshAdminToken();
+            if (token) {
+                console.log('[auth] Token auto-refreshed');
+            }
+        }, 5 * 60 * 1000);
         
+        // Logout function - clears auth state before navigation
+        function doLogout(e) {
+            // Prevent default link behavior - we'll redirect after cleanup
+            if (e) e.preventDefault();
+
+            console.log('[logout] Starting logout...');
+
+            // Clear admin token cookie immediately
+            document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+            document.cookie = 'admin_token=; path=/admin; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+
+            // Clear local storage
+            try {
+                localStorage.removeItem('admin_token');
+            } catch (e) {
+                console.warn('[logout] localStorage clear failed:', e);
+            }
+
+            // Sign out from Supabase (non-blocking)
+            try {
+                if (window._adminSupabase && window._adminSupabase.auth) {
+                    window._adminSupabase.auth.signOut().catch(function(err) {
+                        console.warn('[logout] Supabase signOut error (non-fatal):', err);
+                    });
+                }
+            } catch (error) {
+                console.warn('[logout] Supabase signOut failed (non-fatal):', error);
+            }
+
+            console.log('[logout] Redirecting to login...');
+            // Redirect to login page
+            window.location.href = '/admin/login';
+        }
+
+        // Attach logout handlers to both buttons
+        document.addEventListener('DOMContentLoaded', function() {
+            var desktopBtn = document.getElementById('logout-btn-desktop');
+            var mobileBtn = document.getElementById('logout-btn-mobile');
+            if (desktopBtn) desktopBtn.addEventListener('click', doLogout);
+            if (mobileBtn) mobileBtn.addEventListener('click', doLogout);
+        });
+
+        // Also assign to window for any explicit calls
+        window.logout = doLogout;
+
         // Check authentication on page load
         document.addEventListener('DOMContentLoaded', async function() {
             // Skip auth check on login and reset-password pages
@@ -497,18 +645,18 @@
             if (currentPath.includes('/admin/login') || currentPath.includes('/admin/reset-password')) {
                 return;
             }
-            
+
             // Check if in development mode - check for DEVELOPMENT_MODE cookie or specific hosts
             const devModeCookie = document.cookie.split('; ').find(row => row.startsWith('DEVELOPMENT_MODE='));
             const isDevelopment = (devModeCookie && devModeCookie.split('=')[1] === 'true') ||
-                                window.location.hostname === 'localhost' || 
-                                window.location.hostname === '127.0.0.1' || 
+                                window.location.hostname === 'localhost' ||
+                                window.location.hostname === '127.0.0.1' ||
                                 window.location.hostname.includes('.local');
-            
+
             // Check for admin token in cookies first
             const adminToken = document.cookie.split('; ').find(row => row.startsWith('admin_token='));
             const hasAdminToken = adminToken && adminToken.split('=')[1] && adminToken.split('=')[1] !== '';
-            
+
             // In development mode with a token (including dev-token), skip Supabase check
             if (isDevelopment && hasAdminToken) {
                 const displayName = 'Dev';
@@ -522,31 +670,57 @@
                 }
                 return;
             }
-            
-            // Simplified auth check - only redirect if no token at all
-            if (!hasAdminToken) {
-                // Check if user has a Supabase session
-                const { data: { session } } = await supabase.auth.getSession();
-                
-                if (!session) {
-                    // No token and no session - redirect to login
-                    console.log('No authentication found, redirecting to login');
-                    window.location.href = '/admin/login?redirect=auth_required';
-                    return;
+
+            // Always refresh token on page load to ensure it's current
+            const freshToken = await refreshAdminToken();
+
+            // If no fresh token and no existing token, check Supabase session
+            if (!freshToken && !hasAdminToken) {
+                // Make sure Supabase client is available
+                if (!window._adminSupabase || !window._adminSupabase.auth) {
+                    console.warn('[auth] Supabase client not available for session check');
+                    // Don't redirect - might be a timing issue, let backend handle auth
                 } else {
-                    // Has session but no admin_token cookie - set it
-                    if (session.access_token) {
-                        document.cookie = `admin_token=${session.access_token}; path=/; max-age=28800`;
-                        localStorage.setItem('admin_token', session.access_token);
-                        // Reload to apply the token
-                        window.location.reload();
-                        return;
+                    try {
+                        // Check if user has a Supabase session
+                        const { data: { session } } = await window._adminSupabase.auth.getSession();
+
+                        if (!session) {
+                            // No token and no session - redirect to login
+                            console.log('No authentication found, redirecting to login');
+                            window.location.href = '/admin/login?redirect=auth_required';
+                            return;
+                        } else {
+                            // Has session but no admin_token cookie - set it
+                            if (session.access_token) {
+                                document.cookie = `admin_token=${session.access_token}; path=/; max-age=28800`;
+                                localStorage.setItem('admin_token', session.access_token);
+                                // Reload to apply the token
+                                window.location.reload();
+                                return;
+                            }
+                        }
+                    } catch (sessionErr) {
+                        console.warn('[auth] Session check failed:', sessionErr);
+                        // Don't redirect on error - let backend handle auth
                     }
                 }
             }
-            
+
             // Update user display if we have a session
-            const { data: { session } } = await supabase.auth.getSession();
+            if (!window._adminSupabase || !window._adminSupabase.auth) {
+                console.warn('[auth] Supabase client not available for display update');
+                return;
+            }
+
+            let session = null;
+            try {
+                const result = await window._adminSupabase.auth.getSession();
+                session = result.data?.session;
+            } catch (displayErr) {
+                console.warn('[auth] Failed to get session for display:', displayErr);
+                return;
+            }
             if (session && session.user) {
                 const metadata = session.user.user_metadata || {};
                 const fullName = metadata.full_name || metadata.name || metadata.display_name;
@@ -592,10 +766,7 @@
             setInterval(updateTimestamp, 1000);
             updateTimestamp();
         });
-        
-        // Make logout function global
-        window.logout = logout;
-        
+
         window.toggleMobileMenu = function() {
             const menu = document.getElementById('mobile-nav-menu');
             const toggle = document.getElementById('mobile-nav-toggle');

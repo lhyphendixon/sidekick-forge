@@ -14,13 +14,18 @@ from typing import Dict, Any
 import os
 from app.config import settings
 
-# Simple auth dependency for now
+# Simple auth dependency for now - extracts user from request context
 async def get_current_user(request):
-    # This would normally validate the JWT token
-    # For now, return a mock admin user
+    """
+    Extract current user from request.
+    The actual user info is passed in the request body for admin preview endpoints.
+    This is a fallback that returns None, letting the endpoint use request body values.
+    """
+    # The platform_user_id and user_email are passed in the request body
+    # from the admin routes which have proper authentication
     return {
-        "id": "351bb07b-03fc-4fb4-b09b-748ef8a72084",
-        "email": "l-dixon@autonomite.net"
+        "id": None,
+        "email": None
     }
 
 # Database connection
@@ -170,57 +175,42 @@ async def ensure_client_user(
                 logger.error(f"Failed to store mapping: {e}")
                 # Non-fatal, continue with the client_user_id we have
             
-            # Create a profile for the shadow user in the client's database
-            # This ensures RAG context can find user profile data
-            try:
-                # First check if profile already exists
-                existing_profile = client_sb.table("profiles").select("*").eq("user_id", client_user_id).maybe_single().execute()
-                
-                if not existing_profile.data:
-                    # Create profile for shadow user (matching client's schema)
-                    profile_data = {
-                        "user_id": client_user_id,
-                        "email": user_email,
-                        "full_name": f"Platform Admin (Preview)",
-                        "Tags": ["platform_admin", "preview_mode"],  # Capitalized to match schema
-                        "goals": ["Admin preview session"],  # goals is an array field
-                        "created_at": datetime.utcnow().isoformat(),
-                        "updated_at": datetime.utcnow().isoformat(),
-                        # Optional fields
-                        "phone": None,
-                        "company_id": None,
-                        "wordpress_id": None,
-                        "wordpress_username": None
-                    }
-                    
-                    # Get platform user's profile if available for better data
-                    try:
-                        platform_profile = db.table("profiles").select("*").eq("user_id", platform_user_id).maybe_single().execute()
-                        if platform_profile.data:
-                            # Copy relevant fields from platform profile
-                            profile_data["full_name"] = platform_profile.data.get("full_name") or profile_data["full_name"]
-                            if platform_profile.data.get("goals"):
-                                profile_data["goals"] = platform_profile.data["goals"]
-                            # Note: platform might have different schema, only copy what exists in client schema
-                            if platform_profile.data.get("Tags"):
-                                profile_data["Tags"] = platform_profile.data["Tags"]
-                            elif platform_profile.data.get("tags"):
-                                profile_data["Tags"] = platform_profile.data["tags"]
-                    except Exception as e:
-                        logger.debug(f"Could not fetch platform profile: {e}")
-                    
-                    client_sb.table("profiles").insert(profile_data).execute()
-                    logger.info(f"Created profile for shadow user {client_user_id} in client database")
-                else:
-                    logger.info(f"Profile already exists for shadow user {client_user_id}")
-            except Exception as e:
-                logger.error(f"Failed to create/check profile for shadow user: {e}")
-                # This is critical for RAG context - fail the request
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to ensure user profile: {str(e)}"
-                )
-        
+        # ALWAYS ensure profile exists for the user (moved outside the else block)
+        # This ensures profile is created even when mapping already exists
+        try:
+            client_sb: Client = create_client(client_supabase_url, client_service_role_key)
+
+            # First check if profile already exists
+            existing_profile = client_sb.table("profiles").select("*").eq("user_id", client_user_id).maybe_single().execute()
+
+            if not existing_profile.data:
+                # Use minimal profile data that works with most schemas
+                profile_data = {
+                    "user_id": client_user_id,
+                    "email": user_email,
+                    "full_name": "Platform Admin (Preview)",
+                    "created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+
+                # Get platform user's profile if available for better data
+                try:
+                    platform_profile = db.table("profiles").select("*").eq("user_id", platform_user_id).maybe_single().execute()
+                    if platform_profile.data:
+                        # Copy relevant fields from platform profile
+                        profile_data["full_name"] = platform_profile.data.get("full_name") or profile_data["full_name"]
+                except Exception as e:
+                    logger.debug(f"Could not fetch platform profile: {e}")
+
+                client_sb.table("profiles").insert(profile_data).execute()
+                logger.info(f"Created profile for shadow user {client_user_id} in client database")
+            else:
+                logger.info(f"Profile already exists for shadow user {client_user_id}")
+        except Exception as e:
+            logger.error(f"Failed to create/check profile for shadow user: {e}")
+            # Continue anyway - profile creation is important but not critical for the preview to work
+            logger.warning("Continuing without profile - user identity may not be available to agent")
+
         # Generate short-lived JWT for the client user
         # This mimics what Supabase would generate
         jwt_secret = client.get("jwt_secret") or client_service_role_key

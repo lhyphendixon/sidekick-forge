@@ -3,7 +3,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Dict, Any, Optional
 import jwt
 import os
+import logging
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 # Security scheme
 security = HTTPBearer()
@@ -162,29 +165,40 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             return True
         return False
 
-    # Try to get token from Authorization header or cookie first
+    # PREFER cookie token over header token - cookie is more reliably refreshed by browser
+    # This fixes issues where JavaScript sends stale localStorage tokens in headers
+    cookie_token = request.cookies.get("admin_token")
     auth_header = request.headers.get("authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        # Try to get from cookies (for browser-based auth)
-        token = request.cookies.get("admin_token")
-        if not token:
-            if _dev_bypass_allowed(request):
-                return {
-                    "user_id": "dev-admin",
-                    "email": "admin@autonomite.ai",
-                    "role": "superadmin",
-                    "first_name": "Dev",
-                    "full_name": "Dev Admin",
-                    "auth_method": "development",
-                    "authenticated_at": datetime.utcnow().isoformat()
-                }
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required - please login",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+    header_token = auth_header.split(" ")[1] if auth_header and auth_header.startswith("Bearer ") else None
+
+    # Use cookie token first if available, fall back to header
+    if cookie_token:
+        token = cookie_token
+        token_source = "cookie"
+    elif header_token:
+        token = header_token
+        token_source = "header"
     else:
-        token = auth_header.split(" ")[1]
+        if _dev_bypass_allowed(request):
+            return {
+                "user_id": "dev-admin",
+                "email": "admin@autonomite.ai",
+                "role": "superadmin",
+                "first_name": "Dev",
+                "full_name": "Dev Admin",
+                "auth_method": "development",
+                "authenticated_at": datetime.utcnow().isoformat()
+            }
+        logger.warning(f"[AUTH] No token found for {request.url.path}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required - please login",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Log token info for debugging (first/last 10 chars only for security)
+    token_preview = f"{token[:10]}...{token[-10:]}" if len(token) > 20 else "short-token"
+    logger.info(f"[AUTH] {request.url.path} - Token from {token_source}: {token_preview}")
 
     # Check for development token
     if token == "dev-token":
@@ -218,9 +232,11 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                     asyncio.run(supabase_manager.initialize())
             except Exception:
                 pass
-        # Use Supabase to verify the JWT token
-        user_response = supabase_manager.admin_client.auth.get_user(token)
-        
+        # Use Supabase to verify the JWT token (use auth_client with anon key, not admin)
+        logger.info(f"[AUTH] Calling Supabase auth.get_user for {request.url.path}")
+        user_response = supabase_manager.auth_client.auth.get_user(token)
+        logger.info(f"[AUTH] Supabase response for {request.url.path}: user={'present' if user_response.user else 'None'}")
+
         if user_response.user:
             user = user_response.user
             meta = getattr(user, 'user_metadata', None) or {}
@@ -324,6 +340,21 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             elif role != 'superadmin':
                 visible_client_ids = tenant_assignments.get('subscriber_client_ids', [])
 
+            # Determine if user is Adventurer-only (for UI customization)
+            is_adventurer_only = False
+            user_tier = None
+            primary_client_id = None
+            if role == 'admin' and visible_client_ids and len(visible_client_ids) == 1:
+                # Single-client admin - check their client's tier
+                primary_client_id = visible_client_ids[0]
+                try:
+                    client_result = admin_client.table('clients').select('tier').eq('id', primary_client_id).single().execute()
+                    if client_result.data:
+                        user_tier = client_result.data.get('tier')
+                        is_adventurer_only = (user_tier == 'adventurer')
+                except Exception as tier_err:
+                    logger.warning(f"Failed to fetch client tier for {primary_client_id}: {tier_err}")
+
             return {
                 "user_id": user.id,
                 "email": user.email,
@@ -334,7 +365,10 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                 "authenticated_at": datetime.utcnow().isoformat(),
                 "tenant_assignments": tenant_assignments,
                 "visible_client_ids": visible_client_ids,
-                "is_super_admin": role == 'superadmin'
+                "is_super_admin": role == 'superadmin',
+                "is_adventurer_only": is_adventurer_only,
+                "user_tier": user_tier,
+                "primary_client_id": primary_client_id,
             }
         else:
             raise HTTPException(

@@ -3,7 +3,7 @@ Agent model for multi-tenant AI agent management
 """
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, model_validator
 from enum import Enum
 from app.models.client import ChannelSettings  # Reuse channel schema
 
@@ -59,6 +59,23 @@ class VoiceSettings(BaseModel):
         default=None, description="Default speed hint for Cartesia Sonic-3 emotion tags"
     )
 
+    # Video avatar settings
+    avatar_provider: Optional[str] = Field(
+        default="bithuman", description="Avatar provider: 'bithuman' or 'beyondpresence'"
+    )
+    avatar_image_url: Optional[str] = Field(
+        default=None, description="URL to avatar image for video chat (Bithuman cloud mode)"
+    )
+    avatar_model_path: Optional[str] = Field(
+        default=None, description="Path to .imx model file for Bithuman local/self-hosted mode"
+    )
+    avatar_model_type: Optional[str] = Field(
+        default="expression", description="Avatar model type for Bithuman: 'expression' or 'essence'"
+    )
+    avatar_id: Optional[str] = Field(
+        default=None, description="Avatar ID for Beyond Presence (pre-built avatar selection)"
+    )
+
 
 class WebhookSettings(BaseModel):
     """Webhook configuration"""
@@ -105,7 +122,23 @@ class Agent(BaseModel):
     context_retention_minutes: Optional[int] = Field(default=30, description="How long to retain context for voice sessions")
     max_context_messages: Optional[int] = Field(default=50, description="Number of past messages to keep in short-term memory")
     rag_results_limit: Optional[int] = Field(default=5, description="Number of knowledge base results to include in RAG context")
-    
+
+    # Supertab paywall settings
+    supertab_enabled: Optional[bool] = Field(default=False, description="Enable Supertab paywall for voice chat")
+    supertab_experience_id: Optional[str] = Field(default=None, description="Supertab offering ID for pricing")
+
+    # Chat mode settings
+    voice_chat_enabled: bool = Field(default=True, description="Whether voice chat is enabled for this agent")
+    text_chat_enabled: bool = Field(default=True, description="Whether text chat is enabled for this agent")
+    video_chat_enabled: bool = Field(default=False, description="Whether video chat with avatar is enabled for this agent")
+
+    @model_validator(mode='after')
+    def validate_at_least_one_chat_mode(self):
+        """Ensure at least one chat mode (voice, text, or video) is enabled."""
+        if not self.voice_chat_enabled and not self.text_chat_enabled and not self.video_chat_enabled:
+            raise ValueError("At least one chat mode (voice, text, or video) must be enabled")
+        return self
+
     @field_serializer('created_at', 'updated_at')
     def serialize_datetimes(self, value: Optional[datetime], info) -> str:
         if isinstance(value, datetime):
@@ -153,6 +186,11 @@ class AgentUpdate(BaseModel):
     max_context_messages: Optional[int] = None
     channels: Optional[ChannelSettings] = None
     rag_results_limit: Optional[int] = None
+    supertab_enabled: Optional[bool] = Field(None, description="Enable Supertab paywall for voice chat")
+    supertab_experience_id: Optional[str] = Field(None, description="Supertab experience ID for pricing")
+    voice_chat_enabled: Optional[bool] = Field(None, description="Whether voice chat is enabled")
+    text_chat_enabled: Optional[bool] = Field(None, description="Whether text chat is enabled")
+    video_chat_enabled: Optional[bool] = Field(None, description="Whether video chat with avatar is enabled")
 
 
 class AgentInDB(Agent):

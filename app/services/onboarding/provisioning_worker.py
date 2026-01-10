@@ -1,4 +1,10 @@
-"""Background worker for provisioning new client Supabase projects."""
+"""Background worker for provisioning new client Supabase projects.
+
+Supports tiered provisioning:
+- Adventurer (shared): No project creation, just mark as ready
+- Champion (dedicated): Create Supabase project + apply schema
+- Paragon (dedicated): Same as Champion with additional setup
+"""
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +20,7 @@ from app.services.onboarding.supabase_management import (
     SupabaseManagementError,
     create_project,
 )
+from app.services.tier_features import ClientTier, HostingType, get_tier_features
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +117,8 @@ class ProvisioningWorker:
             await self._process_supabase_project(job)
         elif job.job_type == "schema_sync":
             await self._process_schema_sync(job)
+        elif job.job_type == "shared_pool_setup":
+            await self._process_shared_pool_setup(job)
         else:
             logger.warning("Unknown provisioning job type '%s' for job %s", job.job_type, job.id)
             await self._delete_job(job.id)
@@ -271,5 +280,161 @@ class ProvisioningWorker:
 
         await asyncio.to_thread(_update)
 
+    async def _process_shared_pool_setup(self, job: ProvisioningJob) -> None:
+        """
+        Process Adventurer tier setup (shared pool).
 
-__all__ = ["ProvisioningWorker", "ProvisioningJob"]
+        For shared hosting, we don't create a Supabase project.
+        We set up default API configuration with platform keys and mark as ready.
+        """
+        logger.info("Processing shared_pool_setup job for client %s (Adventurer tier)", job.client_id)
+
+        await self._update_client(job.client_id, {
+            "provisioning_status": "configuring_shared",
+            "provisioning_error": None,
+            "provisioning_started_at": datetime.utcnow().isoformat(),
+        })
+
+        # Verify shared pool is available (optional - may not have table yet)
+        def _verify_pool() -> bool:
+            try:
+                result = (
+                    self.platform_db
+                    .table("shared_pool_config")
+                    .select("id, pool_name, current_client_count, max_clients")
+                    .eq("is_active", True)
+                    .eq("pool_name", "adventurer_pool")
+                    .single()
+                    .execute()
+                )
+                if not result.data:
+                    # No pool config found - allow anyway for now
+                    logger.warning("No shared_pool_config found, proceeding with default setup")
+                    return True
+
+                # Check if pool has capacity
+                current = result.data.get("current_client_count", 0)
+                max_clients = result.data.get("max_clients", 1000)
+                return current < max_clients
+            except Exception as e:
+                # Table may not exist yet - allow provisioning to continue
+                logger.warning(f"shared_pool_config check failed: {e}, proceeding anyway")
+                return True
+
+        pool_available = await asyncio.to_thread(_verify_pool)
+
+        if not pool_available:
+            await self._record_failure(
+                job,
+                "Shared pool not available or at capacity. Cannot provision Adventurer tier."
+            )
+            return
+
+        # Set default API configuration for Adventurer tier
+        # These are the platform-managed defaults - user can override with BYOK
+        default_api_config = {
+            "llm": {
+                "provider": "cerebras",
+                "model": "glm-4-9b-chat",  # GLM 4.6
+            },
+            "stt": {
+                "provider": "cartesia",
+            },
+            "tts": {
+                "provider": "cartesia",
+            },
+            "embedding": {
+                "provider": "siliconflow",
+                "model": "Qwen/Qwen3-Embedding-4B",
+            },
+            "rerank": {
+                "enabled": True,
+                "provider": "siliconflow",
+                "model": "Qwen/Qwen3-Reranker-2B",
+            }
+        }
+
+        # Initialize usage tracking record for this client
+        def _init_usage() -> None:
+            try:
+                period_start = datetime.utcnow().replace(day=1).date().isoformat()
+                self.platform_db.table("client_usage").upsert({
+                    "client_id": job.client_id,
+                    "period_start": period_start,
+                    "voice_seconds_used": 0,
+                    "voice_seconds_limit": 6000,  # 100 minutes
+                    "text_messages_used": 0,
+                    "text_messages_limit": 1000,
+                    "embedding_chunks_used": 0,
+                    "embedding_chunks_limit": 10000,
+                }, on_conflict="client_id,period_start").execute()
+            except Exception as e:
+                logger.warning(f"Failed to initialize usage tracking: {e}")
+
+        await asyncio.to_thread(_init_usage)
+
+        # Mark client as ready with shared hosting and default config
+        await self._update_client(job.client_id, {
+            "tier": "adventurer",
+            "hosting_type": "shared",
+            "max_sidekicks": 1,
+            "uses_platform_keys": True,  # Use platform API keys by default
+            "default_api_config": default_api_config,
+            "supabase_url": None,  # Uses shared pool
+            "supabase_service_role_key": None,
+            "provisioning_status": "completed",
+            "provisioning_completed_at": datetime.utcnow().isoformat(),
+            "provisioning_error": None,
+        })
+
+        await self._delete_job(job.id)
+        logger.info("Client %s provisioning complete (Adventurer tier, shared pool, platform keys)", job.client_id)
+
+
+async def provision_client_by_tier(
+    client_id: str,
+    tier: str = "champion",
+    platform_db=None,
+) -> None:
+    """
+    Enqueue the appropriate provisioning job based on tier.
+
+    Args:
+        client_id: The client UUID
+        tier: 'adventurer', 'champion', or 'paragon'
+        platform_db: Platform Supabase client (optional, will use default)
+    """
+    if platform_db is None:
+        platform_db = get_connection_manager().platform_client
+
+    tier_features = get_tier_features(tier)
+    hosting_type = tier_features.get("hosting_type", HostingType.DEDICATED)
+
+    if hosting_type == HostingType.SHARED:
+        # Adventurer tier: Use shared pool setup
+        job_type = "shared_pool_setup"
+        logger.info(f"Enqueueing shared_pool_setup for client {client_id} (Adventurer tier)")
+    else:
+        # Champion/Paragon tier: Create dedicated Supabase project
+        job_type = "supabase_project"
+        logger.info(f"Enqueueing supabase_project for client {client_id} ({tier} tier)")
+
+    # Update client with tier info
+    platform_db.table("clients").update({
+        "tier": tier,
+        "hosting_type": str(hosting_type.value) if isinstance(hosting_type, HostingType) else hosting_type,
+        "max_sidekicks": tier_features.get("max_sidekicks"),
+        "provisioning_status": "queued",
+    }).eq("id", client_id).execute()
+
+    # Enqueue the job
+    platform_db.table("client_provisioning_jobs").upsert({
+        "client_id": client_id,
+        "job_type": job_type,
+        "attempts": 0,
+        "claimed_at": None,
+        "last_error": None,
+    }, on_conflict="client_id,job_type").execute()
+
+
+__all__ = ["ProvisioningWorker", "ProvisioningJob", "provision_client_by_tier"]

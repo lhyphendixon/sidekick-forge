@@ -1,0 +1,21 @@
+# BGE Service Dependencies
+# Local embedding and reranking service using BGE-M3 and BGE-reranker-v2-m3
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+
+# ML/Embedding
+torch>=2.6.0
+transformers>=4.48.0
+sentence-transformers>=3.4.0
+FlagEmbedding==1.2.11
+peft>=0.13.0  # Required by FlagEmbedding for PEFT model support
+
+# Utilities
+numpy==1.26.4
+httpx==0.28.1
+
+# Health checks
+psutil==6.1.1

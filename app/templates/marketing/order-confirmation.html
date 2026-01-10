@@ -1,0 +1,147 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Order Confirmation - Sidekick Forge{% endblock %}
+
+{% block content %}
+<section class="py-16 min-h-screen">
+    <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8">
+        {% if order %}
+        <!-- Success State -->
+        <div class="text-center mb-8">
+            <div class="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <svg class="w-10 h-10 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+            </div>
+            <h1 class="text-3xl md:text-4xl font-bold text-white mb-3">
+                Order Confirmed!
+            </h1>
+            <p class="text-xl text-gray-400">
+                Thank you for your purchase, {{ order.first_name }}
+            </p>
+        </div>
+
+        <!-- Order Details Card -->
+        <div class="glass-container rounded-2xl p-8 mb-8">
+            <h2 class="text-lg font-semibold text-white mb-4">Order Details</h2>
+
+            <div class="space-y-3 mb-6">
+                <div class="flex justify-between items-center py-2 border-b border-white/10">
+                    <span class="text-gray-400">Order Number</span>
+                    <span class="text-white font-mono">{{ order.order_number }}</span>
+                </div>
+                <div class="flex justify-between items-center py-2 border-b border-white/10">
+                    <span class="text-gray-400">Plan</span>
+                    <span class="text-white font-semibold">{{ order.tier_name }}</span>
+                </div>
+                <div class="flex justify-between items-center py-2 border-b border-white/10">
+                    <span class="text-gray-400">Amount</span>
+                    <span class="text-white font-semibold">${{ order.price }}/month</span>
+                </div>
+                <div class="flex justify-between items-center py-2">
+                    <span class="text-gray-400">Email</span>
+                    <span class="text-white">{{ order.email }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Email Verification Notice -->
+        <div class="glass-card rounded-2xl p-8 mb-8 border-2 border-blue-500/30">
+            <div class="flex items-start gap-4">
+                <div class="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-white mb-2">Check Your Email</h3>
+                    <p class="text-gray-400 mb-4">
+                        We've sent a verification email to <strong class="text-white">{{ order.email }}</strong>.
+                        Click the link in the email to activate your account and access your dashboard.
+                    </p>
+                    <p class="text-gray-500 text-sm">
+                        The verification link expires in 24 hours.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Resend Verification -->
+            <div class="mt-6 pt-6 border-t border-white/10">
+                <p class="text-gray-500 text-sm mb-3">Didn't receive the email?</p>
+                <form hx-post="/api/resend-verification"
+                      hx-target="#resend-result"
+                      hx-swap="innerHTML"
+                      class="flex flex-col sm:flex-row gap-3">
+                    <input type="hidden" name="email" value="{{ order.email }}">
+                    <button type="submit"
+                            class="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg font-medium transition text-sm">
+                        Resend Verification Email
+                    </button>
+                </form>
+                <div id="resend-result" class="mt-3"></div>
+            </div>
+        </div>
+
+        <!-- What's Next -->
+        <div class="glass-card rounded-2xl p-8">
+            <h3 class="text-lg font-semibold text-white mb-4">What Happens Next?</h3>
+            <ol class="space-y-4">
+                <li class="flex items-start gap-4">
+                    <div class="w-8 h-8 bg-brand-teal/20 rounded-full flex items-center justify-center flex-shrink-0 text-brand-teal font-bold text-sm">
+                        1
+                    </div>
+                    <div>
+                        <p class="text-white font-medium">Verify your email</p>
+                        <p class="text-gray-500 text-sm">Click the link in the email we just sent you</p>
+                    </div>
+                </li>
+                <li class="flex items-start gap-4">
+                    <div class="w-8 h-8 bg-brand-teal/20 rounded-full flex items-center justify-center flex-shrink-0 text-brand-teal font-bold text-sm">
+                        2
+                    </div>
+                    <div>
+                        <p class="text-white font-medium">We're setting up your infrastructure</p>
+                        <p class="text-gray-500 text-sm">This typically takes a few minutes</p>
+                    </div>
+                </li>
+                <li class="flex items-start gap-4">
+                    <div class="w-8 h-8 bg-brand-teal/20 rounded-full flex items-center justify-center flex-shrink-0 text-brand-teal font-bold text-sm">
+                        3
+                    </div>
+                    <div>
+                        <p class="text-white font-medium">Access your dashboard</p>
+                        <p class="text-gray-500 text-sm">Create your first AI sidekick and start building</p>
+                    </div>
+                </li>
+            </ol>
+        </div>
+
+        <!-- Support -->
+        <div class="text-center mt-8 text-gray-500 text-sm">
+            <p>
+                Questions? Contact us at
+                <a href="mailto:team@sidekickforge.com" class="text-brand-teal hover:underline">team@sidekickforge.com</a>
+            </p>
+        </div>
+
+        {% else %}
+        <!-- No Order Found -->
+        <div class="text-center">
+            <div class="w-20 h-20 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <svg class="w-10 h-10 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path>
+                </svg>
+            </div>
+            <h1 class="text-3xl font-bold text-white mb-3">Order Not Found</h1>
+            <p class="text-gray-400 mb-6">
+                We couldn't find the order you're looking for.
+            </p>
+            <a href="/checkout"
+               class="inline-block bg-brand-teal hover:bg-brand-teal/90 text-white px-6 py-3 rounded-lg font-semibold transition">
+                Start New Order
+            </a>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

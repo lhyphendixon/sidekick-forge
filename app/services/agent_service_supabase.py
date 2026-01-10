@@ -6,6 +6,7 @@ from datetime import datetime
 from supabase import Client as SupabaseClient
 import logging
 import json
+import re
 
 from app.models.agent import Agent, AgentCreate, AgentUpdate, VoiceSettings, WebhookSettings
 from app.models.client import ChannelSettings, TelegramChannelSettings
@@ -38,7 +39,9 @@ class AgentService:
         # Create VoiceSettings object with defaults
         try:
             voice_settings = VoiceSettings(**voice_settings_dict)
-        except Exception:
+            logger.info(f"[_parse_agent_data] Parsed voice_settings: avatar_image_url={voice_settings.avatar_image_url}, avatar_model_type={voice_settings.avatar_model_type}")
+        except Exception as e:
+            logger.error(f"[_parse_agent_data] Failed to parse voice_settings: {e}, raw={voice_settings_dict}")
             voice_settings = VoiceSettings()
         
         # Parse webhooks
@@ -123,6 +126,11 @@ class AgentService:
             tools_config=tools_config,
             channels=channels,
             rag_results_limit=agent_data.get("rag_results_limit", 5),
+            supertab_enabled=agent_data.get("supertab_enabled", False),
+            supertab_experience_id=agent_data.get("supertab_experience_id"),
+            voice_chat_enabled=agent_data.get("voice_chat_enabled", True),
+            text_chat_enabled=agent_data.get("text_chat_enabled", True),
+            video_chat_enabled=agent_data.get("video_chat_enabled", False),
         )
     
     async def get_agent(self, client_id: str, agent_slug: str) -> Optional[Agent]:
@@ -335,8 +343,18 @@ class AgentService:
                 created_agent_data = result.data[0]
                 # Ensure client_id is set for parsing
                 created_agent_data["client_id"] = client_id
+
+                # Auto-assign existing documents to the new agent
+                agent_id = created_agent_data.get("id")
+                if agent_id:
+                    await self._auto_assign_existing_documents_to_agent(
+                        agent_id=agent_id,
+                        client_id=client_id,
+                        client_supabase=client_supabase,
+                    )
+
                 return self._parse_agent_data(created_agent_data, client_id)
-            
+
             logger.error(f"Agent creation returned no data for client {client_id}")
             return None
             
@@ -378,17 +396,37 @@ class AgentService:
             if update_dict:
                 update_dict["updated_at"] = datetime.utcnow().isoformat()
                 
-                # Remove fields that might not exist in the table
-                update_dict.pop("tools_config", None)  # Remove if not in table schema
+                # Remove fields that are not direct columns
                 update_dict.pop("channels", None)      # Channels are stored inside tools_config, not as a column
+                # Note: tools_config IS a valid column in the agents table, so we keep it
                 
-                # Ensure voice_settings is a plain dict (let Supabase handle JSONB)
+                # Ensure voice_settings is a plain dict with proper serialization (let Supabase handle JSONB)
                 if "voice_settings" in update_dict and update_dict["voice_settings"]:
                     try:
                         if hasattr(update_dict["voice_settings"], "dict"):
-                            update_dict["voice_settings"] = update_dict["voice_settings"].dict()
-                    except Exception:
-                        pass
+                            # Use mode='json' to ensure enums are serialized to strings
+                            if hasattr(update_dict["voice_settings"], "model_dump"):
+                                # Pydantic v2
+                                update_dict["voice_settings"] = update_dict["voice_settings"].model_dump(mode='json')
+                            else:
+                                # Pydantic v1 fallback - manually convert enums
+                                vs_dict = update_dict["voice_settings"].dict()
+                                # Convert any enum values to strings
+                                for key, value in vs_dict.items():
+                                    if hasattr(value, 'value'):
+                                        vs_dict[key] = value.value
+                                update_dict["voice_settings"] = vs_dict
+                        elif isinstance(update_dict["voice_settings"], dict):
+                            # Already a dict but might have enum objects
+                            vs_dict = update_dict["voice_settings"]
+                            for key, value in list(vs_dict.items()):
+                                if hasattr(value, 'value'):
+                                    vs_dict[key] = value.value
+                        # Debug: log voice_settings content
+                        logger.info(f"[agents.update] VOICE_SETTINGS DICT: {update_dict['voice_settings']}")
+                        logger.info(f"[agents.update] avatar_image_url in dict: {update_dict['voice_settings'].get('avatar_image_url')}")
+                    except Exception as e:
+                        logger.error(f"[agents.update] voice_settings conversion error: {e}")
                 
                 # Do not update legacy webhook columns here to avoid 400s on tenants
                 # where these columns may not exist. Skip mapping entirely.
@@ -396,15 +434,36 @@ class AgentService:
                     update_dict.pop("webhooks", None)
                 
                 # Discover existing columns for this tenant's agents table and prune payload
+                # Known core columns that exist on all agents tables (fallback if RPC fails)
+                KNOWN_AGENT_COLUMNS = {
+                    'id', 'slug', 'name', 'description', 'client_id', 'agent_image',
+                    'system_prompt', 'voice_settings', 'enabled', 'show_citations',
+                    'rag_results_limit', 'supertab_enabled', 'supertab_experience_id',
+                    'voice_chat_enabled', 'text_chat_enabled', 'video_chat_enabled',
+                    'tools_config', 'rag_config',
+                    'created_at', 'updated_at'
+                }
+                cols = None
                 try:
                     cols_info = client_supabase.rpc("pg_table_cols", {"table_name": "agents"}).execute()
                     # If RPC not available, fall back silently
                     if getattr(cols_info, 'data', None):
                         cols = {c.get('name') for c in cols_info.data if isinstance(c, dict)}
-                        if cols:
-                            update_dict = {k: v for k, v in update_dict.items() if k in cols}
-                except Exception:
-                    pass
+                        logger.info(f"[agents.update] discovered columns: {cols}")
+                except Exception as col_err:
+                    logger.warning(f"[agents.update] column discovery RPC failed: {col_err}")
+
+                # Use discovered columns or fallback to known columns
+                if not cols:
+                    cols = KNOWN_AGENT_COLUMNS
+                    logger.info(f"[agents.update] using fallback known columns: {cols}")
+
+                if cols:
+                    original_keys = set(update_dict.keys())
+                    update_dict = {k: v for k, v in update_dict.items() if k in cols}
+                    filtered_keys = original_keys - set(update_dict.keys())
+                    if filtered_keys:
+                        logger.warning(f"[agents.update] FILTERED OUT columns not in schema: {filtered_keys}")
 
                 # Debug: log update payload
                 try:
@@ -445,8 +504,69 @@ class AgentService:
                     # Some client versions may not support select() chaining; fall back to plain update
                     pass
 
-                # Execute the update
-                result = update_query.execute()
+                # Execute the update with retry logic for missing columns
+                logger.info(f"[agents.update] executing update for agent_slug={agent_slug}, agent_id={agent_id}")
+
+                # Columns that may not exist on all tenant databases
+                optional_columns = [
+                    'voice_chat_enabled', 'text_chat_enabled', 'video_chat_enabled',
+                    'show_citations', 'rag_results_limit', 'supertab_enabled',
+                    'supertab_experience_id', 'tools_config', 'rag_config'
+                ]
+
+                result = None
+                columns_to_remove = []
+                max_retries = len(optional_columns)
+
+                for attempt in range(max_retries + 1):
+                    try:
+                        # Remove any columns identified as missing in previous attempts
+                        current_dict = {k: v for k, v in update_dict.items() if k not in columns_to_remove}
+
+                        update_query = (
+                            client_supabase
+                            .table("agents")
+                            .update(current_dict)
+                        )
+                        if agent_id:
+                            update_query = update_query.eq("id", agent_id)
+                        else:
+                            update_query = update_query.eq("slug", agent_slug)
+
+                        try:
+                            update_query = update_query.select("*")
+                        except Exception:
+                            pass
+
+                        result = update_query.execute()
+                        logger.info(f"[agents.update] result.data={result.data}")
+                        break  # Success, exit retry loop
+
+                    except Exception as update_err:
+                        error_str = str(update_err)
+                        # Check for PostgREST column not found error (PGRST204)
+                        if "PGRST204" in error_str or "Could not find the" in error_str:
+                            # Extract the missing column name from error message
+                            import re
+                            match = re.search(r"Could not find the '(\w+)' column", error_str)
+                            if match:
+                                missing_col = match.group(1)
+                                if missing_col not in columns_to_remove:
+                                    columns_to_remove.append(missing_col)
+                                    logger.warning(f"[agents.update] Column '{missing_col}' not found, retrying without it (attempt {attempt + 1})")
+                                    continue
+                        # If we can't handle the error or it's not a missing column error, re-raise
+                        raise
+
+                if result is None:
+                    logger.error(f"[agents.update] All retry attempts failed")
+                    return None
+
+                # Debug: log what voice_settings came back from the database
+                if result.data and len(result.data) > 0:
+                    returned_vs = result.data[0].get('voice_settings', {})
+                    logger.info(f"[agents.update] RETURNED voice_settings: {returned_vs}")
+                    logger.info(f"[agents.update] RETURNED avatar_image_url: {returned_vs.get('avatar_image_url') if returned_vs else 'N/A'}")
                 try:
                     # Some clients expose result.error; log if present
                     err = getattr(result, "error", None)
@@ -454,30 +574,6 @@ class AgentService:
                         logger.error(f"[agents.update] supabase error: {err}")
                 except Exception:
                     pass
-                
-                # If the update failed due to a non-existent column like show_citations or rag_results_limit,
-                # retry once without those fields to avoid PostgREST 400s on tenants missing the column
-                retry_columns = []
-                if "show_citations" in update_dict:
-                    retry_columns.append("show_citations")
-                if "rag_results_limit" in update_dict:
-                    retry_columns.append("rag_results_limit")
-
-                if (not result.data) and retry_columns:
-                    try:
-                        update_dict_retry = dict(update_dict)
-                        for col in retry_columns:
-                            update_dict_retry.pop(col, None)
-                        result = (
-                            client_supabase
-                            .table("agents")
-                            .update(update_dict_retry)
-                            .eq("slug", agent_slug)
-                            .execute()
-                        )
-                    except Exception as retry_err:
-                        logger.error(f"Retry without show_citations failed: {retry_err}")
-                        return None
 
                 if result.data:
                     agent_data = result.data[0]
@@ -591,7 +687,71 @@ class AgentService:
         """Force sync agents from a client's Supabase and return count"""
         agents = await self.get_client_agents(client_id)
         return len(agents)
-    
+
+    async def _auto_assign_existing_documents_to_agent(
+        self,
+        agent_id: str,
+        client_id: str,
+        client_supabase=None,
+    ):
+        """
+        Auto-assign all existing documents to a newly created agent.
+        This ensures agents have access to all documents in the knowledge base.
+        """
+        try:
+            if not client_supabase:
+                client_supabase = await self.client_service.get_client_supabase_client(client_id)
+
+            if not client_supabase:
+                logger.error(f"No Supabase client found for client {client_id}")
+                return
+
+            # Get all documents with status 'ready' (processed and available)
+            docs_result = client_supabase.table('documents').select('id').eq('status', 'ready').execute()
+
+            if not docs_result.data:
+                logger.info(f"No existing documents to assign for new agent {agent_id}")
+                return
+
+            documents = docs_result.data
+            logger.info(f"Auto-assigning {len(documents)} existing documents to new agent {agent_id}")
+
+            assigned_count = 0
+            for doc in documents:
+                doc_id = doc.get('id')
+                if not doc_id:
+                    continue
+
+                # Check if assignment already exists
+                existing = client_supabase.table('agent_documents') \
+                    .select('id') \
+                    .eq('agent_id', agent_id) \
+                    .eq('document_id', doc_id) \
+                    .limit(1) \
+                    .execute()
+
+                if existing.data:
+                    continue
+
+                # Create new assignment
+                agent_doc_data = {
+                    'agent_id': agent_id,
+                    'document_id': doc_id,
+                    'access_type': 'read',
+                    'enabled': True
+                }
+
+                try:
+                    client_supabase.table('agent_documents').insert(agent_doc_data).execute()
+                    assigned_count += 1
+                except Exception as insert_error:
+                    logger.warning(f"Failed to assign document {doc_id} to agent {agent_id}: {insert_error}")
+
+            logger.info(f"Auto-assigned {assigned_count} documents to new agent {agent_id}")
+
+        except Exception as e:
+            logger.error(f"Error auto-assigning existing documents to agent {agent_id}: {e}")
+
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics - returns empty for Supabase-only mode"""
         return {

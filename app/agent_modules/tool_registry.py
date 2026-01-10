@@ -16,7 +16,9 @@ from livekit.agents import llm
 from livekit.agents.llm.tool_context import function_tool as lk_function_tool, ToolError
 
 from app.agent_modules.abilities.asana import AsanaAbilityConfigError, build_asana_tool
+from app.agent_modules.abilities.helpscout import HelpScoutAbilityConfigError, build_helpscout_tool
 from app.services.asana_oauth_service import AsanaOAuthService
+from app.services.helpscout_oauth_service import HelpScoutOAuthService
 from app.agent_modules.tool_status_wrapper import with_status_updates, get_tool_friendly_name
 
 
@@ -58,6 +60,10 @@ class ToolRegistry:
                     ft = self._build_code_tool(t)
                 elif ttype == "asana":
                     ft = self._build_asana_tool(t)
+                elif ttype == "helpscout":
+                    ft = self._build_helpscout_tool(t)
+                elif ttype == "content_catalyst":
+                    ft = self._build_content_catalyst_tool(t)
                 else:
                     self._logger.warning(f"Unsupported tool type '{ttype}' for slug={slug}; skipping")
                     continue
@@ -733,3 +739,308 @@ class ToolRegistry:
                     },
                 }
             )(_misconfigured_tool)
+
+    def _build_helpscout_tool(self, t: Dict[str, Any]) -> Any:
+        slug = t.get("slug") or t.get("name") or t.get("id") or "helpscout_tickets"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            lookup_keys = (
+                slug,
+                t.get("id"),
+                t.get("name"),
+            )
+            for key in lookup_keys:
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        access_token = merged_cfg.get("access_token")
+        key_name = merged_cfg.get("access_token_key") or merged_cfg.get("api_key_name") or "helpscout_access_token"
+        if not access_token and key_name:
+            access_token = self._api_keys.get(key_name)
+        env_key = merged_cfg.get("access_token_env")
+        if not access_token and env_key:
+            access_token = os.getenv(str(env_key))
+        if not access_token and key_name:
+            env_candidate = os.getenv(str(key_name).upper())
+            if env_candidate:
+                access_token = env_candidate
+        if access_token:
+            merged_cfg["access_token"] = access_token
+
+        oauth_service = None
+        try:
+            from app.core.dependencies import get_client_service
+
+            client_service = get_client_service()
+            platform_client = self._platform_supabase or getattr(client_service, "supabase", None)
+            oauth_service = HelpScoutOAuthService(
+                client_service,
+                primary_supabase=self._primary_supabase,
+                platform_supabase=platform_client,
+            )
+        except Exception:
+            oauth_service = None
+
+        try:
+            return build_helpscout_tool(t, merged_cfg, oauth_service=oauth_service)
+        except HelpScoutAbilityConfigError as exc:
+            message = f"HelpScout ability is not ready: {exc}"
+            try:
+                self._logger.warning(
+                    "HelpScout ability could not be built",
+                    extra={"slug": slug, "reason": str(exc)},
+                )
+            except Exception:
+                pass
+
+            async def _misconfigured_tool(**_: Any) -> Dict[str, str]:
+                return {"error": message, "slug": slug}
+
+            description = t.get("description") or "HelpScout integration is not configured yet."
+            return lk_function_tool(
+                raw_schema={
+                    "name": slug,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_inquiry": {
+                                "type": "string",
+                                "description": "Latest user request describing the desired HelpScout action.",
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional session metadata.",
+                                "additionalProperties": True,
+                            },
+                        },
+                        "required": ["user_inquiry"],
+                    },
+                }
+            )(_misconfigured_tool)
+
+    def _build_content_catalyst_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Content Catalyst tool for multi-phase article generation."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "content_catalyst"
+        cfg = dict(t.get("config") or {})
+        description = t.get("description") or (
+            "Generate two high-quality, research-backed article variations from a topic or source material. "
+            "Accepts an MP3 audio file URL, a web URL, or text input as the starting point. "
+            "Uses a multi-phase process with research, architecture, drafting, fact-checking, and polishing."
+        )
+
+        # Get client_id from runtime context or config
+        client_id = cfg.get("client_id")
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_type": {
+                        "type": "string",
+                        "enum": ["mp3", "url", "text"],
+                        "description": "Type of source input: 'mp3' for audio file URL, 'url' for web page, 'text' for direct text input",
+                    },
+                    "source_content": {
+                        "type": "string",
+                        "description": "The source content: MP3 file URL for transcription, web URL to scrape, or text input",
+                    },
+                    "target_word_count": {
+                        "type": "integer",
+                        "default": 1500,
+                        "description": "Target word count for each article (default: 1500)",
+                    },
+                    "style_prompt": {
+                        "type": "string",
+                        "description": "Optional style guidance (e.g., 'formal', 'conversational', 'technical')",
+                    },
+                    "use_perplexity": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Whether to use Perplexity for web research",
+                    },
+                    "use_knowledge_base": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Whether to search the knowledge base for relevant content",
+                    },
+                },
+                "required": ["source_type", "source_content"],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            """Invoke the Content Catalyst pipeline."""
+            try:
+                self._logger.info("🚀 Content Catalyst tool invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+
+            source_type = kwargs.get("source_type", "text")
+            source_content = kwargs.get("source_content", "")
+            target_word_count = kwargs.get("target_word_count", 1500)
+            style_prompt = kwargs.get("style_prompt")
+            use_perplexity = kwargs.get("use_perplexity", True)
+            use_knowledge_base = kwargs.get("use_knowledge_base", True)
+
+            if not source_content:
+                raise ToolError("source_content is required. Provide an MP3 URL, web URL, or text input.")
+
+            # Get client_id from runtime context
+            runtime_client_id = None
+            runtime_ctx = self._runtime_context.get(slug)
+            if runtime_ctx:
+                runtime_client_id = runtime_ctx.get("client_id")
+            final_client_id = runtime_client_id or client_id
+
+            if not final_client_id:
+                raise ToolError(
+                    "client_id is required for Content Catalyst. "
+                    "Ensure the tool is configured with a client context."
+                )
+
+            try:
+                from app.services.content_catalyst_service import (
+                    get_content_catalyst_service,
+                    ContentCatalystConfig,
+                    SourceType,
+                )
+
+                # Map source_type string to enum
+                source_type_enum = SourceType(source_type.lower())
+
+                # For MP3 sources, we need to transcribe first
+                if source_type_enum == SourceType.MP3:
+                    # Check if client has STT configured
+                    from app.core.dependencies import get_client_service
+                    client_service = get_client_service()
+                    client = await client_service.get_client(final_client_id)
+
+                    if not client or not client.settings or not client.settings.api_keys:
+                        return json.dumps({
+                            "error": "STT not configured",
+                            "message": "Audio transcription requires an STT provider. Please configure Deepgram or another STT provider in your client settings.",
+                            "action_required": "Configure STT in client settings"
+                        })
+
+                    # Check for Deepgram API key
+                    deepgram_key = getattr(client.settings.api_keys, "deepgram_api_key", None)
+                    if not deepgram_key:
+                        return json.dumps({
+                            "error": "Deepgram API key not configured",
+                            "message": "Audio transcription requires a Deepgram API key. Please add your Deepgram API key in client settings.",
+                            "action_required": "Add deepgram_api_key to client API keys"
+                        })
+
+                    # Transcribe the MP3
+                    self._logger.info(f"📝 Transcribing MP3 from: {source_content[:100]}")
+                    try:
+                        transcribed = await _transcribe_mp3(source_content, deepgram_key)
+                        source_content = transcribed
+                        source_type_enum = SourceType.TEXT  # Now treat as text
+                    except Exception as e:
+                        return json.dumps({
+                            "error": "Transcription failed",
+                            "message": f"Failed to transcribe audio: {str(e)}",
+                            "action_required": "Check the MP3 URL is accessible and try again"
+                        })
+
+                # Get WordPress URLs for internal linking if available
+                wordpress_urls = []
+                try:
+                    from app.services.wordpress_site_service import WordPressSiteService
+                    wp_service = WordPressSiteService()
+                    sites = await wp_service.list_sites(final_client_id)
+                    for site in sites:
+                        if site.get("sync_status") == "connected":
+                            # Get some recent posts from this site
+                            # (simplified - would need actual API call to get post URLs)
+                            wordpress_urls.append(site.get("site_url", ""))
+                except Exception:
+                    pass  # WordPress linking is optional
+
+                # Create config
+                config = ContentCatalystConfig(
+                    source_type=source_type_enum,
+                    source_content=source_content,
+                    target_word_count=target_word_count,
+                    style_prompt=style_prompt,
+                    use_perplexity=use_perplexity,
+                    use_knowledge_base=use_knowledge_base,
+                )
+
+                # Get the service
+                service = await get_content_catalyst_service(final_client_id)
+
+                # Run the pipeline
+                run_id, article_1, article_2 = await service.run_full_pipeline(
+                    config=config,
+                    wordpress_urls=wordpress_urls if wordpress_urls else None,
+                )
+
+                return json.dumps({
+                    "success": True,
+                    "run_id": run_id,
+                    "article_1": {
+                        "content": article_1,
+                        "word_count": len(article_1.split()),
+                    },
+                    "article_2": {
+                        "content": article_2,
+                        "word_count": len(article_2.split()),
+                    },
+                    "message": "Content Catalyst completed! Two article variations have been generated."
+                })
+
+            except Exception as e:
+                self._logger.error(f"❌ Content Catalyst failed: {e}")
+                return json.dumps({
+                    "error": "Pipeline failed",
+                    "message": str(e),
+                })
+
+        async def _transcribe_mp3(mp3_url: str, deepgram_api_key: str) -> str:
+            """Transcribe an MP3 file using Deepgram."""
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true",
+                    headers={
+                        "Authorization": f"Token {deepgram_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"url": mp3_url},
+                    timeout=aiohttp.ClientTimeout(total=300),  # 5 minute timeout for long audio
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        raise Exception(f"Deepgram API error {resp.status}: {text[:200]}")
+
+                    data = await resp.json()
+                    transcript = data.get("results", {}).get("channels", [{}])[0].get(
+                        "alternatives", [{}]
+                    )[0].get("transcript", "")
+
+                    if not transcript:
+                        raise Exception("No transcript returned from Deepgram")
+
+                    return transcript
+
+        # Attach the transcribe helper to the wrapper for access
+        _invoke_raw._transcribe_mp3 = _transcribe_mp3
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)

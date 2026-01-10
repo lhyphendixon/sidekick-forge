@@ -28,6 +28,7 @@ from app.config import settings
 from app.services.tools_service_supabase import ToolsService
 from app.services.document_processor import document_processor
 from app.utils.tool_prompts import apply_tool_prompt_instructions
+from app.services.usage_tracking import usage_tracking_service, QuotaType
 from livekit.agents.llm.tool_context import ToolContext
 from app.agent_modules.tool_registry import ToolRegistry
 # Redis dedupe removed
@@ -355,21 +356,32 @@ async def _build_agent_context_for_dispatch(
             )
 
     embedding_cfg: Dict[str, Any] = {}
-    if getattr(client, "additional_settings", None) and client.additional_settings.get("embedding"):
+    # Check client.settings.additional_settings first (PlatformClient model structure)
+    if client.settings and getattr(client.settings, "additional_settings", None):
+        settings_additional = client.settings.additional_settings
+        if isinstance(settings_additional, dict) and settings_additional.get("embedding"):
+            embedding_cfg = settings_additional.get("embedding", {})
+            logger.info(f"📦 Embedding config from client.settings.additional_settings: {embedding_cfg}")
+    # Fallback: check client.additional_settings directly (for backward compatibility)
+    if not embedding_cfg and getattr(client, "additional_settings", None) and client.additional_settings.get("embedding"):
         embedding_cfg = client.additional_settings.get("embedding", {})
-    elif client.settings and getattr(client.settings, "embedding", None):
+        logger.info(f"📦 Embedding config from client.additional_settings (direct): {embedding_cfg}")
+    # Legacy path: check client.settings.embedding
+    if not embedding_cfg and client.settings and getattr(client.settings, "embedding", None):
         try:
             embedding_cfg = client.settings.embedding.dict()
         except Exception:
             embedding_cfg = dict(client.settings.embedding) if isinstance(client.settings.embedding, dict) else {}
+        logger.info(f"📦 Embedding config from client.settings.embedding: {embedding_cfg}")
     # Fallback: if embedding config is still empty, derive a safe default so the context manager can initialize
     if not embedding_cfg:
         embedding_cfg = {
             "provider": "siliconflow",
-            "document_model": "Qwen/Qwen3-Embedding-0.6B",
-            "conversation_model": "Qwen/Qwen3-Embedding-0.6B",
+            "document_model": "Qwen/Qwen3-Embedding-4B",
+            "conversation_model": "Qwen/Qwen3-Embedding-4B",
             "dimension": 1024,
         }
+        logger.info(f"📦 Using FALLBACK embedding config: {embedding_cfg}")
 
     tools_config = _extract_agent_tools_config(agent)
     api_keys_map = _extract_api_keys(client)
@@ -665,6 +677,7 @@ class TriggerMode(str, Enum):
     """Agent trigger modes"""
     VOICE = "voice"
     TEXT = "text"
+    VIDEO = "video"
 
 
 class TriggerAgentRequest(BaseModel):
@@ -754,10 +767,38 @@ async def trigger_agent(
         
         if not agent.enabled:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Agent '{request.agent_slug}' is currently disabled"
             )
-        
+
+        # Validate chat mode is enabled for the requested mode
+        voice_chat_enabled = getattr(agent, 'voice_chat_enabled', True)
+        text_chat_enabled = getattr(agent, 'text_chat_enabled', True)
+        video_chat_enabled = getattr(agent, 'video_chat_enabled', False)
+        # Handle None values (default to True for backwards compatibility, except video which defaults False)
+        if voice_chat_enabled is None:
+            voice_chat_enabled = True
+        if text_chat_enabled is None:
+            text_chat_enabled = True
+        if video_chat_enabled is None:
+            video_chat_enabled = False
+
+        if request.mode == TriggerMode.VOICE and not voice_chat_enabled:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Voice chat is disabled for agent '{request.agent_slug}'"
+            )
+        if request.mode == TriggerMode.TEXT and not text_chat_enabled:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Text chat is disabled for agent '{request.agent_slug}'"
+            )
+        if request.mode == TriggerMode.VIDEO and not video_chat_enabled:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Video chat is disabled for agent '{request.agent_slug}'"
+            )
+
         # Get client configuration for LiveKit/API keys
         client = await agent_service.client_service.get_client(client_id)
         if not client:
@@ -781,6 +822,19 @@ async def trigger_agent(
             except Exception as e:
                 logger.error(f"Validation error for voice result: {e}")
                 raise HTTPException(status_code=500, detail="Invalid voice trigger result")
+        elif request.mode == TriggerMode.VIDEO:
+            # Video mode uses same LiveKit infrastructure as voice, but with mode='video'
+            # The agent worker will initialize the Bithuman avatar session
+            result = await handle_voice_trigger(request, agent, client, tools_service, mode_override="video")
+            try:
+                if not isinstance(result, dict) or not result.get("conversation_id"):
+                    logger.error("❌ video result missing conversation_id; refusing to return success")
+                    raise HTTPException(status_code=500, detail="Missing conversation_id in video trigger result")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Validation error for video result: {e}")
+                raise HTTPException(status_code=500, detail="Invalid video trigger result")
         else:  # TEXT mode
             if settings.enable_livekit_text_dispatch:
                 logger.info("🔄 ENABLE_LIVEKIT_TEXT_DISPATCH=true -> routing via LiveKit worker")
@@ -904,14 +958,17 @@ async def handle_voice_trigger(
     agent, 
     client,
     tools_service: Optional[ToolsService] = None,
+    mode_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Handle voice mode agent triggering
     
-    This creates a LiveKit room (if needed) and triggers a Python LiveKit agent to join it
+    This creates a LiveKit room (if needed) and triggers a Python LiveKit agent to join it.
+    For video mode, pass mode_override="video" to enable avatar rendering.
     """
-    logger.debug(f"Starting voice trigger handling", extra={'agent_slug': agent.slug, 'room_name': request.room_name})
-    logger.info(f"Handling voice trigger for agent {agent.slug} in room {request.room_name}")
+    effective_mode = mode_override or "voice"
+    logger.debug(f"Starting {effective_mode} trigger handling", extra={'agent_slug': agent.slug, 'room_name': request.room_name})
+    logger.info(f"Handling {effective_mode} trigger for agent {agent.slug} in room {request.room_name}")
     
     voice_trigger_start = time.time()
     
@@ -935,7 +992,7 @@ async def handle_voice_trigger(
         conversation_id=conversation_id,
         user_id=request.user_id,
         session_id=request.session_id,
-        mode="voice",
+        mode=effective_mode,
         request_context=request.context,
         client_conversation_id=client_conversation_id,
     )
@@ -1156,6 +1213,37 @@ async def handle_text_trigger_via_livekit(
 ) -> Dict[str, Any]:
     """Route text mode through LiveKit worker for unified tool execution."""
     logger.info(f"🛠️ Routing text request for {agent.slug} through LiveKit worker")
+
+    # Pre-flight quota check - reject if already exceeded
+    try:
+        await usage_tracking_service.initialize()
+        is_allowed, quota_status = await usage_tracking_service.check_agent_quota(
+            client_id=str(client.id),
+            agent_id=str(agent.id),
+            quota_type=QuotaType.TEXT,
+        )
+        if not is_allowed:
+            logger.warning(
+                "Text quota already exceeded for agent %s (client %s): %d/%d messages",
+                agent.slug, client.id, quota_status.used, quota_status.limit
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "quota_exceeded",
+                    "message": f"Text message quota exceeded. Used {quota_status.used} of {quota_status.limit} messages this month.",
+                    "quota": {
+                        "used": quota_status.used,
+                        "limit": quota_status.limit,
+                        "percent_used": quota_status.percent_used,
+                    }
+                }
+            )
+    except HTTPException:
+        raise
+    except Exception as quota_check_err:
+        logger.warning("Failed to check text quota (allowing request): %s", quota_check_err)
+
     from app.integrations.livekit_client import livekit_manager
 
     backend_livekit = livekit_manager
@@ -1228,6 +1316,24 @@ async def handle_text_trigger_via_livekit(
     )
     citations = citations or []
     tool_results = tool_results or []
+
+    # Track text usage for quota metering (per-agent)
+    quota_exceeded = False
+    try:
+        await usage_tracking_service.initialize()
+        is_within_quota, quota_status = await usage_tracking_service.increment_agent_text_usage(
+            client_id=str(client.id),
+            agent_id=str(agent.id),
+            count=1,  # Each text exchange counts as 1 message
+        )
+        if not is_within_quota:
+            quota_exceeded = True
+            logger.warning(
+                "Text quota exceeded for agent %s (client %s): %d/%d messages",
+                agent.slug, client.id, quota_status.used, quota_status.limit
+            )
+    except Exception as usage_err:
+        logger.warning("Failed to track text usage: %s", usage_err)
 
     # TEMP: disable text room cleanup to allow metadata inspection
     cleanup_status = "skipped (cleanup disabled)"
@@ -1841,14 +1947,9 @@ async def dispatch_agent_job(
             job_metadata["tool_prompt_sections"] = context_snapshot["tool_prompt_sections"]
 
         try:
+            tools_keys = [t.get("slug") or t.get("name") for t in tools_payload] if tools_payload else []
             logger.info(
-                "🧰 Dispatch metadata summary",
-                extra={
-                    "tools_count": tools_count,
-                    "tools_keys": [t.get("slug") or t.get("name") for t in tools_payload] if tools_payload else [],
-                    "has_tools_config": bool(tools_config),
-                    "has_perplexity_key": bool(api_keys_map.get("perplexity_api_key")),
-                },
+                f"🧰 Dispatch metadata summary: tools_count={tools_count}, tools_keys={tools_keys}, has_tools_config={bool(tools_config)}"
             )
         except Exception:
             pass
@@ -1868,29 +1969,45 @@ async def dispatch_agent_job(
             job_metadata["preferred_worker_id"] = preferred_worker
             logger.info(f"♻️ Requesting warm worker {preferred_worker} for dispatch")
 
-        # Dispatch the agent with job metadata using the correct API method
-        dispatch_request = api.CreateAgentDispatchRequest(
-            room=room_name,
-            metadata=json.dumps(job_metadata),  # Pass full config as job metadata
-            agent_name=settings.livekit_agent_name  # Match the agent name the worker accepts
-        )
-        
+        # LiveKit has a 64KB metadata limit - check and truncate if needed
+        LIVEKIT_METADATA_LIMIT = 60000  # Leave some headroom below 65536
+        metadata_json = json.dumps(job_metadata)
+        metadata_size = len(metadata_json)
+
+        if metadata_size > LIVEKIT_METADATA_LIMIT:
+            logger.warning(f"⚠️ Dispatch metadata ({metadata_size} bytes) exceeds limit ({LIVEKIT_METADATA_LIMIT}). Truncating system_prompt...")
+            # Calculate how much we need to trim
+            excess = metadata_size - LIVEKIT_METADATA_LIMIT
+            system_prompt = job_metadata.get("system_prompt", "")
+            if system_prompt and len(system_prompt) > excess + 1000:
+                # Truncate system_prompt, keeping the beginning (persona/instructions)
+                # and marking truncation
+                truncated_prompt = system_prompt[:len(system_prompt) - excess - 100] + "\n\n[... context truncated due to size limits ...]"
+                job_metadata["system_prompt"] = truncated_prompt
+                metadata_json = json.dumps(job_metadata)
+                logger.info(f"   - Truncated system_prompt from {len(system_prompt)} to {len(truncated_prompt)} chars")
+                logger.info(f"   - New metadata size: {len(metadata_json)} bytes")
+
         logger.info(f"📤 Sending dispatch request:")
         logger.info(f"   - Room: {room_name}")
         logger.info(f"   - Agent name: {settings.livekit_agent_name}")
         logger.info(f"   - Metadata fields: {len(job_metadata)}")
-        logger.info(f"   - Metadata size: {len(json.dumps(job_metadata))} bytes")
-        
+        logger.info(f"   - Metadata size: {len(metadata_json)} bytes")
+
+        # Update dispatch request with potentially truncated metadata
+        dispatch_request = api.CreateAgentDispatchRequest(
+            room=room_name,
+            metadata=metadata_json,
+            agent_name=settings.livekit_agent_name
+        )
+
+        # Dispatch ONCE - do NOT retry, as each create_dispatch creates a NEW job that results in duplicate processing
+        # The agent will pick up the dispatch when it's available - no need to create multiple dispatches
         dispatch_api_start = time.time()
         dispatch_response = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
         dispatch_api_duration = time.time() - dispatch_api_start
-        logger.info(f"⏱️ Dispatch API call took {dispatch_api_duration:.2f}s")
-        
-        # Log the actual response to understand structure
-        logger.info(f"Dispatch response type: {type(dispatch_response)}")
-        logger.info(f"Dispatch response dir: {dir(dispatch_response)}")
-        
-        # Try different attribute names
+
+        # Extract dispatch_id
         dispatch_id = None
         if hasattr(dispatch_response, 'dispatch_id'):
             dispatch_id = dispatch_response.dispatch_id
@@ -1900,9 +2017,14 @@ async def dispatch_agent_job(
             dispatch_id = dispatch_response.id
 
         worker_id = getattr(dispatch_response, "worker_id", None)
+
+        logger.info(f"⏱️ Dispatch API call took {dispatch_api_duration:.2f}s")
         if worker_id:
+            logger.info(f"✅ Agent dispatched with dispatch_id: {dispatch_id}, worker_id={worker_id}")
             await livekit_manager.return_worker_to_pool(worker_id)
-        logger.info(f"✅ Agent dispatched successfully with dispatch_id: {dispatch_id}, worker_id={worker_id}")
+        else:
+            # worker_id=None is normal - the dispatch is queued and the agent will pick it up
+            logger.info(f"✅ Agent dispatched (queued) with dispatch_id: {dispatch_id}, worker_id=None (agent will pick up when available)")
         
         dispatch_total_duration = time.time() - dispatch_start
         logger.info(f"⏱️ Total dispatch process took {dispatch_total_duration:.2f}s")
@@ -2029,12 +2151,23 @@ async def poll_for_text_response_streaming(
         if text_response and streaming_flag is not True:
             citations = metadata.get("citations") or []
             tool_results = metadata.get("tool_results") or []
-            yield {
+            widget = metadata.get("widget")  # Widget trigger from agent
+
+            # Debug logging to diagnose widget timing issues
+            logger.info(f"[poll-stream] Returning final response. widget={widget is not None}, streaming={streaming_flag}, text_len={len(text_response) if text_response else 0}")
+            if not widget:
+                # Log metadata keys to help debug missing widget
+                logger.warning(f"[poll-stream] Widget NOT present in metadata. Keys: {list(metadata.keys())}")
+
+            result = {
                 "done": True,
                 "full_text": text_response,
                 "citations": citations,
                 "tool_results": tool_results,
             }
+            if widget:
+                result["widget"] = widget
+            yield result
             return
 
         await asyncio.sleep(poll_interval)
@@ -2221,7 +2354,21 @@ async def ensure_livekit_room_exists(
         # Convert metadata to JSON string (LiveKit expects JSON string)
         import json
         metadata_json = json.dumps(room_metadata)
-        
+
+        # LiveKit has a 64KB metadata limit - truncate room metadata if needed
+        LIVEKIT_METADATA_LIMIT = 60000  # Leave headroom below 65536
+        metadata_size = len(metadata_json)
+        if metadata_size > LIVEKIT_METADATA_LIMIT:
+            logger.warning(f"⚠️ Room metadata ({metadata_size} bytes) exceeds limit. Truncating system_prompt...")
+            system_prompt = room_metadata.get("system_prompt", "")
+            excess = metadata_size - LIVEKIT_METADATA_LIMIT
+            if system_prompt and len(system_prompt) > excess + 1000:
+                truncated_prompt = system_prompt[:len(system_prompt) - excess - 100] + "\n\n[... context truncated due to size limits ...]"
+                room_metadata["system_prompt"] = truncated_prompt
+                metadata_json = json.dumps(room_metadata)
+                logger.info(f"   - Truncated room system_prompt from {len(system_prompt)} to {len(truncated_prompt)} chars")
+                logger.info(f"   - New room metadata size: {len(metadata_json)} bytes")
+
         create_start = time.time()
         room_info = await livekit_manager.create_room(
             name=room_name,

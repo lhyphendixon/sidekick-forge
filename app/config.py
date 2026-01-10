@@ -124,6 +124,14 @@ class Settings(BaseSettings):
     asana_token_mirror_stores: bool = Field(default=False)
     asana_token_refresh_margin_seconds: int = Field(default=300)
 
+    # HelpScout OAuth configuration
+    helpscout_oauth_client_id: Optional[str] = Field(default=None)
+    helpscout_oauth_client_secret: Optional[str] = Field(default=None)
+    helpscout_oauth_redirect_uri: Optional[str] = Field(default=None)
+    helpscout_token_preferred_store: str = Field(default="platform")
+    helpscout_token_mirror_stores: bool = Field(default=False)
+    helpscout_token_refresh_margin_seconds: int = Field(default=300)
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -152,7 +160,24 @@ class Settings(BaseSettings):
         return candidate
 
     @field_validator('asana_token_refresh_margin_seconds', mode='before')
-    def clamp_refresh_margin(cls, v):
+    def clamp_asana_refresh_margin(cls, v):
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 300
+        return max(0, value)
+
+    @field_validator('helpscout_token_preferred_store', mode='before')
+    def normalize_helpscout_token_store(cls, v):
+        if not isinstance(v, str):
+            return "platform"
+        candidate = v.strip().lower()
+        if candidate not in {"platform", "primary"}:
+            return "platform"
+        return candidate
+
+    @field_validator('helpscout_token_refresh_margin_seconds', mode='before')
+    def clamp_helpscout_refresh_margin(cls, v):
         try:
             value = int(v)
         except (TypeError, ValueError):

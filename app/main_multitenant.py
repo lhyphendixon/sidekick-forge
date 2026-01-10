@@ -33,7 +33,11 @@ async def lifespan(app: FastAPI):
     global redis_client
     worker = None
     worker_task = None
-    
+    ambient_worker = None
+    ambient_worker_task = None
+    learning_worker = None
+    learning_worker_task = None
+
     # Startup
     logger.info("Starting Sidekick Forge Platform")
     
@@ -69,6 +73,26 @@ async def lifespan(app: FastAPI):
     except RuntimeError as e:
         logger.warning(f"Provisioning worker disabled: {e}")
 
+    # Start ambient ability worker for background processing
+    try:
+        from app.services.ambient_ability_worker import ambient_ability_worker
+
+        ambient_worker = ambient_ability_worker
+        ambient_worker_task = asyncio.create_task(ambient_worker.start())
+        logger.info("✅ Ambient ability worker started")
+    except Exception as e:
+        logger.warning(f"Ambient ability worker failed to start: {e}")
+
+    # Start UserSense learning worker for initial learning jobs
+    try:
+        from app.services.usersense_learning_worker import usersense_learning_worker
+
+        learning_worker = usersense_learning_worker
+        learning_worker_task = asyncio.create_task(learning_worker.start())
+        logger.info("✅ UserSense learning worker started")
+    except Exception as e:
+        logger.warning(f"UserSense learning worker failed to start: {e}")
+
     try:
         yield
     finally:
@@ -76,6 +100,22 @@ async def lifespan(app: FastAPI):
             worker.stop()
         if worker_task:
             await worker_task
+
+        # Stop ambient ability worker
+        if ambient_worker:
+            try:
+                await ambient_worker.stop()
+                logger.info("Ambient ability worker stopped")
+            except Exception as e:
+                logger.error(f"Error stopping ambient ability worker: {e}")
+
+        # Stop UserSense learning worker
+        if learning_worker:
+            try:
+                await learning_worker.stop()
+                logger.info("UserSense learning worker stopped")
+            except Exception as e:
+                logger.error(f"Error stopping UserSense learning worker: {e}")
 
         # Shutdown
         logger.info("Shutting down Sidekick Forge Platform")
@@ -138,7 +178,9 @@ from app.api.v1 import (
     conversations_proxy,
     documents_proxy,
     text_chat_proxy,
-    knowledge_base
+    knowledge_base,
+    wordpress,
+    content_catalyst,
 )
 from app.api import embed as embed_router
 from app.api import admin_preview_standalone
@@ -166,6 +208,8 @@ app.include_router(conversations_proxy.router, prefix="/api/v1", tags=["conversa
 app.include_router(documents_proxy.router, prefix="/api/v1", tags=["documents"])
 app.include_router(text_chat_proxy.router, prefix="/api/v1", tags=["text-chat"])
 app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-base"])
+app.include_router(wordpress.router, prefix="/api/v1", tags=["wordpress"])
+app.include_router(content_catalyst.router, prefix="/api/v1", tags=["content-catalyst"])
 app.include_router(embed_router.router)
 # Expose admin preview helper endpoints (used by preview modal)
 app.include_router(admin_preview_standalone.router)
@@ -181,6 +225,14 @@ if static_dir:
     logger.info(f"Mounted static directory at {static_dir}")
 else:
     logger.warning(f"Static directory not found at any of {static_dir_candidates}, skipping static file mount")
+
+# Include marketing site routes (homepage, pricing, features, etc.)
+try:
+    from app.marketing.routes import router as marketing_router
+    app.include_router(marketing_router)
+    logger.info("✅ Marketing site routes loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load marketing routes: {e}")
 
 # Include admin dashboard (will need updating for multi-tenant)
 from app.admin.routes import router as admin_router
@@ -209,15 +261,16 @@ from app.api.webhooks import livekit_router, supabase_router
 app.include_router(livekit_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
 
-# Root endpoint
-@app.get("/", tags=["health"])
-async def root():
-    return {
-        "service": "Sidekick Forge Platform",
-        "version": "2.2.1",
-        "status": "operational",
-        "timestamp": datetime.utcnow().isoformat()
-    }
+# Root endpoint - Now handled by marketing routes (app/marketing/routes.py)
+# The homepage at / is served by the marketing site
+# @app.get("/", tags=["health"])
+# async def root():
+#     return {
+#         "service": "Sidekick Forge Platform",
+#         "version": "2.2.1",
+#         "status": "operational",
+#         "timestamp": datetime.utcnow().isoformat()
+#     }
 
 # Health check endpoints
 @app.get("/health", tags=["health"])

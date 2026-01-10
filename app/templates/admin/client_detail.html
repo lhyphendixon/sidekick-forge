@@ -71,7 +71,8 @@
             </div>
         </div>
 
-        <!-- Supabase Configuration -->
+        {% if not user.is_adventurer_only %}
+        <!-- Supabase Configuration (hidden for Adventurer users) -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
             <div class="border-b border-dark-border px-6 py-4">
                 <h5 class="text-lg font-semibold text-dark-text">Supabase Configuration</h5>
@@ -111,7 +112,7 @@
             </div>
         </div>
 
-        <!-- LiveKit Configuration -->
+        <!-- LiveKit Configuration (hidden for Adventurer users) -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
             <div class="border-b border-dark-border px-6 py-4">
                 <h5 class="text-lg font-semibold text-dark-text">LiveKit Configuration</h5>
@@ -143,6 +144,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
 
         <!-- Channels -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
@@ -177,12 +179,127 @@
             </div>
         </div>
 
-        <!-- API Keys -->
+        {% if user.is_adventurer_only %}
+        <!-- Usage & Quotas (Adventurer only) -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text flex items-center">
+                    <svg class="h-5 w-5 text-brand-teal mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    Monthly Usage
+                </h5>
+                <p class="text-sm text-dark-text-secondary mt-1">Your usage resets on the 1st of each month</p>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Voice Minutes -->
+                    <div class="bg-dark-elevated rounded-lg p-4 border border-dark-border">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center">
+                                <svg class="h-5 w-5 text-brand-teal mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                                </svg>
+                                <span class="text-sm font-medium text-dark-text">Voice Minutes</span>
+                            </div>
+                            <span class="text-xs text-dark-text-secondary">{{ usage.voice.minutes_used if usage else 0 }} / {{ usage.voice.minutes_limit if usage else 100 }} min</span>
+                        </div>
+                        <div class="w-full bg-dark-border rounded-full h-2.5">
+                            <div class="bg-brand-teal h-2.5 rounded-full transition-all duration-300" style="width: {{ usage.voice.percent_used if usage else 0 }}%"></div>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-2">{{ usage.voice.remaining if usage else 100 }} minutes remaining</p>
+                    </div>
+
+                    <!-- Text Messages -->
+                    <div class="bg-dark-elevated rounded-lg p-4 border border-dark-border">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center">
+                                <svg class="h-5 w-5 text-brand-orange mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                                </svg>
+                                <span class="text-sm font-medium text-dark-text">Text Messages</span>
+                            </div>
+                            <span class="text-xs text-dark-text-secondary">{{ usage.text.used if usage else 0 }} / {{ usage.text.limit if usage else 1000 }}</span>
+                        </div>
+                        <div class="w-full bg-dark-border rounded-full h-2.5">
+                            <div class="bg-brand-orange h-2.5 rounded-full transition-all duration-300" style="width: {{ usage.text.percent_used if usage else 0 }}%"></div>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-2">{{ usage.text.remaining if usage else 1000 }} messages remaining</p>
+                    </div>
+                </div>
+
+                <div class="mt-6 p-4 bg-dark-elevated/50 rounded-lg border border-dark-border">
+                    <div class="flex items-start">
+                        <svg class="h-5 w-5 text-brand-teal mr-3 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div class="text-sm text-dark-text-secondary">
+                            <p>Your Adventurer plan includes <strong class="text-dark-text">100 voice minutes</strong> and <strong class="text-dark-text">1,000 text messages</strong> per month.</p>
+                            <p class="mt-2">Need more? <a href="/pricing" class="text-brand-teal hover:underline">Upgrade to Champion</a> for higher limits.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Platform Configuration Info (Adventurer only) -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text flex items-center">
+                    <svg class="h-5 w-5 text-green-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                    AI Configuration
+                </h5>
+            </div>
+            <div class="p-6">
+                <div class="flex items-start p-4 bg-green-500/10 border border-green-500/30 rounded-lg mb-4">
+                    <svg class="h-5 w-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                    <div>
+                        <p class="text-sm text-green-400 font-medium">All set! Your AI services are automatically configured.</p>
+                        <p class="text-xs text-green-300/80 mt-1">You're using Sidekick Forge's managed AI infrastructure - no API keys needed.</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
+                        <div class="text-xs text-dark-text-secondary mb-1">Language Model</div>
+                        <div class="text-sm font-medium text-dark-text">Cerebras GLM</div>
+                    </div>
+                    <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
+                        <div class="text-xs text-dark-text-secondary mb-1">Voice</div>
+                        <div class="text-sm font-medium text-dark-text">Cartesia</div>
+                    </div>
+                    <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
+                        <div class="text-xs text-dark-text-secondary mb-1">Embeddings</div>
+                        <div class="text-sm font-medium text-dark-text">SiliconFlow</div>
+                    </div>
+                    <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
+                        <div class="text-xs text-dark-text-secondary mb-1">Reranking</div>
+                        <div class="text-sm font-medium text-dark-text">Qwen3</div>
+                    </div>
+                </div>
+
+                <details class="mt-4">
+                    <summary class="text-sm text-dark-text-secondary cursor-pointer hover:text-brand-teal">
+                        Want to use your own API keys? (Advanced)
+                    </summary>
+                    <div class="mt-3 p-4 bg-dark-elevated rounded-lg border border-dark-border">
+                        <p class="text-sm text-dark-text-secondary mb-3">
+                            You can optionally provide your own API keys to use your own accounts. This bypasses the monthly quota limits.
+                        </p>
+        {% endif %}
+
+        <!-- API Keys -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6 {% if user.is_adventurer_only %}border-0 shadow-none bg-transparent p-0{% endif %}">
+            {% if not user.is_adventurer_only %}
             <div class="border-b border-dark-border px-6 py-4">
                 <h5 class="text-lg font-semibold text-dark-text">API Keys</h5>
             </div>
-            <div class="p-6">
+            {% endif %}
+            <div class="{% if not user.is_adventurer_only %}p-6{% endif %}">
                 <!-- LLM Providers -->
                 <h6 class="text-md font-medium text-dark-text mb-4">LLM Providers</h6>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
@@ -205,6 +322,18 @@
                                    value="{{ client.settings.get('api_keys', {}).get('groq_api_key') or '' }}"
                                    class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
                             <button type="button" onclick="togglePassword('groqKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Cerebras API Key</label>
+                        <div class="relative">
+                            <input type="password" id="cerebrasKey" name="cerebras_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('cerebras_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('cerebrasKey')"
                                     class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
                                 <i class="bi bi-eye"></i>
                             </button>
@@ -289,6 +418,37 @@
                     </div>
                 </div>
 
+                <!-- Avatar/Video Providers -->
+                <h6 class="text-md font-medium text-dark-text mb-4">Avatar/Video Providers</h6>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Bithuman API Secret</label>
+                        <div class="relative">
+                            <input type="password" id="bithumanKey" name="bithuman_api_secret"
+                                   value="{{ client.settings.get('api_keys', {}).get('bithuman_api_secret') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('bithumanKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-1">Required for Bithuman video avatars</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Beyond Presence API Key</label>
+                        <div class="relative">
+                            <input type="password" id="beyKey" name="bey_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('bey_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('beyKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-1">Required for Beyond Presence video avatars</p>
+                    </div>
+                </div>
+
                 <!-- Embedding & Reranking Providers -->
                 <h6 class="text-md font-medium text-dark-text mb-4">Embedding & Reranking Providers</h6>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
@@ -340,10 +500,31 @@
                             </button>
                         </div>
                     </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Firecrawl API Key</label>
+                        <div class="relative">
+                            <input type="password" id="firecrawlKey" name="firecrawl_api_key"
+                                   value="{{ client.firecrawl_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('firecrawlKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                        <p class="mt-1 text-xs text-dark-text-secondary">Required for scraping websites in Knowledge Base. Get one at <a href="https://firecrawl.dev" target="_blank" class="text-brand-teal hover:underline">firecrawl.dev</a></p>
+                    </div>
                 </div>
             </div>
         </div>
 
+        {% if user.is_adventurer_only %}
+                    </div>
+                </details>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if not user.is_adventurer_only %}
         <!-- Embedding Configuration -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
             <div class="border-b border-dark-border px-6 py-4">
@@ -353,8 +534,9 @@
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div>
                         <label class="block text-sm font-medium text-dark-text mb-2">Embedding Provider</label>
-                        <select id="embeddingProvider" name="embedding_provider" 
+                        <select id="embeddingProvider" name="embedding_provider"
                                 class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <option value="local" {% if client.settings.get('embedding', {}).get('provider') in ['local', 'on-prem', 'bge-local', 'bge', 'bge-m3'] %}selected{% endif %}>Local (BGE-M3 On-Prem)</option>
                             <option value="openai" {% if client.settings.get('embedding', {}).get('provider') == 'openai' %}selected{% endif %}>OpenAI</option>
                             <option value="deepinfra" {% if client.settings.get('embedding', {}).get('provider') == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
                             <option value="novita" {% if client.settings.get('embedding', {}).get('provider') == 'novita' %}selected{% endif %}>Novita AI</option>
@@ -365,24 +547,32 @@
                         <label class="block text-sm font-medium text-dark-text mb-2">Document Embedding Model</label>
                         <select id="documentEmbeddingModel" name="document_embedding_model"
                                 class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
-                            <option value="text-embedding-3-small" {% if client.settings.get('embedding', {}).get('document_model') == 'text-embedding-3-small' %}selected{% endif %}>text-embedding-3-small (OpenAI)</option>
-                            <option value="text-embedding-3-large" {% if client.settings.get('embedding', {}).get('document_model') == 'text-embedding-3-large' %}selected{% endif %}>text-embedding-3-large (OpenAI)</option>
-                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %}>Qwen/Qwen2.5-72B-Instruct</option>
-                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %}>Qwen3-Embedding-0.6B (Fastest)</option>
-                            <option value="Qwen/Qwen3-Embedding-4B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-4B' %}selected{% endif %}>Qwen3-Embedding-4B (Balanced)</option>
-                            <option value="Qwen/Qwen3-Embedding-8B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %}>Qwen3-Embedding-8B (Highest Quality)</option>
+                            <!-- Local On-Prem Model -->
+                            <option value="bge-m3" {% if client.settings.get('embedding', {}).get('document_model') == 'bge-m3' %}selected{% endif %} data-provider="local">BGE-M3 (1024 dimensions, On-Prem)</option>
+                            <!-- OpenAI Models -->
+                            <option value="text-embedding-3-small" {% if client.settings.get('embedding', {}).get('document_model') == 'text-embedding-3-small' %}selected{% endif %} data-provider="openai">text-embedding-3-small (OpenAI)</option>
+                            <option value="text-embedding-3-large" {% if client.settings.get('embedding', {}).get('document_model') == 'text-embedding-3-large' %}selected{% endif %} data-provider="openai">text-embedding-3-large (OpenAI)</option>
+                            <!-- DeepInfra/SiliconFlow/Novita Models -->
+                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %} data-provider="deepinfra">Qwen/Qwen2.5-72B-Instruct</option>
+                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-0.6B (Fastest)</option>
+                            <option value="Qwen/Qwen3-Embedding-4B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-4B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-4B (Balanced)</option>
+                            <option value="Qwen/Qwen3-Embedding-8B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-8B (Highest Quality)</option>
                         </select>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-dark-text mb-2">Conversation Embedding Model</label>
                         <select id="conversationEmbeddingModel" name="conversation_embedding_model"
                                 class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
-                            <option value="text-embedding-3-small" {% if client.settings.get('embedding', {}).get('conversation_model') == 'text-embedding-3-small' %}selected{% endif %}>text-embedding-3-small (OpenAI)</option>
-                            <option value="text-embedding-3-large" {% if client.settings.get('embedding', {}).get('conversation_model') == 'text-embedding-3-large' %}selected{% endif %}>text-embedding-3-large (OpenAI)</option>
-                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %}>Qwen/Qwen2.5-72B-Instruct</option>
-                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %}>Qwen3-Embedding-0.6B (Fastest)</option>
-                            <option value="Qwen/Qwen3-Embedding-4B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-4B' %}selected{% endif %}>Qwen3-Embedding-4B (Balanced)</option>
-                            <option value="Qwen/Qwen3-Embedding-8B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %}>Qwen3-Embedding-8B (Highest Quality)</option>
+                            <!-- Local On-Prem Model -->
+                            <option value="bge-m3" {% if client.settings.get('embedding', {}).get('conversation_model') == 'bge-m3' %}selected{% endif %} data-provider="local">BGE-M3 (1024 dimensions, On-Prem)</option>
+                            <!-- OpenAI Models -->
+                            <option value="text-embedding-3-small" {% if client.settings.get('embedding', {}).get('conversation_model') == 'text-embedding-3-small' %}selected{% endif %} data-provider="openai">text-embedding-3-small (OpenAI)</option>
+                            <option value="text-embedding-3-large" {% if client.settings.get('embedding', {}).get('conversation_model') == 'text-embedding-3-large' %}selected{% endif %} data-provider="openai">text-embedding-3-large (OpenAI)</option>
+                            <!-- DeepInfra/SiliconFlow/Novita Models -->
+                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %} data-provider="deepinfra">Qwen/Qwen2.5-72B-Instruct</option>
+                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-0.6B (Fastest)</option>
+                            <option value="Qwen/Qwen3-Embedding-4B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-4B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-4B (Balanced)</option>
+                            <option value="Qwen/Qwen3-Embedding-8B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-8B (Highest Quality)</option>
                         </select>
                     </div>
                 </div>
@@ -439,6 +629,7 @@
                                     {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
                                     class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
                                 <option value="none" {% if client.settings.get('rerank', {}).get('provider') == 'none' %}selected{% endif %}>None</option>
+                                <option value="local" {% if client.settings.get('rerank', {}).get('provider') in ['local', 'on-prem', 'bge-local', 'bge', 'bge-reranker'] %}selected{% endif %}>Local (BGE-Reranker On-Prem)</option>
                                 <option value="siliconflow" {% if client.settings.get('rerank', {}).get('provider') == 'siliconflow' %}selected{% endif %}>SiliconFlow</option>
                                 <option value="cohere" {% if client.settings.get('rerank', {}).get('provider') == 'cohere' %}selected{% endif %}>Cohere</option>
                                 <option value="jina" {% if client.settings.get('rerank', {}).get('provider') == 'jina' %}selected{% endif %}>Jina</option>
@@ -449,6 +640,8 @@
                             <select id="rerankModel" name="rerank_model"
                                     {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
                                     class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                                <!-- Local On-Prem Model -->
+                                <option value="bge-reranker-v2-m3" {% if client.settings.get('rerank', {}).get('model') == 'bge-reranker-v2-m3' %}selected{% endif %} data-provider="local">BGE-Reranker-v2-M3 (On-Prem)</option>
                                 <!-- SiliconFlow Models -->
                                 <option value="Qwen/Qwen3-Reranker-0.6B" {% if client.settings.get('rerank', {}).get('model') == 'Qwen/Qwen3-Reranker-0.6B' %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-0.6B (Fastest)</option>
                                 <option value="Qwen/Qwen3-Reranker-2B" {% if client.settings.get('rerank', {}).get('model') == 'Qwen/Qwen3-Reranker-2B' %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-2B (Balanced)</option>
@@ -483,6 +676,44 @@
                 </div>
             </div>
         </div>
+        {% endif %}
+
+        <!-- Supertab Voice Paywall Section -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text flex items-center">
+                    <svg class="h-5 w-5 text-emerald-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                    </svg>
+                    Supertab Voice Paywall
+                </h5>
+            </div>
+            <div class="p-6">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">
+                            Supertab Client ID
+                        </label>
+                        <input type="text" id="supertabClientId" name="supertab_client_id"
+                               value="{{ client.supertab_client_id or '' }}"
+                               placeholder="client.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        <p class="text-xs text-dark-text-secondary mt-1">
+                            Found in your <a href="https://business.supertab.co" target="_blank" class="text-emerald-500 hover:underline">Supertab Business Portal</a> under Settings → API Keys
+                        </p>
+                    </div>
+
+                    <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
+                        <p class="text-sm text-dark-text-secondary">
+                            Supertab enables per-session microtransaction paywalls for voice chat. Text chat remains free; users pay or "Put it on my Tab" to access voice.
+                        </p>
+                        <p class="text-sm text-dark-text-secondary mt-2">
+                            The Client ID is shared across all sidekicks. Enable/disable and set pricing per-sidekick in each agent's configuration.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </form>
 
     <!-- WordPress Plugin Access -->
@@ -500,6 +731,11 @@
             </div>
         </div>
         <div class="p-6 space-y-6">
+            {% if wordpress_message %}
+            <div class="bg-brand-teal/10 border border-brand-teal/30 text-brand-teal px-3 py-2 rounded text-sm">
+                {{ wordpress_message }}
+            </div>
+            {% endif %}
             {% if wordpress_error %}
             <div class="bg-brand-salmon/10 border border-brand-salmon/30 text-brand-salmon px-3 py-2 rounded text-sm">
                 {{ wordpress_error }}
@@ -670,18 +906,22 @@ function updateEmbeddingModels() {
     const provider = document.getElementById('embeddingProvider').value;
     const docModelSelect = document.getElementById('documentEmbeddingModel');
     const convModelSelect = document.getElementById('conversationEmbeddingModel');
-    
+
     // Store current selections
     const currentDocModel = docModelSelect.value;
     const currentConvModel = convModelSelect.value;
-    
+
     // Clear options
     docModelSelect.innerHTML = '';
     convModelSelect.innerHTML = '';
-    
+
     let options = [];
-    
-    if (provider === 'openai') {
+
+    if (provider === 'local') {
+        options = [
+            { value: 'bge-m3', text: 'BGE-M3 (1024 dimensions, On-Prem)' }
+        ];
+    } else if (provider === 'openai') {
         options = [
             { value: 'text-embedding-3-small', text: 'text-embedding-3-small' },
             { value: 'text-embedding-3-large', text: 'text-embedding-3-large' }
@@ -699,20 +939,20 @@ function updateEmbeddingModels() {
             { value: 'Qwen/Qwen3-Embedding-8B', text: 'Qwen3-Embedding-8B (Highest Quality)' }
         ];
     }
-    
+
     // Add options to both selects
     options.forEach(opt => {
         const docOption = new Option(opt.text, opt.value);
         const convOption = new Option(opt.text, opt.value);
-        
+
         // Restore selection if possible
         if (opt.value === currentDocModel) docOption.selected = true;
         if (opt.value === currentConvModel) convOption.selected = true;
-        
+
         docModelSelect.appendChild(docOption);
         convModelSelect.appendChild(convOption);
     });
-    
+
     // If no selection was restored, select the first option
     if (!docModelSelect.value && options.length > 0) {
         docModelSelect.value = options[0].value;
@@ -720,7 +960,7 @@ function updateEmbeddingModels() {
     if (!convModelSelect.value && options.length > 0) {
         convModelSelect.value = options[0].value;
     }
-    
+
     // Update dimension visibility
     updateDimensionVisibility();
 }
@@ -730,13 +970,19 @@ function updateDimensionVisibility() {
     const docModel = document.getElementById('documentEmbeddingModel').value;
     const convModel = document.getElementById('conversationEmbeddingModel').value;
     const dimensionSection = document.getElementById('embeddingDimensionSection');
-    
-    // Show dimension selector if provider is deepinfra and either model is a Qwen embedding model
-    const isDeepinfra = provider === 'deepinfra';
-    const hasQwenEmbedding = (docModel && docModel.includes('Qwen') && docModel.includes('Embedding')) || 
+
+    // Local BGE-M3 uses fixed 1024 dimensions - no selector needed
+    if (provider === 'local') {
+        dimensionSection.style.display = 'none';
+        return;
+    }
+
+    // Show dimension selector if provider is deepinfra/siliconflow and either model is a Qwen embedding model
+    const isEligibleProvider = provider === 'deepinfra' || provider === 'siliconflow';
+    const hasQwenEmbedding = (docModel && docModel.includes('Qwen') && docModel.includes('Embedding')) ||
                             (convModel && convModel.includes('Qwen') && convModel.includes('Embedding'));
-    
-    if (isDeepinfra && hasQwenEmbedding) {
+
+    if (isEligibleProvider && hasQwenEmbedding) {
         dimensionSection.style.display = 'block';
     } else {
         dimensionSection.style.display = 'none';
@@ -747,7 +993,7 @@ function updateRerankingModels() {
     const provider = document.getElementById('rerankProvider').value;
     const modelSelect = document.getElementById('rerankModel');
     const currentModel = modelSelect.value;
-    
+
     // Show/hide options based on provider
     const options = modelSelect.querySelectorAll('option');
     options.forEach(option => {
@@ -758,7 +1004,7 @@ function updateRerankingModels() {
             option.style.display = 'none';
         }
     });
-    
+
     // If current selection is hidden, select first visible option
     const currentOption = modelSelect.querySelector(`option[value="${currentModel}"]`);
     if (currentOption && currentOption.style.display === 'none') {
@@ -766,6 +1012,11 @@ function updateRerankingModels() {
         if (firstVisible) {
             modelSelect.value = firstVisible.value;
         }
+    }
+
+    // For local provider, automatically select the BGE model
+    if (provider === 'local') {
+        modelSelect.value = 'bge-reranker-v2-m3';
     }
 }
 
@@ -844,5 +1095,229 @@ async function deleteWordpressSite(siteId, clientId) {
         showNotification('error', 'Error deleting site: ' + err.message);
     }
 }
+
+// =============================================
+// Embedding Migration Modal
+// =============================================
+const originalEmbeddingProvider = '{{ client.settings.get("embedding", {}).get("provider", "openai") }}';
+const originalDocModel = '{{ client.settings.get("embedding", {}).get("document_model", "") }}';
+const originalConvModel = '{{ client.settings.get("embedding", {}).get("conversation_model", "") }}';
+let migrationJobId = null;
+let migrationPollInterval = null;
+
+// Track embedding config changes
+function hasEmbeddingConfigChanged() {
+    const currentProvider = document.getElementById('embeddingProvider').value;
+    const currentDocModel = document.getElementById('documentEmbeddingModel').value;
+    const currentConvModel = document.getElementById('conversationEmbeddingModel').value;
+
+    return currentProvider !== originalEmbeddingProvider ||
+           currentDocModel !== originalDocModel ||
+           currentConvModel !== originalConvModel;
+}
+
+// Show migration modal
+function showMigrationModal() {
+    document.getElementById('migrationModal').classList.remove('hidden');
+}
+
+// Hide migration modal
+function hideMigrationModal() {
+    document.getElementById('migrationModal').classList.add('hidden');
+    if (migrationPollInterval) {
+        clearInterval(migrationPollInterval);
+        migrationPollInterval = null;
+    }
+}
+
+// Start embedding migration
+async function startEmbeddingMigration() {
+    const clientId = '{{ client.id }}';
+
+    try {
+        document.getElementById('migrationStartBtn').disabled = true;
+        document.getElementById('migrationStartBtn').textContent = 'Starting...';
+
+        const response = await fetch('/api/v1/knowledge-base/embedding-migration/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: clientId })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to start migration');
+        }
+
+        const result = await response.json();
+        migrationJobId = result.job_id;
+
+        // Show progress section
+        document.getElementById('migrationInitial').classList.add('hidden');
+        document.getElementById('migrationProgress').classList.remove('hidden');
+        document.getElementById('migrationTotalDocs').textContent = result.total_documents;
+        document.getElementById('migrationProcessedDocs').textContent = '0';
+
+        // Start polling for status
+        migrationPollInterval = setInterval(pollMigrationStatus, 2000);
+
+    } catch (error) {
+        showNotification('error', 'Error starting migration: ' + error.message);
+        document.getElementById('migrationStartBtn').disabled = false;
+        document.getElementById('migrationStartBtn').textContent = 'Start Migration';
+    }
+}
+
+// Poll migration status
+async function pollMigrationStatus() {
+    if (!migrationJobId) return;
+
+    try {
+        const response = await fetch(`/api/v1/knowledge-base/embedding-migration/status/${migrationJobId}`);
+        if (!response.ok) {
+            throw new Error('Failed to get migration status');
+        }
+
+        const status = await response.json();
+
+        // Update UI
+        document.getElementById('migrationProcessedDocs').textContent = status.processed_documents;
+        document.getElementById('migrationFailedDocs').textContent = status.failed_documents;
+
+        // Update progress bar
+        const progressBar = document.getElementById('migrationProgressBar');
+        progressBar.style.width = `${status.progress_percent}%`;
+        progressBar.textContent = `${Math.round(status.progress_percent)}%`;
+
+        // Check if completed
+        if (status.status === 'completed' || status.status === 'completed_with_errors') {
+            clearInterval(migrationPollInterval);
+            migrationPollInterval = null;
+
+            // Show completion
+            document.getElementById('migrationProgress').classList.add('hidden');
+            document.getElementById('migrationComplete').classList.remove('hidden');
+
+            if (status.status === 'completed') {
+                document.getElementById('migrationCompleteMessage').textContent =
+                    `Successfully migrated ${status.processed_documents} documents.`;
+                document.getElementById('migrationCompleteMessage').className = 'text-green-500 font-medium';
+            } else {
+                document.getElementById('migrationCompleteMessage').textContent =
+                    `Migrated ${status.processed_documents} documents. ${status.failed_documents} failed.`;
+                document.getElementById('migrationCompleteMessage').className = 'text-yellow-500 font-medium';
+            }
+        }
+
+    } catch (error) {
+        console.error('Error polling migration status:', error);
+    }
+}
+
+// Skip migration and submit form
+function skipMigration() {
+    hideMigrationModal();
+    document.getElementById('clientForm').submit();
+}
+
+// Close modal after migration complete
+function closeMigrationAndSubmit() {
+    hideMigrationModal();
+    document.getElementById('clientForm').submit();
+}
+
+// Intercept form submission to check for embedding changes
+document.getElementById('clientForm').addEventListener('submit', function(e) {
+    if (hasEmbeddingConfigChanged()) {
+        e.preventDefault();
+        showMigrationModal();
+    }
+});
 </script>
+
+<!-- Embedding Migration Modal -->
+<div id="migrationModal" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-black/60">
+    <div class="bg-dark-surface rounded-xl border border-dark-border shadow-2xl max-w-lg w-full mx-4">
+        <div class="border-b border-dark-border px-6 py-4">
+            <h3 class="text-lg font-semibold text-dark-text flex items-center">
+                <svg class="h-5 w-5 text-brand-teal mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Embedding Configuration Changed
+            </h3>
+        </div>
+
+        <div class="p-6">
+            <!-- Initial state -->
+            <div id="migrationInitial">
+                <p class="text-dark-text-secondary mb-4">
+                    You've changed your embedding configuration. All existing documents need to be re-embedded
+                    with the new settings for search to work correctly.
+                </p>
+
+                <div class="bg-dark-elevated rounded-lg p-4 mb-4">
+                    <p class="text-sm text-dark-text-secondary">
+                        <i class="bi bi-info-circle mr-1"></i>
+                        This process will run in the background and may take several minutes depending on the
+                        number of documents.
+                    </p>
+                </div>
+
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="skipMigration()"
+                            class="px-4 py-2 text-dark-text-secondary hover:text-dark-text transition-colors">
+                        Skip for now
+                    </button>
+                    <button type="button" id="migrationStartBtn" onclick="startEmbeddingMigration()"
+                            class="px-4 py-2 bg-brand-teal text-white rounded-lg hover:bg-brand-teal/80 transition-colors">
+                        Start Migration
+                    </button>
+                </div>
+            </div>
+
+            <!-- Progress state -->
+            <div id="migrationProgress" class="hidden">
+                <p class="text-dark-text-secondary mb-4">
+                    Re-embedding documents with new configuration...
+                </p>
+
+                <div class="mb-4">
+                    <div class="flex justify-between text-sm text-dark-text-secondary mb-2">
+                        <span>Progress: <span id="migrationProcessedDocs">0</span> / <span id="migrationTotalDocs">0</span></span>
+                        <span class="text-red-400">Failed: <span id="migrationFailedDocs">0</span></span>
+                    </div>
+                    <div class="w-full bg-dark-elevated rounded-full h-4 overflow-hidden">
+                        <div id="migrationProgressBar"
+                             class="h-full bg-brand-teal text-xs text-white text-center leading-4 transition-all duration-300"
+                             style="width: 0%">0%</div>
+                    </div>
+                </div>
+
+                <p class="text-xs text-dark-text-secondary">
+                    <i class="bi bi-clock mr-1"></i>
+                    This may take several minutes. You can close this modal and the migration will continue in the background.
+                </p>
+            </div>
+
+            <!-- Complete state -->
+            <div id="migrationComplete" class="hidden">
+                <div class="text-center mb-4">
+                    <svg class="h-12 w-12 text-green-500 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p id="migrationCompleteMessage" class="text-green-500 font-medium">
+                        Migration complete!
+                    </p>
+                </div>
+
+                <div class="flex justify-center">
+                    <button type="button" onclick="closeMigrationAndSubmit()"
+                            class="px-6 py-2 bg-brand-teal text-white rounded-lg hover:bg-brand-teal/80 transition-colors">
+                        Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}

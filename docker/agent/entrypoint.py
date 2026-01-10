@@ -14,19 +14,24 @@ import time
 import types
 import re
 import unicodedata
+import aiohttp
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2025-12-09T20:15:25Z"
-AGENT_BUILD_HASH = "v1.5.9-fix-rerank-none"
+AGENT_BUILD_VERSION = "2026-01-03T02:20:00Z"
+AGENT_BUILD_HASH = "v1.6.0-video-chat"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
-from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
+from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia, bithuman
+# bey (Beyond Presence) is imported lazily when needed to avoid import issues
 from livekit.plugins.turn_detector.english import EnglishModel
+from livekit.agents import RoomIO, RoomInputOptions, RoomOutputOptions
+from PIL import Image
+from io import BytesIO
 from api_key_loader import APIKeyLoader
 from config_validator import ConfigValidator, ConfigurationError
 from context import AgentContextManager
@@ -78,6 +83,33 @@ except Exception as exc:
 
 # Feature toggles for transcript handling
 VOICE_ITEM_COMMIT_FALLBACK = os.getenv("VOICE_ITEM_COMMIT_FALLBACK", "false").lower() == "true"
+
+
+async def send_model_loading_progress(room: rtc.Room, progress: int, message: str) -> None:
+    """Send model loading progress to frontend via LiveKit data channel."""
+    try:
+        data = json.dumps({
+            "type": "model_loading",
+            "progress": progress,
+            "message": message
+        }).encode("utf-8")
+        await room.local_participant.publish_data(data, reliable=True)
+        logger.info(f"📊 Model loading progress: {progress}% - {message}")
+    except Exception as e:
+        logger.warning(f"Failed to send model loading progress: {e}")
+
+
+async def send_model_ready(room: rtc.Room) -> None:
+    """Notify frontend that model is ready and video can be shown."""
+    try:
+        data = json.dumps({
+            "type": "model_ready"
+        }).encode("utf-8")
+        await room.local_participant.publish_data(data, reliable=True)
+        logger.info("✅ Sent model_ready event to frontend")
+    except Exception as e:
+        logger.warning(f"Failed to send model ready event: {e}")
+
 
 # Agent logic handled via AgentSession and SidekickAgent
 
@@ -331,12 +363,31 @@ async def _merge_and_update_room_metadata(
                 logger.debug("Text-mode: unable to read existing metadata (attempt %s): %s", attempt, read_err)
 
             merged = existing or {}
+
+            # Remove large dispatch-only fields from existing metadata to make room for response
+            # These fields were needed for dispatch but aren't needed in the response
+            large_dispatch_fields = ["system_prompt", "tools", "tools_config", "tool_prompt_sections",
+                                     "api_keys", "embedding", "dataset_ids", "supabase_service_role_key"]
+            for field in large_dispatch_fields:
+                merged.pop(field, None)
+
             merged.update(payload)
+            # Remove keys that are explicitly set to None (cleanup of streaming data)
+            merged = {k: v for k, v in merged.items() if v is not None}
+
+            # Final size check - truncate response if still too large
+            merged_json = json.dumps(merged)
+            if len(merged_json) > 60000:
+                logger.warning(f"⚠️ Merged metadata still too large ({len(merged_json)} bytes), truncating text_response")
+                text_response = merged.get("text_response", "")
+                if text_response and len(text_response) > 2000:
+                    merged["text_response"] = text_response[:2000] + "\n\n[... response truncated ...]"
+                    merged_json = json.dumps(merged)
 
             await lk_client.room.update_room_metadata(
                 livekit_api.UpdateRoomMetadataRequest(
                     room=room_name,
-                    metadata=json.dumps(merged),
+                    metadata=merged_json,
                 )
             )
             logger.info("✅ Text response stored in LiveKit room metadata via API (attempt %s)", attempt)
@@ -359,6 +410,37 @@ async def _merge_and_update_room_metadata(
                 pass
 
 
+async def _load_conversation_history(
+    supabase_client,
+    conversation_id: str,
+    limit: int = 50,
+) -> List[Dict[str, str]]:
+    """Load previous messages from conversation history for context."""
+    if not supabase_client or not conversation_id:
+        return []
+
+    try:
+        result = supabase_client.table("conversation_transcripts").select(
+            "role", "content", "created_at"
+        ).eq("conversation_id", conversation_id).order(
+            "created_at", desc=False
+        ).limit(limit).execute()
+
+        messages = []
+        if result.data:
+            for msg in result.data:
+                role = msg.get("role")
+                content = msg.get("content", "")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+
+        logger.info(f"📜 Loaded {len(messages)} messages from conversation history for {conversation_id}")
+        return messages
+    except Exception as e:
+        logger.warning(f"Failed to load conversation history: {e}")
+        return []
+
+
 async def _run_text_mode_interaction(
     *,
     session: voice.AgentSession,
@@ -373,22 +455,101 @@ async def _run_text_mode_interaction(
         raise ConfigurationError("Text mode requests require 'user_message' in metadata")
 
     logger.info("📝 Text-only mode: direct LLM path (bypass TTS pipeline)")
-    # Proactively retrieve citations/rerank context for text mode (on_user_turn_completed may not fire)
+
+    # CRITICAL: Clear stale response fields from previous turns to prevent race conditions
+    # This ensures the polling API doesn't see old text_response before the new one is ready
     try:
-        if hasattr(agent, "_retrieve_with_citations") and callable(getattr(agent, "_retrieve_with_citations")):
-            await agent._retrieve_with_citations(user_message)
-            logger.info("📚 Text-mode: pre-fetched citations for user message (count=%s)", len(getattr(agent, "_current_citations", []) or []))
-    except Exception as cite_err:
-        logger.warning("Text-mode citation prefetch failed: %s", cite_err)
+        await _merge_and_update_room_metadata(
+            room_name=room.name,
+            payload={
+                "mode": "text",
+                "conversation_id": conversation_id,
+                "streaming": True,  # Indicate new response in progress
+                # Explicitly clear previous response data
+                "text_response": None,
+                "text_response_partial": None,
+                "citations": None,
+                "tool_results": None,
+                "widget": None,
+                "generated_at": None,
+            },
+            logger=logger,
+            retries=1,
+        )
+        logger.info("🔄 Cleared stale response metadata for new turn")
+    except Exception as clear_err:
+        logger.warning(f"⚠️ Failed to clear stale metadata: {clear_err}")
+    # Proactively retrieve citations/rerank context for text mode (on_user_turn_completed may not fire)
+    # NO FALLBACK POLICY: If RAG retrieval fails, we fail the request rather than hallucinating
+    rag_context = ""
+    if hasattr(agent, "_retrieve_with_citations") and callable(getattr(agent, "_retrieve_with_citations")):
+        await agent._retrieve_with_citations(user_message)
+        logger.info("📚 Text-mode: pre-fetched citations for user message (count=%s)", len(getattr(agent, "_current_citations", []) or []))
+        # Get the RAG context text for injection into the prompt
+        rag_context = getattr(agent, "_current_rag_context", "") or ""
+        if rag_context:
+            logger.info(f"📚 Text-mode: RAG context retrieved ({len(rag_context)} chars)")
+        else:
+            logger.error("❌ RAG context retrieval returned empty - NO FALLBACK POLICY prevents hallucination")
+            raise ValueError("RAG context retrieval failed - empty context returned. Check document indexing and embeddings.")
+    else:
+        logger.error("❌ Agent does not have _retrieve_with_citations method - cannot proceed")
+        raise ValueError("Agent not configured for RAG retrieval")
 
     # Call LLM directly (no TTS) to avoid LiveKit TTS failures in text-only mode
     try:
-        # Build ChatContext (matches what voice path uses)
+        # Build ChatContext with conversation history for context continuity
         chat_ctx = llm.ChatContext()
+
+        # Add system prompt first if available
+        # The system prompt is stored as 'instructions' in the LiveKit Agent base class
+        system_prompt = getattr(agent, "instructions", None) or (
+            agent._agent_config.get("system_prompt") if hasattr(agent, "_agent_config") else None
+        )
+
+        # Inject RAG context into the system prompt if available
+        if rag_context:
+            rag_injection = f"""
+
+## Relevant Knowledge Base Context
+Use the following information from our knowledge base to help answer the user's question.
+
+IMPORTANT: Base your answer ONLY on the information provided below. If the context doesn't contain relevant information to answer the question, say so honestly rather than making up information. Do not invent facts, names, or details that are not in the provided context.
+
+{rag_context}
+
+---
+"""
+            system_prompt = (system_prompt or "") + rag_injection
+            logger.info(f"📚 Injected RAG context into system prompt")
+
+        if system_prompt:
+            chat_ctx.add_message(role="system", content=system_prompt)
+            logger.info(f"📝 Added system prompt to chat context ({len(system_prompt)} chars)")
+
+        # Load and add conversation history for resumed conversations
+        history_messages = await _load_conversation_history(
+            getattr(agent, "_supabase_client", None),
+            conversation_id,
+            limit=50  # Limit history to avoid token overflow
+        )
+
+        for msg in history_messages:
+            chat_ctx.add_message(role=msg["role"], content=msg["content"])
+
+        if history_messages:
+            logger.info(f"📜 Added {len(history_messages)} history messages to chat context")
+
+        # Add current user message
         chat_ctx.add_message(role="user", content=user_message)
 
-        llm_result = agent.llm.chat(chat_ctx=chat_ctx)
-        response_text = ""
+        # Get tools registered on the agent for native function calling
+        # This follows LiveKit's recommended pattern for tool use
+        agent_tools = list(getattr(agent, "tools", []) or [])
+        logger.info(f"🧰 TEXT-MODE: Passing {len(agent_tools)} tools to LLM for native function calling")
+
+        # Call LLM directly for text mode WITH tools for native function calling
+        llm_result = agent.llm.chat(chat_ctx=chat_ctx, tools=agent_tools if agent_tools else None)
 
         # Streaming path: accumulate deltas and emit BATCHED partial metadata
         # to avoid per-token API calls which cause massive delays
@@ -397,12 +558,44 @@ async def _run_text_mode_interaction(
         chunk_size = int(chunk_size_env) if chunk_size_env and chunk_size_env.isdigit() else 80
         # Batch updates: only emit metadata every N tokens to reduce API overhead
         stream_batch_size = int(os.getenv("TEXT_STREAM_BATCH_SIZE", "50"))
+
+        assembled = ""
+        response_text = ""
+
+        # Track tool calls from native function calling
+        detected_tool_calls: List[Dict[str, Any]] = []
+
         if hasattr(llm_result, "__aiter__"):
-            assembled = ""
             chunk_index = 0
             last_update_index = 0
             async for chunk in llm_result:
                 delta = None
+
+
+                # Check for native tool calls in the stream
+                try:
+                    # LiveKit LLM stream has tool_calls on chunk.delta, not chunk directly
+                    tool_calls_list = None
+                    if hasattr(chunk, "delta") and chunk.delta:
+                        tool_calls_list = getattr(chunk.delta, "tool_calls", None)
+                    if not tool_calls_list:
+                        tool_calls_list = getattr(chunk, "tool_calls", None)
+
+                    if tool_calls_list:
+                        for tc in tool_calls_list:
+                            tool_name = getattr(tc, "name", None) or getattr(tc, "function", {}).get("name")
+                            tool_args = getattr(tc, "arguments", {})
+                            if isinstance(tool_args, str):
+                                try:
+                                    tool_args = json.loads(tool_args)
+                                except:
+                                    tool_args = {}
+                            if tool_name and tool_name not in [t["name"] for t in detected_tool_calls]:
+                                detected_tool_calls.append({"name": tool_name, "arguments": tool_args})
+                                logger.info(f"🧰 TEXT-MODE: Detected native tool call: {tool_name} with args: {tool_args}")
+                except Exception as tc_err:
+                    logger.debug(f"Tool call detection error: {tc_err}")
+
                 try:
                     if hasattr(chunk, "delta") and getattr(chunk.delta, "content", None):
                         delta = chunk.delta.content
@@ -448,6 +641,23 @@ async def _run_text_mode_interaction(
                         logger.debug(f"Streaming metadata update skipped: {partial_err}")
 
             response_text = assembled.strip()
+
+            # After stream completes, check for final tool calls on the stream object
+            try:
+                if hasattr(llm_result, "tool_calls") and llm_result.tool_calls:
+                    for tc in llm_result.tool_calls:
+                        tool_name = getattr(tc, "name", None) or getattr(tc, "function", {}).get("name")
+                        tool_args = getattr(tc, "arguments", {})
+                        if isinstance(tool_args, str):
+                            try:
+                                tool_args = json.loads(tool_args)
+                            except:
+                                tool_args = {}
+                        if tool_name and not any(t["name"] == tool_name for t in detected_tool_calls):
+                            detected_tool_calls.append({"name": tool_name, "arguments": tool_args})
+                            logger.info(f"🧰 TEXT-MODE: Detected final tool call: {tool_name}")
+            except Exception as tc_err:
+                logger.debug(f"Final tool call detection error: {tc_err}")
         else:
             # Non-streaming response object
             llm_response = llm_result
@@ -461,13 +671,103 @@ async def _run_text_mode_interaction(
                 msg = getattr(choice, "message", None)
                 if msg and getattr(msg, "content", None):
                     text = msg.content
+                # Check for tool calls in non-streaming response
+                if msg and hasattr(msg, "tool_calls") and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        tool_name = getattr(tc, "name", None) or getattr(tc.function, "name", None)
+                        tool_args = getattr(tc, "arguments", {}) or getattr(tc.function, "arguments", {})
+                        if isinstance(tool_args, str):
+                            try:
+                                tool_args = json.loads(tool_args)
+                            except:
+                                tool_args = {}
+                        if tool_name:
+                            detected_tool_calls.append({"name": tool_name, "arguments": tool_args})
+                            logger.info(f"🧰 TEXT-MODE: Detected tool call (non-stream): {tool_name}")
             response_text = (text or "").strip()
     except Exception as llm_err:
         logger.error(f"Direct LLM call failed in text mode: {type(llm_err).__name__}: {llm_err}")
         raise
 
-    citations = list(getattr(agent, "_current_citations", []) or [])
+    # Process detected tool calls (native function calling)
     tool_results: List[Dict[str, Any]] = []
+    widget_trigger = None
+
+    # Check for content_catalyst tool call from native function calling
+    for tc in detected_tool_calls:
+        if tc["name"] == "content_catalyst":
+            logger.info(f"🎨 TEXT-MODE: Processing Content Catalyst tool call: {tc['arguments']}")
+            args = tc["arguments"]
+            suggested_topic = args.get("suggested_topic", "") or args.get("source_content", "")
+
+            widget_trigger = {
+                "type": "content_catalyst",
+                "config": {
+                    "suggested_topic": suggested_topic,
+                    "source_type": args.get("source_type", "topic"),
+                    "source_content": args.get("source_content", ""),
+                    "target_word_count": args.get("target_word_count"),
+                    "style_prompt": args.get("style_prompt", ""),
+                },
+                "message": "Opening Content Catalyst configuration..."
+            }
+
+            # Set a helpful response if none was generated
+            if not response_text:
+                response_text = "I'll help you create an article. Please configure your preferences in the Content Catalyst widget below."
+
+            logger.info(f"🎨 TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
+            break
+
+    # Fallback: Also check for JSON tool call in LLM text response (for models that don't support native function calling)
+    if not widget_trigger:
+        import re
+        json_match = re.search(r'```json\s*(\{.*?"tool".*?\})\s*```', response_text, re.DOTALL)
+        if not json_match:
+            # Also try without markdown code block
+            json_match = re.search(r'(\{[^{}]*"tool"\s*:\s*"content_catalyst"[^{}]*\})', response_text, re.DOTALL)
+
+        if json_match:
+            try:
+                tool_call_json = json.loads(json_match.group(1))
+                tool_name = tool_call_json.get("tool")
+                tool_args = tool_call_json.get("args", {})
+
+                if tool_name == "content_catalyst":
+                    logger.info(f"🎨 TEXT-MODE: Detected Content Catalyst via JSON fallback: {tool_args}")
+
+                    # Extract suggested topic from args - handle both new and old formats
+                    suggested_topic = tool_args.get("suggested_topic", "") or tool_args.get("source_content", "")
+
+                    # Create widget trigger for the UI
+                    widget_trigger = {
+                        "type": "content_catalyst",
+                        "config": {
+                            "suggested_topic": suggested_topic,
+                        },
+                        "message": "Opening Content Catalyst configuration..."
+                    }
+
+                    # Clean up the response text - remove the JSON block
+                    response_text = re.sub(r'```json\s*\{.*?"tool".*?\}\s*```', '', response_text, flags=re.DOTALL)
+                    response_text = re.sub(r'\{[^{}]*"tool"\s*:\s*"content_catalyst"[^{}]*\}', '', response_text)
+                    response_text = response_text.strip()
+
+                    # If response is now empty or just whitespace, provide a default message
+                    if not response_text:
+                        response_text = "I'll help you create an article. Please configure your preferences in the Content Catalyst widget below."
+
+                    logger.info(f"🎨 TEXT-MODE: Widget trigger prepared (JSON fallback): {widget_trigger}")
+
+            except json.JSONDecodeError as e:
+                logger.debug(f"🔧 TEXT-MODE: JSON parse failed for potential tool call: {e}")
+
+    citations = list(getattr(agent, "_current_citations", []) or [])
+    logger.info(f"📚 DEBUG: Found {len(citations)} citations on agent for response payload")
+    if citations:
+        logger.info(f"📚 DEBUG: First citation: {citations[0].get('title', 'no title')}")
+    # Log first 500 chars of response for debugging
+    logger.info(f"📝 DEBUG: LLM response preview: {response_text[:500]}...")
 
     if collector:
         try:
@@ -492,11 +792,17 @@ async def _run_text_mode_interaction(
         else:
             metadata_citations.append(citation)
 
+    # Log what citations we're about to send
+    logger.info(f"📚 DEBUG: Sending {len(metadata_citations)} citations in final payload")
+    if metadata_citations:
+        logger.info(f"📚 DEBUG: Citation titles: {[c.get('title', 'no title')[:40] for c in metadata_citations[:5]]}")
+
     payload = {
         "mode": "text",
         "conversation_id": conversation_id,
         "text_response": response_text,
-        "text_response_stream": stream_chunks if 'stream_chunks' in locals() else [],
+        # Don't include stream chunks in final payload - they're redundant and can exceed LiveKit's 64KB metadata limit
+        # "text_response_stream": stream_chunks if 'stream_chunks' in locals() else [],
         "citations": metadata_citations,
         "tool_results": tool_results,
         "rerank": (
@@ -506,7 +812,17 @@ async def _run_text_mode_interaction(
         ),
         "streaming": False,
         "generated_at": datetime.utcnow().isoformat(),
+        # Clear out streaming data from previous partial updates
+        "text_response_partial": None,
+        "text_response_stream": None,
+        "text_stream_token": None,
+        "stream_progress": None,
     }
+
+    # Add widget trigger if present (for Content Catalyst and other widget-based abilities)
+    if widget_trigger:
+        payload["widget"] = widget_trigger
+        logger.info(f"🎨 TEXT-MODE: Adding widget trigger to payload: {widget_trigger}")
     # Persist response via LiveKit server metadata so the API can poll it
     await _merge_and_update_room_metadata(
         room_name=room.name,
@@ -954,12 +1270,14 @@ async def agent_job_handler(ctx: JobContext):
         requested_mode = str(raw_mode or "").strip().lower()
         if not requested_mode and metadata.get("user_message"):
             requested_mode = "text"
-        if requested_mode not in ("text", "voice"):
+        if requested_mode not in ("text", "voice", "video"):
             logger.warning(f"Mode not provided or unrecognized ({requested_mode!r}); defaulting to voice")
             requested_mode = "voice"
         is_text_mode = requested_mode == "text"
-        metadata["mode"] = "text" if is_text_mode else "voice"
-        logger.info(f"🎯 Agent job running in {'TEXT' if is_text_mode else 'VOICE'} mode")
+        is_video_mode = requested_mode == "video"
+        metadata["mode"] = requested_mode
+        mode_label = "TEXT" if is_text_mode else ("VIDEO" if is_video_mode else "VOICE")
+        logger.info(f"🎯 Agent job running in {mode_label} mode")
         text_response_collector: Optional[TextResponseCollector] = TextResponseCollector() if is_text_mode else None
 
         # Load API keys using the loader (follows dynamic loading policy)
@@ -1342,6 +1660,7 @@ async def agent_job_handler(ctx: JobContext):
                 "conversation_id": agent._conversation_id,
                 "client_conversation_id": metadata.get("client_conversation_id") or agent._conversation_id,
                 "user_id": agent._user_id,
+                "agent_id": metadata.get("agent_id"),  # UUID for update_user_overview tool
                 "agent_slug": metadata.get("agent_slug") or metadata.get("agent_id"),
                 "client_id": metadata.get("client_id") or client_id,
                 "session_id": metadata.get("session_id")
@@ -1406,10 +1725,21 @@ async def agent_job_handler(ctx: JobContext):
             agent.setup_transcript_storage(ctx.room)
             
             # Register tools (Abilities) if provided in metadata
+            # Always include built-in tools like update_user_overview
             try:
-                tool_defs = metadata.get("tools") or []
+                tool_defs = list(metadata.get("tools") or [])
+
+                # Add built-in user_overview tool for all agents
+                user_overview_tool_def = {
+                    "id": "builtin_update_user_overview",
+                    "slug": "update_user_overview",
+                    "type": "user_overview",
+                    "description": "Update persistent notes about this user (shared across all sidekicks)."
+                }
+                tool_defs.append(user_overview_tool_def)
+
                 if tool_defs:
-                    logger.info(f"🧰 Preparing to register tools: count={len(tool_defs)}")
+                    logger.info(f"🧰 Preparing to register tools: count={len(tool_defs)} (including built-in)")
                     try:
                         slugs = [t.get("slug") or t.get("name") or t.get("id") for t in tool_defs]
                         logger.info(f"🧰 Tool defs slugs: {slugs}")
@@ -1428,7 +1758,8 @@ async def agent_job_handler(ctx: JobContext):
                         tracked_tool_slugs = []
                         for tool_def in tool_defs:
                             tool_type = tool_def.get("type")
-                            if tool_type not in {"n8n", "asana"}:
+                            # Track runtime context for tools that need user/client context
+                            if tool_type not in {"n8n", "asana", "user_overview", "content_catalyst"}:
                                 continue
                             slug_candidate = (
                                 tool_def.get("slug")
@@ -1439,7 +1770,7 @@ async def agent_job_handler(ctx: JobContext):
                                 tracked_tool_slugs.append(slug_candidate)
                         if tracked_tool_slugs:
                             logger.info(
-                                "🧰 Tracking runtime context for n8n tools: %s",
+                                "🧰 Tracking runtime context for tools: %s",
                                 tracked_tool_slugs,
                             )
                             push_runtime_context(base_tool_context)
@@ -1483,8 +1814,8 @@ async def agent_job_handler(ctx: JobContext):
                 # TTS-aligned transcriptions for better frontend synchronization
                 use_tts_aligned_transcript=True,         # Enable word-level transcription timing (Cartesia/ElevenLabs)
                 # Endpointing parameters for turn detection model
-                min_endpointing_delay=2.0,               # INCREASED: Allow 2s pause before considering turn complete
-                max_endpointing_delay=10.0,              # INCREASED: Allow longer thoughtful pauses
+                min_endpointing_delay=1.0,               # 1s pause before considering turn complete (balanced responsiveness)
+                max_endpointing_delay=6.0,               # Allow thoughtful pauses but not too long
                 # Interruption settings that prevent scheduler from getting stuck
                 allow_interruptions=True,
                 min_interruption_duration=0.5,           # Increased to avoid accidental interruptions
@@ -1533,8 +1864,9 @@ async def agent_job_handler(ctx: JobContext):
                         agent._last_committed_text = buffered
                         push_runtime_context({"latest_user_text": buffered})
                         session.commit_user_turn(transcript_timeout=commit_timeout)
-                        session._current_turn_text = ""
-                        agent._current_turn_text = ""
+                        # NOTE: Do NOT clear _current_turn_text here!
+                        # The buffer should persist across multiple STT final chunks during a long utterance.
+                        # It will be cleared when the assistant actually starts speaking (turn boundary).
                     except asyncio.CancelledError:
                         logger.debug("Delayed commit cancelled before execution")
                     except Exception as ce:
@@ -1587,11 +1919,14 @@ async def agent_job_handler(ctx: JobContext):
 
             def _merge_transcript_text(existing: str, incoming: str) -> str:
                 """
-                Combine partial ASR chunks into a single utterance while avoiding obvious duplication.
+                Handle progressive STT updates for a single turn.
 
-                The Deepgram stream we receive sometimes emits disjoint final chunks (e.g., "Hey" then
-                "is coming"), so we append when the new chunk does not already appear in the aggregate.
-                If the recognizer sends the entire sentence, we replace the aggregate to keep spacing right.
+                STT can send:
+                1. Progressive updates: partial → more complete → final (same utterance)
+                2. Multiple final chunks: separate "final" events for different parts of a long utterance
+
+                For progressive updates, we pick the more complete version.
+                For disjoint final chunks, we CONCATENATE to preserve the full message.
                 """
 
                 if not incoming:
@@ -1604,16 +1939,44 @@ async def agent_job_handler(ctx: JobContext):
                 if not existing:
                     return incoming
 
-                # If the incoming chunk already contains the existing text, prefer the richer version
-                if incoming.startswith(existing) or existing in incoming:
-                    return incoming
+                existing = existing.strip()
 
-                # If the existing text already includes this chunk (or a trimmed variant), keep existing
-                if incoming in existing:
+                # Normalize for comparison (lowercase, collapse whitespace)
+                def normalize(s):
+                    return ' '.join(s.lower().split())
+
+                incoming_norm = normalize(incoming)
+                existing_norm = normalize(existing)
+
+                # If incoming contains existing (or vice versa), use the longer/more complete one
+                # This handles progressive STT updates where each update is more complete
+                if incoming_norm in existing_norm or existing_norm.startswith(incoming_norm[:min(len(incoming_norm), 20)]):
+                    # Existing is more complete
                     return existing
 
-                # Otherwise append with a space separator
-                return f"{existing.rstrip()} {incoming}".strip()
+                if existing_norm in incoming_norm or incoming_norm.startswith(existing_norm[:min(len(existing_norm), 20)]):
+                    # Incoming is more complete
+                    return incoming
+
+                # Check for significant overlap at boundaries (handles partial overlap)
+                # This catches cases where the STT re-transcribes with slight variations
+                overlap_threshold = min(15, len(existing_norm) // 3, len(incoming_norm) // 3)
+                if overlap_threshold > 5:
+                    # Check if existing ends with what incoming starts with
+                    for overlap_len in range(overlap_threshold, 3, -1):
+                        if existing_norm.endswith(incoming_norm[:overlap_len]):
+                            # Overlapping - append only the non-overlapping part
+                            # Find where the overlap starts in incoming (using original, not normalized)
+                            return existing + " " + incoming[overlap_len:].strip()
+                        if incoming_norm.endswith(existing_norm[:overlap_len]):
+                            # Incoming overlaps beginning of existing - keep existing as it's more complete
+                            return existing
+
+                # For truly disjoint content, CONCATENATE to preserve the full message
+                # This handles cases where STT sends multiple separate "final" events
+                # for different parts of a long utterance (user pauses mid-sentence)
+                logger.info(f"📝 Concatenating disjoint transcript chunks: existing={len(existing)} chars, incoming={len(incoming)} chars, result={len(existing) + 1 + len(incoming)} chars")
+                return existing + " " + incoming
 
 
             def _strip_assistant_echo(txt_raw: str, txt_norm: str, recent_greet: str, last_assistant: str):
@@ -1669,6 +2032,7 @@ async def agent_job_handler(ctx: JobContext):
 
                     if txt:
                         prev_turn_text = getattr(session, "_current_turn_text", "")
+                        logger.info(f"📝 Merge inputs: prev_len={len(prev_turn_text)}, incoming_len={len(txt)}, prev='{prev_turn_text[:50]}...' if prev_turn_text else 'empty'")
                         if not prev_turn_text:
                             try:
                                 session._user_transcript_committed = False
@@ -1680,6 +2044,7 @@ async def agent_job_handler(ctx: JobContext):
                             prev_turn_text,
                             txt,
                         )
+                        logger.info(f"📝 Merge result: merged_len={len(merged)}")
                         session._current_turn_text = merged
                         agent._current_turn_text = merged
                         session.latest_user_text = merged
@@ -1768,9 +2133,9 @@ async def agent_job_handler(ctx: JobContext):
                                     logger.warning("⚠️ Interrupt call failed: %s: %s", type(interrupt_exc).__name__, interrupt_exc)
                             else:
                                 logger.info("⏭️  Skipping interruption for duplicate final transcript (turn_id=%s)", getattr(agent, "_current_turn_id", None))
-                            # Final chunk marks end of this user utterance; clear buffer immediately
-                            session._current_turn_text = ""
-                            agent._current_turn_text = ""
+                            # NOTE: Do NOT clear buffer here. STT may send multiple final chunks for a single
+                            # long utterance when user pauses mid-sentence. Buffer will be cleared when the
+                            # assistant starts responding (turn boundary).
                         if is_final:
                             push_runtime_context({"latest_user_text": merged})
                             try:
@@ -1853,6 +2218,9 @@ async def agent_job_handler(ctx: JobContext):
                         session._user_transcript_committed = False
                         session._user_transcript_committed_text = ""
                         session._user_transcript_committed_turn = None
+                        # Clear the turn text buffer - this marks the true turn boundary
+                        session._current_turn_text = ""
+                        agent._current_turn_text = ""
                     except Exception:
                         pass
                 except Exception as e:
@@ -1871,14 +2239,17 @@ async def agent_job_handler(ctx: JobContext):
                 close_on_disconnect=False  # Keep agent running even if user disconnects briefly
             )
 
+            # For video mode, avatar publishes audio so we disable agent's direct audio output
+            # For voice mode, agent publishes audio directly to the room
             output_options = room_io.RoomOutputOptions(
-                audio_enabled=True,
+                audio_enabled=not is_video_mode,  # Disable for video mode - avatar handles audio
                 transcription_enabled=True,
                 audio_track_name="agent_audio",
             )
 
             if not is_text_mode:
-                logger.info("Priming RoomIO audio output before starting AgentSession...")
+                mode_str = "VIDEO" if is_video_mode else "VOICE"
+                logger.info(f"Priming RoomIO for {mode_str} mode (audio_enabled={not is_video_mode})...")
                 try:
                     session_room_io = room_io.RoomIO(
                         agent_session=session,
@@ -1898,10 +2269,160 @@ async def agent_job_handler(ctx: JobContext):
             else:
                 logger.info("📝 Text-only mode: skipping RoomIO audio priming")
 
-            await session.start(
-                room=ctx.room,
-                agent=agent,
-            )
+            # Initialize avatar for video mode
+            avatar_session = None
+            if is_video_mode:
+                voice_settings = metadata.get("voice_settings", {})
+                avatar_provider = voice_settings.get("avatar_provider", "bithuman")
+                logger.info(f"🎬 Video mode: initializing {avatar_provider} avatar session")
+
+                try:
+                    # Get LiveKit credentials (needed for both providers)
+                    livekit_url = api_keys.get("livekit_url") or os.getenv("LIVEKIT_URL")
+                    livekit_api_key = api_keys.get("livekit_api_key") or os.getenv("LIVEKIT_API_KEY")
+                    livekit_api_secret = api_keys.get("livekit_api_secret") or os.getenv("LIVEKIT_API_SECRET")
+
+                    if avatar_provider == "beyondpresence":
+                        # Beyond Presence avatar provider - lazy import
+                        from livekit.plugins import bey
+
+                        bey_api_key = api_keys.get("bey_api_key")
+                        avatar_id = voice_settings.get("avatar_id")
+
+                        if not bey_api_key:
+                            raise ValueError("Video chat with Beyond Presence requires BEY API key in client settings")
+
+                        # Set environment variable for the plugin
+                        os.environ["BEY_API_KEY"] = bey_api_key
+
+                        logger.info(f"🎭 Beyond Presence: avatar_id={avatar_id or 'default'}")
+
+                        # Create Beyond Presence avatar session
+                        if avatar_id:
+                            avatar_session = bey.AvatarSession(avatar_id=avatar_id)
+                        else:
+                            avatar_session = bey.AvatarSession()  # Uses default avatar
+
+                        logger.info(f"🎬 Starting Beyond Presence avatar session...")
+                        await avatar_session.start(session, room=ctx.room)
+                        logger.info("✅ Beyond Presence avatar session started - video will be published")
+
+                    else:
+                        # Bithuman avatar provider (default)
+                        avatar_model_path = voice_settings.get("avatar_model_path")
+                        avatar_image_url = voice_settings.get("avatar_image_url")
+                        avatar_model_type = voice_settings.get("avatar_model_type", "expression")
+                        bithuman_api_secret = api_keys.get("bithuman_api_secret")
+
+                        if not bithuman_api_secret:
+                            raise ValueError("Video chat with Bithuman requires API secret in client settings")
+
+                        # Send initial loading progress
+                        await send_model_loading_progress(ctx.room, 10, "Initializing avatar system...")
+
+                        # Determine mode: Local IMX (self-hosted) vs Cloud (image-based)
+                        if avatar_model_path:
+                            # LOCAL/SELF-HOSTED MODE: Use .imx model file
+                            logger.info(f"🎬 Bithuman LOCAL mode: using IMX model at {avatar_model_path}")
+                            await send_model_loading_progress(ctx.room, 15, "Loading local avatar model...")
+
+                            # Check if the model file exists
+                            if not os.path.exists(avatar_model_path):
+                                raise ValueError(f"IMX model file not found: {avatar_model_path}")
+
+                            await send_model_loading_progress(ctx.room, 20, "Creating avatar session...")
+                            avatar_session = bithuman.AvatarSession(
+                                model_path=avatar_model_path,
+                                model=avatar_model_type,
+                                api_secret=bithuman_api_secret,
+                            )
+                            logger.info(f"✅ Bithuman AvatarSession created with local IMX model")
+                            await send_model_loading_progress(ctx.room, 30, "Avatar session created...")
+
+                        else:
+                            # CLOUD MODE: Use avatar image URL
+                            if not avatar_image_url:
+                                raise ValueError("Video chat with Bithuman requires either avatar_model_path (local) or avatar_image_url (cloud)")
+
+                            # Handle relative URLs - prepend base URL if needed
+                            if avatar_image_url.startswith('/'):
+                                base_url = os.getenv('PLATFORM_API_URL', 'https://staging.sidekickforge.com')
+                                avatar_image_url = f"{base_url}{avatar_image_url}"
+                                logger.info(f"📷 Converted relative path to full URL: {avatar_image_url[:80]}...")
+
+                            await send_model_loading_progress(ctx.room, 15, "Downloading avatar image...")
+                            logger.info(f"🎬 Bithuman CLOUD mode: downloading avatar image from {avatar_image_url[:80]}...")
+                            import httpx
+                            async with httpx.AsyncClient() as http_client:
+                                img_response = await http_client.get(avatar_image_url, timeout=30.0)
+                                img_response.raise_for_status()
+                                avatar_image = Image.open(BytesIO(img_response.content)).convert("RGB")
+                            logger.info("✅ Avatar image loaded successfully")
+                            await send_model_loading_progress(ctx.room, 25, "Creating avatar session...")
+
+                            avatar_session = bithuman.AvatarSession(
+                                avatar_image=avatar_image,
+                                model=avatar_model_type,
+                                api_secret=bithuman_api_secret,
+                            )
+                            await send_model_loading_progress(ctx.room, 30, "Avatar session created...")
+
+                        logger.info(f"🎬 Starting Bithuman avatar session with LiveKit URL: {livekit_url[:30] if livekit_url else 'NOT SET'}...")
+                        await send_model_loading_progress(ctx.room, 35, "Starting avatar model (this may take 15-20 seconds)...")
+
+                        # Start avatar session with simulated progress updates
+                        # The actual start() call is slow (~20s), so we run progress updates in parallel
+                        async def update_progress_during_load():
+                            """Send periodic progress updates during slow model load."""
+                            progress_steps = [
+                                (2.0, 45, "Loading neural network weights..."),
+                                (4.0, 55, "Initializing inference engine..."),
+                                (6.0, 65, "Warming up avatar model..."),
+                                (8.0, 75, "Preparing video stream..."),
+                                (10.0, 85, "Almost ready..."),
+                            ]
+                            for delay, progress, msg in progress_steps:
+                                await asyncio.sleep(delay)
+                                await send_model_loading_progress(ctx.room, progress, msg)
+
+                        # Run avatar start and progress updates concurrently
+                        progress_task = asyncio.create_task(update_progress_during_load())
+                        try:
+                            await avatar_session.start(
+                                session,
+                                room=ctx.room,
+                                livekit_url=livekit_url,
+                                livekit_api_key=livekit_api_key,
+                                livekit_api_secret=livekit_api_secret,
+                            )
+                        finally:
+                            progress_task.cancel()
+                            try:
+                                await progress_task
+                            except asyncio.CancelledError:
+                                pass
+
+                        await send_model_loading_progress(ctx.room, 100, "Avatar ready!")
+                        await send_model_ready(ctx.room)
+                        logger.info("✅ Bithuman avatar session started - video will be published")
+
+                except Exception as avatar_err:
+                    logger.error(f"❌ Failed to initialize {avatar_provider} avatar: {avatar_err}")
+                    raise ValueError(f"Video chat initialization failed ({avatar_provider}): {avatar_err}") from avatar_err
+
+            # Start the agent session
+            if is_video_mode:
+                # In video mode, avatar publishes audio so we disable agent audio output
+                await session.start(
+                    room=ctx.room,
+                    agent=agent,
+                    room_output_options=RoomOutputOptions(audio_enabled=False),
+                )
+            else:
+                await session.start(
+                    room=ctx.room,
+                    agent=agent,
+                )
 
             if is_text_mode:
                 user_message = metadata.get("user_message")
@@ -2338,13 +2859,51 @@ async def agent_job_handler(ctx: JobContext):
                                     session._active_speech_handle = greeting_speech_handle
                                 except Exception:
                                     pass
-                                await asyncio.wait_for(greeting_speech_handle, timeout=6.0)
-                                # Clear the stored handle after playout completes
-                                try:
-                                    session._active_speech_handle = None
-                                except Exception:
-                                    pass
-                                logger.info("✅ Proactive greeting delivered via session.say()")
+
+                                # In VIDEO mode, don't wait for completion - DataStreamAudioOutput
+                                # sends audio to Bithuman which doesn't signal back when done.
+                                # Waiting causes timeout and blocks all subsequent responses.
+                                if is_video_mode:
+                                    # Give audio a moment to flush to Bithuman
+                                    await asyncio.sleep(2.0)
+                                    # CRITICAL: Interrupt the greeting speech handle AND directly clear
+                                    # the SDK's internal _current_speech state. Without this, the SDK
+                                    # thinks we're still speaking and won't generate new responses.
+                                    try:
+                                        if greeting_speech_handle and not greeting_speech_handle.done():
+                                            greeting_speech_handle.interrupt(force=True)
+                                            logger.info("🔇 Interrupted greeting speech handle for video mode")
+                                    except Exception as int_err:
+                                        logger.debug(f"Could not interrupt greeting handle: {int_err}")
+                                    # Also call session.interrupt to ensure all state is cleared
+                                    try:
+                                        session.interrupt(force=True)
+                                    except Exception:
+                                        pass
+                                    # CRITICAL FIX: Directly clear the activity's _current_speech
+                                    # The SDK's interrupt() doesn't clear this in video mode because
+                                    # DataStreamAudioOutput never signals completion
+                                    try:
+                                        activity = getattr(session, '_activity', None)
+                                        if activity and hasattr(activity, '_current_speech'):
+                                            activity._current_speech = None
+                                            logger.info("🔇 Cleared activity._current_speech for video mode")
+                                    except Exception as act_err:
+                                        logger.debug(f"Could not clear activity._current_speech: {act_err}")
+                                    try:
+                                        session._active_speech_handle = None
+                                    except Exception:
+                                        pass
+                                    logger.info("✅ Proactive greeting sent to Bithuman (video mode - no wait)")
+                                else:
+                                    # Voice mode: wait for playout completion
+                                    await asyncio.wait_for(greeting_speech_handle, timeout=6.0)
+                                    # Clear the stored handle after playout completes
+                                    try:
+                                        session._active_speech_handle = None
+                                    except Exception:
+                                        pass
+                                    logger.info("✅ Proactive greeting delivered via session.say()")
                                 if room_id:
                                     _greeted_rooms.add(room_id)
                                 # Conversation events will capture the greeting transcript; no manual store needed
@@ -2352,6 +2911,12 @@ async def agent_job_handler(ctx: JobContext):
                                 logger.info("⚠️ No greeting method available on session; skipping proactive greeting")
                         except Exception as e:
                             logger.warning(f"Proactive greeting failed or timed out: {type(e).__name__}: {e}")
+                            # CRITICAL: Clear the speech handle on exception/timeout
+                            # Otherwise it stays set forever blocking subsequent responses
+                            try:
+                                session._active_speech_handle = None
+                            except Exception:
+                                pass
 
                     # If a participant is already in the room, greet immediately
                     try:

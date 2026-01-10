@@ -27,13 +27,73 @@ import time
 logger = logging.getLogger(__name__)
 
 
+class LocalBGEEmbedder:
+    """Client for local BGE-M3 embedding service (on-premise)"""
+
+    def __init__(self, service_url: str = None):
+        self.service_url = service_url or os.getenv("BGE_SERVICE_URL", "http://bge-service:8090")
+        self.model = "bge-m3"
+        self.client = httpx.AsyncClient(timeout=60.0)  # Longer timeout for local inference
+        logger.info(f"Initialized LocalBGEEmbedder with service URL: {self.service_url}")
+
+    async def create_embedding(self, text: str) -> List[float]:
+        """Create embeddings using local BGE service"""
+        try:
+            response = await self.client.post(
+                f"{self.service_url}/embed",
+                json={"texts": [text], "model": self.model},
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                embeddings = result.get("embeddings", [])
+                if embeddings and len(embeddings) > 0:
+                    logger.debug(f"Local BGE embedding generated in {result.get('processing_time_ms', 0):.0f}ms")
+                    return embeddings[0]
+                raise ValueError("Empty embedding response from BGE service")
+            elif response.status_code == 503:
+                raise ValueError("BGE service not ready - model may still be loading")
+            else:
+                raise ValueError(f"BGE service error: {response.status_code} - {response.text}")
+        except httpx.ConnectError as e:
+            raise ValueError(f"Cannot connect to BGE service at {self.service_url}: {e}")
+        except httpx.TimeoutException as e:
+            raise ValueError(f"BGE service timeout: {e}")
+
+    async def create_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
+        """Create embeddings for multiple texts in a single batch (more efficient)"""
+        if not texts:
+            return []
+
+        try:
+            response = await self.client.post(
+                f"{self.service_url}/embed",
+                json={"texts": texts, "model": self.model},
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                embeddings = result.get("embeddings", [])
+                logger.debug(f"Local BGE batch embedding ({len(texts)} texts) in {result.get('processing_time_ms', 0):.0f}ms")
+                return embeddings
+            else:
+                raise ValueError(f"BGE service error: {response.status_code} - {response.text}")
+        except httpx.ConnectError as e:
+            raise ValueError(f"Cannot connect to BGE service at {self.service_url}: {e}")
+
+    async def close(self):
+        """Close the HTTP client"""
+        await self.client.aclose()
+
+
 class RemoteEmbedder:
     """Simple client for remote embedding services"""
-    
-    def __init__(self, provider: str, api_key: str, model: str = None):
+
+    def __init__(self, provider: str, api_key: str, model: str = None, dimension: int = None):
         self.provider = provider
         self.api_key = api_key
         self.model = model
+        self.dimension = dimension  # For models that support variable dimensions (e.g., Qwen3)
         self.client = httpx.AsyncClient(timeout=30.0)
         
     async def create_embedding(self, text: str) -> List[float]:
@@ -53,21 +113,25 @@ class RemoteEmbedder:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
+
         if not self.model:
             raise ValueError("No model specified for SiliconFlow embeddings")
-            
+
         data = {
             "model": self.model,
             "input": text
         }
-        
+
+        # Add dimensions parameter for models that support variable dimensions (e.g., Qwen3)
+        if self.dimension:
+            data["dimensions"] = self.dimension
+
         response = await self.client.post(
             "https://api.siliconflow.com/v1/embeddings",
             headers=headers,
             json=data
         )
-        
+
         if response.status_code == 200:
             result = response.json()
             if 'data' in result and len(result['data']) > 0:
@@ -145,42 +209,56 @@ class AgentContextManager:
         # Detect database schema
         self._detect_schema()
     
-    def _initialize_embedder(self) -> RemoteEmbedder:
-        """Initialize the remote embedding client based on configuration"""
+    def _initialize_embedder(self):
+        """Initialize the embedding client based on configuration.
+
+        Returns either LocalBGEEmbedder (for on-premise) or RemoteEmbedder (for cloud APIs).
+        """
         # Get embedding provider from agent config - NO DEFAULTS
         embedding_config = self.agent_config.get('embedding', {})
-        
+
         if not embedding_config:
             # Log available keys to help debug
             logger.warning(f"No embedding configuration found. Available keys in agent_config: {list(self.agent_config.keys())}")
             raise ValueError("No embedding configuration found. Embedding provider and model must be configured.")
-        
-        provider = embedding_config.get('provider')
+
+        provider = embedding_config.get('provider', '').lower()
         if not provider:
             raise ValueError("No embedding provider specified in configuration. Required field: embedding.provider")
-            
+
+        # Check for local/on-prem provider first
+        if provider in ('local', 'on-prem', 'bge-local', 'bge', 'bge-m3'):
+            # Local BGE-M3 embeddings via sidecar service
+            service_url = embedding_config.get('service_url') or os.getenv("BGE_SERVICE_URL")
+            logger.info(f"Initializing Local BGE-M3 embedder (on-premise) at {service_url or 'default'}")
+            return LocalBGEEmbedder(service_url=service_url)
+
+        # Remote provider - needs model and API key
         model = embedding_config.get('model') or embedding_config.get('document_model') or embedding_config.get('conversation_model')
         if not model:
             raise ValueError(f"No embedding model specified for provider {provider}. Required field: embedding.model or embedding.document_model")
-        
+
         # Map provider to API key name
         api_key_mapping = {
             'siliconflow': 'siliconflow_api_key',
             'openai': 'openai_api_key',
             'novita': 'novita_api_key'
         }
-        
+
         # Get the appropriate API key
         api_key_name = api_key_mapping.get(provider)
         if not api_key_name:
-            raise ValueError(f"Unsupported embedding provider: {provider}")
-        
+            raise ValueError(f"Unsupported embedding provider: {provider}. Supported: local, siliconflow, openai, novita")
+
         api_key = self.api_keys.get(api_key_name)
         if not api_key:
             raise ValueError(f"No API key found for embedding provider {provider}. Required key: {api_key_name}")
-        
-        logger.info(f"Initializing {provider} embedder with model: {model or 'default'}")
-        return RemoteEmbedder(provider, api_key, model)
+
+        # Get dimension if specified (for models that support variable dimensions like Qwen3)
+        dimension = embedding_config.get('dimension')
+
+        logger.info(f"Initializing {provider} embedder with model: {model or 'default'}, dimension: {dimension or 'default'}")
+        return RemoteEmbedder(provider, api_key, model, dimension)
     
     def _detect_schema(self):
         """
@@ -214,26 +292,45 @@ class AgentContextManager:
         perf_details = {}
 
         try:
-            # Only gather user profile - no RAG searches
+            # Gather user profile and user overview in parallel - no RAG searches
             start_gather = time.perf_counter()
-            user_profile, profile_duration = await self._gather_user_profile(user_id)
-            
+            profile_task = asyncio.create_task(self._gather_user_profile(user_id))
+            overview_task = asyncio.create_task(self._gather_user_overview(user_id))
+
+            results = await asyncio.gather(profile_task, overview_task, return_exceptions=True)
+
+            # Handle profile result
+            if isinstance(results[0], Exception):
+                logger.warning(f"Profile fetch failed: {results[0]}")
+                user_profile, profile_duration = {}, 0
+            else:
+                user_profile, profile_duration = results[0]
+
+            # Handle overview result
+            if isinstance(results[1], Exception):
+                logger.warning(f"Overview fetch failed: {results[1]}")
+                user_overview, overview_duration = {}, 0
+            else:
+                user_overview, overview_duration = results[1]
+
             perf_details['gather_user_profile'] = profile_duration
-            
-            # Format user profile as markdown (without RAG results)
+            perf_details['gather_user_overview'] = overview_duration
+
+            # Format user profile and overview as markdown (without RAG results)
             context_markdown = self._format_context_as_markdown(
                 user_profile,
                 [],  # No knowledge results
-                []   # No conversation results
+                [],  # No conversation results
+                user_overview
             )
-            
+
             # Merge with original system prompt
             original_prompt = self.agent_config.get("system_prompt", "You are a helpful AI assistant.")
             enhanced_prompt = self._merge_system_prompts(original_prompt, context_markdown)
-            
+
             # Calculate timing
             duration = time.perf_counter() - start_time
-            
+
             # Prepare result
             result = {
                 "enhanced_system_prompt": enhanced_prompt,
@@ -243,6 +340,7 @@ class AgentContextManager:
                     "timestamp": datetime.now().isoformat(),
                     "duration_seconds": duration,
                     "user_profile_found": bool(user_profile),
+                    "user_overview_found": bool(user_overview and any(user_overview.values())),
                     "knowledge_results_count": 0,  # No knowledge search in initial context
                     "conversation_results_count": 0,  # No conversation search in initial context
                     "context_length": len(context_markdown),
@@ -252,15 +350,17 @@ class AgentContextManager:
                 },
                 "raw_context_data": {
                     "user_profile": user_profile,
+                    "user_overview": user_overview,
                     "knowledge_results": [],
                     "conversation_results": [],
                     "context_markdown": context_markdown
                 }
             }
-            
+
             logger.info(
                 f"Initial context built successfully in {duration:.2f}s - "
-                f"Profile: {result['context_metadata']['user_profile_found']}"
+                f"Profile: {result['context_metadata']['user_profile_found']}, "
+                f"Overview: {result['context_metadata']['user_overview_found']}"
             )
             
             return result
@@ -270,15 +370,17 @@ class AgentContextManager:
             # NO FALLBACKS - re-raise the error
             raise
 
-    async def build_complete_context(self, user_message: str, user_id: str) -> Dict[str, Any]:
+    async def build_complete_context(self, user_message: str, user_id: str, skip_knowledge_rag: bool = False, cached_query_embedding: Optional[List[float]] = None) -> Dict[str, Any]:
         """
         Build dynamic context based on user message - performs RAG searches.
         This should only be called when there's an actual user message to process.
-        
+
         Args:
             user_message: The user's current message/query (MUST NOT BE EMPTY)
             user_id: The ID of the user who is speaking
-            
+            skip_knowledge_rag: If True, skip knowledge RAG search (e.g., when citations_service already did it)
+            cached_query_embedding: Optional pre-computed embedding to reuse (saves ~1s API call)
+
         Returns:
             Dictionary containing:
             - enhanced_system_prompt: Original prompt + dynamic context
@@ -288,8 +390,8 @@ class AgentContextManager:
         # Fail fast if no user message provided
         if not user_message or not user_message.strip():
             raise ValueError("build_complete_context requires a non-empty user_message")
-            
-        logger.info(f"Building complete context for user {user_id}, message: {user_message[:100]}...")
+
+        logger.info(f"Building complete context for user {user_id}, message: {user_message[:100]}... (skip_knowledge_rag={skip_knowledge_rag}, has_cached_embedding={cached_query_embedding is not None})")
         start_time = time.perf_counter()
         perf_details = {}
 
@@ -297,41 +399,64 @@ class AgentContextManager:
             # Run all context gathering operations in parallel
             start_gather = time.perf_counter()
             user_profile_task = asyncio.create_task(self._gather_user_profile(user_id))
-            knowledge_task = asyncio.create_task(self._gather_knowledge_rag(user_message))
-            conversation_task = asyncio.create_task(self._gather_conversation_rag(user_message, user_id))
-            
+            user_overview_task = asyncio.create_task(self._gather_user_overview(user_id))
+            # Pass cached embedding to conversation RAG to skip embedding generation
+            conversation_task = asyncio.create_task(self._gather_conversation_rag(user_message, user_id, cached_query_embedding))
+
+            # Only do knowledge RAG if not already done by citations_service
+            if skip_knowledge_rag:
+                logger.info("Skipping knowledge RAG - already performed by citations_service")
+                knowledge_task = None
+            else:
+                knowledge_task = asyncio.create_task(self._gather_knowledge_rag(user_message))
+
             # Wait for all tasks to complete - NO FALLBACKS, fail fast
-            results = await asyncio.gather(
-                user_profile_task,
-                knowledge_task,
-                conversation_task,
-                return_exceptions=False  # Fail immediately if any task fails
-            )
-            
-            # Unpack results with performance data
-            user_profile, profile_duration = results[0]
-            knowledge_results, knowledge_duration = results[1]
-            conversation_results, conversation_duration = results[2]
-            
+            if knowledge_task:
+                results = await asyncio.gather(
+                    user_profile_task,
+                    user_overview_task,
+                    knowledge_task,
+                    conversation_task,
+                    return_exceptions=False  # Fail immediately if any task fails
+                )
+                user_profile, profile_duration = results[0]
+                user_overview, overview_duration = results[1]
+                knowledge_results, knowledge_duration = results[2]
+                conversation_results, conversation_duration = results[3]
+            else:
+                results = await asyncio.gather(
+                    user_profile_task,
+                    user_overview_task,
+                    conversation_task,
+                    return_exceptions=False
+                )
+                user_profile, profile_duration = results[0]
+                user_overview, overview_duration = results[1]
+                knowledge_results, knowledge_duration = [], 0.0  # Empty - already handled by citations
+                conversation_results, conversation_duration = results[2]
+
             perf_details['parallel_gather'] = time.perf_counter() - start_gather
             perf_details['gather_user_profile'] = profile_duration
+            perf_details['gather_user_overview'] = overview_duration
             perf_details['gather_knowledge_rag'] = knowledge_duration
+            perf_details['skip_knowledge_rag'] = skip_knowledge_rag
             perf_details['gather_conversation_rag'] = conversation_duration
-            
+
             # Format all context as markdown
             context_markdown = self._format_context_as_markdown(
                 user_profile,
                 knowledge_results,
-                conversation_results
+                conversation_results,
+                user_overview
             )
-            
+
             # Merge with original system prompt
             original_prompt = self.agent_config.get("system_prompt", "You are a helpful AI assistant.")
             enhanced_prompt = self._merge_system_prompts(original_prompt, context_markdown)
-            
+
             # Calculate timing
             duration = time.perf_counter() - start_time
-            
+
             # Prepare result
             result = {
                 "enhanced_system_prompt": enhanced_prompt,
@@ -341,6 +466,7 @@ class AgentContextManager:
                     "timestamp": datetime.now().isoformat(),
                     "duration_seconds": duration,
                     "user_profile_found": bool(user_profile),
+                    "user_overview_found": bool(user_overview and any(user_overview.values())),
                     "knowledge_results_count": len(knowledge_results),
                     "conversation_results_count": len(conversation_results),
                     "context_length": len(context_markdown),
@@ -350,15 +476,17 @@ class AgentContextManager:
                 },
                 "raw_context_data": {
                     "user_profile": user_profile,
+                    "user_overview": user_overview,
                     "knowledge_results": knowledge_results,
                     "conversation_results": conversation_results,
                     "context_markdown": context_markdown
                 }
             }
-            
+
             logger.info(
                 f"Complete context built successfully in {duration:.2f}s - "
                 f"Profile: {result['context_metadata']['user_profile_found']}, "
+                f"Overview: {result['context_metadata']['user_overview_found']}, "
                 f"Knowledge: {result['context_metadata']['knowledge_results_count']}, "
                 f"Conversations: {result['context_metadata']['conversation_results_count']}"
             )
@@ -408,7 +536,108 @@ class AgentContextManager:
             # For invalid input (e.g., 22P02) or any other query error, log and continue without profile
             logger.error(f"Error fetching user profile: {e}")
             return {}, time.perf_counter() - start_time
-    
+
+    async def _gather_user_overview(self, user_id: str) -> Tuple[Dict[str, Any], float]:
+        """
+        Fetch the persistent User Overview from the database.
+
+        The User Overview is a shared, agent-maintained summary of the user
+        that persists across conversations and is shared by all sidekicks
+        within a client. Also includes sidekick-specific insights for this agent.
+
+        Args:
+            user_id: The ID of the user to fetch overview for
+
+        Returns:
+            Tuple of (Overview data dict with sidekick_insights, duration in seconds)
+        """
+        start_time = time.perf_counter()
+        try:
+            logger.info(f"Fetching user overview for {user_id}")
+
+            # Validate user_id is a valid UUID
+            try:
+                import uuid as _uuid
+                _ = _uuid.UUID(str(user_id))
+            except Exception:
+                logger.warning(f"User id is not a UUID; skipping overview lookup: {user_id}")
+                return {}, time.perf_counter() - start_time
+
+            # Get agent_id for sidekick-specific insights
+            agent_id = self.agent_config.get("agent_id") or self.agent_config.get("id")
+
+            # Try to use the enhanced get_user_overview_for_agent RPC if available
+            # This returns both shared overview and sidekick-specific insights
+            try:
+                if agent_id:
+                    result = self.supabase.rpc("get_user_overview_for_agent", {
+                        "p_user_id": user_id,
+                        "p_client_id": self.client_id,
+                        "p_agent_id": agent_id
+                    }).execute()
+
+                    if result.data and isinstance(result.data, dict):
+                        # RPC returns 'shared_understanding' (not 'overview') and 'my_insights' (not 'sidekick_insights')
+                        overview = result.data.get("shared_understanding", {}) or result.data.get("overview", {})
+
+                        # Extract sidekick insights from my_insights array
+                        # The array contains JSON strings of insights, iterate reversed to get most recent
+                        my_insights_raw = result.data.get("my_insights", [])
+                        sidekick_insights = {}
+                        if my_insights_raw and isinstance(my_insights_raw, list):
+                            # Parse the insights - they come as JSON strings or dicts
+                            # Iterate in reverse to get the most recent insight first
+                            for item in reversed(my_insights_raw):
+                                if isinstance(item, str) and item.strip().startswith('{'):
+                                    try:
+                                        parsed = json.loads(item)
+                                        if isinstance(parsed, dict) and parsed.get("relationship_context"):
+                                            sidekick_insights = parsed
+                                            break  # Use the most recent one
+                                    except json.JSONDecodeError:
+                                        pass
+                                elif isinstance(item, dict) and item.get("relationship_context"):
+                                    sidekick_insights = item
+                                    break
+
+                        # Include sidekick insights in the overview dict for formatting
+                        if sidekick_insights:
+                            overview["_sidekick_insights"] = sidekick_insights
+
+                        if overview and any(overview.values()):
+                            logger.info(f"Found user overview with {len(overview)} sections for agent {agent_id}")
+                            return overview, time.perf_counter() - start_time
+                        else:
+                            logger.info(f"User overview for agent {agent_id} was empty")
+            except Exception as e:
+                # Fall back to regular get_user_overview if agent-specific one doesn't exist
+                logger.debug(f"get_user_overview_for_agent not available, falling back: {e}")
+
+            # Fallback to basic get_user_overview
+            result = self.supabase.rpc("get_user_overview", {
+                "p_user_id": user_id,
+                "p_client_id": self.client_id
+            }).execute()
+
+            if result.data:
+                data = result.data
+                if isinstance(data, dict) and data.get("exists"):
+                    overview = data.get("overview", {})
+                    logger.info(f"Found user overview with {len(overview)} sections")
+                    return overview, time.perf_counter() - start_time
+                elif isinstance(data, dict):
+                    # Return empty/default overview
+                    logger.info("No existing user overview found, using defaults")
+                    return data.get("overview", {}), time.perf_counter() - start_time
+
+            logger.info(f"No user overview found for user {user_id}")
+            return {}, time.perf_counter() - start_time
+
+        except Exception as e:
+            # Log error but don't fail - overview is optional enhancement
+            logger.warning(f"Error fetching user overview: {e}")
+            return {}, time.perf_counter() - start_time
+
     async def _gather_knowledge_rag(self, user_message: str) -> Tuple[List[Dict[str, Any]], float]:
         """
         RAG search on agent's assigned documents
@@ -464,14 +693,15 @@ class AgentContextManager:
             })
         return formatted_results
     
-    async def _gather_conversation_rag(self, user_message: str, user_id: str) -> Tuple[List[Dict[str, Any]], float]:
+    async def _gather_conversation_rag(self, user_message: str, user_id: str, cached_embedding: Optional[List[float]] = None) -> Tuple[List[Dict[str, Any]], float]:
         """
         RAG search on user-agent conversation history
-        
+
         Args:
             user_message: Query to search for
             user_id: The ID of the user whose conversations to search
-            
+            cached_embedding: Optional pre-computed embedding to reuse (saves ~1s API call)
+
         Returns:
             Tuple of (List of relevant conversation excerpts, duration in seconds)
         """
@@ -486,17 +716,28 @@ class AgentContextManager:
                 raise ValueError("No agent identifier found in config - slug, agent_slug, or agent_id required for conversation RAG")
             if not agent_slug:
                 raise ValueError("agent_slug is required for match_conversation_transcripts_secure (slug or agent_slug must be provided)")
-                
-            # Generate embeddings using remote service
-            query_embedding = await self.embedder.create_embedding(user_message)
 
-            # NO FALLBACKS: Only use the correct RPC function
+            # Use cached embedding if available, otherwise generate new one
+            if cached_embedding:
+                logger.info(f"[PERF] Reusing cached embedding for conversation RAG (saved ~1000ms)")
+                query_embedding = cached_embedding
+            else:
+                # Generate embeddings using remote service - TIMED
+                embed_start = time.perf_counter()
+                query_embedding = await self.embedder.create_embedding(user_message)
+                embed_duration = (time.perf_counter() - embed_start) * 1000
+                logger.info(f"[PERF] Conversation RAG embedding took {embed_duration:.0f}ms")
+
+            # NO FALLBACKS: Only use the correct RPC function - TIMED
+            rpc_start = time.perf_counter()
             result = self.supabase.rpc("match_conversation_transcripts_secure", {
                 "query_embeddings": query_embedding,
                 "agent_slug_param": agent_slug,
                 "user_id_param": user_id,  # Use the passed user_id, not self.user_id
                 "match_count": MAX_CONVERSATION_RESULTS
             }).execute()
+            rpc_duration = (time.perf_counter() - rpc_start) * 1000
+            logger.info(f"[PERF] Conversation RAG RPC took {rpc_duration:.0f}ms (returned {len(result.data) if result.data else 0} results)")
 
             if result.data:
                 logger.info(f"✅ match_conversation_transcripts_secure returned {len(result.data)} results.")
@@ -522,27 +763,165 @@ class AgentContextManager:
         self,
         profile: Dict[str, Any],
         knowledge: List[Dict[str, Any]],
-        conversations: List[Dict[str, Any]]
+        conversations: List[Dict[str, Any]],
+        user_overview: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         Generate clean markdown sections with proper headings
-        
+
         Args:
             profile: User profile data
             knowledge: Knowledge base search results
             conversations: Conversation history search results
-            
+            user_overview: Persistent user overview (agent-maintained notes)
+
         Returns:
             Formatted markdown string
         """
         # If nothing to include, return empty string to avoid adding token noise
-        if not profile and not knowledge and not conversations:
+        if not profile and not knowledge and not conversations and not user_overview:
             return ""
 
         sections = []
         # Header
         sections.append("# Agent Context\n")
-        
+
+        # User Overview Section (comes first - most important for relationship context)
+        if user_overview and any(user_overview.values()):
+            sections.append("## User Overview")
+            sections.append("*Your persistent notes about this user (shared across all sidekicks):*\n")
+
+            # Identity section
+            identity = user_overview.get("identity", {})
+            if identity and any(identity.values()):
+                sections.append("### Identity")
+                if identity.get("role"):
+                    sections.append(f"- **Role:** {self._truncate_text(identity['role'], MAX_PROFILE_FIELD_CHARS)}")
+                if identity.get("background"):
+                    sections.append(f"- **Background:** {self._truncate_text(identity['background'], MAX_PROFILE_FIELD_CHARS)}")
+                if identity.get("team"):
+                    sections.append(f"- **Team:** {self._truncate_text(identity['team'], MAX_PROFILE_FIELD_CHARS)}")
+                # Include any other identity fields
+                for key, value in identity.items():
+                    if key not in ("role", "background", "team") and value:
+                        sections.append(f"- **{key.replace('_', ' ').title()}:** {self._truncate_text(value, MAX_PROFILE_FIELD_CHARS)}")
+                sections.append("")
+
+            # Goals section
+            goals = user_overview.get("goals", {})
+            if goals and any(goals.values()):
+                sections.append("### Goals")
+                if goals.get("primary"):
+                    sections.append(f"- **Primary:** {self._truncate_text(goals['primary'], MAX_PROFILE_FIELD_CHARS)}")
+                if goals.get("secondary"):
+                    secondary = goals["secondary"]
+                    if isinstance(secondary, list):
+                        sections.append(f"- **Secondary:** {', '.join(str(s) for s in secondary)}")
+                    else:
+                        sections.append(f"- **Secondary:** {self._truncate_text(secondary, MAX_PROFILE_FIELD_CHARS)}")
+                if goals.get("blockers"):
+                    sections.append(f"- **Blockers:** {self._truncate_text(goals['blockers'], MAX_PROFILE_FIELD_CHARS)}")
+                sections.append("")
+
+            # Working Style section
+            working_style = user_overview.get("working_style", {})
+            if working_style and any(working_style.values()):
+                sections.append("### Working Style")
+                if working_style.get("communication"):
+                    sections.append(f"- **Communication:** {self._truncate_text(working_style['communication'], MAX_PROFILE_FIELD_CHARS)}")
+                if working_style.get("decision_making"):
+                    sections.append(f"- **Decision Making:** {self._truncate_text(working_style['decision_making'], MAX_PROFILE_FIELD_CHARS)}")
+                if working_style.get("notes"):
+                    sections.append(f"- **Notes:** {self._truncate_text(working_style['notes'], MAX_PROFILE_FIELD_CHARS)}")
+                sections.append("")
+
+            # Important Context section (list of items)
+            important_context = user_overview.get("important_context", [])
+            if important_context and isinstance(important_context, list) and len(important_context) > 0:
+                sections.append("### Important Context")
+                for item in important_context:
+                    if item:
+                        sections.append(f"- {self._truncate_text(item, MAX_PROFILE_FIELD_CHARS)}")
+                sections.append("")
+
+            # Relationship History section
+            relationship = user_overview.get("relationship_history", {})
+            if relationship and any(relationship.values()):
+                sections.append("### Relationship History")
+                if relationship.get("first_interaction"):
+                    sections.append(f"- **First Interaction:** {relationship['first_interaction']}")
+                if relationship.get("key_wins"):
+                    wins = relationship["key_wins"]
+                    if isinstance(wins, list):
+                        sections.append(f"- **Key Wins:** {', '.join(str(w) for w in wins)}")
+                    else:
+                        sections.append(f"- **Key Wins:** {self._truncate_text(wins, MAX_PROFILE_FIELD_CHARS)}")
+                if relationship.get("ongoing_threads"):
+                    threads = relationship["ongoing_threads"]
+                    if isinstance(threads, list):
+                        sections.append(f"- **Ongoing:** {', '.join(str(t) for t in threads)}")
+                    else:
+                        sections.append(f"- **Ongoing:** {self._truncate_text(threads, MAX_PROFILE_FIELD_CHARS)}")
+                sections.append("")
+
+            # Biography section
+            biography = user_overview.get("biography", {})
+            if biography and any(biography.values()):
+                sections.append("### Biography")
+                if biography.get("summary"):
+                    sections.append(f"- **Summary:** {self._truncate_text(biography['summary'], MAX_PROFILE_FIELD_CHARS)}")
+                if biography.get("mission"):
+                    sections.append(f"- **Mission:** {self._truncate_text(biography['mission'], MAX_PROFILE_FIELD_CHARS)}")
+                if biography.get("ventures"):
+                    ventures = biography["ventures"]
+                    if isinstance(ventures, list):
+                        sections.append(f"- **Ventures:** {', '.join(str(v) for v in ventures)}")
+                    else:
+                        sections.append(f"- **Ventures:** {self._truncate_text(ventures, MAX_PROFILE_FIELD_CHARS)}")
+                if biography.get("alter_egos"):
+                    alter_egos = biography["alter_egos"]
+                    if isinstance(alter_egos, list):
+                        sections.append(f"- **Alter Egos:** {', '.join(str(a) for a in alter_egos)}")
+                    else:
+                        sections.append(f"- **Alter Egos:** {self._truncate_text(alter_egos, MAX_PROFILE_FIELD_CHARS)}")
+                if biography.get("philosophy"):
+                    sections.append(f"- **Philosophy:** {self._truncate_text(biography['philosophy'], MAX_PROFILE_FIELD_CHARS)}")
+                if biography.get("essence"):
+                    sections.append(f"- **Essence:** {self._truncate_text(biography['essence'], MAX_PROFILE_FIELD_CHARS)}")
+                # Include any other biography fields
+                for key, value in biography.items():
+                    if key not in ("summary", "mission", "ventures", "alter_egos", "philosophy", "essence") and value:
+                        sections.append(f"- **{key.replace('_', ' ').title()}:** {self._truncate_text(str(value), MAX_PROFILE_FIELD_CHARS)}")
+                sections.append("")
+
+            # Sidekick-Specific Insights section (your private notes about this user)
+            sidekick_insights = user_overview.get("_sidekick_insights", {})
+            if sidekick_insights and any(sidekick_insights.values()):
+                agent_name = self.agent_config.get("agent_name") or self.agent_config.get("name") or "You"
+                sections.append(f"### Your Insights ({agent_name})")
+                sections.append(f"*Your private observations about this user (specific to your relationship):*\n")
+
+                if sidekick_insights.get("relationship_context"):
+                    sections.append(f"- **Your Role:** {self._truncate_text(sidekick_insights['relationship_context'], MAX_PROFILE_FIELD_CHARS)}")
+
+                if sidekick_insights.get("interaction_patterns"):
+                    sections.append(f"- **How They Interact With You:** {self._truncate_text(sidekick_insights['interaction_patterns'], MAX_PROFILE_FIELD_CHARS)}")
+
+                unique_obs = sidekick_insights.get("unique_observations", [])
+                if unique_obs and isinstance(unique_obs, list) and len(unique_obs) > 0:
+                    sections.append("- **What Only You Know:**")
+                    for obs in unique_obs[:5]:  # Limit to 5 observations
+                        if obs:
+                            sections.append(f"  - {self._truncate_text(obs, MAX_PROFILE_FIELD_CHARS)}")
+
+                topics = sidekick_insights.get("topics_discussed", [])
+                if topics and isinstance(topics, list) and len(topics) > 0:
+                    sections.append(f"- **Topics You've Discussed:** {', '.join(str(t) for t in topics[:10])}")
+
+                sections.append("")
+
+            sections.append("")  # Extra spacing after overview
+
         # User Profile Section
         if profile:
             sections.append("## User Profile")
@@ -694,10 +1073,29 @@ When speaking, structure your responses for clarity:
 - Use transition phrases to guide the listener through your explanation
 - Keep individual sentences clear and conversational"""
 
+        # User Overview tool guidance
+        overview_tool_guidance = """
+## User Overview Tool
+
+You have access to an `update_user_overview` tool to maintain persistent notes about users.
+These notes are shared across all sidekicks for this client - they're your collective memory.
+
+**Use this tool when the user shares ENDURING information about:**
+- **Biography:** Life story, background, personal journey, ventures, projects, origin story
+- **Identity:** Career/role changes ("I just got promoted", "I'm switching teams"), who they are
+- **Goals:** Priority shifts ("My priority is now X instead of Y"), aspirations, missions
+- **Working Style:** Communication preferences, decision-making patterns, neurodivergence
+- **Important Context:** Personal factors affecting interactions, constraints, circumstances
+- **Relationship History:** Key wins, milestones, ongoing threads worth remembering
+
+**Do NOT use for:** Routine tasks, today-only info, already-captured details, or speculation.
+
+**Be concise and update (don't just append).** If a goal changes, replace it. If they share biographical details, add them to the biography section."""
+
         if not context_markdown or context_markdown.strip() == "# Agent Context":
-            # No meaningful context to add, but still include formatting guidelines
-            return f"{original_prompt}\n\n---\n{formatting_guidelines}"
-        
+            # No meaningful context to add, but still include formatting and tool guidelines
+            return f"{original_prompt}\n\n---\n{formatting_guidelines}\n{overview_tool_guidance}"
+
         # Build the enhanced prompt with formatting guidance
         enhanced_prompt = f"""{original_prompt}
 
@@ -707,6 +1105,7 @@ When speaking, structure your responses for clarity:
 
 ---
 {formatting_guidelines}
+{overview_tool_guidance}
 
 Remember to use this context appropriately in your responses while maintaining your core personality and instructions."""
 

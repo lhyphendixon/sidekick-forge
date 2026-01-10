@@ -81,7 +81,7 @@
             <p class="text-gray-600">Sign in to access the admin dashboard</p>
         </div>
         
-        <form id="loginForm" class="space-y-6">
+        <form id="loginForm" class="space-y-6" method="POST" action="/admin/login" onsubmit="return handleLogin(event);">
             <div>
                 <label for="email" class="block text-sm font-medium text-gray-900">Email</label>
                 <input 
@@ -127,6 +127,11 @@
             </div>
         </form>
         
+        {% if error %}
+        <div class="mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded">
+            {{ error }}
+        </div>
+        {% endif %}
         <div id="errorMessage" class="mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded hidden"></div>
         <div id="loadingMessage" class="mt-4 p-3 bg-teal-50 border border-teal-200 text-teal-700 rounded hidden">
             Signing in...
@@ -204,26 +209,26 @@
             console.log('Auto-redirect disabled to prevent loops');
         });
 
-        // Handle login form
-        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        // Handle login form - defined as global function for onsubmit fallback
+        async function handleLogin(e) {
             e.preventDefault();
-            
+
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             const loginBtn = document.getElementById('loginBtn');
             const errorMessage = document.getElementById('errorMessage');
             const loadingMessage = document.getElementById('loadingMessage');
-            
+
             // Show loading state
             loginBtn.disabled = true;
             loadingMessage.classList.remove('hidden');
             errorMessage.classList.add('hidden');
-            
+
             // Check for development mode bypass
-            const isDevelopment = window.location.hostname === 'localhost' || 
+            const isDevelopment = window.location.hostname === 'localhost' ||
                                  window.location.hostname === '127.0.0.1' ||
                                  {% if development_mode %}true{% else %}false{% endif %};
-            
+
             if (isDevelopment && email === 'admin@autonomite.ai' && password === 'dev') {
                 // Development mode bypass
                 console.log('Using development mode bypass');
@@ -231,34 +236,39 @@
                 document.cookie = 'admin_token=dev-token; path=/; max-age=28800';
                 document.cookie = 'DEVELOPMENT_MODE=true; path=/; max-age=28800';
                 window.location.href = '/admin/';
-                return;
+                return false;
             }
-            
+
             try {
+                // Check if Supabase is loaded
+                if (typeof supabase === 'undefined') {
+                    throw new Error('Authentication library failed to load. Please refresh the page.');
+                }
+
                 const { data, error } = await supabase.auth.signInWithPassword({
                     email: email,
                     password: password
                 });
-                
+
                 if (error) {
                     throw error;
                 }
-                
+
                 // Store session token for admin access
                 const session = data.session;
                 if (session) {
                     // Store the access token for admin API calls
                     localStorage.setItem('admin_token', session.access_token);
-                    
+
                     // Also set as a cookie for backend authentication
                     document.cookie = `admin_token=${session.access_token}; path=/; max-age=28800`; // 8 hours
-                    
+
                     // Redirect to admin dashboard
                     window.location.href = '/admin/';
                 } else {
                     throw new Error('No session received');
                 }
-                
+
             } catch (error) {
                 console.error('Login error:', error);
                 errorMessage.textContent = error.message || 'Login failed. Please try again.';
@@ -267,7 +277,12 @@
                 loginBtn.disabled = false;
                 loadingMessage.classList.add('hidden');
             }
-        });
+
+            return false; // Prevent form submission
+        }
+
+        // Also attach via addEventListener as backup
+        document.getElementById('loginForm').addEventListener('submit', handleLogin);
         
         // Handle password reset
         document.getElementById('resetPasswordBtn').addEventListener('click', async () => {

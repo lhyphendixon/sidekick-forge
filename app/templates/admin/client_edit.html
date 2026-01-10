@@ -395,6 +395,18 @@
                         <input type="password" value="{{ client.settings.api_keys.jina_api_key or '' }}" name="jina_api_key" data-api-key="jina_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Bithuman API Secret (Video Avatar)</label>
+                        <input type="password" value="{{ client.settings.api_keys.bithuman_api_secret or '' }}" name="bithuman_api_secret" data-api-key="bithuman_api_secret"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Beyond Presence API Key (Video Avatar)</label>
+                        <input type="password" value="{{ client.settings.api_keys.bey_api_key or '' }}" name="bey_api_key" data-api-key="bey_api_key"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                    </div>
                 </div>
             </div>
         </div>
@@ -409,9 +421,10 @@
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Embedding Provider</label>
-                        <select id="embeddingProvider" name="embedding_provider" 
+                        <select id="embeddingProvider" name="embedding_provider"
                                 onchange="updateEmbeddingModels()"
                                 class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            <option value="local" {% if client.settings.get('embedding', {}).get('provider') in ['local', 'on-prem', 'bge-local', 'bge', 'bge-m3'] %}selected{% endif %}>Local (BGE-M3 On-Prem)</option>
                             <option value="openai" {% if client.settings.get('embedding', {}).get('provider') == 'openai' %}selected{% endif %}>OpenAI</option>
                             <option value="deepinfra" {% if client.settings.get('embedding', {}).get('provider') == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
                             <option value="novita" {% if client.settings.get('embedding', {}).get('provider') == 'novita' %}selected{% endif %}>Novita AI</option>
@@ -466,6 +479,129 @@
             </div>
         </div>
 
+        <!-- UserSense (Ambient Ability) Configuration -->
+        <div class="bg-white shadow rounded-lg mt-6">
+            <div class="px-6 py-4 border-b">
+                <h2 class="text-lg font-medium text-gray-900">UserSense</h2>
+                <p class="text-sm text-gray-600 mt-1">AI-powered user understanding that reflects on conversations to build context</p>
+            </div>
+            <div class="px-6 py-4 space-y-4">
+                <div class="flex items-center">
+                    <input type="checkbox" id="usersenseEnabled" name="usersense_enabled"
+                           {% if client.usersense_enabled %}checked{% endif %}
+                           class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                    <label for="usersenseEnabled" class="ml-2 text-sm text-gray-700">
+                        Enable UserSense for this client
+                    </label>
+                </div>
+
+                <!-- Learning Status Section (only visible when UserSense is enabled) -->
+                <div id="usersenseLearningStatus" class="{% if not client.usersense_enabled %}hidden{% endif %}">
+                    <div id="learningInProgress" class="hidden rounded-md bg-purple-50 border border-purple-200 px-4 py-3">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <svg class="animate-spin h-5 w-5 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                            </div>
+                            <div class="ml-3 flex-1">
+                                <p class="text-sm font-medium text-purple-800">Learning...</p>
+                                <p id="learningProgressMessage" class="text-xs text-purple-600 mt-1">Analyzing conversation history</p>
+                                <div class="mt-2 w-full bg-purple-200 rounded-full h-2">
+                                    <div id="learningProgressBar" class="bg-purple-600 h-2 rounded-full transition-all duration-500" style="width: 0%"></div>
+                                </div>
+                                <p id="learningProgressPercent" class="text-xs text-purple-500 mt-1">0%</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="learningCompleted" class="hidden rounded-md bg-green-50 border border-green-200 px-4 py-3">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <svg class="h-5 w-5 text-green-500" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                </svg>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm font-medium text-green-800">Initial learning complete</p>
+                                <p id="learningCompletedCount" class="text-xs text-green-600 mt-1">User overviews have been built from conversation history.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="learningPending" class="hidden rounded-md bg-yellow-50 border border-yellow-200 px-4 py-3">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <svg class="h-5 w-5 text-yellow-500" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/>
+                                </svg>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm font-medium text-yellow-800">Initial learning queued</p>
+                                <p class="text-xs text-yellow-600 mt-1">UserSense will begin analyzing conversation history shortly.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-md bg-blue-50 border border-blue-100 px-4 py-3">
+                    <div class="flex">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div class="ml-3 text-sm text-blue-700">
+                            <p>When enabled, UserSense automatically reflects on completed conversations to update user understanding. This ambient ability runs in the background after sessions end (minimum 3 messages required).</p>
+                            <p class="mt-2">Users will see a subtle "User Understanding Expanded" notification when their profile is updated.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Supertab Voice Paywall Section -->
+        <div class="bg-white shadow rounded-lg p-6">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center">
+                    <svg class="h-6 w-6 text-emerald-600 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                    </svg>
+                    <h2 class="text-lg font-medium text-gray-900">Supertab Voice Paywall</h2>
+                </div>
+            </div>
+
+            <div class="space-y-4">
+                <div>
+                    <label for="supertabClientId" class="block text-sm font-medium text-gray-700 mb-1">
+                        Supertab Client ID
+                    </label>
+                    <input type="text"
+                           id="supertabClientId"
+                           name="supertab_client_id"
+                           value="{{ client.supertab_client_id or '' }}"
+                           placeholder="client.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500">
+                    <p class="mt-1 text-xs text-gray-500">Found in your <a href="https://business.supertab.co" target="_blank" class="text-emerald-600 hover:underline">Supertab Business Portal</a> under Settings → API Keys</p>
+                </div>
+
+                <div class="rounded-md bg-emerald-50 border border-emerald-100 px-4 py-3">
+                    <div class="flex">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-emerald-400" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div class="ml-3 text-sm text-emerald-700">
+                            <p>Supertab enables per-session microtransaction paywalls for voice chat. Text chat remains free; users pay or "Put it on my Tab" to access voice.</p>
+                            <p class="mt-2">The Client ID is shared across all sidekicks. Enable/disable and set pricing per-sidekick in each agent's configuration.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="mt-6 flex justify-end space-x-3">
             <a href="/admin/clients" class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
                 Cancel
@@ -475,6 +611,42 @@
             </button>
         </div>
     </form>
+</div>
+
+<!-- UserSense Disable Confirmation Modal -->
+<div id="usersenseDisableModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden overflow-y-auto h-full w-full z-50">
+    <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+        <div class="mt-3">
+            <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100">
+                <svg class="h-6 w-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+            </div>
+            <h3 class="text-lg leading-6 font-medium text-gray-900 text-center mt-4">Disable UserSense?</h3>
+            <div class="mt-4 px-4">
+                <p class="text-sm text-gray-500">
+                    Disabling UserSense will stop building User Overviews from conversations.
+                </p>
+                <div class="mt-4 bg-gray-50 rounded-md p-3">
+                    <label class="flex items-start">
+                        <input type="checkbox" id="deleteUserOverviews" class="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded mt-0.5">
+                        <span class="ml-2 text-sm text-gray-700">
+                            <strong class="text-red-600">Also delete</strong> all existing User Overviews for this client's users
+                        </span>
+                    </label>
+                    <p class="text-xs text-gray-500 mt-2 ml-6">This action cannot be undone. All learned user understanding will be permanently removed.</p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6 px-4 pb-2">
+                <button type="button" onclick="cancelUsersenseDisable()" class="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-200">
+                    Cancel
+                </button>
+                <button type="button" onclick="confirmUsersenseDisable()" class="px-4 py-2 bg-yellow-600 text-white text-sm font-medium rounded-md hover:bg-yellow-700">
+                    Disable UserSense
+                </button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -728,14 +900,18 @@ function updateEmbeddingModels() {
     const provider = document.getElementById('embeddingProvider').value;
     const docModelSelect = document.getElementById('documentEmbeddingModel');
     const convModelSelect = document.getElementById('conversationEmbeddingModel');
-    
+
     // Clear existing options
     docModelSelect.innerHTML = '';
     convModelSelect.innerHTML = '';
-    
+
     let options = [];
-    
-    if (provider === 'openai') {
+
+    if (provider === 'local') {
+        options = [
+            { value: 'bge-m3', text: 'BGE-M3 (1024 dimensions)' }
+        ];
+    } else if (provider === 'openai') {
         options = [
             { value: 'text-embedding-3-small', text: 'text-embedding-3-small' },
             { value: 'text-embedding-3-large', text: 'text-embedding-3-large' },
@@ -792,12 +968,18 @@ function updateDimensionVisibility() {
     const docModel = document.getElementById('documentEmbeddingModel').value;
     const convModel = document.getElementById('conversationEmbeddingModel').value;
     const dimensionSection = document.getElementById('embeddingDimensionSection');
-    
+
+    // Local BGE-M3 uses fixed 1024 dimensions - no selector needed
+    if (provider === 'local') {
+        dimensionSection.style.display = 'none';
+        return;
+    }
+
     // Show dimension selector if provider is deepinfra or siliconflow and either model is a Qwen embedding model
     const isEligibleProvider = provider === 'deepinfra' || provider === 'siliconflow';
-    const hasQwenEmbedding = (docModel && docModel.includes('Qwen') && docModel.includes('Embedding')) || 
+    const hasQwenEmbedding = (docModel && docModel.includes('Qwen') && docModel.includes('Embedding')) ||
                             (convModel && convModel.includes('Qwen') && convModel.includes('Embedding'));
-    
+
     if (isEligibleProvider && hasQwenEmbedding) {
         dimensionSection.style.display = 'block';
     } else {
@@ -886,5 +1068,180 @@ async function manualSync() {
 }
 
 // Remove the submit event listener - let the form submit naturally
+
+// ========================================
+// UserSense Learning Status Polling
+// ========================================
+const usersenseEnabled = {{ 'true' if client.usersense_enabled else 'false' }};
+let learningPollHandle = null;
+const learningPollIntervalMs = 3000;
+
+function updateLearningUI(status) {
+    const learningSection = document.getElementById('usersenseLearningStatus');
+    const inProgress = document.getElementById('learningInProgress');
+    const completed = document.getElementById('learningCompleted');
+    const pending = document.getElementById('learningPending');
+
+    if (!learningSection || !inProgress || !completed || !pending) return;
+
+    // Hide all states
+    inProgress.classList.add('hidden');
+    completed.classList.add('hidden');
+    pending.classList.add('hidden');
+
+    if (!status) return;
+
+    // Check if there are active jobs (in_progress or pending)
+    const hasActiveJobs = status.has_active_jobs;
+    const inProgressJobs = status.in_progress || [];
+    const pendingCount = status.pending || 0;
+    const completedCount = status.completed || 0;
+
+    if (inProgressJobs.length > 0) {
+        // Show in-progress state
+        inProgress.classList.remove('hidden');
+
+        // Update progress details from first job
+        const job = inProgressJobs[0];
+        const progressBar = document.getElementById('learningProgressBar');
+        const progressPercent = document.getElementById('learningProgressPercent');
+        const progressMessage = document.getElementById('learningProgressMessage');
+
+        if (progressBar) progressBar.style.width = (job.progress_percent || 0) + '%';
+        if (progressPercent) progressPercent.textContent = (job.progress_percent || 0) + '%';
+        if (progressMessage) progressMessage.textContent = job.progress_message || 'Analyzing conversation history';
+
+    } else if (pendingCount > 0) {
+        // Show pending state
+        pending.classList.remove('hidden');
+
+    } else if (completedCount > 0) {
+        // Show completed state
+        completed.classList.remove('hidden');
+        stopLearningPolling();
+    }
+}
+
+async function pollLearningStatus() {
+    try {
+        const response = await fetch(`/admin/clients/${clientId}/usersense-learning-status`);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch learning status (${response.status})`);
+        }
+        const data = await response.json();
+        if (data.success && data.status) {
+            updateLearningUI(data.status);
+        }
+    } catch (error) {
+        console.error('Learning status poll failed:', error);
+    }
+}
+
+function startLearningPolling() {
+    if (learningPollHandle) return;
+    learningPollHandle = setInterval(pollLearningStatus, learningPollIntervalMs);
+    pollLearningStatus(); // Immediate poll
+}
+
+function stopLearningPolling() {
+    if (learningPollHandle) {
+        clearInterval(learningPollHandle);
+        learningPollHandle = null;
+    }
+}
+
+// Initialize UserSense learning status UI
+if (usersenseEnabled) {
+    // Start polling for learning status
+    startLearningPolling();
+}
+
+// Toggle learning status section when checkbox changes
+document.getElementById('usersenseEnabled')?.addEventListener('change', function(e) {
+    const learningSection = document.getElementById('usersenseLearningStatus');
+    if (e.target.checked) {
+        // Enabling UserSense - show learning section
+        if (learningSection) {
+            learningSection.classList.remove('hidden');
+            startLearningPolling();
+        }
+    } else {
+        // Disabling UserSense - show confirmation modal
+        e.preventDefault();
+        e.target.checked = true; // Keep it checked until confirmed
+        showUsersenseDisableModal();
+    }
+});
+
+// UserSense disable confirmation modal functions
+function showUsersenseDisableModal() {
+    const modal = document.getElementById('usersenseDisableModal');
+    const deleteCheckbox = document.getElementById('deleteUserOverviews');
+    if (modal) {
+        modal.classList.remove('hidden');
+        // Reset the delete checkbox
+        if (deleteCheckbox) {
+            deleteCheckbox.checked = false;
+        }
+    }
+}
+
+function cancelUsersenseDisable() {
+    const modal = document.getElementById('usersenseDisableModal');
+    if (modal) {
+        modal.classList.add('hidden');
+    }
+    // Checkbox remains checked since we didn't confirm disable
+}
+
+async function confirmUsersenseDisable() {
+    const modal = document.getElementById('usersenseDisableModal');
+    const deleteCheckbox = document.getElementById('deleteUserOverviews');
+    const usersenseCheckbox = document.getElementById('usersenseEnabled');
+    const learningSection = document.getElementById('usersenseLearningStatus');
+
+    // Check if user wants to delete existing overviews
+    const shouldDelete = deleteCheckbox?.checked || false;
+
+    if (shouldDelete) {
+        try {
+            // Call the delete endpoint
+            const response = await fetch(`/admin/clients/${clientId}/user-overviews`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                console.log(`Deleted ${result.deleted_count} user overview(s)`);
+            } else {
+                console.error('Failed to delete user overviews:', result.error);
+                alert('Warning: Failed to delete user overviews: ' + (result.error || 'Unknown error'));
+            }
+        } catch (error) {
+            console.error('Error deleting user overviews:', error);
+            alert('Warning: Error deleting user overviews. UserSense will still be disabled.');
+        }
+    }
+
+    // Now uncheck the UserSense checkbox
+    if (usersenseCheckbox) {
+        usersenseCheckbox.checked = false;
+    }
+
+    // Hide learning section
+    if (learningSection) {
+        learningSection.classList.add('hidden');
+        stopLearningPolling();
+    }
+
+    // Hide the modal
+    if (modal) {
+        modal.classList.add('hidden');
+    }
+}
 </script>
 {% endblock %}

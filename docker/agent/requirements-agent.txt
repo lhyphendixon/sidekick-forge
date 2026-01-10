@@ -10,7 +10,12 @@ livekit-plugins-silero==1.2.18
 livekit-plugins-speechify==1.2.18
 livekit-plugins-cartesia==1.2.18
 livekit-plugins-turn-detector==1.2.18
+livekit-plugins-bithuman==1.2.18
+livekit-plugins-bey==1.2.18
 mcp>=1.14.0,<2.0.0
+
+# Image Processing (for Bithuman avatar images)
+Pillow>=10.3.0
 
 # Voice/Audio Processing
 pydub==0.25.1
@@ -53,7 +58,7 @@ prometheus-client>=0.22
 structlog==23.2.0
 
 # Utils
-scipy==1.11.4
+scipy>=1.13.0,<2.0
 
 # Fix for numpy compatibility
 numpy<2.0.0

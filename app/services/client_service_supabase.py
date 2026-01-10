@@ -212,6 +212,18 @@ class ClientService:
         if update_data.perplexity_api_key is not None:
             update_dict["perplexity_api_key"] = update_data.perplexity_api_key
 
+        # UserSense enabled flag (direct column)
+        if update_data.usersense_enabled is not None:
+            update_dict["usersense_enabled"] = update_data.usersense_enabled
+
+        # Supertab client ID (direct column)
+        if update_data.supertab_client_id is not None:
+            update_dict["supertab_client_id"] = update_data.supertab_client_id
+
+        # Firecrawl API key (direct column)
+        if update_data.firecrawl_api_key is not None:
+            update_dict["firecrawl_api_key"] = update_data.firecrawl_api_key
+
         # Fields that go in additional_settings JSONB (we merge once at the end to avoid losing changes)
         additional_settings = {}
         if update_data.description is not None:
@@ -279,7 +291,21 @@ class ClientService:
                 if api_keys.perplexity_api_key is not None:
                     update_dict["perplexity_api_key"] = api_keys.perplexity_api_key
                 # Note: anthropic_api_key is not in the APIKeys model
-            
+
+                # bithuman_api_secret doesn't have a dedicated column, store in additional_settings.api_keys
+                if api_keys.bithuman_api_secret is not None:
+                    if "api_keys" not in additional_settings:
+                        additional_settings["api_keys"] = {}
+                    additional_settings["api_keys"]["bithuman_api_secret"] = api_keys.bithuman_api_secret
+                    self.logger.info(f"BITHUMAN SERVICE DEBUG - adding to additional_settings: {api_keys.bithuman_api_secret[:20] if api_keys.bithuman_api_secret else 'None'}...")
+
+                # bey_api_key (Beyond Presence) - store in additional_settings.api_keys
+                if api_keys.bey_api_key is not None:
+                    if "api_keys" not in additional_settings:
+                        additional_settings["api_keys"] = {}
+                    additional_settings["api_keys"]["bey_api_key"] = api_keys.bey_api_key
+                    self.logger.info(f"BEY SERVICE DEBUG - adding to additional_settings: {api_keys.bey_api_key[:20] if api_keys.bey_api_key else 'None'}...")
+
             # Note: We don't have a settings column in the platform database
             # All settings are stored in individual columns
         
@@ -290,8 +316,19 @@ class ClientService:
             # Normalize nulls to dict to avoid TypeError on merge
             if not isinstance(existing_additional, dict):
                 existing_additional = {}
-            merged_additional = {**existing_additional, **additional_settings}
+
+            # Deep merge for nested objects like api_keys
+            merged_additional = {**existing_additional}
+            for key, value in additional_settings.items():
+                if key == "api_keys" and isinstance(value, dict):
+                    # Deep merge api_keys
+                    existing_api_keys = merged_additional.get("api_keys", {}) or {}
+                    merged_additional["api_keys"] = {**existing_api_keys, **value}
+                else:
+                    merged_additional[key] = value
+
             update_dict["additional_settings"] = merged_additional
+            self.logger.info(f"BITHUMAN SERVICE DEBUG - merged additional_settings api_keys: {merged_additional.get('api_keys', {}).keys()}")
 
         if update_dict:
             update_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -677,7 +714,7 @@ class ClientService:
             "openai_api_key", "groq_api_key", "deepgram_api_key", "elevenlabs_api_key",
             "cartesia_api_key", "replicate_api_key", "deepinfra_api_key", "cerebras_api_key",
             "novita_api_key", "cohere_api_key", "siliconflow_api_key", "jina_api_key", "speechify_api_key",
-            "perplexity_api_key"
+            "perplexity_api_key", "anthropic_api_key"
         ]
         for key_field in api_key_fields:
             if key_field in db_row and db_row[key_field]:
@@ -685,6 +722,13 @@ class ClientService:
         
         # Extract additional fields from additional_settings JSONB
         additional = db_row.get("additional_settings", {}) or {}
+
+        # Extract API keys stored in additional_settings.api_keys (like bithuman_api_secret, bey_api_key)
+        additional_api_keys = additional.get("api_keys", {}) or {}
+        if additional_api_keys.get("bithuman_api_secret"):
+            settings_dict["api_keys"]["bithuman_api_secret"] = additional_api_keys["bithuman_api_secret"]
+        if additional_api_keys.get("bey_api_key"):
+            settings_dict["api_keys"]["bey_api_key"] = additional_api_keys["bey_api_key"]
 
         if db_row.get("supabase_project_ref") and "supabase_project_ref" not in additional:
             additional["supabase_project_ref"] = db_row.get("supabase_project_ref")
@@ -727,7 +771,9 @@ class ClientService:
             created_at=db_row.get("created_at"),
             updated_at=db_row.get("updated_at"),
             additional_settings=additional,  # Include the full additional_settings
-            perplexity_api_key=db_row.get("perplexity_api_key")
+            perplexity_api_key=db_row.get("perplexity_api_key"),
+            supertab_client_id=db_row.get("supertab_client_id"),
+            firecrawl_api_key=db_row.get("firecrawl_api_key")
         )
     
     def get_cache_stats(self) -> Dict[str, Any]:

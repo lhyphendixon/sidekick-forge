@@ -1,6 +1,10 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
+from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
 import json
+import time
+import hmac
+import hashlib
 from pydantic import BaseModel
 from livekit import api
 from app.config import settings
@@ -376,3 +380,7 @@ async def end_session(request: EndSessionRequest):
         # Log the error for debugging
         # logger.error(f"Failed to delete room '{request.room_name}': {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete room: {str(e)}")
+
+
+# NOTE: WordPress session endpoint moved to app/api/v1/wordpress.py
+# to consolidate all WordPress-related endpoints in one file

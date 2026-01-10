@@ -127,6 +127,8 @@ async def list_clients(
 async def client_detail(
     request: Request,
     client_id: str,
+    error: Optional[str] = None,
+    message: Optional[str] = None,
     admin_user: dict = Depends(get_admin_user)
 ):
     """Client detail page with agents"""
@@ -135,14 +137,14 @@ async def client_detail(
         client = await client_service.get_client(client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
-        
+
         # Get client's agents
         agents = await agent_service.get_agents(UUID(client_id))
-        
+
         # Get API keys (masked)
         connection_manager = get_connection_manager()
         api_keys = connection_manager.get_client_api_keys(UUID(client_id))
-        
+
         # Mask sensitive values
         masked_keys = {}
         for key, value in api_keys.items():
@@ -150,10 +152,11 @@ async def client_detail(
                 masked_keys[key] = f"{value[:4]}...{value[-4:]}"
             else:
                 masked_keys[key] = "Not configured" if not value else value
-        
+
         # Load WordPress sites for this client
         wordpress_sites: List[Dict[str, Any]] = []
-        wordpress_error: Optional[str] = None
+        wordpress_error: Optional[str] = error  # Use query param error if provided
+        wordpress_message: Optional[str] = message
         try:
             sites = wordpress_service.list_sites(client_id=client_id)
             for site in sites:
@@ -164,9 +167,10 @@ async def client_detail(
                 wordpress_sites.append(site_dict)
         except Exception as e:
             logger.error(f"Failed to load WordPress sites for client {client_id}: {e}")
-            wordpress_error = str(e)
+            if not wordpress_error:
+                wordpress_error = str(e)
 
-        wordpress_api_endpoint = f"https://{settings.domain_name}/api/v1/wordpress-sites/auth/validate"
+        wordpress_api_endpoint = f"https://{settings.domain_name}/api/v1/wordpress/session"
 
         context = {
             "request": request,
@@ -177,10 +181,11 @@ async def client_detail(
             "api_keys": masked_keys,
             "wordpress_sites": wordpress_sites,
             "wordpress_error": wordpress_error,
+            "wordpress_message": wordpress_message,
             "wordpress_api_endpoint": wordpress_api_endpoint,
             "wordpress_domain": settings.domain_name,
         }
-        
+
         return templates.TemplateResponse("client_detail.html", context)
         
     except HTTPException:
@@ -195,15 +200,24 @@ async def create_client_wordpress_site(
     client_id: str,
     domain: str = Form(...),
     site_name: str = Form(...),
-    admin_email: str = Form(...)
+    admin_email: str = Form(...),
+    allowed_origins: str = Form("")
 ):
     """Create a WordPress site registration for the client"""
     try:
+        # Parse allowed origins from comma-separated string
+        metadata = {}
+        if allowed_origins.strip():
+            origins_list = [origin.strip() for origin in allowed_origins.split(",") if origin.strip()]
+            if origins_list:
+                metadata["allowed_origins"] = origins_list
+
         site_data = WordPressSiteCreate(
             domain=domain,
             site_name=site_name,
             admin_email=admin_email,
-            client_id=client_id
+            client_id=client_id,
+            metadata=metadata if metadata else None
         )
         wordpress_service.create_site(site_data)
         message = quote("WordPress site added successfully")

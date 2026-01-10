@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Request, HTTPException, status
 import logging
+import json
 from datetime import datetime
 
 from app.integrations.livekit_client import livekit_manager
 from app.integrations.supabase_client import supabase_manager
 from app.models.common import APIResponse, SuccessResponse
+from app.services.usage_tracking import usage_tracking_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -70,7 +72,6 @@ async def handle_room_started(event_data: dict):
     # Extract metadata
     metadata = room.get("metadata", {})
     if isinstance(metadata, str):
-        import json
         try:
             metadata = json.loads(metadata)
         except:
@@ -93,18 +94,17 @@ async def handle_room_finished(event_data: dict):
     """Handle room finished event"""
     room = event_data.get("room", {})
     room_name = room.get("name")
-    
+
     logger.info(f"Room finished: {room_name}")
-    
+
     # Update conversation status if linked
     metadata = room.get("metadata", {})
     if isinstance(metadata, str):
-        import json
         try:
             metadata = json.loads(metadata)
         except:
             metadata = {}
-    
+
     conversation_id = metadata.get("conversation_id")
     if conversation_id:
         await supabase_manager.execute_query(
@@ -115,7 +115,40 @@ async def handle_room_finished(event_data: dict):
             })
             .eq("id", conversation_id)
         )
-    
+
+    # Track voice usage for quota metering (per-agent)
+    # Duration is in seconds from LiveKit
+    duration_seconds = room.get("duration", 0)
+    client_id = metadata.get("client_id")
+    agent_id = metadata.get("agent_id")
+
+    # Only track voice usage for non-text rooms with valid IDs
+    if duration_seconds and client_id and agent_id and not room_name.startswith("text-"):
+        try:
+            await usage_tracking_service.initialize()
+            is_within_quota, quota_status = await usage_tracking_service.increment_agent_voice_usage(
+                client_id=str(client_id),
+                agent_id=str(agent_id),
+                seconds=int(duration_seconds),
+            )
+            logger.info(
+                "Tracked voice usage: agent=%s, client=%s, duration=%ds, total=%d/%d seconds (%.1f%%)",
+                agent_id, client_id, duration_seconds,
+                quota_status.used, quota_status.limit, quota_status.percent_used
+            )
+            if not is_within_quota:
+                logger.warning(
+                    "Voice quota exceeded for agent %s (client %s): %d/%d seconds",
+                    agent_id, client_id, quota_status.used, quota_status.limit
+                )
+        except Exception as usage_err:
+            logger.warning("Failed to track voice usage: %s", usage_err)
+    elif duration_seconds and not room_name.startswith("text-"):
+        logger.warning(
+            "Room finished with duration %ds but missing metadata for usage tracking: client_id=%s, agent_id=%s",
+            duration_seconds, client_id, agent_id
+        )
+
     # Log room event
     event_log = {
         "event_type": "room_finished",
@@ -125,7 +158,7 @@ async def handle_room_finished(event_data: dict):
         "metadata": metadata,
         "created_at": datetime.utcnow().isoformat()
     }
-    
+
     await supabase_manager.execute_query(
         supabase_manager.admin_client.table("livekit_events").insert(event_log)
     )

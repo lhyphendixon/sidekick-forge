@@ -319,7 +319,11 @@ class ClientService:
                 })
                 if hasattr(keys, 'anthropic_api_key'):
                     update_data["anthropic_api_key"] = keys.anthropic_api_key
-            
+
+            # Update Firecrawl API key if provided
+            if client_update.firecrawl_api_key is not None:
+                update_data["firecrawl_api_key"] = client_update.firecrawl_api_key
+
             # Update LiveKit config if provided
             if client_update.settings and client_update.settings.livekit_config:
                 livekit = client_update.settings.livekit_config

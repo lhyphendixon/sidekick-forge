@@ -20,12 +20,42 @@ from app.services.client_supabase_auth import ensure_client_user_credentials
 from app.integrations.supabase_client import supabase_manager
 from app.middleware.auth import require_user_auth
 from app.models.user import AuthContext
+from app.agent_modules.transcript_store import store_turn
+from app.services.usage_tracking import usage_tracking_service
 from pydantic import BaseModel, EmailStr
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+
+
+async def _resolve_effective_user_id(user_id: str, client_id: str) -> str:
+    """
+    Resolve the effective user_id for querying a client's database.
+
+    For platform admins previewing external clients, this looks up the
+    platform_client_user_mappings table to find the shadow user_id that
+    was created in the client's Supabase instance.
+
+    For regular client users, returns the original user_id unchanged.
+    """
+    try:
+        from supabase import create_client
+        platform_sb = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        mapping_result = platform_sb.table("platform_client_user_mappings").select("client_user_id").eq(
+            "platform_user_id", user_id
+        ).eq("client_id", client_id).maybe_single().execute()
+
+        if mapping_result.data and mapping_result.data.get("client_user_id"):
+            effective_user_id = mapping_result.data["client_user_id"]
+            logger.info(f"[embed] Resolved platform user {user_id[:8]}... -> client user {effective_user_id[:8]}...")
+            return effective_user_id
+    except Exception as mapping_err:
+        # Non-fatal - continue with original user_id (regular client user case)
+        logger.debug(f"[embed] No platform-to-client user mapping found: {mapping_err}")
+
+    return user_id
 
 
 class ClientUserSyncRequest(BaseModel):
@@ -49,17 +79,88 @@ async def embed_sidekick(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    # Fetch Supertab config, chat mode settings, and agent display info
+    supertab_config = None
+    voice_chat_enabled = True  # Default to enabled
+    text_chat_enabled = True   # Default to enabled
+    video_chat_enabled = False # Default to disabled (requires avatar setup)
+    agent_name = agent_slug.replace("-", " ").title()  # Default: convert slug to title case
+    agent_image = None  # Default: no image
+    agent_id = None  # Will be populated from database lookup
+    try:
+        from supabase import create_client
+
+        # Get client's Supertab client_id and service role key from platform database
+        platform_sb = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        client_result = platform_sb.table("clients").select("supertab_client_id, supabase_service_role_key").eq("id", client_id).maybe_single().execute()
+        client_supertab_id = client_result.data.get("supertab_client_id") if client_result.data else None
+        client_service_key = client_result.data.get("supabase_service_role_key") if client_result.data else None
+
+        # Get agent settings from client database (chat mode settings, Supertab, and display info)
+        if client_supabase_url and client_service_key:
+            client_sb = create_client(client_supabase_url, client_service_key)
+            agent_result = client_sb.table("agents").select("id, name, agent_image, supertab_enabled, supertab_experience_id, supertab_price, supertab_cta, voice_chat_enabled, text_chat_enabled, video_chat_enabled").eq("slug", agent_slug).maybe_single().execute()
+
+            if agent_result.data:
+                # Get agent ID
+                if agent_result.data.get("id"):
+                    agent_id = str(agent_result.data.get("id"))
+                # Get agent display info
+                if agent_result.data.get("name"):
+                    agent_name = agent_result.data.get("name")
+                if agent_result.data.get("agent_image"):
+                    agent_image = agent_result.data.get("agent_image")
+
+                # Get chat mode settings (default to True if not set)
+                voice_chat_enabled = agent_result.data.get("voice_chat_enabled", True)
+                text_chat_enabled = agent_result.data.get("text_chat_enabled", True)
+                # Handle None values from database
+                if voice_chat_enabled is None:
+                    voice_chat_enabled = True
+                if text_chat_enabled is None:
+                    text_chat_enabled = True
+                video_chat_enabled = agent_result.data.get("video_chat_enabled", False)
+                if video_chat_enabled is None:
+                    video_chat_enabled = False
+
+                # Get Supertab settings
+                agent_supertab_enabled = agent_result.data.get("supertab_enabled", False)
+                agent_supertab_experience_id = agent_result.data.get("supertab_experience_id")
+                agent_supertab_price = agent_result.data.get("supertab_price")
+                agent_supertab_cta = agent_result.data.get("supertab_cta")
+
+                # Only create Supertab config if both client_id and agent is enabled with experience_id
+                if client_supertab_id and agent_supertab_enabled and agent_supertab_experience_id:
+                    supertab_config = {
+                        "enabled": True,
+                        "client_id": client_supertab_id,
+                        "experience_id": agent_supertab_experience_id,
+                        "price": agent_supertab_price or "per session",
+                        "cta": agent_supertab_cta or "Start a voice conversation"
+                    }
+                    logger.info(f"[embed] Supertab enabled for {client_id}/{agent_slug}")
+    except Exception as e:
+        # Fail open - if we can't get config, just continue with defaults
+        logger.warning(f"[embed] Failed to fetch agent config: {e}")
+
     return templates.TemplateResponse(
         "embed/sidekick.html",
         {
             "request": request,
             "client_id": client_id,
+            "agent_id": agent_id,
             "agent_slug": agent_slug,
+            "agent_name": agent_name,
+            "agent_image": agent_image,
             "theme": theme,
             "supabase_url": settings.supabase_url,
             "supabase_anon_key": settings.supabase_anon_key,
             "client_supabase_url": client_supabase_url,
             "client_supabase_anon_key": client_supabase_anon_key,
+            "supertab_config": supertab_config,
+            "voice_chat_enabled": voice_chat_enabled,
+            "text_chat_enabled": text_chat_enabled,
+            "video_chat_enabled": video_chat_enabled,
         },
     )
 
@@ -89,12 +190,128 @@ async def sync_client_user_credentials(
     return {"success": True}
 
 
+class SupertabUserCreateRequest(BaseModel):
+    client_id: str
+    agent_slug: str
+    email: EmailStr
+    supertab_user_id: Optional[str] = None
+    payment_status: str
+    offering_id: Optional[str] = None
+
+
+@router.post("/api/embed/supertab/create-user")
+async def create_supertab_user(payload: SupertabUserCreateRequest):
+    """
+    Create or link a user in the client's Supabase after a successful Supertab payment.
+    This allows users who pay via Supertab to have their conversations tracked.
+    """
+    try:
+        import secrets
+        from supabase import create_client
+
+        logger.info(f"[supertab] Creating user for {payload.email} in client {payload.client_id}")
+
+        # Get client's Supabase credentials
+        client_supabase_url, _, client_service_key = await SupabaseCredentialManager.get_client_supabase_credentials(
+            payload.client_id
+        )
+
+        if not client_supabase_url or not client_service_key:
+            raise HTTPException(status_code=400, detail="Client Supabase not configured")
+
+        client_sb = create_client(client_supabase_url, client_service_key)
+
+        # Check if user already exists by email
+        existing_user = None
+        try:
+            # Try to find user by email in auth.users via admin API
+            users_response = client_sb.auth.admin.list_users()
+            for user in users_response:
+                if hasattr(user, 'email') and user.email and user.email.lower() == payload.email.lower():
+                    existing_user = user
+                    break
+        except Exception as e:
+            logger.debug(f"[supertab] Could not list users: {e}")
+
+        user_id = None
+
+        if existing_user:
+            # User already exists
+            user_id = str(existing_user.id)
+            logger.info(f"[supertab] Found existing user {user_id} for {payload.email}")
+
+            # Update user metadata with Supertab info
+            try:
+                client_sb.auth.admin.update_user_by_id(
+                    user_id,
+                    {"user_metadata": {
+                        "supertab_user_id": payload.supertab_user_id,
+                        "supertab_payment_status": payload.payment_status,
+                        "supertab_offering_id": payload.offering_id,
+                    }}
+                )
+            except Exception as e:
+                logger.warning(f"[supertab] Could not update user metadata: {e}")
+        else:
+            # Create new user with random password (they'll use Supertab for auth)
+            temp_password = secrets.token_urlsafe(32)
+
+            try:
+                new_user = client_sb.auth.admin.create_user({
+                    "email": payload.email,
+                    "password": temp_password,
+                    "email_confirm": True,  # Auto-confirm since they paid
+                    "user_metadata": {
+                        "source": "supertab_payment",
+                        "supertab_user_id": payload.supertab_user_id,
+                        "supertab_payment_status": payload.payment_status,
+                        "supertab_offering_id": payload.offering_id,
+                        "agent_slug": payload.agent_slug,
+                    }
+                })
+                user_id = str(new_user.user.id)
+                logger.info(f"[supertab] Created new user {user_id} for {payload.email}")
+            except Exception as e:
+                logger.error(f"[supertab] Failed to create user: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+
+        # Record the payment/entitlement in a supertab_entitlements table if it exists
+        try:
+            client_sb.table("supertab_entitlements").upsert({
+                "user_id": user_id,
+                "email": payload.email,
+                "supertab_user_id": payload.supertab_user_id,
+                "offering_id": payload.offering_id,
+                "payment_status": payload.payment_status,
+                "agent_slug": payload.agent_slug,
+                "created_at": "now()",
+            }, on_conflict="user_id,offering_id").execute()
+        except Exception as e:
+            # Table might not exist - that's OK
+            logger.debug(f"[supertab] Could not record entitlement (table may not exist): {e}")
+
+        return {
+            "success": True,
+            "user_id": user_id,
+            "email": payload.email,
+            "is_new_user": existing_user is None,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[supertab] Error creating user: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/api/embed/text/stream")
 async def embed_text_stream(
     request: Request,
     client_id: str = Form(...),
     agent_slug: str = Form(...),
     message: str = Form(...),
+    conversation_id: Optional[str] = Form(None),
+    user_id: Optional[str] = Form(None),
 ):
     async def generate():
         try:
@@ -107,9 +324,9 @@ async def embed_text_stream(
                 "[embed-stream] start client_id=%s agent=%s", client_id, agent_slug
             )
 
-            # TEMP: text embed requests use a deterministic user/session
+            # Use provided user_id or generate a deterministic one
             # Use a valid UUID so downstream queries against Supabase succeed.
-            user_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "sidekick-forge/embed-user"))
+            effective_user_id = user_id if user_id else str(uuid.uuid5(uuid.NAMESPACE_URL, "sidekick-forge/embed-user"))
 
             # Use multitenant services for proper architecture
             agent_service = MultitentAgentService()
@@ -131,17 +348,19 @@ async def embed_text_stream(
 
             api_keys = await agent_service.get_client_api_keys(client_uuid)
 
-            conversation_id = str(uuid.uuid4())
+            # Use provided conversation_id or generate a new one
+            effective_conversation_id = conversation_id if conversation_id else str(uuid.uuid4())
             session_id = str(uuid.uuid4())
+            is_new_conversation = not conversation_id
 
             trigger_request = trigger_api.TriggerAgentRequest(
                 agent_slug=agent_slug,
                 client_id=client_id,
                 mode=trigger_api.TriggerMode.TEXT,
                 message=message,
-                user_id=user_id,
+                user_id=effective_user_id,
                 session_id=session_id,
-                conversation_id=conversation_id,
+                conversation_id=effective_conversation_id,
             )
 
             # Initialize ToolsService with Supabase-based ClientService for platform access
@@ -167,31 +386,35 @@ async def embed_text_stream(
                 agent_context, _, _, _ = await trigger_api._build_agent_context_for_dispatch(
                     agent=agent,
                     client=platform_client,
-                    conversation_id=conversation_id,
-                    user_id=user_id,
+                    conversation_id=effective_conversation_id,
+                    user_id=effective_user_id,
                     session_id=session_id,
                     mode="text",
                     request_context=None,
-                    client_conversation_id=conversation_id,
+                    client_conversation_id=effective_conversation_id,
                 )
                 
                 # Add tools and user message to context
                 tools_payload = await trigger_api._get_agent_tools(tools_service, platform_client.id, agent.id)
+                logger.info(f"[embed-stream] tools_payload count: {len(tools_payload) if tools_payload else 0}")
                 if tools_payload:
+                    logger.info(f"[embed-stream] tool slugs: {[t.get('slug') for t in tools_payload]}")
                     agent_context["tools"] = tools_payload
                 trigger_api._apply_tool_prompt_sections(agent_context, tools_payload)
                 agent_context["user_message"] = message
 
                 # Create room and dispatch
-                text_room_name = f"text-{conversation_id}-{uuid.uuid4().hex[:8]}"
+                # NOTE: enable_agent_dispatch=False because we explicitly call dispatch_agent_job below
+                # Setting it to True causes DOUBLE dispatch (one from room creation, one from explicit call)
+                text_room_name = f"text-{effective_conversation_id}-{uuid.uuid4().hex[:8]}"
                 await trigger_api.ensure_livekit_room_exists(
                     backend_livekit,
                     text_room_name,
                     agent_name=settings.livekit_agent_name,
                     agent_slug=agent.slug,
-                    user_id=user_id,
+                    user_id=effective_user_id,
                     agent_config=agent_context,
-                    enable_agent_dispatch=True,
+                    enable_agent_dispatch=False,  # Don't dispatch here - we do it explicitly below
                 )
 
                 await trigger_api.dispatch_agent_job(
@@ -199,14 +422,30 @@ async def embed_text_stream(
                     room_name=text_room_name,
                     agent=agent,
                     client=platform_client,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
+                    user_id=effective_user_id,
+                    conversation_id=effective_conversation_id,
                     session_id=session_id,
                     tools=agent_context.get("tools"),
                     tools_config=agent_context.get("tools_config"),
                     api_keys=agent_context.get("api_keys"),
                     agent_context=agent_context,
                 )
+
+                # Track text usage for quota metering (per-agent)
+                try:
+                    await usage_tracking_service.initialize()
+                    is_within_quota, quota_status = await usage_tracking_service.increment_agent_text_usage(
+                        client_id=str(platform_client.id),
+                        agent_id=str(agent.id),
+                        count=1,
+                    )
+                    if not is_within_quota:
+                        logger.warning(
+                            "Text quota exceeded for agent %s (client %s): %d/%d messages",
+                            agent.slug, platform_client.id, quota_status.used, quota_status.limit
+                        )
+                except Exception as usage_err:
+                    logger.warning("Failed to track text usage in embed stream: %s", usage_err)
 
                 # Stream responses from the worker
                 async for update in trigger_api.poll_for_text_response_streaming(
@@ -219,61 +458,63 @@ async def embed_text_stream(
                     elif "delta" in update:
                         yield f"data: {json.dumps({'delta': update['delta']})}\n\n"
                     elif update.get("done"):
+                        full_text = update.get("full_text", "")
+                        citations = update.get("citations", [])
+
+                        # Persist the conversation turn to the client's Supabase
+                        try:
+                            client_supabase_url, _, client_service_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+                            from supabase import create_client
+                            client_sb = create_client(client_supabase_url, client_service_key)
+
+                            # Build metadata, including widget data if present
+                            turn_metadata = {"channel": "text", "agent_slug": agent_slug}
+                            if update.get("widget"):
+                                turn_metadata["widget"] = update["widget"]
+
+                            await store_turn({
+                                "conversation_id": effective_conversation_id,
+                                "session_id": session_id,
+                                "agent_id": str(agent.id) if agent.id else None,
+                                "user_id": effective_user_id,
+                                "user_text": message,
+                                "assistant_text": full_text,
+                                "citations": citations,
+                                "metadata": turn_metadata
+                            }, client_sb)
+                            logger.info(f"[embed-stream] Persisted conversation turn for {effective_conversation_id}")
+                        except Exception as store_err:
+                            logger.warning(f"[embed-stream] Failed to persist conversation turn: {store_err}")
+
                         final_payload = {
                             "done": True,
-                            "full_text": update.get("full_text", ""),
-                            "conversation_id": conversation_id,
-                            "citations": update.get("citations", []),
+                            "full_text": full_text,
+                            "conversation_id": effective_conversation_id,
+                            "is_new_conversation": is_new_conversation,
+                            "citations": citations,
                             "tools": {"results": update.get("tool_results", [])},
                         }
+                        # Include widget trigger if present
+                        if update.get("widget"):
+                            final_payload["widget"] = update["widget"]
+                            logger.info(f"[embed-stream] Widget trigger included in response: {update['widget'].get('type')}")
                         yield f"data: {json.dumps(final_payload)}\n\n"
                         return
 
             except Exception as livekit_err:
-                logger.error(f"[embed-stream] livekit streaming failed: {livekit_err}; falling back to non-streaming")
-                try:
-                    final_result = await trigger_api.handle_text_trigger_via_livekit(
-                        trigger_request,
-                        agent,
-                        platform_client,
-                        tools_service,
-                    )
-                except Exception:
-                    try:
-                        final_result = await trigger_api.handle_text_trigger(
-                            trigger_request,
-                            agent,
-                            platform_client,
-                            tools_service,
-                        )
-                    except Exception:
-                        yield f"data: {json.dumps({'error': 'stream failed'})}\n\n"
-                        return
-                        
-                if not final_result:
-                    yield f"data: {json.dumps({'error': 'stream failed'})}\n\n"
-                    return
-
-                response_text = (
-                    final_result.get("response")
-                    or final_result.get("agent_response")
-                    or "(No response from the model.)"
-                )
-                tools_payload = final_result.get("tools") or {}
-                citations = final_result.get("citations") or []
-
-                final_payload = {
-                    "done": True,
-                    "full_text": response_text,
-                    "conversation_id": conversation_id,
-                    "citations": citations,
-                    "tools": tools_payload,
-                }
-                yield f"data: {json.dumps(final_payload)}\n\n"
+                # NO FALLBACK POLICY: If LiveKit streaming fails, return an error rather than
+                # falling back to non-RAG paths that would produce hallucinated responses
+                import traceback
+                logger.error(f"[embed-stream] ❌ NO FALLBACK POLICY: LiveKit streaming failed: {type(livekit_err).__name__}: {livekit_err}")
+                logger.error(f"[embed-stream] Traceback: {traceback.format_exc()}")
+                error_msg = f"RAG processing failed: {str(livekit_err)}"
+                yield f"data: {json.dumps({'error': error_msg, 'no_fallback': True})}\n\n"
+                return
 
         except Exception as exc:
-            logger.error("embed_text_stream error: %s", exc, exc_info=True)
-            yield f"data: {json.dumps({'error': 'stream failed'})}\n\n"
+            # NO FALLBACK POLICY: Any error in the streaming path should return an error
+            logger.error("❌ NO FALLBACK POLICY - embed_text_stream error: %s", exc, exc_info=True)
+            yield f"data: {json.dumps({'error': f'Processing failed: {str(exc)}', 'no_fallback': True})}\n\n"
 
     return StreamingResponse(
         generate(),
@@ -283,3 +524,561 @@ async def embed_text_stream(
             "Connection": "keep-alive",
         },
     )
+
+
+class GenerateTitleRequest(BaseModel):
+    first_message: str
+
+
+@router.post("/api/embed/conversations/{conversation_id}/generate-title")
+async def generate_conversation_title(
+    conversation_id: str,
+    request: GenerateTitleRequest,
+    client_id: str = None,
+):
+    """
+    Generate an AI title for a conversation based on the first message.
+    Uses the agent's configured LLM to generate a short, descriptive title.
+    """
+    try:
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id is required")
+
+        # Get client's Supabase credentials
+        client_supabase_url, _, client_service_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_supabase_url, client_service_key)
+
+        # Get conversation to find the agent
+        conversation_result = client_sb.table("conversations").select("*").eq("id", conversation_id).limit(1).execute()
+        if not conversation_result.data:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        conversation = conversation_result.data[0]
+        agent_id = conversation.get("agent_id")
+
+        # Get agent's LLM settings
+        agent_service = MultitentAgentService()
+        from uuid import UUID
+        client_uuid = UUID(client_id)
+
+        # Get API keys for title generation
+        api_keys = await agent_service.get_client_api_keys(client_uuid)
+        openai_key = api_keys.get("openai_api_key") if api_keys else None
+
+        if not openai_key:
+            # Fallback: generate a simple title from the message
+            words = request.first_message.split()[:5]
+            title = " ".join(words) + ("..." if len(request.first_message.split()) > 5 else "")
+        else:
+            # Use OpenAI to generate a title
+            import openai
+            openai_client = openai.OpenAI(api_key=openai_key)
+
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Generate a very short title (3-6 words) for a conversation that starts with the following message. Return only the title, no quotes or punctuation."
+                    },
+                    {
+                        "role": "user",
+                        "content": request.first_message
+                    }
+                ],
+                max_tokens=20,
+                temperature=0.7
+            )
+            title = response.choices[0].message.content.strip()
+
+        # Update the conversation with the generated title
+        client_sb.table("conversations").update({
+            "conversation_title": title
+        }).eq("id", conversation_id).execute()
+
+        return {"success": True, "title": title, "conversation_id": conversation_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate conversation title: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/embed/conversations")
+async def list_embed_conversations(
+    client_id: str,
+    user_id: str,
+    agent_slug: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+):
+    """
+    List conversations for a user, optionally filtered by agent.
+    Returns conversations ordered by last interaction time.
+    """
+    try:
+        # Get client's Supabase credentials
+        client_supabase_url, _, client_service_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_supabase_url, client_service_key)
+
+        # Resolve effective user_id (handles platform admin -> client shadow user mapping)
+        effective_user_id = await _resolve_effective_user_id(user_id, client_id)
+
+        # If agent_slug provided but no agent_id, look up the agent_id
+        effective_agent_id = agent_id
+        if agent_slug and not agent_id:
+            try:
+                agent_service = MultitentAgentService()
+                from uuid import UUID
+                client_uuid = UUID(client_id)
+                agent = await agent_service.get_agent(client_uuid, agent_slug)
+                if agent and agent.id:
+                    effective_agent_id = str(agent.id)
+            except Exception as e:
+                logger.warning(f"Failed to look up agent_id for slug {agent_slug}: {e}")
+
+        # Build query - use effective_user_id which may be mapped for platform admins
+        query = client_sb.table("conversations").select("*").eq("user_id", effective_user_id)
+
+        # Filter by agent if we have an agent_id
+        if effective_agent_id:
+            query = query.eq("agent_id", effective_agent_id)
+
+        # Exclude deleted conversations (handle NULL status)
+        # Use or_ filter: status is null OR status is not 'deleted'
+        query = query.or_("status.is.null,status.neq.deleted")
+
+        # Order by most recent interaction first
+        query = query.order("updated_at", desc=True).order("created_at", desc=True)
+
+        # Apply pagination
+        query = query.limit(limit).offset(offset)
+
+        result = query.execute()
+        conversations = result.data or []
+
+        # Batch fetch message counts and last messages to avoid N+1 queries
+        if conversations:
+            conv_ids = [conv["id"] for conv in conversations]
+
+            # Create lookup dicts for quick access
+            message_counts = {}
+            last_messages = {}
+
+            # Batch query: Get all transcripts for these conversations in one query
+            # We'll process them in Python to get counts and last messages
+            try:
+                # Get last message for each conversation using a single query
+                # Order by created_at desc to get most recent first
+                all_transcripts = client_sb.table("conversation_transcripts").select(
+                    "conversation_id", "content", "role", "created_at"
+                ).in_("conversation_id", conv_ids).order("created_at", desc=True).execute()
+
+                # Process transcripts to get counts and last messages
+                seen_convs = set()
+                for transcript in (all_transcripts.data or []):
+                    conv_id = transcript.get("conversation_id")
+                    if not conv_id:
+                        continue
+
+                    # Count messages per conversation
+                    message_counts[conv_id] = message_counts.get(conv_id, 0) + 1
+
+                    # Store first (most recent) message for each conversation
+                    if conv_id not in seen_convs:
+                        content = transcript.get("content", "")
+                        last_messages[conv_id] = {
+                            "content": content[:100] + ("..." if len(content) > 100 else ""),
+                            "role": transcript.get("role"),
+                            "created_at": transcript.get("created_at")
+                        }
+                        seen_convs.add(conv_id)
+
+            except Exception as e:
+                logger.warning(f"Failed to batch fetch transcript data: {e}")
+
+            # Apply counts and last messages to conversations
+            for conv in conversations:
+                conv["message_count"] = message_counts.get(conv["id"], 0)
+                conv["last_message"] = last_messages.get(conv["id"])
+
+        return {
+            "success": True,
+            "conversations": conversations,
+            "total": len(conversations),
+            "limit": limit,
+            "offset": offset
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list conversations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/embed/conversations/{conversation_id}/messages")
+async def get_embed_conversation_messages(
+    conversation_id: str,
+    client_id: str,
+    limit: int = 200,
+    offset: int = 0,
+):
+    """
+    Get messages for a specific conversation.
+    Returns messages ordered by creation time (oldest first).
+    """
+    try:
+        # Get client's Supabase credentials
+        client_supabase_url, _, client_service_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_supabase_url, client_service_key)
+
+        # Get messages
+        result = client_sb.table("conversation_transcripts").select("*").eq("conversation_id", conversation_id).order("created_at", desc=False).limit(limit).offset(offset).execute()
+
+        messages = result.data or []
+
+        return {
+            "success": True,
+            "messages": messages,
+            "conversation_id": conversation_id,
+            "total": len(messages),
+            "limit": limit,
+            "offset": offset
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get conversation messages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/embed/conversations/recent")
+async def get_most_recent_conversation(
+    client_id: str,
+    user_id: str,
+    agent_slug: Optional[str] = None,
+    agent_id: Optional[str] = None,
+):
+    """
+    Get the most recent conversation for a user with a specific agent.
+    Used to auto-restore the last conversation on page load.
+    """
+    try:
+        # Get client's Supabase credentials
+        client_supabase_url, _, client_service_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_supabase_url, client_service_key)
+
+        # Resolve effective user_id (handles platform admin -> client shadow user mapping)
+        effective_user_id = await _resolve_effective_user_id(user_id, client_id)
+
+        # If agent_slug provided but no agent_id, look up the agent_id
+        effective_agent_id = agent_id
+        if agent_slug and not agent_id:
+            try:
+                agent_service = MultitentAgentService()
+                from uuid import UUID
+                client_uuid = UUID(client_id)
+                agent = await agent_service.get_agent(client_uuid, agent_slug)
+                if agent and agent.id:
+                    effective_agent_id = str(agent.id)
+            except Exception as e:
+                logger.warning(f"Failed to look up agent_id for slug {agent_slug}: {e}")
+
+        # Build query for most recent conversation - use effective_user_id which may be mapped for platform admins
+        query = client_sb.table("conversations").select("*").eq("user_id", effective_user_id)
+
+        # Filter by agent if we have an agent_id
+        if effective_agent_id:
+            query = query.eq("agent_id", effective_agent_id)
+
+        # Exclude deleted conversations (handle NULL status)
+        query = query.or_("status.is.null,status.neq.deleted")
+        query = query.order("updated_at", desc=True).order("created_at", desc=True).limit(1)
+
+        result = query.execute()
+
+        if not result.data:
+            return {"success": True, "conversation": None}
+
+        conversation = result.data[0]
+
+        # Get messages for this conversation (ascending order for chronological display)
+        messages_result = client_sb.table("conversation_transcripts").select("*").eq("conversation_id", conversation["id"]).order("created_at", desc=False).limit(200).execute()
+
+        return {
+            "success": True,
+            "conversation": conversation,
+            "messages": messages_result.data or []
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get recent conversation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Session End & Ambient Abilities Endpoints
+# =============================================================================
+
+@router.post("/api/embed/session-end")
+async def notify_session_end(
+    client_id: str = Form(...),
+    user_id: str = Form(...),
+    conversation_id: str = Form(...),
+    session_id: Optional[str] = Form(None),
+    message_count: int = Form(0),
+    agent_slug: Optional[str] = Form(None),
+):
+    """
+    Notify the system that a user session has ended.
+    Triggers post-session ambient abilities like UserSense.
+    """
+    try:
+        from app.services.ambient_ability_service import ambient_ability_service
+
+        # Resolve effective user_id for platform admins
+        effective_user_id = await _resolve_effective_user_id(user_id, client_id)
+
+        logger.info(
+            f"[session-end] client={client_id[:8]}..., user={effective_user_id[:8]}..., "
+            f"conversation={conversation_id[:8]}..., messages={message_count}"
+        )
+
+        # Fetch transcript for context
+        transcript = None
+        user_overview = None
+        try:
+            client_supabase_url, _, client_service_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+            from supabase import create_client
+            client_sb = create_client(client_supabase_url, client_service_key)
+
+            # Get transcript
+            transcript_result = client_sb.table("conversation_transcripts").select(
+                "role", "content", "created_at"
+            ).eq("conversation_id", conversation_id).order(
+                "created_at", desc=False
+            ).execute()
+            transcript = transcript_result.data or []
+
+            # Get user overview
+            try:
+                overview_result = client_sb.rpc(
+                    "get_user_overview",
+                    {"p_user_id": effective_user_id, "p_client_id": client_id}
+                ).execute()
+                if overview_result.data:
+                    user_overview = overview_result.data.get("overview", {})
+            except Exception as ov_err:
+                logger.debug(f"Could not fetch user overview: {ov_err}")
+
+        except Exception as ctx_err:
+            logger.warning(f"Could not fetch context for session end: {ctx_err}")
+
+        # Queue post-session ambient abilities
+        queued_runs = await ambient_ability_service.queue_post_session_abilities(
+            client_id=client_id,
+            user_id=effective_user_id,
+            conversation_id=conversation_id,
+            session_id=session_id,
+            message_count=message_count,
+            agent_slug=agent_slug,
+            transcript=transcript,
+            user_overview=user_overview
+        )
+
+        return {
+            "success": True,
+            "queued_abilities": len(queued_runs),
+            "run_ids": queued_runs
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to process session end: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/embed/notifications")
+async def get_embed_notifications(
+    client_id: str,
+    user_id: str,
+):
+    """
+    Get pending ambient ability notifications for a user.
+    These are shown as subtle toasts in the embed (e.g., "User Understanding Expanded").
+    """
+    try:
+        from app.services.ambient_ability_service import ambient_ability_service
+
+        # Resolve effective user_id for platform admins
+        effective_user_id = await _resolve_effective_user_id(user_id, client_id)
+
+        notifications = await ambient_ability_service.get_user_notifications(
+            user_id=effective_user_id,
+            client_id=client_id
+        )
+
+        return {
+            "success": True,
+            "notifications": [
+                {
+                    "id": str(n.id),
+                    "ability_slug": n.ability_slug,
+                    "message": n.notification_message,
+                    "completed_at": n.completed_at.isoformat() if n.completed_at else None
+                }
+                for n in notifications
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get notifications: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/embed/notifications/{notification_id}/shown")
+async def mark_notification_shown(notification_id: str):
+    """Mark a notification as shown to the user."""
+    try:
+        from app.services.ambient_ability_service import ambient_ability_service
+
+        success = await ambient_ability_service.mark_notification_shown(notification_id)
+
+        return {"success": success}
+
+    except Exception as e:
+        logger.error(f"Failed to mark notification shown: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/user-overview/{client_id}", response_class=HTMLResponse)
+async def view_user_overview(
+    request: Request,
+    client_id: str,
+    user_id: Optional[str] = None,
+    auth_context: AuthContext = Depends(require_user_auth),
+):
+    """
+    View your User Overview - the understanding sidekicks have built about you.
+    Users can see what information has been learned through their conversations.
+    """
+    try:
+        # Use authenticated user_id if not explicitly provided
+        effective_user_id = user_id or auth_context.user_id
+        if not effective_user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        # Resolve effective user_id for platform admins previewing
+        resolved_user_id = await _resolve_effective_user_id(effective_user_id, client_id)
+
+        # Get client credentials
+        client_url, _, client_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_url, client_key)
+
+        # Fetch user overview
+        user_overview = {}
+        sidekick_insights = {}
+        learning_status = "unknown"
+
+        try:
+            result = client_sb.table("user_overviews").select(
+                "overview", "sidekick_insights", "learning_status", "updated_at"
+            ).eq("user_id", resolved_user_id).eq("client_id", client_id).limit(1).execute()
+
+            if result.data and len(result.data) > 0:
+                data = result.data[0]
+                user_overview = data.get("overview", {})
+                sidekick_insights = data.get("sidekick_insights", {})
+                learning_status = data.get("learning_status", "completed")
+        except Exception as fetch_err:
+            logger.warning(f"Could not fetch user overview: {fetch_err}")
+
+        # Get client name for display
+        try:
+            from supabase import create_client as create_platform_sb
+            platform_sb = create_platform_sb(settings.supabase_url, settings.supabase_service_role_key)
+            client_result = platform_sb.table("clients").select("name").eq("id", client_id).limit(1).execute()
+            client_name = client_result.data[0]["name"] if client_result.data else "Your Sidekicks"
+        except Exception:
+            client_name = "Your Sidekicks"
+
+        return templates.TemplateResponse(
+            "embed/user_overview.html",
+            {
+                "request": request,
+                "client_id": client_id,
+                "client_name": client_name,
+                "user_id": resolved_user_id,
+                "user_overview": user_overview,
+                "sidekick_insights": sidekick_insights,
+                "learning_status": learning_status,
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to render user overview page: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/embed/user-overview/{client_id}")
+async def get_user_overview_api(
+    client_id: str,
+    user_id: Optional[str] = None,
+    auth_context: AuthContext = Depends(require_user_auth),
+):
+    """
+    API endpoint to get user overview data as JSON.
+    Used by the chat widget to show a link to view overview after learning completes.
+    """
+    try:
+        effective_user_id = user_id or auth_context.user_id
+        if not effective_user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        resolved_user_id = await _resolve_effective_user_id(effective_user_id, client_id)
+
+        client_url, _, client_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_url, client_key)
+
+        try:
+            result = client_sb.table("user_overviews").select(
+                "overview", "sidekick_insights", "learning_status", "conversations_analyzed", "updated_at"
+            ).eq("user_id", resolved_user_id).eq("client_id", client_id).limit(1).execute()
+
+            if result.data and len(result.data) > 0:
+                data = result.data[0]
+                return {
+                    "success": True,
+                    "exists": True,
+                    "overview": data.get("overview", {}),
+                    "sidekick_insights": data.get("sidekick_insights", {}),
+                    "learning_status": data.get("learning_status", "unknown"),
+                    "conversations_analyzed": data.get("conversations_analyzed", 0),
+                    "updated_at": data.get("updated_at"),
+                    "view_url": f"/user-overview/{client_id}"
+                }
+        except Exception as fetch_err:
+            logger.warning(f"Could not fetch user overview: {fetch_err}")
+
+        return {
+            "success": True,
+            "exists": False,
+            "overview": {},
+            "sidekick_insights": {},
+            "learning_status": "not_started",
+            "conversations_analyzed": 0,
+            "view_url": None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get user overview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

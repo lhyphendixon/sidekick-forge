@@ -36,8 +36,8 @@ services:
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       # Agent name for staging (must match agent-worker)
-      - AGENT_NAME=sidekick-agent-staging-docker
-      - LIVEKIT_AGENT_NAME=sidekick-agent-staging-docker
+      - AGENT_NAME=sidekick-agent-staging-local
+      - LIVEKIT_AGENT_NAME=sidekick-agent-staging-local
       - DOCKER_HOST=unix:///var/run/docker.sock
       - DOCUMENT_PROCESSOR_MAX_CONCURRENCY=2
       - DOCUMENT_PROCESSOR_MAX_CHUNKS=250
@@ -103,6 +103,7 @@ services:
       - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
       - ./docker/agent/citations_service.py:/app/citations_service.py:ro
       - ./docker/agent/tool_registry.py:/app/tool_registry.py:ro
+      - ./docker/agent/models:/app/models:ro
       - ./app:/app/app:ro
     environment:
       - LIVEKIT_URL=${LIVEKIT_URL:-wss://litebridge-hw6srhvi.livekit.cloud}
@@ -113,7 +114,7 @@ services:
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - DOMAIN_NAME=${DOMAIN_NAME}
       # Agent configuration
-      - AGENT_NAME=sidekick-agent-staging-docker
+      - AGENT_NAME=sidekick-agent-staging-local
       - ENABLE_PROACTIVE_GREETING=true
       # Supabase configuration for API key fallback
       - SUPABASE_URL=${SUPABASE_URL}
@@ -144,10 +145,42 @@ services:
       # RAG context settings - increase results and lower threshold for better retrieval
       - CONTEXT_MAX_KNOWLEDGE_RESULTS=${CONTEXT_MAX_KNOWLEDGE_RESULTS:-10}
       - CONTEXT_MATCH_THRESHOLD=${CONTEXT_MATCH_THRESHOLD:-0.3}
+      # BGE Local Service URL (for local embeddings/reranking)
+      - BGE_SERVICE_URL=${BGE_SERVICE_URL:-http://bge-service:8090}
     networks:
       - platform-network
 
+  # BGE Local Embedding & Reranking Service
+  # Provides on-premise BGE-M3 embeddings and BGE-reranker-v2-m3 reranking
+  bge-service:
+    build:
+      context: ./docker/bge-service
+      dockerfile: Dockerfile
+    container_name: ${APP_NAME:-sidekick-forge}-bge-service
+    ports:
+      - "8090:8090"
+    environment:
+      - BGE_DEVICE=${BGE_DEVICE:-cpu}
+      - BGE_M3_ENABLED=${BGE_M3_ENABLED:-true}
+      - BGE_RERANKER_ENABLED=${BGE_RERANKER_ENABLED:-true}
+      - BGE_M3_MODEL=${BGE_M3_MODEL:-BAAI/bge-m3}
+      - BGE_RERANKER_MODEL=${BGE_RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      - BGE_MAX_BATCH_SIZE=${BGE_MAX_BATCH_SIZE:-32}
+    volumes:
+      - bge-models:/app/models
+    restart: unless-stopped
+    networks:
+      - platform-network
+    # Resource limits for CPU mode
+    deploy:
+      resources:
+        limits:
+          memory: 10G
+        reservations:
+          memory: 6G
+
 volumes:
+  bge-models:
   redis-data:
 
 networks:

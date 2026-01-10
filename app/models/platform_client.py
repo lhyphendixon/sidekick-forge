@@ -32,6 +32,10 @@ class APIKeys(BaseModel):
     siliconflow_api_key: Optional[str] = None
     jina_api_key: Optional[str] = None
 
+    # Avatar/Video Providers
+    bithuman_api_secret: Optional[str] = None
+    bey_api_key: Optional[str] = None
+
 
 class PlatformSupabaseConfig(BaseModel):
     """Minimal Supabase config for platform clients"""

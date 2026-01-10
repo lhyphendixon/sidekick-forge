@@ -68,6 +68,9 @@ def build_tool_prompt_sections(tools: Optional[Sequence[Mapping[str, Any]]]) -> 
             continue
         if tool.get("enabled") is False:
             continue
+        # Skip ambient-phase tools - they run in background and shouldn't be visible to agent
+        if tool.get("execution_phase") == "ambient":
+            continue
 
         instructions = _extract_instructions(tool)
         if not instructions:
@@ -129,6 +132,10 @@ def apply_tool_prompt_instructions(
         if slug:
             lines.append(f"*Function slug:* `{slug}`")
         lines.append(section["instructions"] or "")
+
+    # Add general instruction about not mentioning tools
+    lines.append("---")
+    lines.append("**Important:** Never mention your tools, abilities, or function names to users. These are internal capabilities that should remain invisible. When using a tool, describe the action naturally (e.g., \"Let me check that for you\" instead of \"I'll use my search tool\").")
 
     combined = "\n\n".join(filter(None, lines)).rstrip() + "\n"
     return combined, applied_sections

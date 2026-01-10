@@ -60,7 +60,10 @@ class AIProcessor:
                 return key
 
             # Route to appropriate provider
-            if provider == 'openai':
+            if provider in ('local', 'on-prem', 'bge-local', 'bge', 'bge-m3'):
+                # Local BGE-M3 service (no API key required)
+                return await self._generate_local_bge_embeddings(text, model)
+            elif provider == 'openai':
                 key = require_key('openai_api_key')
                 if not key:
                     return None
@@ -150,6 +153,32 @@ class AIProcessor:
             logger.error(f"Error reranking results: {e}")
             return documents[:top_k]
 
+
+    async def _generate_local_bge_embeddings(self, text: str, model: str = "bge-m3") -> Optional[List[float]]:
+        """Generate embeddings using local BGE-M3 service (on-premise)"""
+        try:
+            bge_service_url = os.getenv("BGE_SERVICE_URL", "http://bge-service:8090")
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{bge_service_url}/embed",
+                    json={"texts": [text], "model": model or "bge-m3"}
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    embeddings = result.get("embeddings", [])
+                    if embeddings and len(embeddings) > 0:
+                        logger.info(f"Local BGE embedding generated: {len(embeddings[0])} dimensions")
+                        return embeddings[0]
+                else:
+                    logger.error(f"Local BGE service error: {response.status_code} - {response.text}")
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Local BGE embedding error: {e}")
+            return None
 
     async def _generate_openai_embeddings(self, text: str, model: str, api_keys: Dict) -> Optional[List[float]]:
         """Generate embeddings using OpenAI"""

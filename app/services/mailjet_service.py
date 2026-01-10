@@ -178,4 +178,280 @@ class MailjetService:
         return lines
 
 
+    # ============================================================
+    # User-Facing Transactional Emails
+    # ============================================================
+
+    async def send_order_confirmation_email(
+        self,
+        to_email: str,
+        to_name: str,
+        order_data: Dict[str, Any],
+        verification_url: str,
+    ) -> bool:
+        """
+        Send order confirmation with verification link to customer.
+
+        Args:
+            to_email: Customer email address
+            to_name: Customer name
+            order_data: Dict with order_number, tier_name, price, etc.
+            verification_url: Full URL for email verification
+        """
+        if not self._client or not self._sender_email:
+            logger.warning("Mailjet not configured; skipping order confirmation email to %s", to_email)
+            return False
+
+        order_number = order_data.get("order_number", "N/A")
+        tier_name = order_data.get("tier_name", "Unknown")
+        price = order_data.get("price", 0)
+
+        subject = f"Welcome to {settings.platform_name} - Activate Your Account"
+
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;font-family:Inter,Helvetica,Arial,sans-serif;background:#f4f4f5;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;margin:0 auto;">
+        <!-- Header -->
+        <tr>
+            <td style="background:linear-gradient(135deg,#01a4a6 0%,#018789 100%);padding:32px 24px;text-align:center;">
+                <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;">Welcome to {escape(settings.platform_name)}!</h1>
+            </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+            <td style="background:#ffffff;padding:32px 24px;">
+                <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
+                    Hi {escape(to_name)},
+                </p>
+
+                <p style="margin:0 0 24px;color:#374151;font-size:16px;line-height:1.6;">
+                    Thank you for your order! Your AI sidekick is being prepared. Here are your order details:
+                </p>
+
+                <!-- Order Box -->
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin:0 0 24px;">
+                    <tr>
+                        <td style="padding:16px;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                                <tr>
+                                    <td style="padding:8px 0;color:#6b7280;font-size:14px;">Order Number</td>
+                                    <td style="padding:8px 0;color:#111827;font-size:14px;text-align:right;font-weight:600;">{escape(order_number)}</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:8px 0;color:#6b7280;font-size:14px;">Plan</td>
+                                    <td style="padding:8px 0;color:#111827;font-size:14px;text-align:right;font-weight:600;">{escape(tier_name)}</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:8px 0;color:#6b7280;font-size:14px;">Price</td>
+                                    <td style="padding:8px 0;color:#111827;font-size:14px;text-align:right;font-weight:600;">${price}/month</td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- CTA Section -->
+                <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:24px;text-align:center;margin:0 0 24px;">
+                    <h2 style="margin:0 0 12px;color:#0d9488;font-size:20px;font-weight:600;">Activate Your Account</h2>
+                    <p style="margin:0 0 20px;color:#374151;font-size:14px;">
+                        Please verify your email to access your dashboard:
+                    </p>
+                    <a href="{escape(verification_url)}"
+                       style="display:inline-block;background:#01a4a6;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;">
+                        Verify Email &amp; Activate
+                    </a>
+                </div>
+
+                <p style="margin:0 0 8px;color:#6b7280;font-size:13px;">
+                    This verification link expires in 24 hours.
+                </p>
+                <p style="margin:0 0 24px;color:#6b7280;font-size:13px;">
+                    If you didn't create this account, you can safely ignore this email.
+                </p>
+
+                <!-- Next Steps -->
+                <h3 style="margin:0 0 12px;color:#111827;font-size:16px;font-weight:600;">What happens next?</h3>
+                <ol style="margin:0 0 24px;padding-left:20px;color:#374151;font-size:14px;line-height:1.8;">
+                    <li>Click the button above to verify your email</li>
+                    <li>Your sidekick infrastructure is being set up (takes a few minutes)</li>
+                    <li>Once ready, log in to your dashboard to create your first AI sidekick</li>
+                </ol>
+            </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+            <td style="background:#1f2937;padding:24px;text-align:center;">
+                <p style="margin:0 0 8px;color:#9ca3af;font-size:14px;">
+                    {escape(settings.platform_name)} - Your AI Sidekick for the Hero's Journey
+                </p>
+                <p style="margin:0;color:#6b7280;font-size:12px;">
+                    Questions? Reply to this email or contact team@sidekickforge.com
+                </p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+"""
+
+        text_body = f"""Welcome to {settings.platform_name}!
+
+Hi {to_name},
+
+Thank you for your order! Here are your details:
+
+Order Number: {order_number}
+Plan: {tier_name}
+Price: ${price}/month
+
+ACTIVATE YOUR ACCOUNT
+Please verify your email to access your dashboard:
+{verification_url}
+
+This link expires in 24 hours.
+
+What happens next?
+1. Click the link above to verify your email
+2. Your sidekick infrastructure is being set up
+3. Once ready, log in to create your first AI sidekick
+
+Questions? Reply to this email or contact team@sidekickforge.com
+
+{settings.platform_name} - Your AI Sidekick for the Hero's Journey
+"""
+
+        payload = {
+            "Messages": [{
+                "From": {"Email": self._sender_email, "Name": self._sender_name},
+                "To": [{"Email": to_email, "Name": to_name}],
+                "Subject": subject,
+                "TextPart": text_body,
+                "HTMLPart": html_body,
+                "CustomID": f"order_confirmation_{order_data.get('order_id', 'unknown')}",
+                "TrackClicks": "disabled",  # Disable link tracking to avoid redirect through old domain
+            }]
+        }
+
+        try:
+            await asyncio.to_thread(self._send, payload)
+            logger.info("Order confirmation email sent to %s for order %s", to_email, order_number)
+            return True
+        except Exception:
+            logger.exception("Failed to send order confirmation email to %s", to_email)
+            return False
+
+    async def send_verification_email(
+        self,
+        to_email: str,
+        to_name: str,
+        verification_url: str,
+    ) -> bool:
+        """
+        Send a standalone verification/resend email.
+
+        Args:
+            to_email: Customer email address
+            to_name: Customer name
+            verification_url: Full URL for email verification
+        """
+        if not self._client or not self._sender_email:
+            logger.warning("Mailjet not configured; skipping verification email to %s", to_email)
+            return False
+
+        subject = f"Verify your {settings.platform_name} account"
+
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;font-family:Inter,Helvetica,Arial,sans-serif;background:#f4f4f5;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;margin:0 auto;">
+        <!-- Header -->
+        <tr>
+            <td style="background:linear-gradient(135deg,#01a4a6 0%,#018789 100%);padding:32px 24px;text-align:center;">
+                <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">Verify Your Email</h1>
+            </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+            <td style="background:#ffffff;padding:32px 24px;">
+                <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
+                    Hi {escape(to_name)},
+                </p>
+
+                <p style="margin:0 0 24px;color:#374151;font-size:16px;line-height:1.6;">
+                    Click the button below to verify your email and activate your account:
+                </p>
+
+                <div style="text-align:center;margin:0 0 24px;">
+                    <a href="{escape(verification_url)}"
+                       style="display:inline-block;background:#01a4a6;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;">
+                        Verify Email
+                    </a>
+                </div>
+
+                <p style="margin:0;color:#6b7280;font-size:13px;">
+                    This link expires in 24 hours. If you didn't request this, you can safely ignore this email.
+                </p>
+            </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+            <td style="background:#1f2937;padding:24px;text-align:center;">
+                <p style="margin:0;color:#6b7280;font-size:12px;">
+                    {escape(settings.platform_name)}
+                </p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+"""
+
+        text_body = f"""Verify Your Email
+
+Hi {to_name},
+
+Click the link below to verify your email and activate your account:
+{verification_url}
+
+This link expires in 24 hours.
+
+{settings.platform_name}
+"""
+
+        payload = {
+            "Messages": [{
+                "From": {"Email": self._sender_email, "Name": self._sender_name},
+                "To": [{"Email": to_email, "Name": to_name}],
+                "Subject": subject,
+                "TextPart": text_body,
+                "HTMLPart": html_body,
+                "CustomID": f"verification_resend_{to_email}",
+                "TrackClicks": "disabled",  # Disable link tracking to avoid redirect through old domain
+            }]
+        }
+
+        try:
+            await asyncio.to_thread(self._send, payload)
+            logger.info("Verification email sent to %s", to_email)
+            return True
+        except Exception:
+            logger.exception("Failed to send verification email to %s", to_email)
+            return False
+
+
 mailjet_service = MailjetService()

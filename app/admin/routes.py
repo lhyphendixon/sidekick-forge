@@ -338,9 +338,74 @@ async def reset_password_page(request: Request):
 
 @router.post("/login")
 async def login(request: Request):
-    """Handle login form submission"""
-    # This will be handled by the frontend JavaScript
-    return {"status": "handled_by_frontend"}
+    """Handle login form submission via Supabase"""
+    from app.config import settings
+    from fastapi.responses import RedirectResponse
+
+    # Get form data
+    form = await request.form()
+    email = form.get("email", "")
+    password = form.get("password", "")
+
+    if not email or not password:
+        return templates.TemplateResponse(
+            "admin/login.html",
+            {
+                "request": request,
+                "error": "Email and password are required",
+                "supabase_url": settings.supabase_url,
+                "supabase_anon_key": settings.supabase_anon_key,
+                "development_mode": os.getenv("DEVELOPMENT_MODE", "false").lower() == "true",
+            },
+        )
+
+    try:
+        # Authenticate with Supabase
+        import httpx
+        async with httpx.AsyncClient() as client:
+            auth_response = await client.post(
+                f"{settings.supabase_url}/auth/v1/token?grant_type=password",
+                headers={
+                    "apikey": settings.supabase_anon_key,
+                    "Content-Type": "application/json",
+                },
+                json={"email": email, "password": password},
+            )
+
+            if auth_response.status_code == 200:
+                auth_data = auth_response.json()
+                access_token = auth_data.get("access_token")
+
+                if access_token:
+                    # Set cookie and redirect to admin dashboard
+                    response = RedirectResponse(url="/admin/", status_code=303)
+                    response.set_cookie(
+                        key="admin_token",
+                        value=access_token,
+                        max_age=28800,  # 8 hours
+                        path="/",
+                        httponly=False,  # Allow JS access for API calls
+                        samesite="lax",
+                    )
+                    return response
+
+            # Authentication failed
+            error_data = auth_response.json() if auth_response.status_code != 200 else {}
+            error_msg = error_data.get("msg", "Invalid login credentials")
+
+    except Exception as e:
+        error_msg = f"Authentication error: {str(e)}"
+
+    return templates.TemplateResponse(
+        "admin/login.html",
+        {
+            "request": request,
+            "error": error_msg,
+            "supabase_url": settings.supabase_url,
+            "supabase_anon_key": settings.supabase_anon_key,
+            "development_mode": os.getenv("DEVELOPMENT_MODE", "false").lower() == "true",
+        },
+    )
 
 @router.post("/logout")
 async def logout(request: Request):
@@ -1257,13 +1322,28 @@ async def dashboard(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Main admin dashboard with HTMX"""
+    # Adventurer users should go directly to their sidekicks page
+    if admin_user.get("is_adventurer_only"):
+        return RedirectResponse(url="/admin/agents", status_code=302)
+
     summary = await get_system_summary(admin_user)
-    
+
     return templates.TemplateResponse("admin/dashboard.html", {
         "request": request,
         "summary": summary,
         "user": admin_user
     })
+
+
+@router.get("/client-settings/{client_id}", response_class=HTMLResponse)
+async def client_settings_redirect(
+    client_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Redirect to the standard client detail page (for Adventurer nav compatibility)"""
+    return RedirectResponse(url=f"/admin/clients/{client_id}", status_code=302)
+
 
 @router.get("/clients", response_class=HTMLResponse)
 async def clients_list(
@@ -1271,6 +1351,13 @@ async def clients_list(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Client management page"""
+    # Adventurer users should go to their settings page instead
+    if admin_user.get("is_adventurer_only"):
+        client_id = admin_user.get("primary_client_id")
+        if client_id:
+            return RedirectResponse(url=f"/admin/client-settings/{client_id}", status_code=302)
+        return RedirectResponse(url="/admin/agents", status_code=302)
+
     try:
         clients = await get_all_clients_with_containers(admin_user)
         logger.info(f"Admin Dashboard: Successfully prepared {len(clients)} clients for display")
@@ -1357,7 +1444,41 @@ async def client_detail_page(
             logger.error(f"Failed to load WordPress sites for client {client_id}: {e}")
             wordpress_error = str(e)
 
-        wordpress_api_endpoint = f"https://{settings.domain_name}/api/v1/wordpress-sites/auth/validate"
+        wordpress_api_endpoint = f"https://{settings.domain_name}/api/v1/wordpress/session/exchange"
+
+        # Load usage data for Adventurer tier clients
+        usage = None
+        if admin_user.get("is_adventurer_only"):
+            try:
+                from app.services.usage_tracking import usage_tracking_service, QuotaType
+                await usage_tracking_service.initialize()
+                quotas = await usage_tracking_service.get_all_quotas(client_id)
+
+                # Format for template
+                usage = {
+                    "voice": {
+                        "used": quotas["voice"].used,
+                        "limit": quotas["voice"].limit,
+                        "remaining": quotas["voice"].remaining,
+                        "percent_used": quotas["voice"].percent_used,
+                        "minutes_used": getattr(quotas["voice"], "minutes_used", 0),
+                        "minutes_limit": getattr(quotas["voice"], "minutes_limit", 100),
+                    },
+                    "text": {
+                        "used": quotas["text"].used,
+                        "limit": quotas["text"].limit,
+                        "remaining": quotas["text"].remaining,
+                        "percent_used": quotas["text"].percent_used,
+                    },
+                    "embedding": {
+                        "used": quotas["embedding"].used,
+                        "limit": quotas["embedding"].limit,
+                        "remaining": quotas["embedding"].remaining,
+                        "percent_used": quotas["embedding"].percent_used,
+                    }
+                }
+            except Exception as usage_err:
+                logger.warning(f"Failed to load usage data for client {client_id}: {usage_err}")
 
         return templates.TemplateResponse("admin/client_detail.html", {
             "request": request,
@@ -1369,6 +1490,7 @@ async def client_detail_page(
             "wordpress_error": wordpress_error,
             "wordpress_api_endpoint": wordpress_api_endpoint,
             "wordpress_domain": settings.domain_name,
+            "usage": usage,
         })
     except Exception as e:
         logger.error(f"Error loading client detail page: {e}")
@@ -1439,7 +1561,8 @@ async def agents_page(
         "request": request,
         "agents": agents,
         "clients": clients,
-        "user": admin_user
+        "user": admin_user,
+        "disable_stats_poll": True
     })
 
 
@@ -1915,7 +2038,44 @@ async def admin_set_agent_tools(
         await tools_service.set_agent_tools(client_id, agent_id, payload.tool_ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse({"success": True})
+
+    # Check if UserSense tool was assigned - if so, enable UserSense for client and trigger learning
+    usersense_learning_triggered = False
+    try:
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        # Check if any of the assigned tools is the UserSense tool
+        if payload.tool_ids:
+            usersense_tools = platform_sb.table("tools").select("id").eq("slug", "usersense").execute()
+            usersense_tool_id = usersense_tools.data[0]["id"] if usersense_tools.data else None
+
+            if usersense_tool_id and usersense_tool_id in payload.tool_ids:
+                # Check if UserSense is already enabled for this client
+                client_result = platform_sb.table("clients").select("usersense_enabled").eq("id", client_id).execute()
+                was_enabled = client_result.data[0].get("usersense_enabled", False) if client_result.data else False
+
+                if not was_enabled:
+                    # Enable UserSense for the client
+                    platform_sb.table("clients").update({"usersense_enabled": True}).eq("id", client_id).execute()
+                    logger.info(f"🧠 UserSense auto-enabled for client {client_id} (ability added to agent {agent_id})")
+
+                    # Queue initial learning
+                    try:
+                        result = platform_sb.rpc('queue_client_initial_learning', {'p_client_id': client_id}).execute()
+                        logger.info(f"✅ Initial learning job queued for client {client_id}")
+                        usersense_learning_triggered = True
+                    except Exception as learn_err:
+                        logger.error(f"⚠️ Failed to queue initial learning: {learn_err}")
+
+    except Exception as usersense_err:
+        logger.warning(f"UserSense auto-enable check failed: {usersense_err}")
+
+    return JSONResponse({
+        "success": True,
+        "usersense_learning_triggered": usersense_learning_triggered
+    })
 
 
 
@@ -2121,11 +2281,44 @@ async def agent_detail(
                 "tools_config": agent.get("tools_config", {}),
                 "show_citations": agent.get("show_citations", True),
                 "rag_results_limit": agent.get("rag_results_limit", 5),
+                "supertab_enabled": agent.get("supertab_enabled", False),
+                "supertab_experience_id": agent.get("supertab_experience_id"),
+                "supertab_price": agent.get("supertab_price"),
+                "supertab_cta": agent.get("supertab_cta"),
+                "voice_chat_enabled": agent.get("voice_chat_enabled", True),
+                "text_chat_enabled": agent.get("text_chat_enabled", True),
+                "video_chat_enabled": agent.get("video_chat_enabled", False),
                 "client_id": client_id,
                 "client_name": client.get("name", "Unknown") if isinstance(client, dict) else (getattr(client, 'name', 'Unknown') if client else "Unknown")
             }
         else:
             # Object format - original service
+            # Convert voice_settings to dict for JSON serialization in template
+            voice_settings_for_template = agent.voice_settings
+            if hasattr(voice_settings_for_template, 'dict'):
+                try:
+                    voice_settings_for_template = voice_settings_for_template.dict()
+                except Exception:
+                    voice_settings_for_template = {}
+            elif hasattr(voice_settings_for_template, 'model_dump'):
+                try:
+                    voice_settings_for_template = voice_settings_for_template.model_dump()
+                except Exception:
+                    voice_settings_for_template = {}
+
+            # Convert webhooks to dict as well
+            webhooks_for_template = agent.webhooks
+            if hasattr(webhooks_for_template, 'dict'):
+                try:
+                    webhooks_for_template = webhooks_for_template.dict()
+                except Exception:
+                    webhooks_for_template = {}
+            elif hasattr(webhooks_for_template, 'model_dump'):
+                try:
+                    webhooks_for_template = webhooks_for_template.model_dump()
+                except Exception:
+                    webhooks_for_template = {}
+
             agent_data = {
                 "id": agent.id,
                 "slug": agent.slug,
@@ -2137,11 +2330,18 @@ async def agent_detail(
                 "enabled": agent.enabled,
                 "created_at": agent.created_at.isoformat() if hasattr(agent.created_at, 'isoformat') else str(agent.created_at),
                 "updated_at": agent.updated_at.isoformat() if hasattr(agent.updated_at, 'isoformat') else str(agent.updated_at),
-                "voice_settings": agent.voice_settings,
-                "webhooks": agent.webhooks,
+                "voice_settings": voice_settings_for_template,
+                "webhooks": webhooks_for_template,
                 "tools_config": agent.tools_config or {},
                 "show_citations": getattr(agent, 'show_citations', True),
                 "rag_results_limit": getattr(agent, "rag_results_limit", 5),
+                "supertab_enabled": getattr(agent, 'supertab_enabled', False),
+                "supertab_experience_id": getattr(agent, 'supertab_experience_id', None),
+                "supertab_price": getattr(agent, 'supertab_price', None),
+                "supertab_cta": getattr(agent, 'supertab_cta', None),
+                "voice_chat_enabled": getattr(agent, 'voice_chat_enabled', True),
+                "text_chat_enabled": getattr(agent, 'text_chat_enabled', True),
+                "video_chat_enabled": getattr(agent, 'video_chat_enabled', False),
                 "client_id": client_id,
                 "client_name": client.name if client else "Unknown"
             }
@@ -2948,15 +3148,12 @@ async def agent_detail(
                             {{ value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B (Groq)' }}
                         ],
                         cerebras: [
-                            {{ value: 'llama3.1-8b', label: 'Llama 3.1 8B (Cerebras)' }},
-                            {{ value: 'llama-3.3-70b', label: 'Llama 3.3 70B (Cerebras)' }},
-                            {{ value: 'llama-4-scout-17b-16e-instruct', label: 'Llama 4 Scout 17B Instruct (Cerebras)' }},
-                            {{ value: 'llama-4-maverick-17b-128e-instruct', label: 'Llama 4 Maverick 17B Instruct (preview, Cerebras)' }},
-                            {{ value: 'qwen-3-32b', label: 'Qwen 3 32B (Cerebras)' }},
-                            {{ value: 'qwen-3-235b-a22b-instruct-2507', label: 'Qwen 3 235B Instruct (preview, Cerebras)' }},
-                            {{ value: 'qwen-3-235b-a22b-thinking-2507', label: 'Qwen 3 235B Thinking (preview, Cerebras)' }},
-                            {{ value: 'qwen-3-coder-480b', label: 'Qwen 3 Coder 480B (preview, Cerebras)' }},
-                            {{ value: 'gpt-oss-120b', label: 'GPT-OSS 120B (preview, Cerebras)' }}
+                            {{ value: 'llama-3.3-70b', label: 'Llama 3.3 70B' }},
+                            {{ value: 'llama3.1-8b', label: 'Llama 3.1 8B (Fast)' }},
+                            {{ value: 'zai-glm-4.6', label: 'Z.ai GLM 4.6 (Preview)' }},
+                            {{ value: 'qwen-3-32b', label: 'Qwen 3 32B' }},
+                            {{ value: 'qwen-3-235b-a22b-instruct-2507', label: 'Qwen 3 235B Instruct (Preview)' }},
+                            {{ value: 'gpt-oss-120b', label: 'GPT-OSS 120B (Preview)' }}
                         ],
                         deepinfra: [
                             {{ value: 'meta-llama/Llama-3.1-8B-Instruct', label: 'Llama 3.1 8B Instruct (DeepInfra)' }},
@@ -3316,25 +3513,12 @@ async def agent_preview_modal(
                     }
             """ % (client_supabase_access_json, client_supabase_refresh_json)
         
-        # Add development banner if in dev mode
+        # Dev banner removed - no longer needed
         dev_banner = ""
-        import os
-        if os.getenv("ENVIRONMENT", "development") == "development" and client_user_id:
-            # Redact sensitive parts of IDs for display
-            client_id_display = f"{client_id[:8]}..."
-            client_user_display = f"{client_user_id[:8]}..."
-            dev_banner = f"""
-            <div class=\"bg-yellow-900/50 border border-yellow-700 p-2 text-xs text-yellow-200\">
-              <span class=\"font-semibold\">DEV MODE:</span> 
-              Preview as client_user: <code>{client_user_display}</code> | 
-              Client: <code>{client_id_display}</code> | 
-              JWT expires: 15 min
-            </div>
-            """
         
         modal_html = f"""
-        <div class=\"fixed inset-0 bg-black/80 flex items-center justify-center z-50\">
-          <div class=\"bg-dark-surface border border-dark-border rounded-lg w-full max-w-3xl h-[80vh] flex flex-col\">
+        <div class=\"fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4\">
+          <div class=\"bg-dark-surface border border-dark-border rounded-lg w-full max-w-4xl h-[90vh] flex flex-col\">
             <div class=\"flex items-center justify-between p-3 border-b border-dark-border\">
               <h3 class=\"text-dark-text text-sm\">Preview Sidekick</h3>
               <button class=\"px-3 py-1 text-sm border border-dark-border rounded\" hx-on:click=\"document.getElementById('modal-container').innerHTML=''\">Close</button>
@@ -4406,6 +4590,10 @@ async def monitoring_dashboard(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """System monitoring dashboard"""
+    # Adventurer users don't have access to monitoring
+    if admin_user.get("is_adventurer_only"):
+        return RedirectResponse(url="/admin/agents", status_code=302)
+
     return templates.TemplateResponse("admin/monitoring.html", {
         "request": request,
         "user": admin_user
@@ -4548,6 +4736,88 @@ async def upload_agent_image(
     }
 
 
+# Avatar image storage directory
+AVATAR_IMAGE_STORAGE_DIR = Path("/app/static/images/avatars")
+
+
+@router.post("/api/upload-avatar")
+async def upload_avatar_image(
+    file: UploadFile = File(...),
+    agent_id: str = Form(...),
+    client_id: str = Form(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Upload an avatar image for video chat."""
+
+    ensure_client_or_global_access(client_id, admin_user)
+
+    if not file:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    content_type = (file.content_type or "").lower()
+    suffix = ""
+
+    if file.filename:
+        original_suffix = Path(file.filename).suffix.lower()
+        if original_suffix in ALLOWED_AGENT_IMAGE_EXTENSIONS:
+            suffix = original_suffix
+
+    if not suffix and content_type in ALLOWED_AGENT_IMAGE_TYPES:
+        suffix = ALLOWED_AGENT_IMAGE_TYPES[content_type]
+
+    if not suffix:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported image type. Please upload PNG, JPG, or WebP files.",
+        )
+
+    try:
+        contents = await file.read()
+    except Exception as exc:
+        logger.error("Failed to read uploaded avatar image: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to read uploaded file") from exc
+
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    if len(contents) > AGENT_IMAGE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds 5 MB limit")
+
+    AVATAR_IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Use agent_id for unique filename
+    safe_agent_id = re.sub(r"[^a-z0-9_-]", "", agent_id.lower()) or "avatar"
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    unique = uuid.uuid4().hex[:8]
+    filename = f"avatar_{safe_agent_id}_{timestamp}_{unique}{suffix}"
+    destination = AVATAR_IMAGE_STORAGE_DIR / filename
+
+    try:
+        with destination.open("wb") as buffer:
+            buffer.write(contents)
+    except Exception as exc:
+        logger.error("Failed to persist avatar image '%s': %s", filename, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to save uploaded image") from exc
+
+    public_url = f"/static/images/avatars/{filename}"
+    logger.info(
+        "Avatar image uploaded",
+        extra={
+            "client_id": client_id,
+            "agent_id": agent_id,
+            "stored_filename": filename,
+            "size_bytes": len(contents),
+        },
+    )
+
+    return {
+        "success": True,
+        "url": public_url,
+        "filename": filename,
+        "content_type": content_type or mimetypes.guess_type(filename)[0],
+        "size": len(contents),
+    }
+
 
 @router.post("/agents/{client_id}/{agent_slug}/update")
 async def admin_update_agent(
@@ -4674,12 +4944,19 @@ async def admin_update_agent(
             tools_config=data.get("tools_config", agent.tools_config),
             show_citations=data.get("show_citations", getattr(agent, 'show_citations', True)),
             rag_results_limit=data.get("rag_results_limit", getattr(agent, "rag_results_limit", 5)),
+            supertab_enabled=data.get("supertab_enabled", getattr(agent, 'supertab_enabled', False)),
+            supertab_experience_id=data.get("supertab_experience_id", getattr(agent, 'supertab_experience_id', None)),
+            voice_chat_enabled=data.get("voice_chat_enabled", getattr(agent, 'voice_chat_enabled', True)),
+            text_chat_enabled=data.get("text_chat_enabled", getattr(agent, 'text_chat_enabled', True)),
+            video_chat_enabled=data.get("video_chat_enabled", getattr(agent, 'video_chat_enabled', False)),
         )
         
         # Handle voice settings if provided
         if "voice_settings" in data:
+            logger.info(f"AVATAR DEBUG - voice_settings from form: avatar_image_url={data['voice_settings'].get('avatar_image_url')}, avatar_model_type={data['voice_settings'].get('avatar_model_type')}")
             update_data.voice_settings = VoiceSettings(**data["voice_settings"])
-        
+            logger.info(f"AVATAR DEBUG - VoiceSettings object: avatar_image_url={update_data.voice_settings.avatar_image_url}, avatar_model_type={update_data.voice_settings.avatar_model_type}")
+
         # Handle webhooks if provided
         if "webhooks" in data:
             update_data.webhooks = WebhookSettings(**data["webhooks"])
@@ -4753,8 +5030,9 @@ async def user_settings(
     request: Request,
     admin_user: Dict[str, Any] = Depends(get_admin_user),
 ):
-    """User settings page (profile + security + channel handles)."""
+    """User settings page (profile + security + channel handles + billing)."""
     profile = None
+    billing_info = None
     try:
         user_id = admin_user.get("id") or admin_user.get("user_id")
         user_email = (admin_user.get("email") or admin_user.get("username") or "").strip().lower()
@@ -4775,6 +5053,38 @@ async def user_settings(
         # Fallback to cache if still missing
         if (not profile) and user_email and user_email in _profile_cache:
             profile = _profile_cache[user_email]
+
+        # Get billing info from client record
+        if user_id:
+            try:
+                client_result = supabase.table("clients").select(
+                    "id, name, tier, stripe_customer_id, stripe_subscription_id, "
+                    "subscription_status, subscription_current_period_end, "
+                    "subscription_cancel_at_period_end"
+                ).eq("owner_user_id", user_id).limit(1).execute()
+                if client_result.data:
+                    client = client_result.data[0]
+                    billing_info = {
+                        "client_id": client.get("id"),
+                        "client_name": client.get("name"),
+                        "tier": client.get("tier"),
+                        "tier_name": {
+                            "adventurer": "Adventurer",
+                            "champion": "Champion",
+                            "paragon": "Paragon"
+                        }.get(client.get("tier"), client.get("tier", "").title()),
+                        "tier_price": {
+                            "adventurer": 49,
+                            "champion": 199,
+                            "paragon": 0
+                        }.get(client.get("tier"), 0),
+                        "stripe_customer_id": client.get("stripe_customer_id"),
+                        "subscription_status": client.get("subscription_status") or "none",
+                        "subscription_end": client.get("subscription_current_period_end"),
+                        "cancel_at_period_end": client.get("subscription_cancel_at_period_end", False),
+                    }
+            except Exception as be:
+                logger.warning(f"Failed to load billing info: {be}")
     except Exception as e:
         logger.warning(f"Failed to load user profile for settings: {e}")
 
@@ -4784,6 +5094,7 @@ async def user_settings(
             "request": request,
             "user": admin_user,
             "profile": profile or {},
+            "billing": billing_info,
             "telegram_bot_username": os.getenv("TELEGRAM_BOT_USERNAME", ""),
         },
     )
@@ -4920,6 +5231,133 @@ async def start_telegram_verification(
             "success": f"Verification code generated: {code}. Open Telegram and tap the deep link to verify.",
         },
     )
+
+
+@router.post("/user-settings/billing/portal")
+async def billing_portal_redirect(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Create a Stripe Customer Portal session and redirect to it."""
+    from app.services.stripe_service import stripe_service
+    from fastapi.responses import RedirectResponse
+
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+
+    # Get stripe_customer_id from client record
+    try:
+        client_result = supabase.table("clients").select(
+            "stripe_customer_id"
+        ).eq("owner_user_id", user_id).limit(1).execute()
+
+        if not client_result.data or not client_result.data[0].get("stripe_customer_id"):
+            # No Stripe customer - redirect back with error
+            return RedirectResponse(
+                url="/admin/user-settings?billing_error=no_subscription",
+                status_code=303
+            )
+
+        customer_id = client_result.data[0]["stripe_customer_id"]
+
+        # Create portal session
+        domain = os.getenv("DOMAIN_NAME", "https://sidekickforge.com")
+        if not domain.startswith("http"):
+            domain = f"https://{domain}"
+
+        portal_url = await stripe_service.create_customer_portal_session(
+            customer_id=customer_id,
+            return_url=f"{domain}/admin/user-settings"
+        )
+
+        return RedirectResponse(url=portal_url, status_code=303)
+
+    except Exception as e:
+        logger.error(f"Failed to create billing portal session: {e}")
+        return RedirectResponse(
+            url="/admin/user-settings?billing_error=portal_failed",
+            status_code=303
+        )
+
+
+@router.post("/user-settings/change-password")
+async def change_password(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Change the user's password."""
+    from fastapi.responses import RedirectResponse
+
+    form = await request.form()
+    current_password = form.get("current_password", "").strip()
+    new_password = form.get("new_password", "").strip()
+    confirm_password = form.get("confirm_password", "").strip()
+
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+    user_email = admin_user.get("email") or admin_user.get("username")
+
+    # Validation
+    if not current_password:
+        return RedirectResponse(
+            url="/admin/user-settings?password_error=current_required",
+            status_code=303
+        )
+
+    if not new_password:
+        return RedirectResponse(
+            url="/admin/user-settings?password_error=new_required",
+            status_code=303
+        )
+
+    if len(new_password) < 8:
+        return RedirectResponse(
+            url="/admin/user-settings?password_error=too_short",
+            status_code=303
+        )
+
+    if new_password != confirm_password:
+        return RedirectResponse(
+            url="/admin/user-settings?password_error=mismatch",
+            status_code=303
+        )
+
+    try:
+        # Verify current password by attempting to sign in
+        try:
+            verify_response = supabase.auth.sign_in_with_password({
+                "email": user_email,
+                "password": current_password
+            })
+            if not verify_response.user:
+                return RedirectResponse(
+                    url="/admin/user-settings?password_error=wrong_current",
+                    status_code=303
+                )
+        except Exception as auth_err:
+            logger.warning(f"Password verification failed for {user_email}: {auth_err}")
+            return RedirectResponse(
+                url="/admin/user-settings?password_error=wrong_current",
+                status_code=303
+            )
+
+        # Update password using admin API
+        supabase.auth.admin.update_user_by_id(
+            user_id,
+            {"password": new_password}
+        )
+
+        logger.info(f"Password changed successfully for user {user_email}")
+        return RedirectResponse(
+            url="/admin/user-settings?password_success=true",
+            status_code=303
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to change password for {user_email}: {e}")
+        return RedirectResponse(
+            url="/admin/user-settings?password_error=failed",
+            status_code=303
+        )
+
 
 @router.get("/clients/{client_id}/edit", response_class=HTMLResponse)
 async def edit_client_modal(client_id: str, request: Request, admin_user: Dict[str, Any] = Depends(get_admin_user)):
@@ -5074,7 +5512,9 @@ async def admin_update_client(
                 novita_api_key=form.get("novita_api_key") or (current_api_keys.novita_api_key if hasattr(current_api_keys, 'novita_api_key') else current_api_keys.get('novita_api_key') if isinstance(current_api_keys, dict) else None),
                 cohere_api_key=form.get("cohere_api_key") or (current_api_keys.cohere_api_key if hasattr(current_api_keys, 'cohere_api_key') else current_api_keys.get('cohere_api_key') if isinstance(current_api_keys, dict) else None),
                 siliconflow_api_key=form.get("siliconflow_api_key") or (current_api_keys.siliconflow_api_key if hasattr(current_api_keys, 'siliconflow_api_key') else current_api_keys.get('siliconflow_api_key') if isinstance(current_api_keys, dict) else None),
-                jina_api_key=form.get("jina_api_key") or (current_api_keys.jina_api_key if hasattr(current_api_keys, 'jina_api_key') else current_api_keys.get('jina_api_key') if isinstance(current_api_keys, dict) else None)
+                jina_api_key=form.get("jina_api_key") or (current_api_keys.jina_api_key if hasattr(current_api_keys, 'jina_api_key') else current_api_keys.get('jina_api_key') if isinstance(current_api_keys, dict) else None),
+                bithuman_api_secret=form.get("bithuman_api_secret") or (current_api_keys.bithuman_api_secret if hasattr(current_api_keys, 'bithuman_api_secret') else current_api_keys.get('bithuman_api_secret') if isinstance(current_api_keys, dict) else None),
+                bey_api_key=form.get("bey_api_key") or (current_api_keys.bey_api_key if hasattr(current_api_keys, 'bey_api_key') else current_api_keys.get('bey_api_key') if isinstance(current_api_keys, dict) else None)
             ),
             embedding=EmbeddingSettings(
                 provider=form.get("embedding_provider", current_embedding.provider if hasattr(current_embedding, 'provider') else current_embedding.get('provider', 'openai') if current_embedding else 'openai'),
@@ -5107,19 +5547,41 @@ async def admin_update_client(
         # Handle checkbox: if multiple values (hidden + checked), take the last one
         active_values = form.getlist("active") if hasattr(form, 'getlist') else ([form.get("active")] if form.get("active") else [])
         active_value = active_values[-1] if active_values else "true"
-        
+
+        # Handle UserSense enabled checkbox
+        usersense_enabled_values = form.getlist("usersense_enabled") if hasattr(form, 'getlist') else ([form.get("usersense_enabled")] if form.get("usersense_enabled") else [])
+        usersense_enabled_value = usersense_enabled_values[-1] if usersense_enabled_values else None
+        usersense_enabled = usersense_enabled_value == "on" if usersense_enabled_value else False
+
+        # Check if UserSense was previously disabled (to trigger initial learning if newly enabled)
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+        current_usersense_result = platform_sb.table("clients").select("usersense_enabled").eq("id", client_id).execute()
+        was_usersense_enabled = current_usersense_result.data[0].get("usersense_enabled", False) if current_usersense_result.data else False
+
+        # Handle Supertab Client ID (empty string becomes None)
+        supertab_client_id = form.get("supertab_client_id", "").strip() or None
+
+        # Handle Firecrawl API key (empty string becomes None)
+        firecrawl_api_key = form.get("firecrawl_api_key", "").strip() or None
+
         update_data = ClientUpdate(
             name=form.get("name", client.name if hasattr(client, 'name') else client.get('name', '')),
             domain=form.get("domain", client.domain if hasattr(client, 'domain') else client.get('domain', '')),
             description=form.get("description", client.description if hasattr(client, 'description') else client.get('description', '')),
             settings=settings_update,
-            active=str(active_value).lower() == "true"
+            active=str(active_value).lower() == "true",
+            usersense_enabled=usersense_enabled,
+            supertab_client_id=supertab_client_id,
+            firecrawl_api_key=firecrawl_api_key
         )
         
         # Debug: Log the API keys and embedding settings being updated
         logger.info(f"About to update client with API keys: cartesia={update_data.settings.api_keys.cartesia_api_key}, siliconflow={update_data.settings.api_keys.siliconflow_api_key}")
         logger.info(f"Embedding settings: provider={update_data.settings.embedding.provider}, dimension={update_data.settings.embedding.dimension}, form_value='{form.get('embedding_dimension')}'")
-        
+        logger.info(f"BITHUMAN DEBUG - form value: '{form.get('bithuman_api_secret')}', in update_data: '{update_data.settings.api_keys.bithuman_api_secret}'")
+
         # Update client
         updated_client = await client_service.update_client(client_id, update_data)
         
@@ -5143,10 +5605,30 @@ async def admin_update_client(
                 logger.info("✅ LiveKit credentials synced to backend")
             else:
                 logger.warning("⚠️ Failed to sync LiveKit credentials to backend")
-        
+
+        # If UserSense was just enabled (wasn't enabled before), trigger initial learning
+        if usersense_enabled and not was_usersense_enabled:
+            logger.info(f"🧠 UserSense enabled for client {client_id} - triggering initial learning")
+            try:
+                # Queue initial learning job for all users of this client
+                result = platform_sb.rpc('queue_client_initial_learning', {
+                    'p_client_id': client_id
+                }).execute()
+                if result.data:
+                    job_id = result.data
+                    logger.info(f"✅ Initial learning job queued: {job_id}")
+                else:
+                    logger.warning("⚠️ Failed to queue initial learning job (no job_id returned)")
+            except Exception as learn_error:
+                logger.error(f"⚠️ Failed to queue initial learning: {learn_error}")
+                # Don't fail the whole update, just log the error
+
         # Redirect back to client detail with success
+        success_message = "Client+updated+successfully"
+        if usersense_enabled and not was_usersense_enabled:
+            success_message = "Client+updated+successfully.+UserSense+initial+learning+started."
         return RedirectResponse(
-            url=f"/admin/clients/{client_id}?message=Client+updated+successfully",
+            url=f"/admin/clients/{client_id}?message={success_message}",
             status_code=303
         )
         
@@ -5156,6 +5638,163 @@ async def admin_update_client(
             url=f"/admin/clients/{client_id}?error=Failed+to+update+client:+{str(e)}",
             status_code=303
         )
+
+
+# UserSense Learning Status Endpoints
+@router.get("/clients/{client_id}/usersense-learning-status")
+async def get_usersense_learning_status(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get UserSense learning status for a client"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        result = platform_sb.rpc('get_client_learning_status', {
+            'p_client_id': client_id
+        }).execute()
+
+        if result.data:
+            return {
+                "success": True,
+                "status": result.data
+            }
+        return {
+            "success": True,
+            "status": {
+                "pending": 0,
+                "in_progress": [],
+                "completed": 0,
+                "failed": 0,
+                "has_active_jobs": False
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to get learning status for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "status": None
+        }
+
+
+@router.delete("/clients/{client_id}/user-overviews")
+async def delete_client_user_overviews(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Delete all user overviews for a client when UserSense is disabled"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.utils.supabase_credentials import SupabaseCredentialManager
+
+        # Get client's Supabase credentials
+        client_url, _, client_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_url, client_key)
+
+        # Delete all user overviews for this client
+        result = client_sb.table("user_overviews").delete().eq("client_id", client_id).execute()
+
+        deleted_count = len(result.data) if result.data else 0
+        logger.info(f"Deleted {deleted_count} user overviews for client {client_id}")
+
+        # Also delete any pending learning jobs from the platform database
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        platform_sb.table("usersense_learning_jobs").delete().eq("client_id", client_id).execute()
+
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": f"Deleted {deleted_count} user overview(s)"
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to delete user overviews for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@router.get("/clients/{client_id}/user-overviews/preview")
+async def admin_preview_user_overviews(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Admin preview of user overviews for a client - returns JSON for modal display"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.utils.supabase_credentials import SupabaseCredentialManager
+
+        # Get admin's user_id for highlighting their own profile
+        admin_user_id = admin_user.get("user_id")
+
+        # Get client info
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        client_result = platform_sb.table("clients").select("name").eq("id", client_id).execute()
+        client_name = client_result.data[0]["name"] if client_result.data else "Unknown Client"
+
+        # Get client's Supabase credentials
+        client_url, _, client_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_url, client_key)
+
+        # Fetch all user overviews for this client (for admin preview)
+        result = client_sb.table("user_overviews").select(
+            "user_id", "overview", "sidekick_insights", "learning_status", "updated_at"
+        ).eq("client_id", client_id).order("updated_at", desc=True).limit(50).execute()
+
+        user_overviews = result.data if result.data else []
+
+        # Resolve admin's client user ID from the mapping table
+        # Admin users have different IDs in platform vs client databases
+        admin_client_user_id = admin_user_id  # Default to platform ID
+        if admin_user_id:
+            try:
+                mapping_result = platform_sb.table("platform_client_user_mappings").select(
+                    "client_user_id"
+                ).eq("platform_user_id", admin_user_id).eq("client_id", client_id).maybe_single().execute()
+
+                if mapping_result.data and mapping_result.data.get("client_user_id"):
+                    admin_client_user_id = mapping_result.data["client_user_id"]
+                    logger.debug(f"Resolved admin user mapping: {admin_user_id[:8]}... -> {admin_client_user_id[:8]}...")
+            except Exception as mapping_err:
+                logger.debug(f"Could not look up admin user mapping: {mapping_err}")
+
+        # Sort to put admin's own profile first (if it exists)
+        # Use the mapped client user ID to match against user_overviews
+        if admin_client_user_id:
+            admin_overviews = [uo for uo in user_overviews if uo.get("user_id") == admin_client_user_id]
+            other_overviews = [uo for uo in user_overviews if uo.get("user_id") != admin_client_user_id]
+            user_overviews = admin_overviews + other_overviews
+
+        return {
+            "success": True,
+            "client_name": client_name,
+            "user_overviews": user_overviews,
+            "total_count": len(user_overviews),
+            "admin_user_id": admin_client_user_id  # Return the mapped client user ID for highlighting
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to preview user overviews for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 # WordPress Sites Management Endpoints
@@ -5562,6 +6201,224 @@ async def upload_knowledge_base_document(
         return {"success": False, "message": f"Upload failed: {str(e)}"}
 
 
+@router.post("/knowledge-base/upload-url")
+async def upload_knowledge_base_url(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """
+    Scrape a website URL and add it to the knowledge base.
+
+    Supports both single URL scraping and multi-page crawling via Firecrawl API.
+    """
+    try:
+        # Parse JSON body
+        body = await request.json()
+        url = body.get("url", "").strip()
+        title = body.get("title", "").strip()
+        description = body.get("description", "")
+        client_id = body.get("client_id")
+        agent_ids = body.get("agent_ids", "")
+        crawl = body.get("crawl", False)  # Whether to crawl multiple pages
+        crawl_limit = body.get("crawl_limit", 20)  # Max pages to crawl
+        exclude_paths = body.get("exclude_paths", "")  # Paths to exclude
+        include_paths = body.get("include_paths", "")  # Paths to include
+
+        if not url:
+            return {"success": False, "message": "URL is required"}
+
+        if not client_id:
+            return {"success": False, "message": "Client ID is required"}
+
+        ensure_client_access(client_id, admin_user)
+
+        # Validate and get Firecrawl API key for this client
+        from app.services.firecrawl_scraper import FirecrawlScraper, FirecrawlError, get_firecrawl_scraper
+
+        scraper = await get_firecrawl_scraper(client_id)
+        if not scraper:
+            return {
+                "success": False,
+                "message": "Firecrawl API key not configured for this client. Please add it in client settings."
+            }
+
+        # Validate embedding provider is configured
+        from app.core.dependencies import get_client_service
+        client_service = get_client_service()
+        client = await client_service.get_client(client_id)
+        if client:
+            embedding_settings = None
+            api_keys = None
+
+            # Handle both object and dict formats
+            if hasattr(client, 'settings') and client.settings:
+                settings = client.settings
+                if hasattr(settings, 'embedding'):
+                    embedding_settings = settings.embedding
+                elif isinstance(settings, dict):
+                    embedding_settings = settings.get('embedding', {})
+                if hasattr(settings, 'api_keys'):
+                    api_keys = settings.api_keys
+                elif isinstance(settings, dict):
+                    api_keys = settings.get('api_keys', {})
+
+            # Determine the embedding provider
+            provider = None
+            if embedding_settings:
+                if hasattr(embedding_settings, 'provider'):
+                    provider = embedding_settings.provider
+                elif isinstance(embedding_settings, dict):
+                    provider = embedding_settings.get('provider')
+
+            provider = provider or 'openai'  # Default to openai
+
+            # Check if the corresponding API key is set
+            provider_key_map = {
+                'openai': 'openai_api_key',
+                'novita': 'novita_api_key',
+                'deepinfra': 'deepinfra_api_key',
+                'siliconflow': 'siliconflow_api_key',
+            }
+
+            required_key = provider_key_map.get(provider)
+            if required_key and api_keys:
+                key_value = None
+                if hasattr(api_keys, required_key):
+                    key_value = getattr(api_keys, required_key)
+                elif isinstance(api_keys, dict):
+                    key_value = api_keys.get(required_key)
+
+                if not key_value:
+                    return {
+                        "success": False,
+                        "message": f"Embedding provider '{provider}' is configured but its API key ({required_key}) is not set. Please add the API key in client settings before scraping."
+                    }
+
+        # Validate URL
+        try:
+            validated_url = FirecrawlScraper.validate_url(url)
+        except ValueError as e:
+            return {"success": False, "message": str(e)}
+
+        # Determine agent access
+        agent_id_list = None
+        if agent_ids and agent_ids != "all":
+            if isinstance(agent_ids, str):
+                agent_id_list = [id.strip() for id in agent_ids.split(',') if id.strip()]
+            elif isinstance(agent_ids, list):
+                agent_id_list = agent_ids
+
+        try:
+            # Scrape the URL(s)
+            # Parse path filters (comma-separated strings to lists)
+            include_paths_list = None
+            exclude_paths_list = None
+            if include_paths:
+                include_paths_list = [p.strip() for p in include_paths.split(',') if p.strip()]
+            if exclude_paths:
+                exclude_paths_list = [p.strip() for p in exclude_paths.split(',') if p.strip()]
+
+            logger.info(f"Starting web scrape for URL: {validated_url} (crawl={crawl}, limit={crawl_limit}, exclude={exclude_paths_list}, include={include_paths_list})")
+
+            pages = await scraper.scrape_and_extract(
+                url=validated_url,
+                crawl=crawl,
+                crawl_limit=min(crawl_limit, 100),  # Cap at 100 pages
+                include_paths=include_paths_list,
+                exclude_paths=exclude_paths_list,
+            )
+
+            if not pages:
+                return {"success": False, "message": "No content could be extracted from the URL"}
+
+            # Process each scraped page
+            from app.services.document_processor import document_processor
+
+            results = []
+            is_multi_page = len(pages) > 1
+
+            for page in pages:
+                page_url = page.get("url", validated_url)
+
+                # For multi-page crawls, use URL path as title for uniqueness
+                # For single page, user-provided title takes precedence
+                if is_multi_page:
+                    # Extract meaningful title from URL path
+                    from urllib.parse import urlparse, unquote
+                    parsed = urlparse(page_url)
+                    path = unquote(parsed.path.strip('/'))
+                    if path:
+                        # Convert path to readable title: /blog/my-post -> blog/my-post
+                        page_title = path
+                    else:
+                        # Root URL - use domain
+                        page_title = parsed.netloc
+                else:
+                    # Single page: user title > page title > URL
+                    page_title = title or page.get("title") or page_url
+                page_content = page.get("content", "")
+                page_metadata = page.get("metadata", {})
+
+                if not page_content.strip():
+                    logger.warning(f"Skipping empty page: {page_url}")
+                    continue
+
+                result = await document_processor.process_web_content(
+                    content=page_content,
+                    title=page_title,
+                    source_url=page_url,
+                    description=description,
+                    user_id=admin_user.get("user_id"),
+                    agent_ids=agent_id_list,
+                    client_id=client_id,
+                    metadata=page_metadata,
+                )
+
+                results.append({
+                    "url": page_url,
+                    "title": page_title,
+                    "success": result.get("success", False),
+                    "document_id": result.get("document_id"),
+                    "status": result.get("status"),
+                    "message": result.get("message") or result.get("error"),
+                    "duplicate": result.get("duplicate", False),
+                })
+
+            # Close the scraper
+            await scraper.close()
+
+            # Summary
+            successful = sum(1 for r in results if r["success"])
+            failed = len(results) - successful
+
+            if successful == 0 and failed > 0:
+                return {
+                    "success": False,
+                    "message": "Failed to process any pages",
+                    "results": results
+                }
+
+            return {
+                "success": True,
+                "message": f"Successfully queued {successful} page(s) for processing" + (f" ({failed} failed)" if failed else ""),
+                "total_pages": len(results),
+                "successful": successful,
+                "failed": failed,
+                "results": results
+            }
+
+        except FirecrawlError as e:
+            logger.error(f"Firecrawl error scraping {url}: {e}")
+            await scraper.close()
+            return {"success": False, "message": f"Scraping failed: {str(e)}"}
+
+    except Exception as e:
+        logger.error(f"URL upload failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"success": False, "message": f"Failed to scrape URL: {str(e)}"}
+
+
 @router.delete("/knowledge-base/documents/{document_id}")
 async def delete_knowledge_base_document(
     document_id: str,
@@ -5647,6 +6504,72 @@ async def reprocess_knowledge_base_document(
         return {"success": False, "message": str(e)}
 
 
+@router.post("/knowledge-base/reprocess-missing-embeddings")
+async def reprocess_missing_embeddings(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Reprocess all documents that are missing embeddings for a client"""
+    try:
+        data = await request.json()
+        client_id = data.get("client_id")
+
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id is required")
+
+        scoped_ids = get_scoped_client_ids(admin_user)
+        if scoped_ids is not None:
+            ensure_client_access(client_id, admin_user)
+
+        from app.services.document_processor import document_processor
+        import asyncio
+
+        # Get client context
+        supabase_client, _ = await document_processor._get_client_context(client_id)
+
+        # Find all documents missing embeddings (status=ready but embeddings is null)
+        result = supabase_client.table("documents").select("id, title, status").eq("status", "ready").is_("embeddings", "null").execute()
+
+        documents_to_process = result.data if result.data else []
+
+        if not documents_to_process:
+            return {"success": True, "message": "No documents need reprocessing", "count": 0}
+
+        # Queue reprocessing for each document
+        async def reprocess_batch():
+            processed = 0
+            for doc in documents_to_process:
+                try:
+                    # Check if document has content in raw_content or file_path
+                    doc_detail = supabase_client.table("documents").select("raw_content, file_path, metadata").eq("id", doc["id"]).single().execute()
+                    if doc_detail.data:
+                        raw_content = doc_detail.data.get("raw_content")
+                        if raw_content:
+                            await document_processor.reprocess_document(doc["id"], raw_content, client_id=client_id, supabase=supabase_client)
+                            processed += 1
+                        else:
+                            # Try from chunks
+                            await document_processor.reprocess_from_chunks(doc["id"], client_id=client_id, supabase=supabase_client)
+                            processed += 1
+                except Exception as e:
+                    logger.error(f"Failed to reprocess document {doc['id']}: {e}")
+            logger.info(f"Bulk reprocess completed: {processed}/{len(documents_to_process)} documents")
+
+        # Start reprocessing in background
+        asyncio.create_task(reprocess_batch())
+
+        return {
+            "success": True,
+            "message": f"Started reprocessing {len(documents_to_process)} documents missing embeddings",
+            "count": len(documents_to_process)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start bulk reprocess: {e}")
+        return {"success": False, "message": str(e)}
+
+
 @router.put("/knowledge-base/documents/{document_id}/access")
 async def update_document_access(
     document_id: str,
@@ -5662,10 +6585,134 @@ async def update_document_access(
         data = await request.json()
         agent_access = data.get("agent_access", "specific")
         agent_ids = data.get("agent_ids", [])
-        
+
         # For now, return success
         # TODO: Implement actual access update in Supabase
         return {"success": True, "message": "Document access updated successfully"}
     except Exception as e:
         logger.error(f"Failed to update document access: {e}")
+        return {"success": False, "message": str(e)}
+
+
+# =========================================================================
+# Usage Tracking API Endpoints
+# =========================================================================
+
+@router.get("/api/usage/{client_id}/{agent_id}")
+async def get_agent_usage(
+    client_id: str,
+    agent_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get usage statistics for a specific agent/sidekick"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.services.usage_tracking import usage_tracking_service
+
+        await usage_tracking_service.initialize()
+        quotas = await usage_tracking_service.get_all_agent_quotas(client_id, agent_id)
+
+        return {
+            "success": True,
+            "agent_id": agent_id,
+            "client_id": client_id,
+            "voice": {
+                "used_seconds": quotas["voice"].used,
+                "limit_seconds": quotas["voice"].limit,
+                "used_minutes": round(quotas["voice"].used / 60, 1),
+                "limit_minutes": round(quotas["voice"].limit / 60, 1) if quotas["voice"].limit > 0 else 0,
+                "percent_used": quotas["voice"].percent_used,
+                "is_exceeded": quotas["voice"].is_exceeded,
+                "is_warning": quotas["voice"].is_warning,
+            },
+            "text": {
+                "used": quotas["text"].used,
+                "limit": quotas["text"].limit,
+                "percent_used": quotas["text"].percent_used,
+                "is_exceeded": quotas["text"].is_exceeded,
+                "is_warning": quotas["text"].is_warning,
+            },
+            "embedding": {
+                "used": quotas["embedding"].used,
+                "limit": quotas["embedding"].limit,
+                "percent_used": quotas["embedding"].percent_used,
+                "is_exceeded": quotas["embedding"].is_exceeded,
+                "is_warning": quotas["embedding"].is_warning,
+            },
+        }
+    except Exception as e:
+        logger.error(f"Failed to get agent usage: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.get("/api/usage/{client_id}")
+async def get_client_usage(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get usage statistics for all agents belonging to a client"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.services.usage_tracking import usage_tracking_service
+        from app.services.client_connection_manager import get_connection_manager
+
+        await usage_tracking_service.initialize()
+
+        # Get client's Supabase to fetch agent names
+        client_supabase = None
+        try:
+            conn_manager = get_connection_manager()
+            client_config = await conn_manager.get_client_config(client_id)
+            if client_config and client_config.get("supabase_url") and client_config.get("supabase_service_role_key"):
+                from supabase import create_client
+                client_supabase = create_client(
+                    client_config["supabase_url"],
+                    client_config["supabase_service_role_key"]
+                )
+        except Exception as e:
+            logger.warning(f"Could not get client Supabase for usage display: {e}")
+
+        agent_usage_records = await usage_tracking_service.get_all_agents_usage(client_id, client_supabase)
+
+        # Convert to JSON-friendly format
+        agents = []
+        for record in agent_usage_records:
+            agents.append({
+                "agent_id": record.agent_id,
+                "agent_name": record.agent_name,
+                "agent_slug": record.agent_slug,
+                "voice": {
+                    "used_seconds": record.voice.used if record.voice else 0,
+                    "limit_seconds": record.voice.limit if record.voice else 0,
+                    "used_minutes": round(record.voice.used / 60, 1) if record.voice else 0,
+                    "limit_minutes": round(record.voice.limit / 60, 1) if record.voice and record.voice.limit > 0 else 0,
+                    "percent_used": record.voice.percent_used if record.voice else 0,
+                    "is_exceeded": record.voice.is_exceeded if record.voice else False,
+                    "is_warning": record.voice.is_warning if record.voice else False,
+                },
+                "text": {
+                    "used": record.text.used if record.text else 0,
+                    "limit": record.text.limit if record.text else 0,
+                    "percent_used": record.text.percent_used if record.text else 0,
+                    "is_exceeded": record.text.is_exceeded if record.text else False,
+                    "is_warning": record.text.is_warning if record.text else False,
+                },
+                "embedding": {
+                    "used": record.embedding.used if record.embedding else 0,
+                    "limit": record.embedding.limit if record.embedding else 0,
+                    "percent_used": record.embedding.percent_used if record.embedding else 0,
+                    "is_exceeded": record.embedding.is_exceeded if record.embedding else False,
+                    "is_warning": record.embedding.is_warning if record.embedding else False,
+                },
+            })
+
+        return {
+            "success": True,
+            "client_id": client_id,
+            "agents": agents,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get client usage: {e}")
         return {"success": False, "message": str(e)}

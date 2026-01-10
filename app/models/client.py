@@ -57,6 +57,10 @@ class APIKeys(BaseModel):
     siliconflow_api_key: Optional[str] = None
     jina_api_key: Optional[str] = None
 
+    # Avatar/Video Providers
+    bithuman_api_secret: Optional[str] = None
+    bey_api_key: Optional[str] = None
+
 
 class EmbeddingSettings(BaseModel):
     """Embedding configuration"""
@@ -115,7 +119,9 @@ class Client(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     additional_settings: Dict[str, Any] = Field(default_factory=dict, description="Additional client-specific settings")
     perplexity_api_key: Optional[str] = Field(None, description="Perplexity API key at the client level")
-    
+    supertab_client_id: Optional[str] = Field(None, description="Supertab client ID for voice chat paywall")
+    firecrawl_api_key: Optional[str] = Field(None, description="Firecrawl API key for web scraping in Knowledge Base")
+
     @field_serializer('created_at', 'updated_at')
     def serialize_datetimes(self, value: Optional[datetime], info) -> str:
         if isinstance(value, datetime):
@@ -148,6 +154,9 @@ class ClientUpdate(BaseModel):
     settings: Optional[ClientSettings] = None
     active: Optional[bool] = None
     perplexity_api_key: Optional[str] = None
+    usersense_enabled: Optional[bool] = None
+    supertab_client_id: Optional[str] = Field(None, description="Supertab client ID for voice chat paywall")
+    firecrawl_api_key: Optional[str] = Field(None, description="Firecrawl API key for web scraping")
 
 
 class ClientInDB(Client):

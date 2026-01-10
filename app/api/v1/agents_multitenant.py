@@ -124,10 +124,12 @@ async def update_agent(
 ) -> Agent:
     """
     Update an existing agent
-    
+
     This endpoint updates the configuration of an existing agent.
     """
     try:
+        if agent_update.voice_settings:
+            logger.info(f"AVATAR API DEBUG - Received voice_settings: avatar_image_url={agent_update.voice_settings.avatar_image_url}, avatar_model_type={agent_update.voice_settings.avatar_model_type}")
         updated_agent = await agent_service.update_agent(client_id, agent_slug, agent_update)
         if not updated_agent:
             raise HTTPException(

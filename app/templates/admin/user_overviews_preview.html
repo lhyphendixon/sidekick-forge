@@ -1,0 +1,163 @@
+{% extends "admin/base.html" %}
+
+{% block title %}User Overviews - {{ client_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <!-- Header -->
+    <div class="mb-6">
+        <div class="flex items-center gap-3 mb-2">
+            <a href="/admin/clients/{{ client_id }}" class="text-dark-text-secondary hover:text-dark-text">
+                <i class="bi bi-arrow-left"></i>
+            </a>
+            <h1 class="text-2xl font-bold text-dark-text">User Overviews</h1>
+        </div>
+        <p class="text-dark-text-secondary">{{ client_name }} - {{ total_count }} user overview(s) stored</p>
+    </div>
+
+    {% if user_overviews and user_overviews|length > 0 %}
+    <div class="space-y-4">
+        {% for overview in user_overviews %}
+        <div class="bg-dark-elevated border border-dark-border rounded-lg p-6">
+            <div class="flex items-start justify-between mb-4">
+                <div>
+                    <h3 class="text-lg font-medium text-dark-text">User {{ overview.user_id[:8] }}...</h3>
+                    <p class="text-xs text-dark-text-secondary mt-1">
+                        Last updated: {{ overview.updated_at[:19] if overview.updated_at else 'Unknown' }}
+                        {% if overview.learning_status %}
+                        <span class="ml-2 px-2 py-0.5 rounded text-xs
+                            {% if overview.learning_status == 'completed' %}bg-green-500/20 text-green-400
+                            {% elif overview.learning_status == 'in_progress' %}bg-purple-500/20 text-purple-400
+                            {% else %}bg-gray-500/20 text-gray-400{% endif %}">
+                            {{ overview.learning_status }}
+                        </span>
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+
+            {% if overview.overview %}
+            <div class="grid gap-4 md:grid-cols-2 mb-4">
+                {% if overview.overview.identity %}
+                <div class="bg-dark-surface rounded-lg p-4">
+                    <h4 class="text-sm font-medium text-indigo-400 mb-2">Identity</h4>
+                    <ul class="space-y-1 text-sm text-dark-text-secondary">
+                        {% for key, value in overview.overview.identity.items() %}
+                        {% if value %}
+                        <li><span class="text-dark-text-secondary/70">{{ key|replace('_', ' ')|title }}:</span> {{ value }}</li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if overview.overview.biography %}
+                <div class="bg-dark-surface rounded-lg p-4">
+                    <h4 class="text-sm font-medium text-cyan-400 mb-2">Biography</h4>
+                    <ul class="space-y-1 text-sm text-dark-text-secondary">
+                        {% for key, value in overview.overview.biography.items() %}
+                        {% if value %}
+                        <li><span class="text-dark-text-secondary/70">{{ key|replace('_', ' ')|title }}:</span>
+                            {% if value is iterable and value is not string %}{{ value|join(', ') }}{% else %}{{ value }}{% endif %}
+                        </li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if overview.overview.goals %}
+                <div class="bg-dark-surface rounded-lg p-4">
+                    <h4 class="text-sm font-medium text-green-400 mb-2">Goals</h4>
+                    <ul class="space-y-1 text-sm text-dark-text-secondary">
+                        {% for key, value in overview.overview.goals.items() %}
+                        {% if value %}
+                        <li><span class="text-dark-text-secondary/70">{{ key|replace('_', ' ')|title }}:</span>
+                            {% if value is iterable and value is not string %}{{ value|join(', ') }}{% else %}{{ value }}{% endif %}
+                        </li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if overview.overview.working_style %}
+                <div class="bg-dark-surface rounded-lg p-4">
+                    <h4 class="text-sm font-medium text-yellow-400 mb-2">Working Style</h4>
+                    <ul class="space-y-1 text-sm text-dark-text-secondary">
+                        {% for key, value in overview.overview.working_style.items() %}
+                        {% if value %}
+                        <li><span class="text-dark-text-secondary/70">{{ key|replace('_', ' ')|title }}:</span> {{ value }}</li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if overview.overview.important_context and overview.overview.important_context|length > 0 %}
+                <div class="bg-dark-surface rounded-lg p-4">
+                    <h4 class="text-sm font-medium text-orange-400 mb-2">Important Context</h4>
+                    <ul class="space-y-1 text-sm text-dark-text-secondary">
+                        {% for item in overview.overview.important_context %}
+                        {% if item %}
+                        <li class="flex items-start gap-2">
+                            <span class="text-orange-400 mt-0.5">•</span>
+                            <span>{{ item }}</span>
+                        </li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
+            {% else %}
+            <p class="text-dark-text-secondary text-sm">No shared overview data yet.</p>
+            {% endif %}
+
+            {% if overview.sidekick_insights and overview.sidekick_insights|length > 0 %}
+            <div class="border-t border-dark-border pt-4 mt-4">
+                <h4 class="text-sm font-medium text-purple-400 mb-3">Sidekick-Specific Insights</h4>
+                <div class="grid gap-3 md:grid-cols-2">
+                    {% for agent_id, insight_data in overview.sidekick_insights.items() %}
+                    <div class="bg-dark-surface rounded-lg p-3">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-xs font-bold">
+                                {{ insight_data.agent_name[0] if insight_data.agent_name else '?' }}
+                            </div>
+                            <span class="text-sm font-medium text-dark-text">{{ insight_data.agent_name or 'Unknown' }}</span>
+                        </div>
+                        {% if insight_data.insights %}
+                        <div class="text-xs text-dark-text-secondary space-y-1">
+                            {% if insight_data.insights.relationship_context %}
+                            <p><span class="text-purple-400">Role:</span> {{ insight_data.insights.relationship_context }}</p>
+                            {% endif %}
+                            {% if insight_data.insights.interaction_patterns %}
+                            <p><span class="text-purple-400">Patterns:</span> {{ insight_data.insights.interaction_patterns }}</p>
+                            {% endif %}
+                            {% if insight_data.insights.topics_discussed %}
+                            <p><span class="text-purple-400">Topics:</span> {{ insight_data.insights.topics_discussed|join(', ') }}</p>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-dark-elevated border border-dark-border rounded-lg p-12 text-center">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-dark-surface flex items-center justify-center">
+            <i class="bi bi-people text-2xl text-dark-text-secondary"></i>
+        </div>
+        <h3 class="text-lg font-medium text-dark-text mb-2">No User Overviews Yet</h3>
+        <p class="text-dark-text-secondary text-sm max-w-md mx-auto">
+            User overviews are built as users have conversations with sidekicks that have UserSense enabled.
+            Once users start chatting, their understanding will appear here.
+        </p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

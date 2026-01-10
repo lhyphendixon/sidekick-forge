@@ -42,10 +42,17 @@ async def ensure_client_user(request: EnsureClientUserRequest):
             )
         
         db = create_client(platform_url, platform_key)
-        
-        # Hardcode for emergency fix
-        platform_user_id = "351bb07b-03fc-4fb4-b09b-748ef8a72084"
-        user_email = "l-dixon@autonomite.net"
+
+        # Use platform_user_id and user_email from request
+        # These are passed from the admin routes which have proper authentication
+        platform_user_id = request.platform_user_id
+        user_email = request.user_email
+
+        if not platform_user_id or not user_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing platform_user_id or user_email in request"
+            )
         
         # Get client configuration
         logger.info(f"Fetching client {request.client_id}")
@@ -79,16 +86,17 @@ async def ensure_client_user(request: EnsureClientUserRequest):
         
         client_user_id = None
         
+        # Check if we already have a cached mapping
         if mapping_result and mapping_result.data:
             client_user_id = mapping_result.data.get("client_user_id")
             logger.info(f"Found existing mapping for platform user -> client user {client_user_id[:8]}...")
         else:
             # Create shadow user in client's Supabase
             client_sb = create_client(client_supabase_url, client_service_role_key)
-            
+
             # Generate a shadow email
             shadow_email = f"admin+{platform_user_id[:8]}@preview.internal"
-            
+
             try:
                 # Create user using service role
                 create_response = client_sb.auth.admin.create_user({
@@ -157,19 +165,7 @@ async def ensure_client_user(request: EnsureClientUserRequest):
                 if not client_user_id:
                     client_user_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"preview:{request.client_id}:{platform_user_id}"))
                     logger.info(f"Generated deterministic preview user id: {client_user_id}")
-                    try:
-                        client_sb.table("profiles").upsert({
-                            "user_id": client_user_id,
-                            "email": user_email or shadow_email,
-                            "full_name": "Platform Admin (Preview)",
-                            "Tags": ["platform_admin", "preview_mode"],
-                            "goals": ["Admin preview session"],
-                            "created_at": datetime.utcnow().isoformat(),
-                            "updated_at": datetime.utcnow().isoformat()
-                        }, on_conflict="user_id").execute()
-                    except Exception as e_prof:
-                        logger.warning(f"Upsert profile for deterministic id failed (non-fatal): {e_prof}")
-            
+
             # Store the mapping (skip if table doesn't exist)
             try:
                 db.table("platform_client_user_mappings").upsert({
@@ -183,32 +179,32 @@ async def ensure_client_user(request: EnsureClientUserRequest):
             except Exception as e:
                 logger.warning(f"Could not store mapping (table may not exist): {e}")
                 # Non-critical, continue
-            
-            # Create profile for shadow user
-            try:
-                client_sb = create_client(client_supabase_url, client_service_role_key)
-                
-                # Check if profile already exists
-                existing_profile = client_sb.table("profiles").select("*").eq("user_id", client_user_id).maybe_single().execute()
-                
-                if not existing_profile.data:
-                    profile_data = {
-                        "user_id": client_user_id,
-                        "email": user_email,
-                        "full_name": "Platform Admin (Preview)",
-                        "Tags": ["platform_admin", "preview_mode"],
-                        "goals": ["Admin preview session"],
-                        "created_at": datetime.utcnow().isoformat(),
-                        "updated_at": datetime.utcnow().isoformat()
-                    }
-                    
-                    client_sb.table("profiles").insert(profile_data).execute()
-                    logger.info(f"Created profile for shadow user {client_user_id}")
-                else:
-                    logger.info(f"Profile already exists for shadow user {client_user_id}")
-            except Exception as e:
-                logger.error(f"Failed to create profile: {e}")
-                # Continue anyway - profile creation is important but not critical
+
+        # ALWAYS ensure profile exists for the user (moved outside the else block)
+        # This ensures profile is created even when mapping already exists
+        try:
+            client_sb = create_client(client_supabase_url, client_service_role_key)
+
+            # Check if profile already exists
+            existing_profile = client_sb.table("profiles").select("*").eq("user_id", client_user_id).maybe_single().execute()
+
+            if not existing_profile.data:
+                # Use minimal profile data that works with most schemas
+                profile_data = {
+                    "user_id": client_user_id,
+                    "email": user_email,
+                    "full_name": "Platform Admin (Preview)",
+                    "created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+
+                client_sb.table("profiles").insert(profile_data).execute()
+                logger.info(f"Created profile for shadow user {client_user_id}")
+            else:
+                logger.info(f"Profile already exists for shadow user {client_user_id}")
+        except Exception as e:
+            logger.error(f"Failed to create/verify profile: {e}")
+            # Continue anyway - profile creation is important but not critical
         
         # Generate short-lived JWT
         jwt_secret = client.get("jwt_secret") or client_service_role_key

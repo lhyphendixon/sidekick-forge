@@ -73,6 +73,10 @@ class ToolRegistry:
                     ft = self._build_code_tool(t)
                 elif ttype == "asana":
                     ft = self._build_asana_tool(t)
+                elif ttype == "user_overview":
+                    ft = self._build_user_overview_tool(t)
+                elif ttype == "content_catalyst":
+                    ft = self._build_content_catalyst_tool(t)
                 else:
                     self._logger.warning(f"Unsupported tool type '{ttype}' for slug={slug}; skipping")
                     continue
@@ -893,3 +897,272 @@ class ToolRegistry:
             setattr(_invoke_with_context, "__livekit_tool_info", getattr(original_tool, "__livekit_tool_info"))
 
         return _invoke_with_context
+
+    def _build_user_overview_tool(self, t: Dict[str, Any]) -> Any:
+        """
+        Build the update_user_overview tool for maintaining persistent user summaries.
+
+        This tool allows agents to update a shared User Overview - persistent notes
+        about each user that all sidekicks within a client can access.
+        """
+        slug = t.get("slug") or "update_user_overview"
+        description = t.get("description") or """Update the persistent User Overview - your shared notes about this user.
+All sidekicks for this client share this overview, so updates help maintain consistent context.
+
+Use this when the user shares ENDURING, IMPORTANT information about:
+- Who they are (identity, role, background, team)
+- What they're trying to achieve (goals, priorities, blockers)
+- How they work best (communication preferences, decision style, notes)
+- Critical context (sensitivities, relationships, constraints)
+
+Do NOT update for:
+- Transient tasks or routine questions
+- Information that's only relevant today
+- Things already captured in the overview
+- Speculation or assumptions - only facts the user has shared"""
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {
+                        "type": "string",
+                        "enum": ["identity", "goals", "working_style", "important_context", "relationship_history"],
+                        "description": "Which section of the overview to update: identity (role, background), goals (objectives, priorities), working_style (preferences, communication), important_context (sensitivities, constraints), relationship_history (milestones, wins)."
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["set", "append", "remove"],
+                        "description": "set=replace a value, append=add to list or notes, remove=delete specific item."
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "The field within the section to update. For identity: role, background, team. For goals: primary, secondary, blockers. For working_style: communication, decision_making, notes. For relationship_history: key_wins, ongoing_threads. For important_context: omit key to append to the list."
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "The new value to set, item to append, or content to remove. Be concise - the overview should be scannable."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief explanation of why this update matters (for audit trail)."
+                    }
+                },
+                "required": ["section", "action", "value", "reason"],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_update_overview(**kwargs: Any) -> str:
+            """Execute the user overview update via Supabase RPC."""
+            section = kwargs.get("section")
+            action = kwargs.get("action")
+            key = kwargs.get("key")  # Can be None for important_context
+            value = kwargs.get("value")
+            reason = kwargs.get("reason")
+
+            # Validate required fields - return soft error to prevent LLM retry loops
+            missing = []
+            if not section:
+                missing.append("section")
+            if not action:
+                missing.append("action")
+            if not value:
+                missing.append("value")
+            if not reason:
+                missing.append("reason")
+
+            if missing:
+                # Return error message instead of raising - prevents infinite retry loops
+                self._logger.warning(f"update_user_overview called with missing fields: {missing}")
+                return f"[Tool skipped - missing required fields: {', '.join(missing)}. Respond to the user instead.]"
+
+            if section not in ["identity", "goals", "working_style", "important_context", "relationship_history"]:
+                raise ToolError(f"Invalid section '{section}'. Must be one of: identity, goals, working_style, important_context, relationship_history.")
+
+            if action not in ["set", "append", "remove"]:
+                raise ToolError(f"Invalid action '{action}'. Must be one of: set, append, remove.")
+
+            # Get user_id and client_id from runtime context
+            runtime_ctx = self._runtime_context.get(slug) or {}
+            user_id = runtime_ctx.get("user_id")
+            client_id = runtime_ctx.get("client_id")
+            agent_id = runtime_ctx.get("agent_id")
+
+            if not user_id or not client_id:
+                raise ToolError("Cannot update user overview: missing user_id or client_id in context.")
+
+            try:
+                self._logger.info(
+                    f"📝 Updating user overview: user={user_id[:8]}..., section={section}, action={action}, key={key}"
+                )
+            except Exception:
+                pass
+
+            # Call the Supabase RPC function
+            if not self._primary_supabase:
+                raise ToolError("User overview update failed: no database connection available.")
+
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self._primary_supabase.rpc(
+                        "update_user_overview",
+                        {
+                            "p_user_id": user_id,
+                            "p_client_id": client_id,
+                            "p_section": section,
+                            "p_action": action,
+                            "p_key": key,
+                            "p_value": value,
+                            "p_agent_id": agent_id,
+                            "p_reason": reason,
+                        }
+                    ).execute()
+                )
+
+                if result.data:
+                    response_data = result.data
+                    if isinstance(response_data, dict):
+                        if response_data.get("success"):
+                            output_msg = f"Updated user overview: {section}/{key or 'list'} ({action}). Reason: {reason}"
+                            self._emit_tool_result(
+                                slug=slug,
+                                tool_type="user_overview",
+                                success=True,
+                                output=output_msg,
+                                raw_output=response_data,
+                            )
+                            try:
+                                self._logger.info(f"✅ User overview updated: {response_data}")
+                            except Exception:
+                                pass
+                            return output_msg
+                        else:
+                            error_msg = response_data.get("message", "Unknown error")
+                            raise ToolError(f"User overview update failed: {error_msg}")
+                    else:
+                        # Unexpected response format
+                        output_msg = f"Updated user overview: {section}/{key or 'list'} ({action})"
+                        self._emit_tool_result(
+                            slug=slug,
+                            tool_type="user_overview",
+                            success=True,
+                            output=output_msg,
+                            raw_output=response_data,
+                        )
+                        return output_msg
+                else:
+                    raise ToolError("User overview update returned no data.")
+
+            except ToolError:
+                raise
+            except Exception as exc:
+                error_msg = f"User overview update failed: {str(exc)}"
+                self._emit_tool_result(
+                    slug=slug,
+                    tool_type="user_overview",
+                    success=False,
+                    error=error_msg,
+                )
+                try:
+                    self._logger.error(f"❌ User overview update error: {exc}", exc_info=True)
+                except Exception:
+                    pass
+                raise ToolError(error_msg)
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_update_overview)
+
+    def _build_content_catalyst_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Content Catalyst tool for multi-phase article generation."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "content_catalyst"
+        cfg = dict(t.get("config") or {})
+        description = t.get("description") or (
+            "Trigger the Content Catalyst article generation widget. "
+            "When the user asks you to write an article, blog post, or generate content, "
+            "use this tool to open the Content Catalyst configuration widget. "
+            "The user will configure their preferences (topic, source type, word count, style) "
+            "directly in the widget interface and submit from there. "
+            "Call this tool with trigger_widget=true and an optional suggested_topic from the conversation."
+        )
+
+        # Get client_id from runtime context or config
+        client_id = cfg.get("client_id")
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_widget": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Set to true to trigger the Content Catalyst widget UI",
+                    },
+                    "suggested_topic": {
+                        "type": "string",
+                        "description": "Optional topic suggestion from the conversation to pre-fill in the widget",
+                    },
+                    "source_type": {
+                        "type": "string",
+                        "enum": ["text", "url", "mp3", "topic", "audio"],
+                        "description": "Source type for content generation: 'text' or 'topic' for topic-based, 'url' for URL-based, 'mp3' or 'audio' for audio transcription",
+                    },
+                    "source_content": {
+                        "type": "string",
+                        "description": "The source content - topic text, URL, or audio reference",
+                    },
+                    "target_word_count": {
+                        "type": "integer",
+                        "description": "Target word count for the generated article (e.g., 500, 1000, 2000)",
+                    },
+                    "style_prompt": {
+                        "type": "string",
+                        "description": "Writing style instructions or preferences",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            """Trigger the Content Catalyst widget UI for user configuration."""
+            try:
+                self._logger.info("🎨 Content Catalyst widget trigger invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+
+            # Extract all possible parameters from LLM tool call
+            suggested_topic = kwargs.get("suggested_topic", "") or kwargs.get("source_content", "")
+            source_type = kwargs.get("source_type", "topic")
+            source_content = kwargs.get("source_content", "")
+            target_word_count = kwargs.get("target_word_count")
+            style_prompt = kwargs.get("style_prompt", "")
+
+            # This tool now just returns a signal that the widget should be shown
+            # The actual API call will be made by the frontend widget when user submits
+            widget_trigger = {
+                "widget_type": "content_catalyst",
+                "suggested_topic": suggested_topic,
+                "source_type": source_type,
+                "source_content": source_content,
+                "target_word_count": target_word_count,
+                "style_prompt": style_prompt,
+                "message": "Opening Content Catalyst configuration...",
+            }
+
+            # Emit the widget trigger through tool result callback
+            self._emit_tool_result(
+                slug=slug,
+                tool_type="content_catalyst",
+                success=True,
+                output="Widget triggered",
+                raw_output=widget_trigger,
+            )
+
+            return f"WIDGET_TRIGGER:content_catalyst:{suggested_topic}"
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)

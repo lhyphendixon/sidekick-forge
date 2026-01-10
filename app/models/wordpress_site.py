@@ -22,11 +22,15 @@ class WordPressSiteBase(BaseModel):
         """Validate and normalize domain"""
         # Remove protocol if present
         v = re.sub(r'^https?://', '', v)
-        # Remove trailing slash
-        v = v.rstrip('/')
-        # Basic domain validation
-        if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?\.[a-zA-Z]{2,}', v):
-            raise ValueError("Invalid domain format")
+        # Remove path (everything after first /)
+        v = v.split('/')[0]
+        # Remove port if present (e.g., example.com:8080)
+        v = v.split(':')[0]
+        # Remove trailing/leading whitespace
+        v = v.strip()
+        # Basic domain validation - must have at least one dot and valid characters
+        if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?(\.[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?)*\.[a-zA-Z]{2,}$', v):
+            raise ValueError("Invalid domain format. Please enter just the domain (e.g., example.com)")
         return v.lower()
 
 

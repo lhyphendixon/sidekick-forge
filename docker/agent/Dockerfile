@@ -26,17 +26,17 @@ WORKDIR $APP_HOME
 RUN groupadd -r agent && useradd -r -g agent agent
 
 # Copy requirements file from the agent directory
-COPY requirements-agent.txt .
+COPY docker/agent/requirements-agent.txt .
 
 # Install Python dependencies (using full requirements for RAG support)
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements-agent.txt
 
 # Copy the entire agent directory into the image
-COPY . /app
+COPY docker/agent/ /app
 
-# Create necessary directories including home for model cache
-RUN mkdir -p /app/logs /app/temp /home/agent/.cache && \
+# Create necessary directories including home for model cache and Bithuman IMX models
+RUN mkdir -p /app/logs /app/temp /app/models /home/agent/.cache && \
     chown -R agent:agent /app /home/agent
 
 # Make entrypoint executable

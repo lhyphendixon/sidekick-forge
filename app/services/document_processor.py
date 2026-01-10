@@ -37,6 +37,7 @@ except ImportError:
 from app.constants import DOCUMENT_MAX_UPLOAD_BYTES
 from app.integrations.supabase_client import supabase_manager
 from app.services.ai_processor import ai_processor
+from app.services.usage_tracking import usage_tracking_service
 
 logger = logging.getLogger(__name__)
 
@@ -441,7 +442,301 @@ class DocumentProcessor:
                 'success': False,
                 'error': str(e)
             }
-    
+
+    async def process_web_content(
+        self,
+        content: str,
+        title: str,
+        source_url: str,
+        description: str = "",
+        user_id: str = None,
+        agent_ids: List[str] = None,
+        client_id: str = None,
+        metadata: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Process scraped web content through the document pipeline.
+
+        This method is similar to process_uploaded_file but accepts raw text content
+        instead of a file path. Used for web scraping via Firecrawl.
+
+        Args:
+            content: The text/markdown content to process
+            title: Document title
+            source_url: The URL the content was scraped from
+            description: Optional description
+            user_id: User ID who initiated the scrape
+            agent_ids: List of agent IDs to assign the document to
+            client_id: Client ID for multi-tenant isolation
+            metadata: Additional metadata from the scraper (e.g., page metadata)
+
+        Returns:
+            Dict with success status, document_id, etc.
+        """
+        try:
+            if not content or not content.strip():
+                return {
+                    'success': False,
+                    'error': 'No content provided'
+                }
+
+            if not source_url:
+                return {
+                    'success': False,
+                    'error': 'Source URL is required'
+                }
+
+            # Calculate checksum of content for deduplication
+            checksum = hashlib.sha256(content.encode('utf-8')).hexdigest()
+            content_size = len(content.encode('utf-8'))
+
+            # Prepare Supabase client
+            supabase_client = None
+            if client_id:
+                supabase_client = await self._get_client_supabase(client_id)
+                if not supabase_client:
+                    logger.error(f"Could not get Supabase connection for client {client_id}")
+                    return {
+                        'success': False,
+                        'error': 'Failed to get client Supabase connection'
+                    }
+            else:
+                supabase_client = self._ensure_supabase()
+
+            # Check for existing document with same URL
+            existing_document = await self._find_existing_web_document(
+                supabase_client, source_url
+            )
+
+            if existing_document:
+                logger.info(
+                    "Found existing document for URL '%s' (id: %s)",
+                    source_url,
+                    existing_document['id'],
+                )
+                # Assign to agents if needed
+                if agent_ids:
+                    await self._assign_document_to_agents(
+                        str(existing_document['id']),
+                        agent_ids,
+                        client_id,
+                        supabase=supabase_client,
+                    )
+                return {
+                    'success': True,
+                    'document_id': str(existing_document['id']),
+                    'status': existing_document.get('status', 'ready'),
+                    'duplicate': True,
+                    'skipped': True,
+                    'message': 'URL already processed; reusing existing document',
+                    'queued': False,
+                }
+
+            # Normalize user_id
+            normalized_user_id = None
+            if user_id:
+                try:
+                    normalized_user_id = str(uuid.UUID(str(user_id)))
+                except Exception:
+                    logger.warning(
+                        "Non-UUID user_id '%s' encountered; storing as NULL.",
+                        user_id,
+                    )
+
+            # Create document record
+            document_data = {
+                'title': title,
+                'file_name': f"{title}.md",  # Synthetic filename
+                'file_type': 'md',  # Treat as markdown
+                'file_size': content_size,
+                'user_id': normalized_user_id,
+                'status': 'processing',
+                'processing_status': 'processing',
+                'document_type': 'website',  # New document type for web content
+                'metadata': {
+                    'source_url': source_url,
+                    'scraped_at': datetime.now(timezone.utc).isoformat(),
+                    'description': description or '',
+                    'checksum': checksum,
+                    'scraper': 'firecrawl',
+                    **(metadata or {}),
+                }
+            }
+
+            result = supabase_client.table('documents').insert(document_data).execute()
+
+            if not result.data:
+                logger.error(f"Failed to create document record for URL: {source_url}")
+                return {
+                    'success': False,
+                    'error': 'Failed to create document record'
+                }
+
+            document_id = str(result.data[0]['id'])
+            logger.info(f"Created document {document_id} for URL: {source_url}")
+
+            # Start async processing with the content directly
+            asyncio.create_task(
+                self._process_web_content_async(
+                    document_id=document_id,
+                    content=content,
+                    agent_ids=agent_ids,
+                    client_id=client_id,
+                )
+            )
+
+            return {
+                'success': True,
+                'document_id': document_id,
+                'status': 'processing'
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing web content: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    async def _find_existing_web_document(
+        self,
+        supabase,
+        source_url: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Find existing document by source URL."""
+        try:
+            # Query for documents with matching source_url in metadata
+            result = supabase.table('documents').select('id, status, metadata').eq(
+                'status', 'ready'
+            ).execute()
+
+            for doc in result.data or []:
+                doc_metadata = doc.get('metadata') or {}
+                if doc_metadata.get('source_url') == source_url:
+                    return doc
+
+            return None
+        except Exception as e:
+            logger.debug(f"Error checking for existing web document: {e}")
+            return None
+
+    async def _process_web_content_async(
+        self,
+        document_id: str,
+        content: str,
+        agent_ids: List[str] = None,
+        client_id: str = None,
+    ):
+        """Async processing pipeline for web content (no file needed)."""
+        async with self._processing_semaphore:
+            supabase_client = None
+            client_settings = None
+            truncated_chunks = False
+            total_chunks_before_truncation = 0
+            success = False
+
+            try:
+                logger.info(f"Starting async processing for web document {document_id}")
+
+                if client_id:
+                    supabase_client, client_settings = await self._get_client_context(client_id)
+                    if not supabase_client:
+                        await self._update_document_status(
+                            document_id,
+                            'error',
+                            'Failed to initialize client Supabase connection',
+                            client_id,
+                            supabase=None,
+                        )
+                        return
+                else:
+                    supabase_client = self._ensure_supabase()
+
+                # Clean and chunk text (content is already extracted)
+                cleaned_text = self._clean_text(content)
+
+                if not cleaned_text.strip():
+                    await self._update_document_status(
+                        document_id,
+                        'error',
+                        'No text content after cleaning',
+                        client_id,
+                        supabase=supabase_client,
+                    )
+                    return
+
+                chunks = self._split_text_into_chunks(cleaned_text)
+                total_chunks_before_truncation = len(chunks)
+
+                max_chunks = int(os.getenv("DOCUMENT_PROCESSOR_MAX_CHUNKS", "250"))
+                if total_chunks_before_truncation > max_chunks:
+                    truncated_chunks = True
+                    logger.warning(
+                        f"Web document {document_id} produced {total_chunks_before_truncation} chunks; truncating to {max_chunks}"
+                    )
+                    chunks = chunks[:max_chunks]
+
+                logger.info(f"Created {len(chunks)} chunks for web document {document_id}")
+
+                # Generate embeddings for document and chunks
+                document_embeddings = await self._generate_document_embeddings(
+                    cleaned_text[:2000], client_settings
+                )
+
+                # Process chunks
+                processed_chunks = []
+                for i, chunk in enumerate(chunks):
+                    try:
+                        chunk_embeddings = await self._generate_chunk_embeddings(chunk, client_settings)
+                        chunk_id = await self._store_document_chunk(
+                            document_id=document_id,
+                            chunk_text=chunk,
+                            chunk_index=i,
+                            embeddings=chunk_embeddings,
+                            client_id=client_id,
+                            supabase=supabase_client,
+                        )
+
+                        if chunk_id:
+                            processed_chunks.append({
+                                'id': chunk_id,
+                                'index': i,
+                                'text': chunk,
+                                'has_embeddings': bool(chunk_embeddings)
+                            })
+                    except Exception as e:
+                        logger.warning(f"Failed to process chunk {i} for web document {document_id}: {e}")
+
+                extra_metadata = {
+                    'truncated_chunks': truncated_chunks,
+                    'original_chunk_count': total_chunks_before_truncation,
+                }
+
+                # Update document with results
+                await self._finalize_document_processing(
+                    document_id=document_id,
+                    content=cleaned_text,
+                    embeddings=document_embeddings,
+                    chunk_count=len(processed_chunks),
+                    agent_ids=agent_ids,
+                    client_id=client_id,
+                    supabase=supabase_client,
+                    extra_metadata=extra_metadata,
+                )
+
+                logger.info(f"Completed processing for web document {document_id}")
+                success = True
+
+            except Exception as e:
+                logger.error(f"Error in async web content processing for {document_id}: {e}")
+                await self._update_document_status(
+                    document_id,
+                    'error',
+                    str(e),
+                    client_id,
+                    supabase=supabase_client,
+                )
+
     async def _validate_file(self, file_path: str) -> Dict[str, Any]:
         """Validate uploaded file"""
         try:
@@ -894,7 +1189,7 @@ class DocumentProcessor:
             # Refresh chunk embeddings
             for c in chunks:
                 emb = await self._generate_chunk_embeddings(c.get('content') or '', client_settings)
-                supabase_client.table('document_chunks').update({'embeddings_vec': emb}).eq('id', c['id']).execute()
+                supabase_client.table('document_chunks').update({'embeddings': emb}).eq('id', c['id']).execute()
 
             await self._finalize_document_processing(
                 document_id=document_id,
@@ -975,7 +1270,7 @@ class DocumentProcessor:
                 'document_id': doc_id_for_chunk,
                 'content': chunk_text,
                 'chunk_index': chunk_index,
-                'embeddings_vec': embeddings,  # Store in vector column for pgvector similarity search
+                'embeddings': embeddings,  # Store in vector column for pgvector similarity search
                 'chunk_metadata': {
                     'word_count': len(chunk_text.split()),
                     'character_count': len(chunk_text),
@@ -1005,6 +1300,40 @@ class DocumentProcessor:
             logger.error(f"Error storing document chunk: {e}")
             return None
     
+    async def _track_embedding_usage(
+        self,
+        client_id: str,
+        agent_id: Optional[str],
+        chunk_count: int,
+    ):
+        """Track embedding usage for quota enforcement."""
+        if not client_id or chunk_count <= 0:
+            return
+
+        try:
+            await usage_tracking_service.initialize()
+
+            if agent_id:
+                is_within, status = await usage_tracking_service.increment_agent_embedding_usage(
+                    client_id=client_id,
+                    agent_id=agent_id,
+                    chunks=chunk_count,
+                )
+                if not is_within:
+                    logger.warning(
+                        "Client %s embedding quota exceeded after processing %d chunks",
+                        client_id, chunk_count
+                    )
+            else:
+                # No agent_id - track at client level only
+                is_within, status = await usage_tracking_service.increment_embedding_usage(
+                    client_id=client_id,
+                    chunks=chunk_count,
+                )
+
+        except Exception as e:
+            logger.warning("Failed to track embedding usage for client %s: %s", client_id, e)
+
     async def _finalize_document_processing(
         self,
         document_id: str,
@@ -1027,6 +1356,12 @@ class DocumentProcessor:
 
             if extra_metadata:
                 metadata.update(extra_metadata)
+
+            # Track embedding usage for quota enforcement
+            if client_id and chunk_count > 0:
+                # Use first agent_id for tracking, or None if document is for all agents
+                tracking_agent_id = agent_ids[0] if agent_ids else None
+                await self._track_embedding_usage(client_id, tracking_agent_id, chunk_count)
 
             update_data = {
                 'content': content,
@@ -1067,7 +1402,14 @@ class DocumentProcessor:
                     client_id,
                     supabase=supabase,
                 )
-            
+            else:
+                # Auto-assign to all agents for this client if no specific agents provided
+                await self._auto_assign_document_to_all_agents(
+                    document_id,
+                    client_id,
+                    supabase=supabase,
+                )
+
         except Exception as e:
             logger.error(f"Error finalizing document processing: {e}")
             await self._update_document_status(
@@ -1132,7 +1474,49 @@ class DocumentProcessor:
                 
         except Exception as e:
             logger.error(f"Error assigning document to agents: {e}")
-    
+
+    async def _auto_assign_document_to_all_agents(
+        self,
+        document_id: str,
+        client_id: str = None,
+        supabase=None,
+    ):
+        """
+        Auto-assign a document to ALL active agents for this client.
+        Called when a document is uploaded without specifying agent_ids.
+        This ensures new documents are always available for RAG queries.
+        """
+        try:
+            supabase_client = supabase
+            if client_id and supabase_client is None:
+                supabase_client, _ = await self._get_client_context(client_id)
+                if not supabase_client:
+                    logger.error(f"Could not get Supabase connection for client {client_id}")
+                    return
+            elif supabase_client is None:
+                supabase_client = self._ensure_supabase()
+
+            # Get all agents for this client
+            agents_result = supabase_client.table('agents').select('id, name, slug').execute()
+
+            if not agents_result.data:
+                logger.info(f"No agents found for client {client_id}, skipping auto-assignment")
+                return
+
+            agent_ids = [agent['id'] for agent in agents_result.data]
+            logger.info(f"Auto-assigning document {document_id} to {len(agent_ids)} agents for client {client_id}")
+
+            # Use the existing assignment method
+            await self._assign_document_to_agents(
+                document_id=document_id,
+                agent_ids=agent_ids,
+                client_id=client_id,
+                supabase=supabase_client,
+            )
+
+        except Exception as e:
+            logger.error(f"Error auto-assigning document to all agents: {e}")
+
     async def _sync_document_agent_permissions(
         self,
         document_id: str,
