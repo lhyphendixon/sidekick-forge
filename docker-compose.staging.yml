@@ -1,0 +1,50 @@
+# Docker Compose Override for STAGING Environment
+# Usage: docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d
+#
+# This file overrides the base docker-compose.yml with staging-specific settings.
+# It uses the STAGING Supabase branch for database isolation from production.
+
+version: '3.8'
+
+services:
+  fastapi:
+    container_name: sidekick-forge-staging-fastapi
+    environment:
+      - APP_ENV=staging
+      - DEVELOPMENT_MODE=true
+      # Staging Supabase branch credentials (set in .env.staging)
+      - SUPABASE_URL=${STAGING_SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${STAGING_SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ANON_KEY=${STAGING_SUPABASE_ANON_KEY}
+      # Staging-specific agent name
+      - AGENT_NAME=sidekick-agent-staging
+      - LIVEKIT_AGENT_NAME=sidekick-agent-staging
+      # Domain
+      - DOMAIN_NAME=staging.sidekickforge.com
+    env_file:
+      - .env.staging
+
+  agent-worker:
+    container_name: sidekick-forge-staging-agent
+    environment:
+      - AGENT_NAME=sidekick-agent-staging
+      # Staging Supabase branch credentials
+      - SUPABASE_URL=${STAGING_SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${STAGING_SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ANON_KEY=${STAGING_SUPABASE_ANON_KEY}
+      - DOMAIN_NAME=staging.sidekickforge.com
+    env_file:
+      - .env.staging
+
+  redis:
+    container_name: sidekick-forge-staging-redis
+
+  nginx:
+    container_name: sidekick-forge-staging-nginx
+
+  bge-service:
+    container_name: sidekick-forge-staging-bge-service
+
+networks:
+  platform-network:
+    name: sidekick-forge-staging-network

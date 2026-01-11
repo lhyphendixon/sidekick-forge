@@ -693,6 +693,120 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
     tool_results: List[Dict[str, Any]] = []
     widget_trigger = None
 
+    # Execute n8n, asana, and other function tools detected via native function calling
+    # (excluding content_catalyst which is handled as a widget trigger below)
+    # Use _built_tools stored during registration, fall back to agent.tools
+    agent_tools = list(getattr(agent, "_built_tools", None) or getattr(agent, "tools", []) or [])
+
+    # Build tool lookup - LiveKit function_tool stores name in __livekit_raw_tool_info.name
+    tool_lookup = {}
+    for t in agent_tools:
+        tool_name_candidate = None
+        # LiveKit function_tool decorator stores info in __livekit_raw_tool_info (raw_schema version)
+        tool_info = getattr(t, "__livekit_raw_tool_info", None)
+        if tool_info and hasattr(tool_info, "name"):
+            tool_name_candidate = tool_info.name
+        # Fallback to __livekit_tool_info if present
+        if not tool_name_candidate:
+            tool_info = getattr(t, "__livekit_tool_info", None)
+            if tool_info and hasattr(tool_info, "name"):
+                tool_name_candidate = tool_info.name
+        # Final fallback to .name attribute
+        if not tool_name_candidate and hasattr(t, "name"):
+            tool_name_candidate = t.name
+
+        if tool_name_candidate:
+            tool_lookup[tool_name_candidate] = t
+
+    logger.info(f"🧰 TEXT-MODE: Tool lookup keys: {list(tool_lookup.keys())} from {len(agent_tools)} tools")
+
+    for tc in detected_tool_calls:
+        tool_name = tc.get("name")
+        tool_args = tc.get("arguments", {})
+
+        # Skip content_catalyst - it's a widget trigger, not a backend execution
+        if tool_name == "content_catalyst":
+            continue
+
+        # Find the tool function
+        tool_fn = tool_lookup.get(tool_name)
+        if not tool_fn:
+            logger.warning(f"🧰 TEXT-MODE: Tool '{tool_name}' not found in registered tools. Available: {list(tool_lookup.keys())}")
+            continue
+
+        logger.info(f"🧰 TEXT-MODE: Executing tool '{tool_name}' with args: {tool_args}")
+
+        try:
+            # Get the actual callable from the tool wrapper
+            if hasattr(tool_fn, "_callable"):
+                callable_fn = tool_fn._callable
+            elif callable(tool_fn):
+                callable_fn = tool_fn
+            else:
+                logger.warning(f"🧰 TEXT-MODE: Tool '{tool_name}' is not callable")
+                continue
+
+            # Execute the tool
+            if asyncio.iscoroutinefunction(callable_fn):
+                tool_output = await callable_fn(**tool_args)
+            else:
+                tool_output = callable_fn(**tool_args)
+
+            logger.info(f"🧰 TEXT-MODE: Tool '{tool_name}' returned: {str(tool_output)[:200]}...")
+
+            tool_results.append({
+                "tool": tool_name,
+                "success": True,
+                "output": tool_output,
+            })
+
+            # Add tool result to chat context and get LLM to respond with the data
+            chat_ctx.add_message(role="assistant", content=response_text or f"I'll check that for you.")
+            chat_ctx.add_message(
+                role="user",
+                content=f"[Tool Result for {tool_name}]:\n{tool_output}\n\nPlease provide a helpful response based on this information."
+            )
+
+            # Call LLM again to generate response using tool result
+            logger.info(f"🧰 TEXT-MODE: Calling LLM with tool result to generate final response")
+            followup_result = agent.llm.chat(chat_ctx=chat_ctx, tools=None)  # No tools for followup
+
+            followup_text = ""
+            if hasattr(followup_result, "__aiter__"):
+                async for chunk in followup_result:
+                    try:
+                        delta = None
+                        if hasattr(chunk, "delta") and getattr(chunk.delta, "content", None):
+                            delta = chunk.delta.content
+                        elif hasattr(chunk, "content"):
+                            delta = getattr(chunk, "content")
+                        elif isinstance(chunk, str):
+                            delta = chunk
+                        if delta:
+                            followup_text += str(delta)
+                    except Exception:
+                        continue
+            else:
+                # Non-streaming response
+                if hasattr(followup_result, "message") and getattr(followup_result.message, "content", None):
+                    followup_text = followup_result.message.content
+                elif hasattr(followup_result, "choices") and followup_result.choices:
+                    msg = getattr(followup_result.choices[0], "message", None)
+                    if msg and getattr(msg, "content", None):
+                        followup_text = msg.content
+
+            if followup_text.strip():
+                response_text = followup_text.strip()
+                logger.info(f"🧰 TEXT-MODE: Got followup response ({len(response_text)} chars)")
+
+        except Exception as tool_err:
+            logger.error(f"🧰 TEXT-MODE: Tool '{tool_name}' execution failed: {tool_err}")
+            tool_results.append({
+                "tool": tool_name,
+                "success": False,
+                "error": str(tool_err),
+            })
+
     # Check for content_catalyst tool call from native function calling
     for tc in detected_tool_calls:
         if tc["name"] == "content_catalyst":
@@ -1792,6 +1906,9 @@ async def agent_job_handler(ctx: JobContext):
                                 "🧰 Agent update_tools missing; stored %s tools on agent fallback",
                                 len(tools)
                             )
+                        # Store registry on agent for text-mode tool execution
+                        agent._tool_registry = registry
+                        agent._built_tools = tools
                     else:
                         logger.warning("🧰 No tools were built from provided definitions")
             except Exception as e:

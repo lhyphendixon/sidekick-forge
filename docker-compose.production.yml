@@ -1,0 +1,50 @@
+# Docker Compose Override for PRODUCTION Environment
+# Usage: docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+#
+# This file overrides the base docker-compose.yml with production-specific settings.
+# It uses the MAIN Supabase project (not a branch) for production data.
+
+version: '3.8'
+
+services:
+  fastapi:
+    container_name: sidekick-forge-production-fastapi
+    environment:
+      - APP_ENV=production
+      - DEVELOPMENT_MODE=false
+      # Production Supabase credentials (set in .env.production)
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      # Production-specific agent name
+      - AGENT_NAME=sidekick-agent-production
+      - LIVEKIT_AGENT_NAME=sidekick-agent-production
+      # Domain
+      - DOMAIN_NAME=app.sidekickforge.com
+    env_file:
+      - .env.production
+
+  agent-worker:
+    container_name: sidekick-forge-production-agent
+    environment:
+      - AGENT_NAME=sidekick-agent-production
+      # Production Supabase credentials
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - DOMAIN_NAME=app.sidekickforge.com
+    env_file:
+      - .env.production
+
+  redis:
+    container_name: sidekick-forge-production-redis
+
+  nginx:
+    container_name: sidekick-forge-production-nginx
+
+  bge-service:
+    container_name: sidekick-forge-production-bge-service
+
+networks:
+  platform-network:
+    name: sidekick-forge-production-network
