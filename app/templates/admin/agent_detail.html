@@ -858,6 +858,48 @@
     </div>
 </div>
 
+<!-- Document Intelligence Modal -->
+<div id="documentIntelligenceModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+    <!-- Backdrop - click to close -->
+    <div class="fixed inset-0 bg-black/60 backdrop-blur-sm modal-backdrop cursor-pointer" onclick="closeDocumentIntelligenceModal()"></div>
+
+    <!-- Modal Content - positioned above backdrop -->
+    <div class="relative min-h-screen flex items-center justify-center p-4 pointer-events-none">
+        <div class="relative bg-dark-surface border border-dark-border rounded-xl shadow-2xl w-full max-w-5xl max-h-[85vh] overflow-hidden pointer-events-auto" onclick="event.stopPropagation()">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center">
+                        <i class="bi bi-file-earmark-text text-white"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-dark-text">Document Intelligence</h2>
+                        <p class="text-xs text-dark-text-secondary">What DocumentSense has extracted from documents</p>
+                    </div>
+                </div>
+                <button onclick="closeDocumentIntelligenceModal()" class="text-dark-text-secondary hover:text-dark-text p-2 rounded-lg hover:bg-dark-elevated transition-colors">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <!-- Content -->
+            <div class="p-6 overflow-y-auto max-h-[calc(80vh-80px)]">
+                <!-- Loading State -->
+                <div id="documentIntelligenceLoading" class="hidden text-center py-12">
+                    <svg class="animate-spin h-8 w-8 mx-auto text-blue-400 mb-4" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <p class="text-dark-text-secondary">Loading document intelligence...</p>
+                </div>
+
+                <!-- Content Container -->
+                <div id="documentIntelligenceContent" class="space-y-4"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 const sttModelOptions = {
     "deepgram": [{ value: "nova-2", label: "Nova 2 (Deepgram)" }],
@@ -1289,8 +1331,10 @@ async function loadAssignedTools(){
             const phaseClass = phase === 'ambient' ? 'bg-purple-500/20 text-purple-400' : 'bg-green-500/20 text-green-400';
             const phaseLabel = phase === 'ambient' ? 'Ambient' : 'Active';
             const isUserSense = tool.name.toLowerCase().includes('usersense');
+            const isDocumentSense = tool.name.toLowerCase().includes('documentsense') || tool.slug === 'documentsense' || tool.tool_type === 'documentsense';
             const isContentCatalyst = tool.name.toLowerCase().includes('content catalyst') || tool.tool_type === 'content_catalyst';
             const userSenseAttr = isUserSense ? 'data-usersense="true"' : '';
+            const documentSenseAttr = isDocumentSense ? 'data-documentsense="true"' : '';
             const contentCatalystAttr = isContentCatalyst ? 'data-content-catalyst="true"' : '';
 
             // Build action buttons
@@ -1312,9 +1356,17 @@ async function loadAssignedTools(){
                     </button>`;
             }
 
+            // Build status banners
+            let statusBanner = '';
+            if (isUserSense) {
+                statusBanner = '<div class="usersense-status-banner"></div>';
+            } else if (isDocumentSense) {
+                statusBanner = '<div class="documentsense-status-banner"></div>';
+            }
+
             return `
-            <div class="tool-card assigned bg-dark-elevated border border-dark-border rounded-lg overflow-hidden" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${contentCatalystAttr}>
-                <div class="p-4">
+            <div class="tool-card assigned bg-dark-elevated border border-dark-border rounded-lg overflow-hidden flex flex-col" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr} ${contentCatalystAttr}>
+                <div class="p-4 flex-1">
                     <div class="flex items-start justify-between">
                         <div class="flex-1">
                             <h6 class="font-medium text-dark-text">${tool.name}</h6>
@@ -1327,7 +1379,7 @@ async function loadAssignedTools(){
                         ${actionButtons}
                     </div>
                 </div>
-                ${isUserSense ? '<div class="usersense-status-banner"></div>' : ''}
+                ${statusBanner}
             </div>
         `;}).join('');
     } catch (err) {
@@ -1419,10 +1471,20 @@ function renderToolCard(tool, phase) {
     const phaseClass = phase === 'ambient' ? 'bg-purple-500/20 text-purple-400' : 'bg-green-500/20 text-green-400';
     const phaseLabel = phase === 'ambient' ? 'Ambient' : 'Active';
     const isUserSense = tool.name.toLowerCase().includes('usersense');
+    const isDocumentSense = tool.name.toLowerCase().includes('documentsense') || tool.slug === 'documentsense' || tool.tool_type === 'documentsense';
     const userSenseAttr = isUserSense ? 'data-usersense="true"' : '';
+    const documentSenseAttr = isDocumentSense ? 'data-documentsense="true"' : '';
+
+    // Build status banner
+    let statusBanner = '';
+    if (isUserSense) {
+        statusBanner = '<div class="usersense-status-banner hidden"></div>';
+    } else if (isDocumentSense) {
+        statusBanner = '<div class="documentsense-status-banner hidden"></div>';
+    }
 
     return `
-        <div class="tool-card bg-dark-elevated border border-dark-border rounded-lg overflow-hidden" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr}>
+        <div class="tool-card bg-dark-elevated border border-dark-border rounded-lg overflow-hidden" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr}>
             <div class="p-4">
                 <div class="flex items-start justify-between">
                     <div class="flex-1">
@@ -1438,7 +1500,7 @@ function renderToolCard(tool, phase) {
                     </button>
                 </div>
             </div>
-            ${isUserSense ? '<div class="usersense-status-banner hidden"></div>' : ''}
+            ${statusBanner}
         </div>
     `;
 }
@@ -1469,8 +1531,9 @@ function assignTool(id, btn){
     // Update the available tools display
     filterAvailableTools();
 
-    // Check if UserSense was just assigned
+    // Check if UserSense or DocumentSense was just assigned
     checkUserSenseStatus();
+    checkDocumentSenseStatus();
 }
 
 function unassignTool(id, btn){
@@ -1504,8 +1567,9 @@ function unassignTool(id, btn){
         assignedGrid.innerHTML = '<div class="col-span-full text-center text-dark-text-secondary py-4">No abilities assigned yet. Add abilities from below.</div>';
     }
 
-    // Check if UserSense was just removed
+    // Check if UserSense or DocumentSense was just removed
     checkUserSenseStatus();
+    checkDocumentSenseStatus();
 }
 
 async function saveAssignedTools(){
@@ -1618,7 +1682,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     try { updateSTTModels(); } catch (err) { console.warn('init updateSTTModels', err); }
     try { updateLLMModels(true); } catch (err) { console.warn('init updateLLMModels', err); }  // Pass true to use initial server value
     try { updateCartesiaEmotionSettings(); } catch (err) { console.warn('init updateCartesiaEmotionSettings', err); }
-    try { checkUserSenseStatus(); } catch (err) { console.warn('init checkUserSenseStatus', err); }
+    try { await checkUserSenseStatus(); } catch (err) { console.warn('init checkUserSenseStatus', err); }
+    try { await checkDocumentSenseStatus(); } catch (err) { console.warn('init checkDocumentSenseStatus', err); }
     document.getElementById('config_cartesia_model')?.addEventListener('change', updateCartesiaEmotionSettings);
     document.getElementById('config_cartesia_emotions_enabled')?.addEventListener('change', updateCartesiaEmotionSettings);
 
@@ -1761,6 +1826,328 @@ function stopLearningPolling() {
     if (learningPollHandle) {
         clearInterval(learningPollHandle);
         learningPollHandle = null;
+    }
+}
+
+// DocumentSense Status Polling
+let documentSensePollHandle = null;
+const documentSensePollIntervalMs = 5000;
+
+function getDocumentSenseCard() {
+    // Find the DocumentSense card in the assigned grid
+    return document.querySelector('#assignedToolsGrid .tool-card[data-documentsense="true"].assigned');
+}
+
+function hasDocumentSenseAssigned() {
+    return !!getDocumentSenseCard();
+}
+
+async function checkDocumentSenseStatus() {
+    // Wait a moment for DOM to update
+    await new Promise(r => setTimeout(r, 100));
+
+    if (hasDocumentSenseAssigned()) {
+        await pollDocumentSenseStatus();
+        startDocumentSensePolling();
+    } else {
+        stopDocumentSensePolling();
+        // Hide any existing banner
+        const card = document.querySelector('.tool-card[data-documentsense="true"]');
+        if (card) {
+            const banner = card.querySelector('.documentsense-status-banner');
+            if (banner) banner.classList.add('hidden');
+        }
+    }
+}
+
+function updateDocumentSenseUI(status) {
+    const card = getDocumentSenseCard();
+    if (!card) return;
+
+    let banner = card.querySelector('.documentsense-status-banner');
+
+    // Create banner if it doesn't exist
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.className = 'documentsense-status-banner';
+        card.appendChild(banner);
+    }
+
+    banner.classList.remove('hidden');
+
+    const inProgressJobs = status?.in_progress || [];
+    const pendingCount = status?.pending || 0;
+    const completedCount = status?.completed || 0;
+    const failedCount = status?.failed || 0;
+
+    if (inProgressJobs.length > 0) {
+        // Extraction in progress - show progress bar
+        const job = inProgressJobs[0];
+        const percent = job.progress_percent || 0;
+        banner.innerHTML = `
+            <div class="bg-blue-500/20 border-t border-blue-500/30">
+                <div class="px-3 py-2 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <svg class="animate-spin h-3 w-3 text-blue-400" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span class="text-xs text-blue-300">Extracting... ${percent}%</span>
+                    </div>
+                </div>
+                <div class="h-1 bg-blue-500/30">
+                    <div class="h-1 bg-blue-500 transition-all duration-500" style="width: ${percent}%"></div>
+                </div>
+            </div>
+        `;
+    } else if (pendingCount > 0) {
+        // Pending - queued
+        banner.innerHTML = `
+            <div class="bg-yellow-500/20 border-t border-yellow-500/30 px-3 py-2">
+                <div class="flex items-center gap-2">
+                    <svg class="h-3 w-3 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/>
+                    </svg>
+                    <span class="text-xs text-yellow-300">Queued for extraction (${pendingCount} document${pendingCount > 1 ? 's' : ''})</span>
+                </div>
+            </div>
+        `;
+    } else {
+        // Completed/Active - always show View Documents button (like UserSense shows View Profiles)
+        const countText = completedCount > 0 ? ` (${completedCount} document${completedCount !== 1 ? 's' : ''} indexed${failedCount > 0 ? `, ${failedCount} failed` : ''})` : '';
+        banner.innerHTML = `
+            <div class="bg-green-500/20 border-t border-green-500/30 px-3 py-2">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <svg class="h-3 w-3 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                        </svg>
+                        <span class="text-xs text-green-300">Active${countText}</span>
+                    </div>
+                    <button type="button" onclick="showDocumentIntelligenceModal()" class="text-xs text-brand-teal hover:text-brand-teal/80 flex items-center gap-1">
+                        <i class="bi bi-eye"></i> View Documents
+                    </button>
+                </div>
+            </div>
+        `;
+        stopDocumentSensePolling();
+    }
+}
+
+async function pollDocumentSenseStatus() {
+    try {
+        const response = await fetch(`/admin/clients/${clientId}/documentsense-status`, { credentials: 'include' });
+        if (!response.ok) return;
+        const data = await response.json();
+        // API returns {success: true, status: {...}}, unwrap status object
+        const status = data?.status || data;
+        updateDocumentSenseUI(status);
+    } catch (error) {
+        console.warn('DocumentSense status poll failed:', error);
+    }
+}
+
+function startDocumentSensePolling() {
+    if (documentSensePollHandle) return;
+    documentSensePollHandle = setInterval(pollDocumentSenseStatus, documentSensePollIntervalMs);
+}
+
+function stopDocumentSensePolling() {
+    if (documentSensePollHandle) {
+        clearInterval(documentSensePollHandle);
+        documentSensePollHandle = null;
+    }
+}
+
+// Document Intelligence Modal
+let wasDocumentSensePollingBeforeModal = false;
+
+async function showDocumentIntelligenceModal() {
+    const modal = document.getElementById('documentIntelligenceModal');
+    const content = document.getElementById('documentIntelligenceContent');
+    const loading = document.getElementById('documentIntelligenceLoading');
+
+    if (!modal) {
+        console.error('[DocumentIntelligenceModal] Modal element not found!');
+        return;
+    }
+
+    // Pause DocumentSense polling while modal is open
+    wasDocumentSensePollingBeforeModal = !!documentSensePollHandle;
+    if (wasDocumentSensePollingBeforeModal) {
+        stopDocumentSensePolling();
+    }
+
+    // Show modal with loading state
+    modal.classList.remove('hidden');
+    modal.style.display = 'block';
+    loading.classList.remove('hidden');
+    content.innerHTML = '';
+
+    try {
+        const response = await fetch(`/admin/clients/${clientId}/document-intelligence/preview`, { credentials: 'include' });
+        const data = await response.json();
+
+        loading.classList.add('hidden');
+
+        if (!data.success) {
+            content.innerHTML = `<div class="text-center py-8 text-red-400">Error: ${data.error || 'Failed to load'}</div>`;
+            return;
+        }
+
+        if (!data.documents || data.documents.length === 0) {
+            content.innerHTML = `
+                <div class="text-center py-12">
+                    <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-dark-surface flex items-center justify-center">
+                        <i class="bi bi-file-earmark-text text-2xl text-dark-text-secondary"></i>
+                    </div>
+                    <h3 class="text-lg font-medium text-dark-text mb-2">No Document Intelligence Yet</h3>
+                    <p class="text-dark-text-secondary text-sm max-w-md mx-auto">
+                        DocumentSense extracts intelligence as documents are processed.
+                        Once extraction completes, document insights will appear here.
+                    </p>
+                </div>
+            `;
+            return;
+        }
+
+        // Render document intelligence cards
+        content.innerHTML = data.documents.map((doc, index) => renderDocumentIntelligenceCard(doc, index)).join('');
+
+    } catch (error) {
+        loading.classList.add('hidden');
+        content.innerHTML = `<div class="text-center py-8 text-red-400">Error: ${error.message}</div>`;
+    }
+}
+
+function closeDocumentIntelligenceModal() {
+    const modal = document.getElementById('documentIntelligenceModal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.style.display = 'none';
+    }
+
+    // Resume polling if it was active before
+    if (wasDocumentSensePollingBeforeModal) {
+        startDocumentSensePolling();
+    }
+}
+
+function renderDocumentIntelligenceCard(doc, index) {
+    const title = doc.document_title || `Document ${doc.document_id}`;
+    const updatedAt = doc.updated_at ? new Date(doc.updated_at).toLocaleDateString() : 'Unknown';
+
+    // Parse intelligence if it's a JSON string (stored as JSONB but may come as string)
+    let intelligence = doc.intelligence || {};
+    if (typeof intelligence === 'string') {
+        try {
+            intelligence = JSON.parse(intelligence);
+        } catch (e) {
+            console.error('Failed to parse intelligence JSON:', e);
+            intelligence = {};
+        }
+    }
+
+    // Extract intelligence fields
+    const summary = intelligence.summary || 'No summary available';
+    const keyQuotes = intelligence.key_quotes || [];
+    const themes = intelligence.themes || [];
+    const entities = intelligence.entities || {};
+    const questionsAnswered = intelligence.questions_answered || [];
+    const docTypeInferred = intelligence.document_type_inferred || 'Unknown';
+
+    // Build entity badges
+    const entityBadges = [];
+    if (entities.people?.length) entityBadges.push(`<span class="px-2 py-0.5 rounded text-xs bg-blue-500/20 text-blue-400">${entities.people.length} people</span>`);
+    if (entities.organizations?.length) entityBadges.push(`<span class="px-2 py-0.5 rounded text-xs bg-purple-500/20 text-purple-400">${entities.organizations.length} orgs</span>`);
+    if (entities.concepts?.length) entityBadges.push(`<span class="px-2 py-0.5 rounded text-xs bg-cyan-500/20 text-cyan-400">${entities.concepts.length} concepts</span>`);
+
+    // Build themes badges
+    const themeBadges = themes.slice(0, 5).map(t =>
+        `<span class="px-2 py-0.5 rounded text-xs bg-green-500/20 text-green-400">${t}</span>`
+    ).join('');
+
+    // Build key quotes (show first 2)
+    const quotesHtml = keyQuotes.slice(0, 2).map(q =>
+        `<div class="text-sm text-dark-text-secondary italic border-l-2 border-blue-500/50 pl-3 py-1">"${q}"</div>`
+    ).join('');
+
+    return `
+        <div class="bg-dark-elevated border border-dark-border rounded-lg p-4 animate-fade-in" style="animation-delay: ${index * 50}ms">
+            <div class="flex items-start justify-between gap-4 mb-3">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center flex-shrink-0">
+                        <i class="bi bi-file-earmark-text text-white"></i>
+                    </div>
+                    <div class="min-w-0">
+                        <h4 class="font-medium text-dark-text truncate" title="${title}">${title}</h4>
+                        <div class="flex items-center gap-2 text-xs text-dark-text-secondary">
+                            <span>Type: ${docTypeInferred}</span>
+                            <span>•</span>
+                            <span>Updated: ${updatedAt}</span>
+                        </div>
+                    </div>
+                </div>
+                <button onclick="toggleDocumentDetails(${index})" class="text-dark-text-secondary hover:text-dark-text p-1 rounded transition-colors flex-shrink-0">
+                    <i class="bi bi-chevron-down text-sm doc-chevron-${index}"></i>
+                </button>
+            </div>
+
+            <!-- Summary -->
+            <div class="mb-3">
+                <p class="text-sm text-dark-text-secondary line-clamp-2">${summary}</p>
+            </div>
+
+            <!-- Quick Stats -->
+            <div class="flex flex-wrap gap-2 mb-3">
+                ${entityBadges.join('')}
+                ${themeBadges}
+            </div>
+
+            <!-- Expandable Details -->
+            <div id="doc-details-${index}" class="hidden border-t border-dark-border pt-3 mt-3 space-y-3">
+                ${keyQuotes.length > 0 ? `
+                    <div>
+                        <h5 class="text-xs font-medium text-dark-text-secondary uppercase mb-2">Key Quotes</h5>
+                        <div class="space-y-2">${quotesHtml}</div>
+                        ${keyQuotes.length > 2 ? `<p class="text-xs text-dark-text-secondary mt-1">+ ${keyQuotes.length - 2} more quotes</p>` : ''}
+                    </div>
+                ` : ''}
+
+                ${questionsAnswered.length > 0 ? `
+                    <div>
+                        <h5 class="text-xs font-medium text-dark-text-secondary uppercase mb-2">Questions This Document Can Answer</h5>
+                        <ul class="text-sm text-dark-text-secondary space-y-1">
+                            ${questionsAnswered.slice(0, 3).map(q => `<li class="flex items-start gap-2"><i class="bi bi-question-circle text-blue-400 mt-0.5"></i>${q}</li>`).join('')}
+                        </ul>
+                    </div>
+                ` : ''}
+
+                ${Object.keys(entities).some(k => entities[k]?.length > 0) ? `
+                    <div>
+                        <h5 class="text-xs font-medium text-dark-text-secondary uppercase mb-2">Entities</h5>
+                        <div class="text-sm text-dark-text-secondary space-y-1">
+                            ${entities.people?.length ? `<div><strong>People:</strong> ${entities.people.join(', ')}</div>` : ''}
+                            ${entities.organizations?.length ? `<div><strong>Organizations:</strong> ${entities.organizations.join(', ')}</div>` : ''}
+                            ${entities.locations?.length ? `<div><strong>Locations:</strong> ${entities.locations.join(', ')}</div>` : ''}
+                            ${entities.concepts?.length ? `<div><strong>Concepts:</strong> ${entities.concepts.slice(0, 10).join(', ')}${entities.concepts.length > 10 ? '...' : ''}</div>` : ''}
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+}
+
+function toggleDocumentDetails(index) {
+    const details = document.getElementById(`doc-details-${index}`);
+    const chevron = document.querySelector(`.doc-chevron-${index}`);
+    if (details) {
+        details.classList.toggle('hidden');
+        if (chevron) {
+            chevron.classList.toggle('bi-chevron-down');
+            chevron.classList.toggle('bi-chevron-up');
+        }
     }
 }
 

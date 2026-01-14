@@ -480,21 +480,26 @@ async def _run_text_mode_interaction(
     except Exception as clear_err:
         logger.warning(f"⚠️ Failed to clear stale metadata: {clear_err}")
     # Proactively retrieve citations/rerank context for text mode (on_user_turn_completed may not fire)
-    # NO FALLBACK POLICY: If RAG retrieval fails, we fail the request rather than hallucinating
+    # Empty RAG context is OK (agent can still respond with system prompt + LLM)
+    # Only fail on actual retrieval errors
     rag_context = ""
     if hasattr(agent, "_retrieve_with_citations") and callable(getattr(agent, "_retrieve_with_citations")):
-        await agent._retrieve_with_citations(user_message)
-        logger.info("📚 Text-mode: pre-fetched citations for user message (count=%s)", len(getattr(agent, "_current_citations", []) or []))
-        # Get the RAG context text for injection into the prompt
-        rag_context = getattr(agent, "_current_rag_context", "") or ""
-        if rag_context:
-            logger.info(f"📚 Text-mode: RAG context retrieved ({len(rag_context)} chars)")
-        else:
-            logger.error("❌ RAG context retrieval returned empty - NO FALLBACK POLICY prevents hallucination")
-            raise ValueError("RAG context retrieval failed - empty context returned. Check document indexing and embeddings.")
+        try:
+            await agent._retrieve_with_citations(user_message)
+            logger.info("📚 Text-mode: pre-fetched citations for user message (count=%s)", len(getattr(agent, "_current_citations", []) or []))
+            # Get the RAG context text for injection into the prompt
+            rag_context = getattr(agent, "_current_rag_context", "") or ""
+            if rag_context:
+                logger.info(f"📚 Text-mode: RAG context retrieved ({len(rag_context)} chars)")
+            else:
+                # Empty RAG is fine - agent can still respond using system prompt
+                logger.info("📚 Text-mode: No matching RAG context found (agent will respond without KB context)")
+        except Exception as rag_err:
+            # Log RAG error but continue - agent can still respond without KB context
+            logger.warning(f"⚠️ RAG retrieval error (continuing without KB context): {rag_err}")
     else:
-        logger.error("❌ Agent does not have _retrieve_with_citations method - cannot proceed")
-        raise ValueError("Agent not configured for RAG retrieval")
+        # Agent doesn't have RAG - that's OK, it can still respond
+        logger.info("📚 Agent does not have _retrieve_with_citations method - proceeding without RAG")
 
     # Call LLM directly (no TTS) to avoid LiveKit TTS failures in text-only mode
     try:
@@ -1808,6 +1813,27 @@ async def agent_job_handler(ctx: JobContext):
                 except Exception:
                     pass
 
+                # If DocumentSense returned citations, prepend them to existing RAG citations
+                # This gives visibility into both: the specific doc user asked about AND semantically similar docs
+                if entry.get("type") == "documentsense" and entry.get("success") and entry.get("citations"):
+                    try:
+                        ds_citations = entry.get("citations", [])
+                        if ds_citations:
+                            # Mark DocumentSense citations with a prefix in the title
+                            for citation in ds_citations:
+                                if citation.get("title") and not citation["title"].startswith("DocumentSense:"):
+                                    citation["title"] = f"DocumentSense: {citation['title']}"
+
+                            # Get existing RAG citations
+                            existing_citations = getattr(agent, "_current_citations", []) or []
+
+                            # Prepend DocumentSense citations, then keep RAG citations
+                            combined = ds_citations + existing_citations
+                            logger.info(f"📚 DocumentSense: Prepending {len(ds_citations)} doc(s) to {len(existing_citations)} RAG citations")
+                            agent._current_citations = combined
+                    except Exception as e:
+                        logger.warning(f"Failed to update citations from DocumentSense: {e}")
+
             def push_runtime_context(updates: Dict[str, Any]) -> None:
                 if not registry or not tracked_tool_slugs or not isinstance(updates, dict):
                     return
@@ -1873,7 +1899,7 @@ async def agent_job_handler(ctx: JobContext):
                         for tool_def in tool_defs:
                             tool_type = tool_def.get("type")
                             # Track runtime context for tools that need user/client context
-                            if tool_type not in {"n8n", "asana", "user_overview", "content_catalyst"}:
+                            if tool_type not in {"n8n", "asana", "user_overview", "content_catalyst", "documentsense"}:
                                 continue
                             slug_candidate = (
                                 tool_def.get("slug")
@@ -2129,6 +2155,7 @@ async def agent_job_handler(ctx: JobContext):
 
             @session.on("user_input_transcribed")
             def on_user_input_transcribed(ev):
+                logger.info(f"🎤 user_input_transcribed EVENT FIRED: type={type(ev)}")
                 try:
                     txt = getattr(ev, 'transcript', '') or ''
                     is_final = bool(getattr(ev, 'is_final', False))
@@ -2345,7 +2372,10 @@ async def agent_job_handler(ctx: JobContext):
 
             # Store session reference on agent for access in on_user_turn_completed
             agent._agent_session = session
-            
+
+            # Debug: Confirm event handlers were registered
+            logger.info("📢 Event handlers registered: user_input_transcribed, user_speech_committed, agent_speech_committed")
+
             # Start the session with the agent and room
             logger.info("Starting AgentSession with agent and room...")
             # Import room_io for input options

@@ -1,12 +1,17 @@
 """
 Firecrawl Web Scraper Service for Sidekick Forge Knowledge Base.
 
-Handles website scraping using the Firecrawl API (https://docs.firecrawl.dev).
+Handles website scraping using Firecrawl (https://docs.firecrawl.dev).
+Supports both self-hosted and cloud API modes:
+- Self-hosted: Set FIRECRAWL_URL env var (default: http://firecrawl:3002)
+- Cloud API: Set FIRECRAWL_API_KEY for authenticated cloud access
+
 Supports both single URL scraping and multi-page crawling.
 """
 
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -16,11 +21,30 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Firecrawl API endpoints
-FIRECRAWL_API_BASE = "https://api.firecrawl.dev/v1"
-FIRECRAWL_SCRAPE_URL = f"{FIRECRAWL_API_BASE}/scrape"
-FIRECRAWL_CRAWL_URL = f"{FIRECRAWL_API_BASE}/crawl"
-FIRECRAWL_CRAWL_STATUS_URL = f"{FIRECRAWL_API_BASE}/crawl"
+# Firecrawl configuration - supports self-hosted or cloud API
+# Self-hosted: http://firecrawl:3002 (no API key needed)
+# Cloud API: https://api.firecrawl.dev (requires API key)
+FIRECRAWL_BASE_URL = os.getenv("FIRECRAWL_URL", "http://firecrawl:3002")
+FIRECRAWL_CLOUD_URL = "https://api.firecrawl.dev"
+
+# Build API endpoints from base URL
+def _get_firecrawl_endpoints(base_url: str = None) -> dict:
+    """Get Firecrawl API endpoints for the given base URL."""
+    base = (base_url or FIRECRAWL_BASE_URL).rstrip("/")
+    # Ensure /v1 suffix
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return {
+        "scrape": f"{base}/scrape",
+        "crawl": f"{base}/crawl",
+        "crawl_status": f"{base}/crawl",
+    }
+
+# Default endpoints (self-hosted)
+_endpoints = _get_firecrawl_endpoints()
+FIRECRAWL_SCRAPE_URL = _endpoints["scrape"]
+FIRECRAWL_CRAWL_URL = _endpoints["crawl"]
+FIRECRAWL_CRAWL_STATUS_URL = _endpoints["crawl_status"]
 
 # Default settings
 DEFAULT_TIMEOUT = 60  # seconds
@@ -39,35 +63,52 @@ class FirecrawlError(Exception):
 
 class FirecrawlScraper:
     """
-    Service for scraping websites using the Firecrawl API.
+    Service for scraping websites using Firecrawl (self-hosted or cloud API).
 
     Supports:
     - Single URL scraping (fast, immediate response)
     - Multi-page crawling (async job with status polling)
+    - Self-hosted mode (no API key required)
+    - Cloud API mode (requires API key)
     """
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str = None, base_url: str = None):
         """
-        Initialize the scraper with a Firecrawl API key.
+        Initialize the scraper with optional Firecrawl API key and base URL.
+
+        For self-hosted Firecrawl, no API key is needed.
+        For cloud API (api.firecrawl.dev), an API key is required.
 
         Args:
-            api_key: Firecrawl API key for authentication
+            api_key: Firecrawl API key for authentication (optional for self-hosted)
+            base_url: Base URL for Firecrawl API (default: FIRECRAWL_URL env var)
         """
-        if not api_key:
-            raise ValueError("Firecrawl API key is required")
-
         self.api_key = api_key
+        self.base_url = base_url or FIRECRAWL_BASE_URL
         self._client: Optional[httpx.AsyncClient] = None
+
+        # Get endpoints for this instance
+        self._endpoints = _get_firecrawl_endpoints(self.base_url)
+
+        # Determine if we're using cloud API (requires auth)
+        self._is_cloud = FIRECRAWL_CLOUD_URL in self.base_url
+        if self._is_cloud and not api_key:
+            raise ValueError("Firecrawl API key is required for cloud API")
+
+        logger.info(f"FirecrawlScraper initialized: base_url={self.base_url}, cloud_mode={self._is_cloud}")
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
         if self._client is None or self._client.is_closed:
+            headers = {"Content-Type": "application/json"}
+
+            # Only add auth header if API key is provided (cloud mode)
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(DEFAULT_TIMEOUT),
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                }
+                headers=headers
             )
         return self._client
 
@@ -172,8 +213,8 @@ class FirecrawlScraper:
         client = await self._get_client()
 
         try:
-            logger.info(f"Scraping URL: {url}")
-            response = await client.post(FIRECRAWL_SCRAPE_URL, json=payload)
+            logger.info(f"Scraping URL: {url} via {self._endpoints['scrape']}")
+            response = await client.post(self._endpoints["scrape"], json=payload)
 
             if response.status_code == 200:
                 data = response.json()
@@ -264,8 +305,8 @@ class FirecrawlScraper:
         client = await self._get_client()
 
         try:
-            logger.info(f"Starting crawl for: {url} (limit: {limit})")
-            response = await client.post(FIRECRAWL_CRAWL_URL, json=payload)
+            logger.info(f"Starting crawl for: {url} (limit: {limit}) via {self._endpoints['crawl']}")
+            response = await client.post(self._endpoints["crawl"], json=payload)
 
             if response.status_code in (200, 201):
                 data = response.json()
@@ -322,7 +363,7 @@ class FirecrawlScraper:
             raise ValueError("Job ID is required")
 
         client = await self._get_client()
-        status_url = f"{FIRECRAWL_CRAWL_STATUS_URL}/{job_id}"
+        status_url = f"{self._endpoints['crawl_status']}/{job_id}"
 
         try:
             response = await client.get(status_url)
@@ -481,17 +522,31 @@ class FirecrawlScraper:
         return results
 
 
-# Factory function for creating scrapers with client-specific API keys
-async def get_firecrawl_scraper(client_id: str) -> Optional[FirecrawlScraper]:
+# Factory function for creating scrapers - supports self-hosted or client API keys
+async def get_firecrawl_scraper(client_id: str = None, use_self_hosted: bool = True) -> Optional[FirecrawlScraper]:
     """
-    Get a FirecrawlScraper instance configured for a specific client.
+    Get a FirecrawlScraper instance.
+
+    By default, uses the self-hosted Firecrawl service (no API key needed).
+    If use_self_hosted=False, attempts to use client-specific API key for cloud API.
 
     Args:
-        client_id: The client ID to get the API key for
+        client_id: The client ID to get the API key for (only for cloud API mode)
+        use_self_hosted: If True, use self-hosted Firecrawl (default). If False, use cloud API.
 
     Returns:
-        FirecrawlScraper instance or None if no API key configured
+        FirecrawlScraper instance or None if cloud mode and no API key configured
     """
+    # Self-hosted mode - no API key needed
+    if use_self_hosted:
+        logger.info(f"Using self-hosted Firecrawl at {FIRECRAWL_BASE_URL}")
+        return FirecrawlScraper()
+
+    # Cloud API mode - requires client API key
+    if not client_id:
+        logger.warning("Client ID required for cloud API mode")
+        return None
+
     from app.integrations.supabase_client import supabase_manager
 
     try:
@@ -504,11 +559,24 @@ async def get_firecrawl_scraper(client_id: str) -> Optional[FirecrawlScraper]:
         api_key = result.data.get("firecrawl_api_key") if result.data else None
 
         if not api_key:
-            logger.warning(f"No Firecrawl API key configured for client {client_id}")
-            return None
+            logger.warning(f"No Firecrawl API key configured for client {client_id}, falling back to self-hosted")
+            return FirecrawlScraper()  # Fallback to self-hosted
 
-        return FirecrawlScraper(api_key)
+        return FirecrawlScraper(api_key=api_key, base_url=FIRECRAWL_CLOUD_URL)
 
     except Exception as e:
         logger.error(f"Failed to get Firecrawl scraper for client {client_id}: {e}")
-        return None
+        # Fallback to self-hosted on error
+        return FirecrawlScraper()
+
+
+def get_self_hosted_scraper() -> FirecrawlScraper:
+    """
+    Get a FirecrawlScraper instance for the self-hosted service.
+
+    This is a synchronous convenience function for simple use cases.
+
+    Returns:
+        FirecrawlScraper configured for self-hosted Firecrawl
+    """
+    return FirecrawlScraper()

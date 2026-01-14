@@ -58,6 +58,11 @@ class ToolRegistry:
             pass
         self._tools.clear()
         out: List[Any] = []
+
+        # Add default built-in tools that are always available
+        default_tools = self._build_default_tools()
+        out.extend(default_tools)
+
         for t in tool_defs or []:
             try:
                 ttype = t.get("type")
@@ -75,8 +80,12 @@ class ToolRegistry:
                     ft = self._build_asana_tool(t)
                 elif ttype == "user_overview":
                     ft = self._build_user_overview_tool(t)
+                elif ttype == "documentsense":
+                    ft = self._build_documentsense_tool(t)
                 elif ttype == "content_catalyst":
                     ft = self._build_content_catalyst_tool(t)
+                elif ttype == "scrape_url":
+                    ft = self._build_scrape_url_tool(t)
                 else:
                     self._logger.warning(f"Unsupported tool type '{ttype}' for slug={slug}; skipping")
                     continue
@@ -99,6 +108,38 @@ class ToolRegistry:
             pass
         return out
 
+    def _build_default_tools(self) -> List[Any]:
+        """
+        Build default tools that are always available to all agents.
+        These tools don't need to be configured in the database.
+        """
+        default_tools = []
+
+        # scrape_url - Always available for fetching web page content
+        try:
+            scrape_url_tool = self._build_scrape_url_tool({
+                "id": "default_scrape_url",
+                "slug": "scrape_url",
+                "type": "scrape_url",
+                "name": "Scrape URL",
+                "description": (
+                    "Scrape a URL and extract its main content as clean markdown. "
+                    "Use this when the user shares a URL and wants you to read, summarize, "
+                    "or answer questions about the page content. Returns the page title, "
+                    "main content (as markdown), and metadata. Works with articles, blog posts, "
+                    "documentation, and most web pages."
+                ),
+                "config": {},
+            })
+            if scrape_url_tool:
+                default_tools.append(scrape_url_tool)
+                self._tools["default_scrape_url"] = scrape_url_tool
+                self._logger.info("✅ Built default tool: scrape_url")
+        except Exception as e:
+            self._logger.warning(f"⚠️ Failed to build default scrape_url tool: {e}")
+
+        return default_tools
+
     def _emit_tool_result(
         self,
         *,
@@ -108,6 +149,7 @@ class ToolRegistry:
         output: Any = None,
         raw_output: Any = None,
         error: Optional[str] = None,
+        citations: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         if not self._tool_result_callback:
             return
@@ -120,6 +162,8 @@ class ToolRegistry:
         }
         if error:
             entry["error"] = error
+        if citations:
+            entry["citations"] = citations
         try:
             self._tool_result_callback(entry)
         except Exception as callback_err:
@@ -1074,6 +1118,197 @@ Do NOT update for:
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_update_overview)
 
+    def _build_documentsense_tool(self, t: Dict[str, Any]) -> Any:
+        """
+        Build the query_document_intelligence tool for document-specific queries.
+
+        This tool allows agents to query extracted intelligence about specific documents,
+        enabling questions like "What are the best quotes from Recording 239?"
+        """
+        slug = t.get("slug") or "query_document_intelligence"
+        description = t.get("description") or """Query extracted intelligence about a specific document.
+
+Use this when the user asks about a SPECIFIC document by name or title, such as:
+- "What are the best quotes from Recording 239?"
+- "Summarize the Divine Plan document"
+- "What themes are discussed in the interview with John?"
+- "What questions does the marketing report answer?"
+
+This tool searches documents by title and returns:
+- Summary of the document
+- Key quotes (exact text from the document)
+- Main themes discussed
+- Named entities (people, organizations, locations, etc.)
+- Questions the document helps answer
+
+Do NOT use this for general knowledge questions - only for document-specific queries."""
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_query": {
+                        "type": "string",
+                        "description": "Document name or identifier to search for. Use the title or partial title mentioned by the user."
+                    },
+                    "info_type": {
+                        "type": "string",
+                        "enum": ["summary", "quotes", "themes", "entities", "questions", "all"],
+                        "default": "all",
+                        "description": "What type of information to retrieve. Use 'quotes' for quote requests, 'summary' for summaries, 'all' for comprehensive info."
+                    }
+                },
+                "required": ["document_query"],
+                "additionalProperties": False
+            }
+        }
+
+        async def _invoke_query_document_intelligence(**kwargs: Any) -> str:
+            document_query = kwargs.get("document_query", "").strip()
+            info_type = kwargs.get("info_type", "all").lower()
+
+            if not document_query:
+                self._logger.warning("query_document_intelligence called without document_query")
+                return "[Tool skipped - document_query is required. Ask the user which document they want to know about.]"
+
+            # Get client_id from runtime context
+            runtime_ctx = self._runtime_context.get(slug) or {}
+            client_id = runtime_ctx.get("client_id")
+
+            if not client_id:
+                raise ToolError("Cannot query document intelligence: missing client_id in context.")
+
+            if not self._primary_supabase:
+                raise ToolError("Document intelligence query failed: no database connection available.")
+
+            try:
+                self._logger.info(
+                    f"📄 Querying document intelligence: query='{document_query}', type={info_type}"
+                )
+
+                # Search for documents matching the query
+                result = await asyncio.to_thread(
+                    lambda: self._primary_supabase.rpc(
+                        "search_document_intelligence",
+                        {
+                            "p_client_id": client_id,
+                            "p_query": document_query,
+                            "p_limit": 5
+                        }
+                    ).execute()
+                )
+
+                if not result.data:
+                    return f"No documents found matching '{document_query}'. The document may not have been processed yet or the title might be different."
+
+                # Format the results based on info_type
+                output_parts = []
+
+                for doc in result.data:
+                    doc_title = doc.get("document_title", "Untitled")
+                    summary = doc.get("summary", "")
+                    key_quotes = doc.get("key_quotes", [])
+                    themes = doc.get("themes", [])
+
+                    doc_section = f"## {doc_title}\n"
+
+                    if info_type in ["summary", "all"]:
+                        if summary:
+                            doc_section += f"\n**Summary:** {summary}\n"
+
+                    if info_type in ["quotes", "all"]:
+                        if key_quotes and isinstance(key_quotes, list):
+                            doc_section += "\n**Key Quotes:**\n"
+                            for i, quote in enumerate(key_quotes[:10], 1):
+                                doc_section += f'{i}. "{quote}"\n'
+
+                    if info_type in ["themes", "all"]:
+                        if themes and isinstance(themes, list):
+                            doc_section += f"\n**Themes:** {', '.join(themes)}\n"
+
+                    # For full intelligence, also get entities and questions
+                    if info_type in ["entities", "questions", "all"]:
+                        # Fetch full intelligence for this document
+                        full_intel = await asyncio.to_thread(
+                            lambda doc_id=doc.get("document_id"): self._primary_supabase.rpc(
+                                "get_document_intelligence",
+                                {
+                                    "p_document_id": doc_id,
+                                    "p_client_id": client_id
+                                }
+                            ).execute()
+                        )
+
+                        if full_intel.data and full_intel.data.get("exists"):
+                            intel = full_intel.data.get("intelligence", {})
+
+                            if info_type in ["entities", "all"]:
+                                entities = intel.get("entities", {})
+                                if entities:
+                                    entity_parts = []
+                                    for etype, elist in entities.items():
+                                        if elist:
+                                            entity_parts.append(f"{etype}: {', '.join(elist[:5])}")
+                                    if entity_parts:
+                                        doc_section += f"\n**Entities:** {'; '.join(entity_parts)}\n"
+
+                            if info_type in ["questions", "all"]:
+                                questions = intel.get("questions_answered", [])
+                                if questions:
+                                    doc_section += "\n**Questions Answered:**\n"
+                                    for q in questions[:5]:
+                                        doc_section += f"- {q}\n"
+
+                    output_parts.append(doc_section)
+
+                output_msg = "\n---\n".join(output_parts)
+
+                # Build citations from the found documents for UI display
+                documentsense_citations = []
+                for doc in result.data:
+                    doc_id = doc.get("document_id")
+                    doc_title = doc.get("document_title", "Untitled")
+                    summary = doc.get("summary", "")
+                    # Create a citation entry that matches the expected format
+                    documentsense_citations.append({
+                        "id": doc_id,
+                        "document_id": doc_id,
+                        "title": doc_title,
+                        "content": summary[:500] if summary else f"Document: {doc_title}",
+                        "similarity": 1.0,  # Perfect match since user asked for this doc
+                        "source": "documentsense",
+                    })
+
+                self._emit_tool_result(
+                    slug=slug,
+                    tool_type="documentsense",
+                    success=True,
+                    output=f"Found {len(result.data)} document(s) matching '{document_query}'",
+                    raw_output=result.data,
+                    citations=documentsense_citations,  # Include citations for UI
+                )
+
+                self._logger.info(f"✅ Document intelligence retrieved for query '{document_query}'")
+
+                return output_msg
+
+            except ToolError:
+                raise
+            except Exception as exc:
+                error_msg = f"Document intelligence query failed: {str(exc)}"
+                self._emit_tool_result(
+                    slug=slug,
+                    tool_type="documentsense",
+                    success=False,
+                    error=error_msg,
+                )
+                self._logger.error(f"❌ Document intelligence query error: {exc}", exc_info=True)
+                raise ToolError(error_msg)
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_query_document_intelligence)
+
     def _build_content_catalyst_tool(self, t: Dict[str, Any]) -> Any:
         """Build the Content Catalyst tool for multi-phase article generation."""
         slug = t.get("slug") or t.get("name") or t.get("id") or "content_catalyst"
@@ -1166,3 +1401,312 @@ Do NOT update for:
             return f"WIDGET_TRIGGER:content_catalyst:{suggested_topic}"
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_scrape_url_tool(self, t: Dict[str, Any]) -> Any:
+        """
+        Build the scrape_url tool for fetching and extracting content from URLs.
+
+        Uses self-hosted Firecrawl service for web scraping when available.
+        Falls back to built-in BeautifulSoup + html2text scraping if Firecrawl
+        is unavailable or returns an error.
+        """
+        slug = t.get("slug") or t.get("name") or t.get("id") or "scrape_url"
+        cfg = dict(t.get("config") or {})
+        description = t.get("description") or (
+            "Scrape a URL and extract its main content as clean markdown. "
+            "Use this when the user shares a URL and wants you to read, summarize, or answer questions about the page content. "
+            "Returns the page title, main content (as markdown), and metadata. "
+            "Works with articles, blog posts, documentation, and most web pages."
+        )
+
+        # Get Firecrawl URL from environment or config
+        firecrawl_url = cfg.get("firecrawl_url") or os.getenv("FIRECRAWL_URL", "http://firecrawl:3002")
+
+        # Timeout for scraping (some pages take longer)
+        try:
+            timeout_seconds = float(cfg.get("timeout") or 30)
+        except (TypeError, ValueError):
+            timeout_seconds = 30.0
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to scrape. Must be a valid http:// or https:// URL.",
+                    },
+                    "include_links": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "If true, include a list of links found on the page.",
+                    },
+                    "wait_for_js": {
+                        "type": "integer",
+                        "description": "Milliseconds to wait for JavaScript to render (for dynamic pages). Default: 0 (no wait). Note: Only works with Firecrawl; built-in fallback does not support JS rendering.",
+                    },
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _scrape_with_fallback(url: str, include_links: bool = False) -> dict:
+            """
+            Built-in scraping fallback using BeautifulSoup + html2text.
+            Returns dict with: title, description, markdown, links, source_url
+            """
+            try:
+                from bs4 import BeautifulSoup
+                import html2text
+            except ImportError:
+                raise ToolError("Web scraping libraries not available. Please contact support.")
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+            }
+
+            timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(url, allow_redirects=True) as resp:
+                    if resp.status >= 400:
+                        raise ToolError(f"HTTP {resp.status} error fetching URL")
+
+                    content_type = resp.headers.get("Content-Type", "")
+                    if "text/html" not in content_type.lower() and "application/xhtml" not in content_type.lower():
+                        raise ToolError(f"URL returned non-HTML content type: {content_type}")
+
+                    html_content = await resp.text()
+                    final_url = str(resp.url)
+
+            # Parse HTML
+            soup = BeautifulSoup(html_content, "lxml")
+
+            # Extract title
+            title = "Untitled"
+            if soup.title and soup.title.string:
+                title = soup.title.string.strip()
+            elif soup.find("h1"):
+                title = soup.find("h1").get_text(strip=True)
+
+            # Extract description from meta tags
+            description = ""
+            meta_desc = soup.find("meta", attrs={"name": "description"})
+            if meta_desc and meta_desc.get("content"):
+                description = meta_desc["content"].strip()
+            elif soup.find("meta", attrs={"property": "og:description"}):
+                og_desc = soup.find("meta", attrs={"property": "og:description"})
+                if og_desc and og_desc.get("content"):
+                    description = og_desc["content"].strip()
+
+            # Remove unwanted elements before conversion
+            for tag in soup.find_all(["script", "style", "nav", "header", "footer", "aside", "noscript", "iframe"]):
+                tag.decompose()
+
+            # Try to find main content area
+            main_content = None
+            for selector in ["main", "article", "[role='main']", ".content", "#content", ".post", ".article"]:
+                main_content = soup.select_one(selector)
+                if main_content:
+                    break
+
+            if not main_content:
+                main_content = soup.find("body") or soup
+
+            # Convert to markdown using html2text
+            h2t = html2text.HTML2Text()
+            h2t.ignore_links = False
+            h2t.ignore_images = True
+            h2t.ignore_emphasis = False
+            h2t.body_width = 0  # No wrapping
+            h2t.skip_internal_links = True
+
+            markdown_content = h2t.handle(str(main_content))
+
+            # Clean up excessive whitespace
+            import re
+            markdown_content = re.sub(r'\n{3,}', '\n\n', markdown_content)
+            markdown_content = markdown_content.strip()
+
+            # Extract links if requested
+            links = []
+            if include_links:
+                for a_tag in soup.find_all("a", href=True):
+                    href = a_tag["href"]
+                    if href.startswith(("http://", "https://")):
+                        links.append(href)
+                links = list(dict.fromkeys(links))  # Remove duplicates while preserving order
+
+            return {
+                "title": title,
+                "description": description,
+                "markdown": markdown_content,
+                "links": links,
+                "source_url": final_url,
+            }
+
+        async def _invoke_scrape(**kwargs: Any) -> str:
+            """Scrape a URL and return markdown content."""
+            url = kwargs.get("url", "").strip()
+            include_links = kwargs.get("include_links", False)
+            wait_for_js = kwargs.get("wait_for_js")
+
+            if not url:
+                raise ToolError("URL is required. Please provide a valid web address to scrape.")
+
+            # Validate URL format
+            if not url.startswith(("http://", "https://")):
+                url = f"https://{url}"
+
+            use_fallback = False
+            firecrawl_error = None
+
+            # Try Firecrawl first
+            try:
+                self._logger.info(f"🌐 Scraping URL: {url} via Firecrawl at {firecrawl_url}")
+
+                scrape_endpoint = f"{firecrawl_url.rstrip('/')}/v1/scrape"
+                payload = {
+                    "url": url,
+                    "formats": ["markdown"],
+                    "onlyMainContent": True,
+                }
+
+                if include_links:
+                    payload["formats"].append("links")
+
+                if wait_for_js:
+                    payload["waitFor"] = int(wait_for_js)
+
+                timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(
+                        scrape_endpoint,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                    ) as resp:
+                        response_text = await resp.text()
+
+                        if resp.status >= 400:
+                            firecrawl_error = f"Firecrawl HTTP {resp.status}"
+                            use_fallback = True
+                        else:
+                            try:
+                                data = json.loads(response_text)
+                            except json.JSONDecodeError:
+                                firecrawl_error = "Invalid JSON from Firecrawl"
+                                use_fallback = True
+
+                            if not use_fallback:
+                                if not data.get("success"):
+                                    firecrawl_error = data.get("error", "Firecrawl error")
+                                    use_fallback = True
+                                else:
+                                    result_data = data.get("data", {})
+                                    markdown_content = result_data.get("markdown", "")
+                                    if not markdown_content:
+                                        firecrawl_error = "Firecrawl returned empty content"
+                                        use_fallback = True
+                                    else:
+                                        # Firecrawl success
+                                        metadata = result_data.get("metadata", {})
+                                        links = result_data.get("links", [])
+                                        title = metadata.get("title", "Untitled")
+                                        description = metadata.get("description", "")
+                                        source_url = metadata.get("sourceURL", url)
+
+                                        return self._format_scrape_output(
+                                            slug, title, description, source_url,
+                                            markdown_content, links if include_links else [], "firecrawl"
+                                        )
+
+            except (aiohttp.ClientError, asyncio.TimeoutError, Exception) as e:
+                firecrawl_error = f"Firecrawl unavailable: {type(e).__name__}"
+                use_fallback = True
+
+            # Fallback to built-in scraping
+            if use_fallback:
+                try:
+                    self._logger.info(f"🔄 Firecrawl failed ({firecrawl_error}), using built-in scraper for: {url}")
+                except Exception:
+                    pass
+
+                try:
+                    result = await _scrape_with_fallback(url, include_links)
+                    return self._format_scrape_output(
+                        slug,
+                        result["title"],
+                        result["description"],
+                        result["source_url"],
+                        result["markdown"],
+                        result["links"] if include_links else [],
+                        "builtin"
+                    )
+                except ToolError:
+                    raise
+                except Exception as e:
+                    error_msg = f"Failed to scrape {url}: {str(e)}"
+                    try:
+                        self._logger.error(f"❌ {error_msg}", exc_info=True)
+                    except Exception:
+                        pass
+                    self._emit_tool_result(
+                        slug=slug,
+                        tool_type="scrape_url",
+                        success=False,
+                        error=error_msg,
+                    )
+                    raise ToolError(error_msg)
+
+            # Should not reach here, but just in case
+            raise ToolError(f"Failed to scrape URL: {firecrawl_error or 'Unknown error'}")
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_scrape)
+
+    def _format_scrape_output(
+        self, slug: str, title: str, description: str, source_url: str,
+        markdown_content: str, links: list, method: str
+    ) -> str:
+        """Format scraped content into a clean markdown response."""
+        output_parts = [
+            f"# {title}",
+            f"**Source:** [{source_url}]({source_url})",
+        ]
+
+        if description:
+            output_parts.append(f"**Description:** {description}")
+
+        output_parts.append("")
+        output_parts.append("## Content")
+        output_parts.append("")
+        output_parts.append(markdown_content[:8000])
+
+        if links:
+            output_parts.append("")
+            output_parts.append("## Links Found")
+            for link in links[:20]:
+                output_parts.append(f"- [{link}]({link})")
+
+        output = "\n".join(output_parts)
+
+        try:
+            self._logger.info(
+                f"✅ Successfully scraped {source_url} via {method}: {len(markdown_content)} chars",
+                extra={"title": title, "url": source_url, "method": method},
+            )
+        except Exception:
+            pass
+
+        self._emit_tool_result(
+            slug=slug,
+            tool_type="scrape_url",
+            success=True,
+            output=f"Scraped: {title} ({len(markdown_content)} chars) via {method}",
+            raw_output={"url": source_url, "title": title, "content_length": len(markdown_content), "method": method},
+        )
+
+        return output

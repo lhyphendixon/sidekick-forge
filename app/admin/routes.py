@@ -2072,9 +2072,43 @@ async def admin_set_agent_tools(
     except Exception as usersense_err:
         logger.warning(f"UserSense auto-enable check failed: {usersense_err}")
 
+    # Check if DocumentSense tool was assigned - if so, enable DocumentSense for client and trigger extraction
+    documentsense_extraction_triggered = False
+    try:
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        # Check if any of the assigned tools is the DocumentSense tool
+        if payload.tool_ids:
+            documentsense_tools = platform_sb.table("tools").select("id").eq("slug", "documentsense").execute()
+            documentsense_tool_id = documentsense_tools.data[0]["id"] if documentsense_tools.data else None
+
+            if documentsense_tool_id and documentsense_tool_id in payload.tool_ids:
+                # Check if DocumentSense is already enabled for this client
+                client_result = platform_sb.table("clients").select("documentsense_enabled").eq("id", client_id).execute()
+                was_enabled = client_result.data[0].get("documentsense_enabled", False) if client_result.data else False
+
+                if not was_enabled:
+                    # Enable DocumentSense for the client
+                    platform_sb.table("clients").update({"documentsense_enabled": True}).eq("id", client_id).execute()
+                    logger.info(f"📄 DocumentSense auto-enabled for client {client_id} (ability added to agent {agent_id})")
+
+                    # Queue initial extraction for all documents
+                    try:
+                        result = platform_sb.rpc('queue_client_documentsense_extraction', {'p_client_id': client_id}).execute()
+                        logger.info(f"✅ DocumentSense extraction job queued for client {client_id}")
+                        documentsense_extraction_triggered = True
+                    except Exception as extract_err:
+                        logger.error(f"⚠️ Failed to queue DocumentSense extraction: {extract_err}")
+
+    except Exception as documentsense_err:
+        logger.warning(f"DocumentSense auto-enable check failed: {documentsense_err}")
+
     return JSONResponse({
         "success": True,
-        "usersense_learning_triggered": usersense_learning_triggered
+        "usersense_learning_triggered": usersense_learning_triggered,
+        "documentsense_extraction_triggered": documentsense_extraction_triggered
     })
 
 
@@ -5791,6 +5825,314 @@ async def admin_preview_user_overviews(
 
     except Exception as e:
         logger.error(f"Failed to preview user overviews for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# DocumentSense Status and Control Endpoints
+@router.get("/clients/{client_id}/documentsense-status")
+async def get_documentsense_status(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get DocumentSense extraction status for a client"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        # Get job status from platform DB
+        result = platform_sb.rpc('get_client_documentsense_status', {
+            'p_client_id': client_id
+        }).execute()
+
+        status = result.data if result.data else {
+            "pending": 0,
+            "in_progress": [],
+            "completed": 0,
+            "failed": 0,
+            "has_active_jobs": False
+        }
+
+        # Also get actual indexed document count from tenant DB
+        # This ensures we show "View Documents" even if jobs table was cleared
+        try:
+            from app.utils.supabase_credentials import SupabaseCredentialManager
+            client_url, _, client_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+            from supabase import create_client
+            client_sb = create_client(client_url, client_key)
+
+            # Count documents with intelligence (table may not exist yet if schema sync hasn't run)
+            intel_result = client_sb.table("document_intelligence").select("id", count="exact").eq("client_id", client_id).execute()
+            indexed_count = intel_result.count if intel_result.count else 0
+            logger.info(f"[DocumentSense] Client {client_id}: tenant indexed_count={indexed_count}, platform completed={status.get('completed', 0)}")
+
+            # Use the higher of completed jobs or indexed documents
+            # This handles cases where jobs were cleared but intelligence exists
+            if indexed_count > status.get("completed", 0):
+                status["completed"] = indexed_count
+                status["indexed_documents"] = indexed_count
+                logger.info(f"[DocumentSense] Updated status.completed to {indexed_count}")
+        except Exception as tenant_err:
+            # Table might not exist yet - that's OK, schema sync will create it
+            if "does not exist" in str(tenant_err):
+                logger.debug(f"document_intelligence table not yet created for client {client_id}")
+            else:
+                logger.warning(f"[DocumentSense] Could not check tenant document_intelligence: {tenant_err}")
+
+        return {
+            "success": True,
+            "status": status
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get DocumentSense status for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "status": None
+        }
+
+
+@router.post("/clients/{client_id}/documentsense/enable")
+async def enable_documentsense_for_client(
+    client_id: str,
+    agent_id: str = Form(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Enable DocumentSense for a client and trigger batch extraction"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.utils.supabase_credentials import SupabaseCredentialManager
+
+        # Get client's Supabase credentials
+        client_url, _, client_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_url, client_key)
+
+        # Check if DocumentSense tool exists in client's tools table
+        tool_result = client_sb.table("tools").select("id").eq("slug", "documentsense").limit(1).execute()
+
+        documentsense_tool_id = None
+        if tool_result.data:
+            documentsense_tool_id = tool_result.data[0]["id"]
+        else:
+            # Create the DocumentSense tool entry
+            new_tool = client_sb.table("tools").insert({
+                "slug": "documentsense",
+                "name": "DocumentSense",
+                "description": "Query extracted intelligence about specific documents",
+                "type": "documentsense",
+                "enabled": True
+            }).execute()
+            if new_tool.data:
+                documentsense_tool_id = new_tool.data[0]["id"]
+
+        if documentsense_tool_id:
+            # Assign tool to agent (if not already assigned)
+            existing_assignment = client_sb.table("agent_tools").select("id").eq(
+                "agent_id", agent_id
+            ).eq("tool_id", documentsense_tool_id).limit(1).execute()
+
+            if not existing_assignment.data:
+                client_sb.table("agent_tools").insert({
+                    "agent_id": agent_id,
+                    "tool_id": documentsense_tool_id,
+                    "enabled": True
+                }).execute()
+                logger.info(f"Assigned DocumentSense tool to agent {agent_id}")
+
+        # Queue batch extraction jobs
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        result = platform_sb.rpc('queue_client_documentsense_extraction', {
+            'p_client_id': client_id,
+            'p_document_ids': None  # Process all documents
+        }).execute()
+
+        jobs_created = result.data.get('jobs_created', 0) if result.data else 0
+
+        return {
+            "success": True,
+            "message": f"DocumentSense enabled. Queued {jobs_created} extraction job(s).",
+            "jobs_created": jobs_created,
+            "tool_assigned_to": agent_id
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to enable DocumentSense for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@router.delete("/clients/{client_id}/document-intelligence")
+async def delete_client_document_intelligence(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Delete all document intelligence for a client when DocumentSense is disabled"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.utils.supabase_credentials import SupabaseCredentialManager
+
+        # Get client's Supabase credentials
+        client_url, _, client_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_url, client_key)
+
+        # Delete all document intelligence for this client
+        result = client_sb.table("document_intelligence").delete().eq("client_id", client_id).execute()
+
+        deleted_count = len(result.data) if result.data else 0
+        logger.info(f"Deleted {deleted_count} document intelligence records for client {client_id}")
+
+        # Also delete any pending extraction jobs from the platform database
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        platform_sb.table("documentsense_learning_jobs").delete().eq("client_id", client_id).execute()
+
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": f"Deleted {deleted_count} document intelligence record(s)"
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to delete document intelligence for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@router.get("/clients/{client_id}/document-intelligence/preview")
+async def admin_preview_document_intelligence(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Admin preview of document intelligence for a client - returns JSON for modal display"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.utils.supabase_credentials import SupabaseCredentialManager
+
+        # Get client info
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        client_result = platform_sb.table("clients").select("name").eq("id", client_id).execute()
+        client_name = client_result.data[0]["name"] if client_result.data else "Unknown Client"
+
+        # Get client's Supabase credentials
+        client_url, _, client_key = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        from supabase import create_client
+        client_sb = create_client(client_url, client_key)
+
+        # Fetch all document intelligence for this client
+        # Table may not exist yet if schema sync hasn't run
+        try:
+            result = client_sb.table("document_intelligence").select(
+                "document_id", "document_title", "intelligence", "extraction_model", "extraction_timestamp", "updated_at"
+            ).eq("client_id", client_id).order("updated_at", desc=True).limit(50).execute()
+            documents = result.data if result.data else []
+        except Exception as table_err:
+            if "does not exist" in str(table_err):
+                logger.info(f"document_intelligence table not yet created for client {client_id} - schema sync needed")
+                documents = []
+            else:
+                raise table_err
+
+        # Format for display - include full intelligence for modal display
+        formatted_docs = []
+        for doc in documents:
+            intel = doc.get("intelligence", {})
+            formatted_docs.append({
+                "document_id": doc.get("document_id"),
+                "document_title": doc.get("document_title", "Untitled"),
+                "intelligence": intel,  # Full intelligence object for modal display
+                "extraction_model": doc.get("extraction_model"),
+                "updated_at": doc.get("updated_at")
+            })
+
+        return {
+            "success": True,
+            "client_name": client_name,
+            "documents": formatted_docs,
+            "total_count": len(formatted_docs)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to preview document intelligence for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@router.post("/clients/{client_id}/schema-sync")
+async def trigger_client_schema_sync(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Trigger schema sync for a client to ensure all tables exist"""
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        # Get client's Supabase credentials
+        client_result = platform_sb.table("clients").select(
+            "supabase_url", "supabase_service_role_key"
+        ).eq("id", client_id).single().execute()
+
+        if not client_result.data:
+            return {"success": False, "error": "Client not found"}
+
+        client_supabase_url = client_result.data.get("supabase_url")
+        client_service_key = client_result.data.get("supabase_service_role_key")
+
+        if not client_supabase_url or not client_service_key:
+            return {"success": False, "error": "Client Supabase credentials not configured"}
+
+        # Run schema sync - use the Supabase Management API access token
+        from app.services.schema_sync import apply_schema, project_ref_from_url
+        project_ref = project_ref_from_url(client_supabase_url)
+        # The Management API requires SUPABASE_ACCESS_TOKEN, not the client's service role key
+        access_token = app_settings.supabase_access_token
+        if not access_token:
+            return {"success": False, "error": "SUPABASE_ACCESS_TOKEN not configured on platform"}
+        results = apply_schema(project_ref, access_token, include_indexes=False)
+
+        # Summarize results
+        successful = [r[0] for r in results if r[1]]
+        failed = [(r[0], r[2]) for r in results if not r[1]]
+
+        logger.info(f"Schema sync for client {client_id}: {len(successful)} successful, {len(failed)} failed")
+
+        return {
+            "success": len(failed) == 0,
+            "message": f"Schema sync completed: {len(successful)} tables/functions synced",
+            "successful": successful,
+            "failed": failed
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to run schema sync for client {client_id}: {e}")
         return {
             "success": False,
             "error": str(e)

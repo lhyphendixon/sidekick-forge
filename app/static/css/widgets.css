@@ -11,8 +11,8 @@
 
 /* Widget Wrapper - matches message bubble width */
 .widget-wrapper {
-    width: 80%;
     max-width: 80%;
+    width: 80%;  /* Use fixed 80% to match message bubbles */
 }
 
 .widget-wrapper .widget-container {
@@ -261,6 +261,261 @@
     transform: rotate(90deg);
 }
 
+/* Document Picker Overlay */
+.cc-document-picker-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: 0;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    z-index: 100;
+}
+
+.cc-document-picker-overlay.show {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Document Picker Slide-up Panel */
+.cc-document-picker {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-height: 70%;
+    background: rgba(20, 20, 20, 0.95);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px 16px 0 0;
+    transform: translateY(100%);
+    transition: transform 0.3s ease;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    z-index: 101;
+}
+
+.cc-document-picker.show {
+    transform: translateY(0);
+}
+
+/* Document Picker Header */
+.cc-document-picker-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.cc-document-picker-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: white;
+}
+
+.cc-document-picker-close {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+    transition: color 0.2s ease;
+}
+
+.cc-document-picker-close:hover {
+    color: white;
+}
+
+/* Document Picker Search */
+.cc-document-picker-search {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cc-document-picker-search input {
+    width: 100%;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: white;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.cc-document-picker-search input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.cc-document-picker-search input:focus {
+    border-color: rgba(1, 164, 166, 0.5);
+    box-shadow: 0 0 0 2px rgba(1, 164, 166, 0.2);
+}
+
+/* Document Picker List */
+.cc-document-picker-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+/* Document List Item */
+.cc-document-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.cc-document-item:hover {
+    background: rgba(1, 164, 166, 0.1);
+}
+
+.cc-document-item.selected {
+    background: rgba(1, 164, 166, 0.2);
+    border-left: 3px solid #01a4a6;
+}
+
+.cc-document-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.cc-document-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.cc-document-title {
+    color: white;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cc-document-meta {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+/* Document Picker Loading State */
+.cc-document-picker-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.cc-document-picker-loading .spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-top-color: #01a4a6;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 12px;
+}
+
+/* Document Picker Empty State */
+.cc-document-picker-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.cc-document-picker-empty p {
+    margin: 0;
+}
+
+/* Selected Document Display */
+.cc-selected-document {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: rgba(1, 164, 166, 0.1);
+    border: 1px solid rgba(1, 164, 166, 0.3);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.cc-selected-document:hover {
+    background: rgba(1, 164, 166, 0.15);
+}
+
+.cc-selected-document-icon {
+    font-size: 20px;
+}
+
+.cc-selected-document-title {
+    flex: 1;
+    color: white;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cc-selected-document-change {
+    color: #01a4a6;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* Always-visible Instructions Field */
+.cc-instructions-field {
+    margin-bottom: 16px;
+}
+
+.cc-instructions-label {
+    display: block;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 13px;
+    margin-bottom: 8px;
+}
+
+.cc-instructions-textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: white;
+    font-size: 14px;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.cc-instructions-textarea::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.cc-instructions-textarea:focus {
+    border-color: rgba(1, 164, 166, 0.5);
+    box-shadow: 0 0 0 2px rgba(1, 164, 166, 0.2);
+}
+
 /* Responsive Adjustments */
 @media (max-width: 480px) {
     .cc-source-tabs {
@@ -274,5 +529,9 @@
     .cc-modal-content {
         max-height: 100vh;
         border-radius: 0;
+    }
+
+    .cc-document-picker {
+        max-height: 80%;
     }
 }

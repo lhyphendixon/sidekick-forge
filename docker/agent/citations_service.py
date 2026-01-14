@@ -6,6 +6,7 @@ Provides document retrieval with structured citation metadata.
 """
 import logging
 import asyncio
+import math
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,6 +29,7 @@ class CitationChunk:
     char_end: Optional[int]
     content: str
     similarity: float
+    document_title: Optional[str] = None  # Explicit document title for RAG context
 
 @dataclass
 class RAGRetrievalResult:
@@ -38,6 +40,7 @@ class RAGRetrievalResult:
     processing_time_ms: float
     rerank_info: Optional[Dict[str, Any]] = None
     query_embedding: Optional[List[float]] = None  # Cache embedding for reuse
+    top_document_intelligence: Optional[Dict[str, Any]] = None  # Intelligence for #1 ranked document
 
 
 class RAGCitationsService:
@@ -123,7 +126,19 @@ class RAGCitationsService:
             embed_start = datetime.now()
             query_embedding = await self.embedder.create_embedding(query)
             embed_duration = (datetime.now() - embed_start).total_seconds() * 1000
-            logger.info(f"[PERF] Embedding generation took {embed_duration:.0f}ms")
+            embedding_dim = len(query_embedding) if query_embedding else 0
+            logger.info(f"[PERF] Embedding generation took {embed_duration:.0f}ms (dim={embedding_dim})")
+            # Warn if dimension doesn't match common sizes (1024 for BGE-M3, 1536 for OpenAI, 768 for others)
+            if embedding_dim not in (768, 1024, 1536, 3072):
+                logger.warning(f"[DEBUG] Unusual embedding dimension {embedding_dim} - may not match stored vectors")
+            # Validate embedding is not all zeros or contains invalid values
+            if query_embedding:
+                non_zero_count = sum(1 for v in query_embedding if v != 0.0)
+                has_nan = any(math.isnan(v) for v in query_embedding[:100])  # Check first 100 to avoid perf hit
+                if non_zero_count < embedding_dim * 0.1:  # Less than 10% non-zero is suspicious
+                    logger.warning(f"[DEBUG] Embedding appears sparse: only {non_zero_count}/{embedding_dim} non-zero values")
+                if has_nan:
+                    logger.error(f"[ERROR] Embedding contains NaN values - vector search will fail")
 
             # Call the match_documents RPC function with correct signature - TIMED
             rpc_start = datetime.now()
@@ -133,11 +148,53 @@ class RAGCitationsService:
                 "p_match_threshold": similarity_threshold,
                 "p_match_count": top_k,
             }
-            result = await asyncio.to_thread(
-                lambda: self.supabase.rpc("match_documents", rpc_params).execute()
-            )
+            logger.info(f"[DEBUG] match_documents params: agent_slug={effective_agent_slug}, threshold={similarity_threshold}, count={top_k}, embedding_dim={embedding_dim}")
+            # Log embedding format for debugging
+            emb_type = type(query_embedding).__name__
+            emb_sample = str(query_embedding[:3]) if query_embedding else "None"
+            logger.info(f"[DEBUG] Embedding type: {emb_type}, sample: {emb_sample}")
+
+            # Convert embedding to pgvector string format for compatibility
+            # supabase-py may not serialize Python lists correctly for pgvector
+            embedding_str = f"[{','.join(str(v) for v in query_embedding)}]"
+            rpc_params["p_query_embedding"] = embedding_str
+            logger.info(f"[DEBUG] Using string format for embedding (first 80 chars): {embedding_str[:80]}...")
+
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self.supabase.rpc("match_documents", rpc_params).execute()
+                )
+                # Log raw result for debugging
+                logger.info(f"[DEBUG] Raw RPC result type: {type(result.data)}, count: {len(result.data) if result.data else 0}")
+            except Exception as rpc_err:
+                logger.error(f"[ERROR] match_documents RPC exception: {type(rpc_err).__name__}: {rpc_err}")
+                raise
             rpc_duration = (datetime.now() - rpc_start).total_seconds() * 1000
-            logger.info(f"[PERF] match_documents RPC took {rpc_duration:.0f}ms (returned {len(result.data) if result.data else 0} chunks)")
+            # Log more details about result
+            result_count = len(result.data) if result.data else 0
+            logger.info(f"[PERF] match_documents RPC took {rpc_duration:.0f}ms (returned {result_count} chunks)")
+            if result_count == 0:
+                # Log additional debug info when no results
+                logger.warning(f"[DEBUG] 0 chunks returned - check: 1) embedding dim matches stored vectors, 2) agent_documents has enabled entries for agent {effective_agent_slug}, 3) document_chunks.embeddings is not null")
+                # Run diagnostic query to check if agent has any documents
+                try:
+                    # Check agent exists
+                    agent_result = await asyncio.to_thread(
+                        lambda: self.supabase.table("agents").select("id, slug").eq("slug", effective_agent_slug).limit(1).execute()
+                    )
+                    if agent_result.data:
+                        agent_id = agent_result.data[0].get("id")
+                        # Check enabled documents for this agent
+                        ad_result = await asyncio.to_thread(
+                            lambda: self.supabase.table("agent_documents").select("document_id", count="exact").eq("agent_id", agent_id).eq("enabled", True).limit(1).execute()
+                        )
+                        doc_count = ad_result.count if hasattr(ad_result, 'count') else len(ad_result.data) if ad_result.data else 0
+                        logger.warning(f"[DIAG] Agent {effective_agent_slug} has {doc_count} enabled documents")
+                    else:
+                        logger.warning(f"[DIAG] Agent {effective_agent_slug} not found in agents table!")
+                except Exception as diag_err:
+                    # Diagnostic failed - just log the error
+                    logger.warning(f"[DIAG] Diagnostic query failed: {diag_err}")
             
             if not result.data:
                 logger.info("No matching documents found")
@@ -263,7 +320,8 @@ class RAGCitationsService:
                     raw_content = raw_content[:truncate_point] + "... [truncated]"
                     logger.debug(f"Truncated chunk {chunk.get('id')} from {len(chunk.get('content', ''))} to {len(raw_content)} chars")
 
-                # Create citation
+                # Create citation with document title for better RAG context
+                doc_title = chunk.get("document_title") or chunk.get("title", "Untitled")
                 citation = CitationChunk(
                     chunk_id=chunk.get("id"),
                     doc_id=doc_id,
@@ -275,7 +333,8 @@ class RAGCitationsService:
                     char_start=chunk.get("char_start"),
                     char_end=chunk.get("char_end"),
                     content=raw_content,
-                    similarity=chunk.get("similarity", 0.0)
+                    similarity=chunk.get("similarity", 0.0),
+                    document_title=doc_title
                 )
 
                 # Check if adding this would exceed total context limit; always allow first chunk
@@ -286,20 +345,32 @@ class RAGCitationsService:
 
                 citations.append(citation)
                 top_doc_ids.append(doc_id)
-                context_parts.append(f"[Source: {citation.title}]\n{citation.content}\n")
+                # Include document title in context for document-specific queries
+                context_parts.append(f"[Source: {citation.document_title} (Document ID: {doc_id[:8] if doc_id else 'unknown'})]\n{citation.content}\n")
                 total_chars += chunk_chars
             
             # Build final context
             context_for_llm = "\n---\n".join(context_parts) if context_parts else ""
-            
+
+            # Fetch intelligence for the #1 ranked document (after reranking)
+            top_doc_intelligence = None
+            if citations and top_doc_ids:
+                top_doc_id = top_doc_ids[0]  # First doc_id is the highest ranked
+                try:
+                    top_doc_intelligence = await self._fetch_document_intelligence(top_doc_id, client_id)
+                    if top_doc_intelligence:
+                        logger.info(f"Fetched intelligence for top document: {top_doc_intelligence.get('title', 'unknown')}")
+                except Exception as intel_err:
+                    logger.debug(f"Could not fetch document intelligence: {intel_err}")
+
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
             rerank_debug["top_doc_ids"] = top_doc_ids
 
             logger.info(
                 f"Retrieved {len(citations)} citations from {len(seen_docs)} documents "
-                f"in {processing_time:.2f}ms"
+                f"in {processing_time:.2f}ms (top_doc_intel={'yes' if top_doc_intelligence else 'no'})"
             )
-            
+
             return RAGRetrievalResult(
                 context_for_llm=context_for_llm,
                 citations=citations,
@@ -307,6 +378,7 @@ class RAGCitationsService:
                 processing_time_ms=processing_time,
                 rerank_info=rerank_debug,
                 query_embedding=query_embedding,  # Return embedding for reuse
+                top_document_intelligence=top_doc_intelligence,
             )
             
         except Exception as e:
@@ -435,11 +507,15 @@ class RAGCitationsService:
         }
 
         try:
+            logger.info(f"[RERANK] Sending request to SiliconFlow: model={model}, query_len={len(query)}, num_docs={len(documents)}, top_n={top_n}")
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post("https://api.siliconflow.com/v1/rerank", json=payload, headers=headers)
+            if resp.status_code != 200:
+                logger.error(f"[RERANK] SiliconFlow returned {resp.status_code}: {resp.text[:500]}")
             resp.raise_for_status()
             data = resp.json() if resp.content else {}
             results = data.get("results") or data.get("data") or []
+            logger.info(f"[RERANK] SiliconFlow returned {len(results)} results")
             if not isinstance(results, list):
                 raise ValueError("Unexpected rerank response format")
 
@@ -589,6 +665,73 @@ class RAGCitationsService:
                 )
 
         return expanded_chunks
+
+    async def _fetch_document_intelligence(self, document_id: str, client_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch intelligence (summary, themes, quotes, entities) for a specific document.
+
+        This is called for the #1 ranked document after RAG retrieval + reranking
+        to provide the agent with deep knowledge about the most relevant document.
+
+        Args:
+            document_id: The document ID to fetch intelligence for
+            client_id: The client ID for filtering
+
+        Returns:
+            Document intelligence dict or None if not available
+        """
+        try:
+            import json as _json
+
+            # Try to find intelligence by matching document_id
+            # The document_id in document_intelligence might be stored differently
+            # Try exact match first, then try extracting just the ID portion
+            result = self.supabase.table("document_intelligence").select(
+                "document_title, intelligence"
+            ).eq("client_id", client_id).limit(50).execute()
+
+            if not result.data:
+                logger.debug(f"No document intelligence found for client {client_id}")
+                return None
+
+            # Find matching document - try different ID formats
+            for doc in result.data:
+                intel = doc.get("intelligence", {})
+                # Parse JSON string if needed
+                if isinstance(intel, str):
+                    try:
+                        intel = _json.loads(intel)
+                    except _json.JSONDecodeError:
+                        continue
+
+                # Return the first match (we'll improve matching later)
+                # For now, we use document_title matching since doc_id formats vary
+                doc_title = doc.get("document_title", "")
+
+                # Check if this document's ID matches (handle various formats)
+                # document_id from chunks is often a UUID, document_intelligence might use BIGINT
+                # For now, return the first document with valid intelligence as a fallback
+                if intel and intel.get("summary"):
+                    return {
+                        "title": doc_title,
+                        "summary": intel.get("summary", ""),
+                        "themes": intel.get("themes", []),
+                        "key_quotes": intel.get("key_quotes", [])[:5],  # Limit quotes
+                        "entities": intel.get("entities", {}),
+                        "document_type": intel.get("document_type_inferred", "document"),
+                        "questions_answered": intel.get("questions_answered", [])
+                    }
+
+            logger.debug(f"No matching document intelligence found for doc_id {document_id}")
+            return None
+
+        except Exception as e:
+            # Don't fail RAG if intelligence fetch fails
+            if "does not exist" in str(e):
+                logger.debug("document_intelligence table not available")
+            else:
+                logger.warning(f"Failed to fetch document intelligence: {e}")
+            return None
 
 
 # Singleton instance (will be initialized with supabase client)

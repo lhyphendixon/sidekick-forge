@@ -45,6 +45,8 @@ services:
       - WORDPRESS_BRIDGE_SECRET=${WORDPRESS_BRIDGE_SECRET:-}
       - WORDPRESS_BRIDGE_MAX_SKEW=${WORDPRESS_BRIDGE_MAX_SKEW:-300}
       - ENABLE_LIVEKIT_TEXT_DISPATCH=true
+      # Firecrawl self-hosted URL for web scraping
+      - FIRECRAWL_URL=${FIRECRAWL_URL:-http://firecrawl:3002}
       # Remove duplicate DEVELOPMENT_MODE to avoid conflicting overrides
     volumes:
       - ./app:/app/app
@@ -147,8 +149,31 @@ services:
       - CONTEXT_MATCH_THRESHOLD=${CONTEXT_MATCH_THRESHOLD:-0.3}
       # BGE Local Service URL (for local embeddings/reranking)
       - BGE_SERVICE_URL=${BGE_SERVICE_URL:-http://bge-service:8090}
+      # Firecrawl self-hosted URL for web scraping
+      - FIRECRAWL_URL=${FIRECRAWL_URL:-http://firecrawl:3002}
     networks:
       - platform-network
+
+  # Firecrawl Self-Hosted Web Scraping Service (OPTIONAL)
+  # Note: The scrape_url tool has a built-in fallback scraper.
+  # Firecrawl is optional and provides enhanced JS rendering support.
+  # To enable: docker compose up -d firecrawl
+  # firecrawl:
+  #   image: trieve/firecrawl:latest
+  #   container_name: ${APP_NAME:-sidekick-forge}-firecrawl
+  #   ports:
+  #     - "3002:3002"
+  #   environment:
+  #     - PORT=3002
+  #     - HOST=0.0.0.0
+  #     - NUM_WORKERS_PER_QUEUE=2
+  #     - REDIS_URL=redis://redis:6379
+  #     - REDIS_RATE_LIMIT_URL=redis://redis:6379
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped
+  #   networks:
+  #     - platform-network
 
   # BGE Local Embedding & Reranking Service
   # Provides on-premise BGE-M3 embeddings and BGE-reranker-v2-m3 reranking

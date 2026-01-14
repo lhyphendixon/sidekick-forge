@@ -678,6 +678,20 @@ class DocumentProcessor:
 
                 logger.info(f"Created {len(chunks)} chunks for web document {document_id}")
 
+                # Fetch document title and source URL for chunk metadata
+                doc_title = None
+                doc_source_url = None
+                try:
+                    doc_result = supabase_client.table('documents').select(
+                        'title, metadata'
+                    ).eq('id', int(document_id)).limit(1).execute()
+                    if doc_result.data:
+                        doc_title = doc_result.data[0].get('title')
+                        metadata = doc_result.data[0].get('metadata') or {}
+                        doc_source_url = metadata.get('url') or metadata.get('source_url') or ''
+                except Exception as e:
+                    logger.warning(f"Could not fetch document metadata for {document_id}: {e}")
+
                 # Generate embeddings for document and chunks
                 document_embeddings = await self._generate_document_embeddings(
                     cleaned_text[:2000], client_settings
@@ -695,6 +709,8 @@ class DocumentProcessor:
                             embeddings=chunk_embeddings,
                             client_id=client_id,
                             supabase=supabase_client,
+                            document_title=doc_title,
+                            document_source_url=doc_source_url,
                         )
 
                         if chunk_id:
@@ -906,6 +922,20 @@ class DocumentProcessor:
 
                 logger.info(f"Created {len(chunks)} chunks for document {document_id}")
 
+                # Fetch document title and source URL for chunk metadata
+                doc_title = None
+                doc_source_url = None
+                try:
+                    doc_result = supabase_client.table('documents').select(
+                        'title, metadata'
+                    ).eq('id', int(document_id)).limit(1).execute()
+                    if doc_result.data:
+                        doc_title = doc_result.data[0].get('title')
+                        metadata = doc_result.data[0].get('metadata') or {}
+                        doc_source_url = metadata.get('url') or metadata.get('source_url') or ''
+                except Exception as e:
+                    logger.warning(f"Could not fetch document metadata for {document_id}: {e}")
+
                 # Generate embeddings for document and chunks
                 document_embeddings = await self._generate_document_embeddings(
                     cleaned_text[:2000], client_settings
@@ -923,6 +953,8 @@ class DocumentProcessor:
                             embeddings=chunk_embeddings,
                             client_id=client_id,
                             supabase=supabase_client,
+                            document_title=doc_title,
+                            document_source_url=doc_source_url,
                         )
 
                         if chunk_id:
@@ -1254,7 +1286,9 @@ class DocumentProcessor:
         chunk_index: int,
         embeddings: Optional[List[float]] = None,
         client_id: str = None,
-        supabase=None
+        supabase=None,
+        document_title: str = None,
+        document_source_url: str = None
     ) -> Optional[str]:
         """Store a document chunk in Supabase"""
         try:
@@ -1264,17 +1298,20 @@ class DocumentProcessor:
             except ValueError:
                 # If it's not a valid int, keep as string (UUID case)
                 doc_id_for_chunk = document_id
-            
+
             chunk_data = {
                 'id': str(uuid.uuid4()),
                 'document_id': doc_id_for_chunk,
                 'content': chunk_text,
                 'chunk_index': chunk_index,
                 'embeddings': embeddings,  # Store in vector column for pgvector similarity search
+                'document_title': document_title,  # Store document title for RAG context
+                'document_source_url': document_source_url,  # Store source URL for web documents
                 'chunk_metadata': {
                     'word_count': len(chunk_text.split()),
                     'character_count': len(chunk_text),
-                    'has_embeddings': bool(embeddings)
+                    'has_embeddings': bool(embeddings),
+                    'document_title': document_title,  # Also in metadata for flexibility
                 }
             }
             

@@ -149,6 +149,65 @@
     color: #9ca3af;
 }
 
+/* DocumentSense Citation Styling - Orange theme with white text */
+.citation-item.citation-documentsense {
+    background: #fc7244;
+    border-color: #fc7244;
+}
+
+.dark .citation-item.citation-documentsense,
+[data-theme="dark"] .citation-item.citation-documentsense {
+    background: #fc7244;
+    border-color: #fc7244;
+}
+
+.citation-item.citation-documentsense:hover {
+    background: #e5663d;
+    border-color: #e5663d;
+}
+
+.dark .citation-item.citation-documentsense:hover,
+[data-theme="dark"] .citation-item.citation-documentsense:hover {
+    background: #e5663d;
+}
+
+.citation-item.citation-documentsense .citation-index {
+    background: rgba(255, 255, 255, 0.25);
+    color: white;
+}
+
+.citation-item.citation-documentsense .citation-link {
+    color: white;
+}
+
+.citation-item.citation-documentsense .citation-link:hover {
+    color: white;
+    opacity: 0.9;
+}
+
+.dark .citation-item.citation-documentsense .citation-link,
+[data-theme="dark"] .citation-item.citation-documentsense .citation-link {
+    color: white;
+}
+
+.dark .citation-item.citation-documentsense .citation-link:hover,
+[data-theme="dark"] .citation-item.citation-documentsense .citation-link:hover {
+    color: white;
+    opacity: 0.9;
+}
+
+.citation-item.citation-documentsense .citation-domain,
+.citation-item.citation-documentsense .citation-chunk-count {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.dark .citation-item.citation-documentsense .citation-domain,
+[data-theme="dark"] .citation-item.citation-documentsense .citation-domain,
+.dark .citation-item.citation-documentsense .citation-chunk-count,
+[data-theme="dark"] .citation-item.citation-documentsense .citation-chunk-count {
+    color: rgba(255, 255, 255, 0.8);
+}
+
 /* Expand Button - compact inline style */
 .citations-expand-btn {
     margin-top: 4px;

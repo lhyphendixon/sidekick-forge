@@ -443,11 +443,11 @@
     })();
   </script>
   {% endif %}
-  <link rel="stylesheet" href="/static/css/citations.css?v=20260107a">
-  <link rel="stylesheet" href="/static/css/widgets.css">
-  <script src="/static/js/citations.js?v=20260107a"></script>
+  <link rel="stylesheet" href="/static/css/citations.css?v=20260114b">
+  <link rel="stylesheet" href="/static/css/widgets.css?v=20260114e">
+  <script src="/static/js/citations.js?v=20260114c"></script>
   <script src="/static/js/widgets.js?v=20260102c"></script>
-  <script src="/static/js/content-catalyst-widget.js?v=20260102d"></script>
+  <script src="/static/js/content-catalyst-widget.js?v=20260114c"></script>
 </head>
 <body style="background: #000000;">
   <div class="w-full p-3 md:p-4 h-full" style="min-height: min(700px, 95vh);">
@@ -1203,7 +1203,7 @@
 
       // Create wrapper div for the widget
       const widgetWrapper = document.createElement('div');
-      widgetWrapper.className = 'flex flex-col items-start widget-wrapper';
+      widgetWrapper.className = 'flex flex-col widget-wrapper';
 
       // Merge config with context data
       const widgetConfig = {
@@ -1323,6 +1323,22 @@
       const div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
+    }
+
+    // Convert URLs in text to clickable links (call after escapeHtml for security)
+    function linkifyUrls(escapedText) {
+      // URL regex pattern - matches http/https URLs
+      const urlPattern = /(https?:\/\/[^\s<>"']+)/gi;
+      return escapedText.replace(urlPattern, (url) => {
+        // Decode HTML entities that might be in the URL from escapeHtml
+        const cleanUrl = url.replace(/&amp;/g, '&');
+        return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="text-brand-teal hover:underline break-all">${url}</a>`;
+      });
+    }
+
+    // Escape HTML and convert URLs to clickable links
+    function escapeAndLinkify(text) {
+      return linkifyUrls(escapeHtml(text));
     }
 
     function iterateTrackPublications(participant, callback) {
@@ -1557,7 +1573,8 @@
     }
 
     function ingestLivekitTranscript(payload, fallbackRole){
-      if (!LIVEKIT_TRANSCRIPT_FALLBACK) { return; }
+      // Always process LiveKit transcripts - they provide real-time UI updates
+      // Supabase Realtime is a backup/sync mechanism, not the primary display source
       try {
         if (!payload) { return; }
         const role = payload.role || fallbackRole || 'assistant';
@@ -2022,7 +2039,7 @@ function clearVoiceTranscriptError(){
       if (welcome) welcome.remove();
 
       const wrap = document.createElement('div'); wrap.className='flex justify-end';
-      wrap.innerHTML = `<div class="max-w-[80%] px-4 py-3 rounded-2xl msg-user text-white">${escapeHtml(text)}</div>`;
+      wrap.innerHTML = `<div class="max-w-[80%] px-4 py-3 rounded-2xl msg-user text-white">${escapeAndLinkify(text)}</div>`;
       chatMessages.appendChild(wrap);
       if (shouldScroll) scrollBottom();
     }
@@ -2192,7 +2209,7 @@ function clearVoiceTranscriptError(){
             if (isUser) {
               const currentText = bubble.textContent || '';
               if (newText.length >= currentText.length) {
-                bubble.textContent = newText;
+                bubble.innerHTML = escapeAndLinkify(newText);
               }
               // else: skip update - probably an out-of-order interim result
             } else {
@@ -2218,10 +2235,29 @@ function clearVoiceTranscriptError(){
       }
     }
 
+    // Content-based deduplication for transcripts (catches duplicates from different sources)
+    let __recentTranscriptTexts = [];
+    function isRecentDuplicateText(role, text) {
+      if (!text || text.length < 5) return false;
+      const normalizedText = text.trim().toLowerCase().slice(0, 100);
+      const key = `${role}:${normalizedText}`;
+      if (__recentTranscriptTexts.includes(key)) return true;
+      __recentTranscriptTexts.push(key);
+      // Keep only last 10 entries to avoid memory bloat
+      if (__recentTranscriptTexts.length > 10) __recentTranscriptTexts.shift();
+      return false;
+    }
+
     function appendVoiceTranscript(role, text, createdAt, citations, id){
       try {
         if (id && markTranscriptSeen(id)) {
-          try { console.log('[voice] appendVoiceTranscript SKIPPED (already seen):', id?.slice(0,8), role); } catch {}
+          try { console.log('[voice] appendVoiceTranscript SKIPPED (already seen by ID):', id?.slice(0,8), role); } catch {}
+          return;
+        }
+        // Content-based deduplication - catches same text from different sources (LiveKit vs Supabase)
+        if (isRecentDuplicateText(role, text)) {
+          try { console.log('[voice] appendVoiceTranscript SKIPPED (duplicate text):', id?.slice(0,8), role, text?.slice(0,30)); } catch {}
+          if (id) markTranscriptSeen(id); // Still mark ID as seen
           return;
         }
         try { console.log('[voice] appendVoiceTranscript ADDING:', id?.slice(0,8), role, text?.slice(0,30)); } catch {}
@@ -2236,9 +2272,9 @@ function clearVoiceTranscriptError(){
         bubble.className = (isUser
           ? 'max-w-[80%] px-4 py-3 rounded-2xl msg-user text-white'
           : 'max-w-[80%] px-4 py-3 rounded-2xl msg-assistant text-white/90 prose prose-invert prose-sm max-w-none');
-        // Render markdown for assistant messages, plain text for user
+        // Render markdown for assistant messages, linkify URLs for user messages
         if (isUser) {
-          bubble.textContent = text || '';
+          bubble.innerHTML = escapeAndLinkify(text || '');
         } else {
           // Use marked + DOMPurify for markdown rendering (same as text mode)
           // Debug: log what we're receiving
@@ -2410,7 +2446,7 @@ function clearVoiceTranscriptError(){
               ? 'max-w-[80%] px-4 py-3 rounded-2xl msg-user text-white'
               : 'max-w-[80%] px-4 py-3 rounded-2xl msg-assistant text-white/90 prose prose-invert prose-sm max-w-none');
             if (isUser) {
-              bubble.textContent = txt;
+              bubble.innerHTML = escapeAndLinkify(txt);
             } else {
               const rawText = txt.replace(/\\n/g, '\n');
               bubble.innerHTML = (window.marked && window.DOMPurify)
@@ -2561,6 +2597,7 @@ function clearVoiceTranscriptError(){
       try {
         window.__lk_transcript_seen = {};
         __seenTranscriptIds = new Set();
+        __recentTranscriptTexts = [];
       } catch {}
       let playbackPrimed = false;
       try {
@@ -2982,8 +3019,46 @@ function clearVoiceTranscriptError(){
       try {
         const transcriptionEvent = RoomEvent.TranscriptionReceived;
         if (transcriptionEvent) {
-          roomConn.on(transcriptionEvent, (evt) => {
-            ingestLivekitTranscript(evt, 'assistant');
+          roomConn.on(transcriptionEvent, (segments, participant, publication) => {
+            try {
+              console.log('[voice] TranscriptionReceived', {
+                segments: segments?.length,
+                participant: participant?.identity,
+                isFinal: segments?.[0]?.final
+              });
+              // LiveKit sends segments array - combine them into transcript
+              if (segments && segments.length > 0) {
+                const text = segments.map(s => s.text || '').join(' ').trim();
+                const isFinal = segments.some(s => s.final);
+                const segmentId = segments[0]?.id || `lk-${Date.now()}`;
+                if (text) {
+                  // Determine role from participant identity
+                  const isAgent = participant && (
+                    String(participant.identity || '').toLowerCase().includes('agent') ||
+                    participant.kind === (ParticipantKind?.AGENT || 1)
+                  );
+                  const role = isAgent ? 'assistant' : 'user';
+
+                  if (isFinal) {
+                    // Final transcript - display it
+                    ingestLivekitTranscript({
+                      text,
+                      role,
+                      id: segmentId,
+                      createdAt: new Date().toISOString()
+                    }, role);
+                  } else {
+                    // Interim transcript - update existing bubble or create temp one
+                    const tempId = `interim-${participant?.identity || 'unknown'}`;
+                    if (!updateVoiceTranscript(tempId, text, role)) {
+                      appendVoiceTranscript(role, text, new Date().toISOString(), [], tempId);
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.warn('[voice] TranscriptionReceived handler error', err);
+            }
           });
         }
       } catch {}
@@ -3085,7 +3160,7 @@ function clearVoiceTranscriptError(){
           delete elementsMap[key];
         });
       } catch {}
-      try { window.__lk_transcript_seen = {}; __seenTranscriptIds = new Set(); } catch {}
+      try { window.__lk_transcript_seen = {}; __seenTranscriptIds = new Set(); __recentTranscriptTexts = []; } catch {}
       try { delete window.__voicePlaybackPrimed; } catch {}
     }
 
@@ -3642,10 +3717,14 @@ function clearVoiceTranscriptError(){
         bubble.appendChild(roleLabel);
       }
 
-      // Add text content
+      // Add text content (linkify URLs for user messages)
       const textSpan = document.createElement('span');
       textSpan.className = 'transcript-text';
-      textSpan.textContent = text;
+      if (isUser) {
+        textSpan.innerHTML = escapeAndLinkify(text);
+      } else {
+        textSpan.textContent = text;
+      }
       bubble.appendChild(textSpan);
 
       if (id) {
@@ -3694,7 +3773,7 @@ function clearVoiceTranscriptError(){
             // This prevents out-of-order STT updates from overwriting the full message
             const currentText = textSpan.textContent || '';
             if (text.length >= currentText.length) {
-              textSpan.textContent = text;
+              textSpan.innerHTML = escapeAndLinkify(text);
             }
             // else: skip update - probably an out-of-order interim result
           } else {

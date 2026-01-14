@@ -24,12 +24,16 @@ router = APIRouter(prefix="/content-catalyst", tags=["content-catalyst"])
 
 class ContentCatalystStartRequest(BaseModel):
     """Request to start a Content Catalyst run."""
-    source_type: str = Field(..., description="Type of source: 'mp3', 'url', or 'text'")
+    source_type: str = Field(..., description="Type of source: 'mp3', 'url', 'text', or 'document'")
     source_content: str = Field(..., description="The source content (URL, text, or storage path)")
     target_word_count: int = Field(default=1500, ge=500, le=10000)
     style_prompt: Optional[str] = Field(None, description="Optional style guidance")
     use_perplexity: bool = Field(default=True)
     use_knowledge_base: bool = Field(default=True)
+    # New fields for document source and text instructions
+    document_id: Optional[int] = Field(None, description="Document ID for 'document' source type")
+    document_title: Optional[str] = Field(None, description="Document title for display")
+    text_instructions: Optional[str] = Field(None, description="Additional instructions for content generation")
 
 
 class ContentCatalystStartResponse(BaseModel):
@@ -83,30 +87,59 @@ async def start_content_catalyst(
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
 
-        # Check if Content Catalyst is enabled (check platform DB)
+        # Check if Content Catalyst is enabled
+        # Can be enabled at client level OR agent level (via agent_tools)
         platform_sb = client_service.supabase
+        content_catalyst_enabled = False
+        has_llm_key = False
+
         try:
+            # Check client-level enablement
             result = platform_sb.table("clients").select(
                 "content_catalyst_enabled, groq_api_key, openai_api_key, anthropic_api_key, deepinfra_api_key"
             ).eq("id", client_id).maybe_single().execute()
             if result.data:
-                if not result.data.get("content_catalyst_enabled", False):
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Content Catalyst is not enabled for this client"
-                    )
-                # Check for at least one LLM API key
+                content_catalyst_enabled = result.data.get("content_catalyst_enabled", False)
                 has_llm_key = any([
                     result.data.get("groq_api_key"),
                     result.data.get("openai_api_key"),
                     result.data.get("anthropic_api_key"),
                     result.data.get("deepinfra_api_key"),
                 ])
-                if not has_llm_key:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="No LLM API key configured. Content Catalyst requires an LLM API key (Groq, OpenAI, Anthropic, or DeepInfra)."
-                    )
+
+            # If not enabled at client level, check if enabled for this specific agent
+            if not content_catalyst_enabled and agent_id:
+                from app.utils.supabase_credentials import SupabaseCredentialManager
+                creds = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+                if creds:
+                    client_supabase_url, _, client_service_key = creds
+                    from supabase import create_client
+                    client_sb = create_client(client_supabase_url, client_service_key)
+
+                    # Check agent_tools for content_catalyst ability
+                    agent_tools_result = client_sb.table("agent_tools") \
+                        .select("id") \
+                        .eq("agent_id", agent_id) \
+                        .eq("tool_type", "content_catalyst") \
+                        .eq("enabled", True) \
+                        .maybe_single() \
+                        .execute()
+
+                    if agent_tools_result.data:
+                        content_catalyst_enabled = True
+                        logger.info(f"Content Catalyst enabled for agent {agent_id} via agent_tools")
+
+            if not content_catalyst_enabled:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Content Catalyst is not enabled for this client or agent"
+                )
+
+            if not has_llm_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No LLM API key configured. Content Catalyst requires an LLM API key (Groq, OpenAI, Anthropic, or DeepInfra)."
+                )
         except HTTPException:
             raise
         except Exception as e:
@@ -125,7 +158,7 @@ async def start_content_catalyst(
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid source_type: {request.source_type}. Must be 'mp3', 'url', or 'text'"
+                detail=f"Invalid source_type: {request.source_type}. Must be 'mp3', 'url', 'text', or 'document'"
             )
 
         # For MP3 sources, check STT configuration
@@ -143,6 +176,14 @@ async def start_content_catalyst(
                     detail="Deepgram API key not configured. Required for audio transcription."
                 )
 
+        # For document sources, validate document_id is provided
+        if source_type_enum == SourceType.DOCUMENT:
+            if not request.document_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="document_id is required when source_type is 'document'"
+                )
+
         # Create config
         config = ContentCatalystConfig(
             source_type=source_type_enum,
@@ -151,6 +192,9 @@ async def start_content_catalyst(
             style_prompt=request.style_prompt,
             use_perplexity=request.use_perplexity,
             use_knowledge_base=request.use_knowledge_base,
+            document_id=request.document_id,
+            document_title=request.document_title,
+            text_instructions=request.text_instructions,
         )
 
         # Get the service (pass agent_id for per-agent configuration)
@@ -422,4 +466,91 @@ async def store_widget_result(
 
     except Exception as e:
         logger.error(f"Failed to store widget result: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DocumentListItem(BaseModel):
+    """Document item for Content Catalyst picker."""
+    id: int
+    title: str
+    created_at: str
+    document_type: Optional[str] = None
+
+
+class DocumentListResponse(BaseModel):
+    """Response with list of documents for Content Catalyst picker."""
+    documents: list[DocumentListItem]
+
+
+@router.get("/documents/{agent_id}", response_model=DocumentListResponse)
+async def get_agent_documents(
+    agent_id: str,
+    client_id: str = Query(...),
+    client_service: ClientService = Depends(get_client_service),
+):
+    """
+    Get list of documents assigned to an agent for Content Catalyst selection.
+
+    Returns documents from the agent_documents junction table that are enabled
+    and have completed processing.
+    """
+    try:
+        from app.utils.supabase_credentials import SupabaseCredentialManager
+
+        # Get client's Supabase
+        creds = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        if not creds:
+            logger.error(f"Could not get Supabase credentials for client {client_id}")
+            raise HTTPException(status_code=404, detail="Client not found or Supabase not configured")
+
+        client_supabase_url, _, client_service_key = creds
+        from supabase import create_client
+        client_sb = create_client(client_supabase_url, client_service_key)
+
+        # Query documents assigned to this agent
+        # First get the document IDs from agent_documents
+        agent_docs_result = client_sb.table('agent_documents') \
+            .select('document_id') \
+            .eq('agent_id', agent_id) \
+            .eq('enabled', True) \
+            .execute()
+
+        logger.info(f"Agent documents query for {agent_id}: {len(agent_docs_result.data or [])} assignments found")
+
+        documents = []
+        if agent_docs_result.data:
+            doc_ids = [item.get('document_id') for item in agent_docs_result.data if item.get('document_id')]
+            logger.info(f"Document IDs to fetch: {doc_ids}")
+
+            if doc_ids:
+                # Fetch document details
+                docs_result = client_sb.table('documents') \
+                    .select('id, title, created_at, document_type, processing_status') \
+                    .in_('id', doc_ids) \
+                    .execute()
+
+                logger.info(f"Documents fetched: {len(docs_result.data or [])} documents")
+
+                for doc in (docs_result.data or []):
+                    # Include all enabled documents - they have content if they're assigned
+                    # Statuses: completed, processed, summarizing, chunking, embedding, etc.
+                    status = doc.get('processing_status', '')
+                    logger.debug(f"Document {doc.get('id')} '{doc.get('title')}' status: {status}")
+                    # Exclude only failed documents
+                    if status != 'failed':
+                        documents.append(DocumentListItem(
+                            id=doc.get('id'),
+                            title=doc.get('title') or 'Untitled',
+                            created_at=doc.get('created_at', ''),
+                            document_type=doc.get('document_type'),
+                        ))
+
+        # Sort by created_at descending (newest first)
+        documents.sort(key=lambda x: x.created_at, reverse=True)
+
+        logger.info(f"Retrieved {len(documents)} documents for agent {agent_id}")
+        return DocumentListResponse(documents=documents)
+
+    except Exception as e:
+        logger.error(f"Failed to get agent documents: {e}")
         raise HTTPException(status_code=500, detail=str(e))

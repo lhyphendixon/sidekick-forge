@@ -326,11 +326,14 @@ class SidekickAgent(voice.Agent):
             skip_knowledge = self._citations_enabled and self._client_id
             # Reuse cached embedding from citations_service if available (saves ~1s API call)
             cached_embedding = getattr(self, '_cached_query_embedding', None) if skip_knowledge else None
+            # Pass top document intelligence from RAG result (DocumentSense - only the #1 ranked document)
+            top_doc_intel = getattr(self, '_top_document_intelligence', None) if skip_knowledge else None
             ctx = await self._context_manager.build_complete_context(
                 user_message=user_text,
                 user_id=self._user_id or "unknown",
                 skip_knowledge_rag=skip_knowledge,
-                cached_query_embedding=cached_embedding
+                cached_query_embedding=cached_embedding,
+                top_document_intelligence=top_doc_intel
             )
 
             enhanced = ctx.get("enhanced_system_prompt") if isinstance(ctx, dict) else None
@@ -486,6 +489,9 @@ class SidekickAgent(voice.Agent):
 
             # Cache the query embedding for reuse in conversation RAG (saves ~1s API call)
             self._cached_query_embedding = result.query_embedding
+
+            # Store top document intelligence for context injection (DocumentSense)
+            self._top_document_intelligence = result.top_document_intelligence
 
             # Store citations for inclusion in the final response
             self._current_citations = [
@@ -753,6 +759,35 @@ class SidekickAgent(voice.Agent):
                         # Generate turn_id once and store it for deduplication
                         if not self._current_turn_id:
                             self._current_turn_id = str(uuid.uuid4())
+
+                        # Ensure conversation record exists before first INSERT (FK constraint)
+                        try:
+                            existing = await asyncio.to_thread(
+                                lambda: self._supabase_client
+                                    .table("conversations")
+                                    .select("id")
+                                    .eq("id", self._conversation_id)
+                                    .limit(1)
+                                    .execute()
+                            )
+                            if not existing or not getattr(existing, "data", None):
+                                conv_payload = {
+                                    "id": self._conversation_id,
+                                    "agent_id": self._agent_id,
+                                    "user_id": self._user_id,
+                                    "channel": "voice",
+                                    "created_at": timestamp,
+                                    "updated_at": timestamp,
+                                }
+                                await asyncio.to_thread(
+                                    lambda: self._supabase_client
+                                        .table("conversations")
+                                        .insert(conv_payload)
+                                        .execute()
+                                )
+                                logger.info(f"📝 Created conversation record: {self._conversation_id[:8]}")
+                        except Exception as conv_err:
+                            logger.warning(f"📝 Failed to ensure conversation exists: {conv_err}")
 
                         # DIAGNOSTIC: Log INSERT operation
                         logger.info(f"📝 INSERT transcript: call_id={call_id}, turn_id={self._current_turn_id[:8]}, text='{formatted_text[:50]}...'")

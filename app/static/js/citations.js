@@ -22,11 +22,19 @@ class CitationsComponent {
 
         // Group citations by document
         const docGroups = this.groupCitationsByDocument(citations);
-        
-        // Sort by best similarity and limit to max documents
-        const topDocuments = docGroups
-            .sort((a, b) => b.bestSimilarity - a.bestSimilarity)
-            .slice(0, this.maxDocumentsShown);
+
+        // Sort: DocumentSense citations first, then by similarity
+        const sortedDocGroups = this.sortDocGroups(docGroups);
+
+        // Check if we have a DocumentSense citation
+        const hasDocumentSense = sortedDocGroups.some(doc =>
+            doc.source === 'documentsense' || (doc.title && doc.title.startsWith('DocumentSense:'))
+        );
+
+        // If DocumentSense is present, show 2 documents (DocumentSense + top RAG)
+        // Otherwise, show the default maxDocumentsShown (1)
+        const docsToShow = hasDocumentSense ? Math.min(2, sortedDocGroups.length) : this.maxDocumentsShown;
+        const topDocuments = sortedDocGroups.slice(0, docsToShow);
 
         // Create container
         const container = document.createElement('div');
@@ -60,8 +68,8 @@ class CitationsComponent {
         container.appendChild(citationsList);
 
         // Add expand/collapse functionality if there are more documents than shown
-        if (docGroups.length > this.maxDocumentsShown) {
-            this.addExpandButton(container, citations, docGroups.length, messageId);
+        if (sortedDocGroups.length > docsToShow) {
+            this.addExpandButton(container, citations, sortedDocGroups.length, messageId, docsToShow);
         }
 
         return container;
@@ -76,20 +84,24 @@ class CitationsComponent {
         const groups = new Map();
 
         citations.forEach(citation => {
-            if (!groups.has(citation.doc_id)) {
-                groups.set(citation.doc_id, {
-                    doc_id: citation.doc_id,
+            // Use document_id if doc_id is not present (for DocumentSense citations)
+            const docId = citation.doc_id || citation.document_id || citation.id;
+
+            if (!groups.has(docId)) {
+                groups.set(docId, {
+                    doc_id: docId,
                     title: citation.title,
                     source_url: citation.source_url,
                     source_type: citation.source_type,
+                    source: citation.source,  // Preserve source field for DocumentSense detection
                     chunks: [],
-                    bestSimilarity: citation.similarity
+                    bestSimilarity: citation.similarity || 1.0
                 });
             }
 
-            const group = groups.get(citation.doc_id);
+            const group = groups.get(docId);
             group.chunks.push(citation);
-            group.bestSimilarity = Math.max(group.bestSimilarity, citation.similarity);
+            group.bestSimilarity = Math.max(group.bestSimilarity, citation.similarity || 1.0);
         });
 
         return Array.from(groups.values());
@@ -103,27 +115,32 @@ class CitationsComponent {
      */
     createCitationItem(docGroup, index) {
         const item = document.createElement('div');
-        item.className = 'citation-item';
-        
+
+        // Check if this is a DocumentSense citation
+        const isDocumentSense = docGroup.source === 'documentsense' ||
+                                (docGroup.title && docGroup.title.startsWith('DocumentSense:'));
+
+        item.className = isDocumentSense ? 'citation-item citation-documentsense' : 'citation-item';
+
         // Extract domain from URL for display
         const domain = this.extractDomain(docGroup.source_url);
-        
+
         // Truncate long titles
         const displayTitle = this.truncateText(docGroup.title, 50);
-        
+
         item.innerHTML = `
             <div class="citation-content">
                 <span class="citation-index">[${index}]</span>
-                <a href="${docGroup.source_url}" 
-                   target="_blank" 
+                <a href="${docGroup.source_url}"
+                   target="_blank"
                    rel="noopener noreferrer"
                    class="citation-link"
                    title="${docGroup.title}">
                     ${displayTitle}
                 </a>
                 <span class="citation-domain">${domain}</span>
-                ${docGroup.chunks.length > 1 ? 
-                    `<span class="citation-chunk-count">(${docGroup.chunks.length} sections)</span>` : 
+                ${docGroup.chunks.length > 1 ?
+                    `<span class="citation-chunk-count">(${docGroup.chunks.length} sections)</span>` :
                     ''}
             </div>
         `;
@@ -234,12 +251,16 @@ class CitationsComponent {
      * @param {Array} allCitations - All citations array
      * @param {number} totalDocCount - Total number of unique documents
      * @param {string} messageId - Message ID
+     * @param {number} currentlyShown - Number of documents currently shown
      */
-    addExpandButton(container, allCitations, totalDocCount, messageId) {
-        const hiddenCount = totalDocCount - this.maxDocumentsShown;
+    addExpandButton(container, allCitations, totalDocCount, messageId, currentlyShown) {
+        const hiddenCount = totalDocCount - currentlyShown;
         const expandButton = document.createElement('button');
         expandButton.className = 'citations-expand-btn';
-        expandButton.textContent = `+${hiddenCount} more source${hiddenCount > 1 ? 's' : ''}`;
+        expandButton.textContent = `view ${hiddenCount} more source${hiddenCount > 1 ? 's' : ''}`;
+
+        // Store currentlyShown on the container for collapse
+        container.setAttribute('data-docs-shown', currentlyShown);
 
         expandButton.addEventListener('click', () => {
             // Toggle expanded state
@@ -258,6 +279,21 @@ class CitationsComponent {
     }
 
     /**
+     * Sort document groups: DocumentSense first, then by similarity
+     * @param {Array} docGroups - Array of document groups
+     * @returns {Array} Sorted document groups
+     */
+    sortDocGroups(docGroups) {
+        return docGroups.sort((a, b) => {
+            const aIsDS = a.source === 'documentsense' || (a.title && a.title.startsWith('DocumentSense:'));
+            const bIsDS = b.source === 'documentsense' || (b.title && b.title.startsWith('DocumentSense:'));
+            if (aIsDS && !bIsDS) return -1;
+            if (!aIsDS && bIsDS) return 1;
+            return b.bestSimilarity - a.bestSimilarity;
+        });
+    }
+
+    /**
      * Expand citations to show all documents
      * @param {HTMLElement} container - Citations container
      * @param {Array} allCitations - All citations array
@@ -265,18 +301,19 @@ class CitationsComponent {
      */
     expandCitations(container, allCitations, messageId) {
         const docGroups = this.groupCitationsByDocument(allCitations);
+        const sortedDocGroups = this.sortDocGroups(docGroups);
         const citationsList = container.querySelector('.citations-list');
         const expandBtn = container.querySelector('.citations-expand-btn');
-        
+
         // Clear current list
         citationsList.innerHTML = '';
-        
+
         // Add all documents
-        docGroups.forEach((docGroup, index) => {
+        sortedDocGroups.forEach((docGroup, index) => {
             const citationItem = this.createCitationItem(docGroup, index + 1);
             citationsList.appendChild(citationItem);
         });
-        
+
         // Update button
         expandBtn.textContent = 'Show fewer sources';
         container.classList.add('citations-expanded');
@@ -291,9 +328,11 @@ class CitationsComponent {
      */
     collapseCitations(container, allCitations, totalDocCount, messageId) {
         const docGroups = this.groupCitationsByDocument(allCitations);
-        const topDocuments = docGroups
-            .sort((a, b) => b.bestSimilarity - a.bestSimilarity)
-            .slice(0, this.maxDocumentsShown);
+        const sortedDocGroups = this.sortDocGroups(docGroups);
+
+        // Get the number of docs to show from the stored attribute
+        const docsToShow = parseInt(container.getAttribute('data-docs-shown')) || this.maxDocumentsShown;
+        const topDocuments = sortedDocGroups.slice(0, docsToShow);
 
         const citationsList = container.querySelector('.citations-list');
         const expandBtn = container.querySelector('.citations-expand-btn');
@@ -308,8 +347,8 @@ class CitationsComponent {
         });
 
         // Update button
-        const hiddenCount = totalDocCount - this.maxDocumentsShown;
-        expandBtn.textContent = `+${hiddenCount} more source${hiddenCount > 1 ? 's' : ''}`;
+        const hiddenCount = totalDocCount - docsToShow;
+        expandBtn.textContent = `view ${hiddenCount} more source${hiddenCount > 1 ? 's' : ''}`;
         container.classList.remove('citations-expanded');
     }
 

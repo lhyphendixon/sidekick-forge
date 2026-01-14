@@ -240,6 +240,7 @@ class SourceType(str, Enum):
     MP3 = "mp3"
     URL = "url"
     TEXT = "text"
+    DOCUMENT = "document"  # Knowledge base document
 
 
 @dataclass
@@ -261,6 +262,10 @@ class ContentCatalystConfig:
     style_prompt: Optional[str] = None
     use_perplexity: bool = True
     use_knowledge_base: bool = True
+    # New fields for document source and text instructions
+    document_id: Optional[int] = None  # Document ID for DOCUMENT source type
+    document_title: Optional[str] = None  # Document title for display
+    text_instructions: Optional[str] = None  # Always-available instructions field
 
 
 @dataclass
@@ -470,6 +475,63 @@ class ContentCatalystService:
             logger.info(f"Transcription complete: {len(transcript)} characters")
             return transcript
 
+    async def _fetch_document_content(self, document_id: int) -> str:
+        """Fetch document content from knowledge base.
+
+        Args:
+            document_id: ID of the document in the documents table
+
+        Returns:
+            Combined content from all document chunks
+        """
+        if not document_id:
+            raise ValueError("Document ID is required")
+
+        logger.info(f"Fetching document content for document_id: {document_id}")
+
+        try:
+            client_sb = await self.get_client_supabase()
+
+            # First, try to get the document's main content field
+            doc_result = client_sb.table('documents') \
+                .select('content, title') \
+                .eq('id', document_id) \
+                .single() \
+                .execute()
+
+            if doc_result.data and doc_result.data.get('content'):
+                content = doc_result.data.get('content', '')
+                if content and len(content.strip()) > 0:
+                    logger.info(f"Retrieved document content from documents table: {len(content)} chars")
+                    return content
+                else:
+                    logger.info(f"Document {document_id} has empty content field, trying chunks")
+
+            # If no main content, get from document_chunks
+            chunks_result = client_sb.table('document_chunks') \
+                .select('content, chunk_index') \
+                .eq('document_id', document_id) \
+                .order('chunk_index') \
+                .execute()
+
+            if not chunks_result.data:
+                raise ValueError(f"No content found for document {document_id}")
+
+            # Combine chunks in order
+            combined_content = "\n\n".join(
+                chunk.get('content', '') for chunk in chunks_result.data
+            )
+
+            if not combined_content or len(combined_content.strip()) == 0:
+                raise ValueError(f"Document {document_id} has no text content in its chunks")
+
+            logger.info(f"Retrieved document content from {len(chunks_result.data)} chunks: {len(combined_content)} chars")
+            return combined_content
+
+        except Exception as e:
+            logger.error(f"Failed to fetch document content: {e}")
+            raise ValueError(f"Failed to fetch document: {str(e)}")
+
     async def get_platform_supabase(self):
         """Get platform Supabase client"""
         if self._platform_sb is None:
@@ -655,6 +717,24 @@ class ContentCatalystService:
                     "content": scraped.get("content", ""),
                     "weight": 1.0,
                 })
+        elif config.source_type == SourceType.DOCUMENT:
+            # Fetch document content from knowledge base
+            if progress_callback:
+                progress_callback("research", "fetching_document", "Fetching document content...")
+
+            try:
+                document_content = await self._fetch_document_content(config.document_id)
+                logger.info(f"Document fetch successful: {len(document_content)} chars")
+                session_sources.append({
+                    "type": "knowledge_base_document",
+                    "document_id": config.document_id,
+                    "title": config.document_title or "Untitled",
+                    "content": document_content,
+                    "weight": 1.0,
+                })
+            except Exception as e:
+                logger.error(f"Document fetch failed: {e}")
+                raise ValueError(f"Failed to fetch document: {str(e)}")
         else:  # TEXT
             session_sources.append({
                 "type": "text_input",
@@ -662,15 +742,37 @@ class ContentCatalystService:
                 "weight": 1.0,
             })
 
-        # Determine search query - use session source content for MP3, otherwise use source_content
-        # For MP3, extract key topics from the transcript for searching
+        # Add text instructions as additional context if provided
+        if config.text_instructions:
+            session_sources.append({
+                "type": "user_instructions",
+                "content": config.text_instructions,
+                "weight": 0.9,  # Slightly lower weight than primary source
+            })
+
+        # Determine search query - use content from session sources for searching
         search_query = config.source_content
-        if session_sources and session_sources[0].get("type") == "mp3_transcript":
-            # Extract first 1000 chars of transcript as search context
-            transcript_excerpt = session_sources[0].get("content", "")[:1000]
-            if transcript_excerpt:
-                search_query = transcript_excerpt
-                logger.info(f"Using transcript excerpt for search query: {len(transcript_excerpt)} chars")
+        if session_sources:
+            first_source = session_sources[0]
+            source_type = first_source.get("type", "")
+
+            if source_type == "mp3_transcript":
+                # Extract first 1000 chars of transcript as search context
+                transcript_excerpt = first_source.get("content", "")[:1000]
+                if transcript_excerpt:
+                    search_query = transcript_excerpt
+                    logger.info(f"Using transcript excerpt for search query: {len(transcript_excerpt)} chars")
+            elif source_type == "knowledge_base_document":
+                # Extract first 1000 chars of document as search context
+                doc_excerpt = first_source.get("content", "")[:1000]
+                if doc_excerpt:
+                    search_query = doc_excerpt
+                    logger.info(f"Using document excerpt for search query: {len(doc_excerpt)} chars")
+
+        # If user provided text instructions, include them in the search query
+        if config.text_instructions:
+            search_query = f"{config.text_instructions}\n\n{search_query[:500]}"
+            logger.info(f"Combined text instructions with source content for search")
 
         # P2: Search Knowledge Base if enabled
         if config.use_knowledge_base:
@@ -848,15 +950,15 @@ Provide citations for all claims."""
 
         all_sources = []
         for s in session_sources:
-            # For transcripts, include much more content (up to 15000 chars)
-            # This is the primary source material for audio-based generation
+            # For transcripts and knowledge base documents, include much more content (up to 15000 chars)
+            # These are the primary source materials for generation
             source_type = s.get('type', 'unknown')
-            if source_type == 'mp3_transcript':
-                # Include more of the transcript - this is the main content
+            if source_type in ('mp3_transcript', 'knowledge_base_document'):
+                # Include more of the primary source content
                 content_limit = 15000
             else:
                 content_limit = 3000
-            all_sources.append(f"[Session Source - {source_type}]\n{s['content'][:content_limit]}")
+            all_sources.append(f"[Session Source - {source_type}]\n{s.get('content', '')[:content_limit]}")
         for s in kb_sources:
             all_sources.append(f"[Knowledge Base - {s.get('title', 'Untitled')}]\n{s['content'][:1000]}")
         for s in web_sources:
@@ -921,8 +1023,10 @@ Respond in JSON format:
         for source in research.session_sources:
             source_copy = source.copy()
             content = source_copy.get("content", "")
-            # For transcripts, include more content (up to 12000 chars)
-            if source_copy.get("type") == "mp3_transcript":
+            source_type = source_copy.get("type", "")
+            # For transcripts and knowledge base documents, include more content (up to 12000 chars)
+            # These are the primary source materials for generation
+            if source_type in ("mp3_transcript", "knowledge_base_document"):
                 source_copy["content"] = content[:12000] + ("..." if len(content) > 12000 else "")
             else:
                 source_copy["content"] = content[:3000] + ("..." if len(content) > 3000 else "")
@@ -1006,7 +1110,13 @@ Design two article architectures in JSON format:
 }}"""
 
         try:
+            logger.info(f"Architecture phase prompt length: {len(prompt)} chars")
             content = await self._llm_chat(prompt, max_tokens=2000)
+            logger.info(f"Architecture phase LLM response length: {len(content) if content else 0} chars")
+
+            if not content or len(content.strip()) == 0:
+                logger.error("Architecture phase received empty response from LLM")
+                raise ValueError("LLM returned empty response for architecture phase")
 
             # Try to extract JSON - handle markdown code blocks
             json_content = content

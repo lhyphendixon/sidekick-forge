@@ -60,5 +60,10 @@ structlog==23.2.0
 # Utils
 scipy>=1.13.0,<2.0
 
+# Web Scraping (for built-in scrape_url fallback)
+beautifulsoup4==4.12.3
+html2text==2024.2.26
+lxml==5.3.0
+
 # Fix for numpy compatibility
 numpy<2.0.0

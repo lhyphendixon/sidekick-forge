@@ -1731,7 +1731,7 @@ async def agent_job_handler(ctx: JobContext):
                         for tool_def in tool_defs:
                             tool_type = tool_def.get("type")
                             # Track runtime context for tools that need user/client context
-                            if tool_type not in {"n8n", "asana", "user_overview", "content_catalyst"}:
+                            if tool_type not in {"n8n", "asana", "user_overview", "content_catalyst", "documentsense"}:
                                 continue
                             slug_candidate = (
                                 tool_def.get("slug")
@@ -2200,4 +2200,9 @@ async def agent_job_handler(ctx: JobContext):
                     raise
             else:
                 logger.info("📝 Text-only mode: skipping RoomIO audio priming")
-
+        except Exception as agent_err:
+            logger.error("❌ Agent session initialization failed: %s", agent_err, exc_info=True)
+            raise
+    except Exception as job_err:
+        logger.error("❌ Failed to initialize job context or agent runtime: %s", job_err, exc_info=True)
+        raise

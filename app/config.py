@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     supabase_url: str = Field(...)
     supabase_service_role_key: str = Field(...)
     supabase_anon_key: str = Field(...)
+    # Access token for Supabase Management API (used for schema sync across tenants)
+    supabase_access_token: Optional[str] = Field(None)
     
     # Supabase Auth Configuration
     supabase_auth_enabled: bool = Field(default=True)

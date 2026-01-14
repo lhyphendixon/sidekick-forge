@@ -109,6 +109,7 @@ class RemoteEmbedder:
     
     async def _siliconflow_embedding(self, text: str) -> List[float]:
         """Generate embeddings using SiliconFlow API"""
+        logger.info(f"[EMBED] SiliconFlow embedding request: model={self.model}, dimension={self.dimension}, text_len={len(text)}")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -135,7 +136,11 @@ class RemoteEmbedder:
         if response.status_code == 200:
             result = response.json()
             if 'data' in result and len(result['data']) > 0:
-                return result['data'][0]['embedding']
+                embedding = result['data'][0]['embedding']
+                logger.debug(f"SiliconFlow embedding generated: dim={len(embedding)}")
+                return embedding
+            else:
+                raise ValueError(f"SiliconFlow API returned unexpected response structure: {list(result.keys())}")
         else:
             raise ValueError(f"SiliconFlow API error: {response.status_code} - {response.text}")
     
@@ -370,7 +375,7 @@ class AgentContextManager:
             # NO FALLBACKS - re-raise the error
             raise
 
-    async def build_complete_context(self, user_message: str, user_id: str, skip_knowledge_rag: bool = False, cached_query_embedding: Optional[List[float]] = None) -> Dict[str, Any]:
+    async def build_complete_context(self, user_message: str, user_id: str, skip_knowledge_rag: bool = False, cached_query_embedding: Optional[List[float]] = None, top_document_intelligence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Build dynamic context based on user message - performs RAG searches.
         This should only be called when there's an actual user message to process.
@@ -380,6 +385,7 @@ class AgentContextManager:
             user_id: The ID of the user who is speaking
             skip_knowledge_rag: If True, skip knowledge RAG search (e.g., when citations_service already did it)
             cached_query_embedding: Optional pre-computed embedding to reuse (saves ~1s API call)
+            top_document_intelligence: Intelligence for the #1 ranked document from RAG (DocumentSense)
 
         Returns:
             Dictionary containing:
@@ -441,13 +447,16 @@ class AgentContextManager:
             perf_details['gather_knowledge_rag'] = knowledge_duration
             perf_details['skip_knowledge_rag'] = skip_knowledge_rag
             perf_details['gather_conversation_rag'] = conversation_duration
+            perf_details['has_top_document_intelligence'] = top_document_intelligence is not None
 
             # Format all context as markdown
+            # top_document_intelligence comes from RAG result (only the #1 ranked document)
             context_markdown = self._format_context_as_markdown(
                 user_profile,
                 knowledge_results,
                 conversation_results,
-                user_overview
+                user_overview,
+                top_document_intelligence  # Single document, not a list
             )
 
             # Merge with original system prompt
@@ -469,6 +478,7 @@ class AgentContextManager:
                     "user_overview_found": bool(user_overview and any(user_overview.values())),
                     "knowledge_results_count": len(knowledge_results),
                     "conversation_results_count": len(conversation_results),
+                    "has_top_document_intelligence": top_document_intelligence is not None,
                     "context_length": len(context_markdown),
                     "total_prompt_length": len(enhanced_prompt),
                     "performance": perf_details,
@@ -479,6 +489,7 @@ class AgentContextManager:
                     "user_overview": user_overview,
                     "knowledge_results": knowledge_results,
                     "conversation_results": conversation_results,
+                    "top_document_intelligence": top_document_intelligence,
                     "context_markdown": context_markdown
                 }
             }
@@ -488,7 +499,8 @@ class AgentContextManager:
                 f"Profile: {result['context_metadata']['user_profile_found']}, "
                 f"Overview: {result['context_metadata']['user_overview_found']}, "
                 f"Knowledge: {result['context_metadata']['knowledge_results_count']}, "
-                f"Conversations: {result['context_metadata']['conversation_results_count']}"
+                f"Conversations: {result['context_metadata']['conversation_results_count']}, "
+                f"TopDocIntel: {result['context_metadata']['has_top_document_intelligence']}"
             )
             
             return result
@@ -638,6 +650,7 @@ class AgentContextManager:
             logger.warning(f"Error fetching user overview: {e}")
             return {}, time.perf_counter() - start_time
 
+
     async def _gather_knowledge_rag(self, user_message: str) -> Tuple[List[Dict[str, Any]], float]:
         """
         RAG search on agent's assigned documents
@@ -764,7 +777,8 @@ class AgentContextManager:
         profile: Dict[str, Any],
         knowledge: List[Dict[str, Any]],
         conversations: List[Dict[str, Any]],
-        user_overview: Optional[Dict[str, Any]] = None
+        user_overview: Optional[Dict[str, Any]] = None,
+        document_intelligence: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
         Generate clean markdown sections with proper headings
@@ -774,12 +788,13 @@ class AgentContextManager:
             knowledge: Knowledge base search results
             conversations: Conversation history search results
             user_overview: Persistent user overview (agent-maintained notes)
+            document_intelligence: Document intelligence summaries (DocumentSense)
 
         Returns:
             Formatted markdown string
         """
         # If nothing to include, return empty string to avoid adding token noise
-        if not profile and not knowledge and not conversations and not user_overview:
+        if not profile and not knowledge and not conversations and not user_overview and not document_intelligence:
             return ""
 
         sections = []
@@ -921,6 +936,54 @@ class AgentContextManager:
                 sections.append("")
 
             sections.append("")  # Extra spacing after overview
+
+        # Document Intelligence Section (DocumentSense - only for the #1 ranked document from RAG)
+        if document_intelligence and isinstance(document_intelligence, dict):
+            sections.append("## Top Document Intelligence")
+            sections.append("*Deep knowledge about the most relevant document to your query:*\n")
+
+            title = document_intelligence.get("title", "Untitled")
+            sections.append(f"### {title}")
+
+            # Document summary
+            summary = document_intelligence.get("summary", "")
+            if summary:
+                sections.append(f"**Summary:** {self._truncate_text(summary, MAX_KNOWLEDGE_EXCERPT_CHARS)}")
+
+            # Themes
+            themes = document_intelligence.get("themes", [])
+            if themes:
+                themes_str = ", ".join(str(t) for t in themes[:5])
+                sections.append(f"**Themes:** {themes_str}")
+
+            # Key quotes (limited to save context)
+            key_quotes = document_intelligence.get("key_quotes", [])
+            if key_quotes:
+                sections.append("**Notable Quotes:**")
+                for quote in key_quotes[:3]:  # Limit to 3 quotes for the top doc
+                    if isinstance(quote, dict):
+                        quote_text = quote.get("quote", quote.get("text", str(quote)))
+                    else:
+                        quote_text = str(quote)
+                    sections.append(f"  - \"{self._truncate_text(quote_text, 250)}\"")
+
+            # Key entities (people, concepts)
+            entities = document_intelligence.get("entities", {})
+            people = entities.get("people", [])
+            concepts = entities.get("concepts", [])
+            if people:
+                sections.append(f"**People mentioned:** {', '.join(str(p) for p in people[:5])}")
+            if concepts:
+                sections.append(f"**Key concepts:** {', '.join(str(c) for c in concepts[:5])}")
+
+            # Questions this document can answer
+            questions = document_intelligence.get("questions_answered", [])
+            if questions:
+                sections.append("**Questions this document answers:**")
+                for q in questions[:3]:
+                    sections.append(f"  - {self._truncate_text(str(q), 150)}")
+
+            sections.append("")  # Extra spacing after document intelligence
 
         # User Profile Section
         if profile:

@@ -583,6 +583,229 @@ CREATE INDEX IF NOT EXISTS idx_conversation_summaries_conversation_id ON public.
 CREATE INDEX IF NOT EXISTS idx_conversation_summaries_user_id ON public.conversation_summaries (user_id);
 """.strip()
 
+# DocumentSense / Document Intelligence schema for extracted document metadata
+DOCUMENT_INTELLIGENCE_SQL = """
+-- Document Intelligence table for DocumentSense feature
+CREATE TABLE IF NOT EXISTS public.document_intelligence (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id UUID NOT NULL,
+  client_id UUID NOT NULL,
+  intelligence JSONB NOT NULL DEFAULT '{
+    "summary": "",
+    "key_quotes": [],
+    "themes": [],
+    "entities": {
+      "people": [],
+      "organizations": [],
+      "locations": [],
+      "dates": [],
+      "concepts": []
+    },
+    "questions_answered": [],
+    "document_type_inferred": null
+  }'::jsonb,
+  extraction_model TEXT,
+  extraction_timestamp TIMESTAMPTZ,
+  chunks_analyzed INTEGER DEFAULT 0,
+  document_title TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uniq_document_intelligence UNIQUE (document_id, client_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_intelligence_document_id ON public.document_intelligence (document_id);
+CREATE INDEX IF NOT EXISTS idx_document_intelligence_client_id ON public.document_intelligence (client_id);
+CREATE INDEX IF NOT EXISTS idx_document_intelligence_updated_at ON public.document_intelligence (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_document_intelligence_title_search
+  ON public.document_intelligence USING gin(to_tsvector('english', coalesce(document_title, '')));
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_document_intelligence_set_updated_at'
+  ) THEN
+    CREATE TRIGGER trg_document_intelligence_set_updated_at
+      BEFORE UPDATE ON public.document_intelligence
+      FOR EACH ROW
+      EXECUTE FUNCTION set_updated_at();
+  END IF;
+END$$;
+
+ALTER TABLE public.document_intelligence ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'document_intelligence' AND policyname = 'document_intelligence_service_role_all'
+  ) THEN
+    CREATE POLICY document_intelligence_service_role_all ON public.document_intelligence
+      FOR ALL
+      USING (auth.role() = 'service_role')
+      WITH CHECK (auth.role() = 'service_role');
+  END IF;
+END$$;
+""".strip()
+
+# DocumentSense RPC functions
+DOCUMENT_INTELLIGENCE_RPCS_SQL = """
+-- RPC function to get document intelligence
+CREATE OR REPLACE FUNCTION get_document_intelligence(
+  p_client_id UUID,
+  p_document_id BIGINT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_result JSONB;
+BEGIN
+  SELECT jsonb_build_object(
+    'id', id,
+    'document_id', document_id,
+    'client_id', client_id,
+    'document_title', document_title,
+    'intelligence', intelligence,
+    'version', version,
+    'extraction_model', extraction_model,
+    'extraction_timestamp', extraction_timestamp,
+    'chunks_analyzed', chunks_analyzed,
+    'updated_at', updated_at
+  ) INTO v_result
+  FROM public.document_intelligence
+  WHERE document_id = p_document_id AND client_id = p_client_id;
+
+  IF v_result IS NULL THEN
+    RETURN jsonb_build_object(
+      'exists', false,
+      'intelligence', jsonb_build_object(
+        'summary', '',
+        'key_quotes', '[]'::jsonb,
+        'themes', '[]'::jsonb,
+        'entities', jsonb_build_object(
+          'people', '[]'::jsonb,
+          'organizations', '[]'::jsonb,
+          'locations', '[]'::jsonb,
+          'dates', '[]'::jsonb,
+          'concepts', '[]'::jsonb
+        ),
+        'questions_answered', '[]'::jsonb,
+        'document_type_inferred', null
+      )
+    );
+  END IF;
+
+  RETURN v_result || jsonb_build_object('exists', true);
+END;
+$$;
+
+-- RPC function to upsert document intelligence
+CREATE OR REPLACE FUNCTION upsert_document_intelligence(
+  p_document_id BIGINT,
+  p_client_id UUID,
+  p_document_title TEXT,
+  p_intelligence JSONB,
+  p_extraction_model TEXT,
+  p_chunks_analyzed INTEGER
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_id UUID;
+  v_version INTEGER;
+BEGIN
+  UPDATE public.document_intelligence
+  SET
+    intelligence = p_intelligence,
+    document_title = COALESCE(p_document_title, document_title),
+    extraction_model = p_extraction_model,
+    extraction_timestamp = NOW(),
+    chunks_analyzed = p_chunks_analyzed,
+    version = version + 1
+  WHERE document_id = p_document_id AND client_id = p_client_id
+  RETURNING id, version INTO v_id, v_version;
+
+  IF v_id IS NULL THEN
+    INSERT INTO public.document_intelligence (
+      document_id, client_id, document_title, intelligence,
+      extraction_model, extraction_timestamp, chunks_analyzed, version
+    )
+    VALUES (
+      p_document_id, p_client_id, p_document_title, p_intelligence,
+      p_extraction_model, NOW(), p_chunks_analyzed, 1
+    )
+    RETURNING id, version INTO v_id, v_version;
+  END IF;
+
+  RETURN jsonb_build_object('success', true, 'id', v_id, 'version', v_version);
+END;
+$$;
+
+-- RPC function to search documents by title
+-- Note: Handles double-encoded JSON where intelligence may be stored as a JSON string
+DROP FUNCTION IF EXISTS search_document_intelligence(UUID, TEXT, INTEGER);
+
+CREATE OR REPLACE FUNCTION search_document_intelligence(
+  p_client_id UUID,
+  p_query TEXT,
+  p_limit INTEGER DEFAULT 10
+)
+RETURNS TABLE (
+  document_id BIGINT,
+  document_title TEXT,
+  summary TEXT,
+  key_quotes JSONB,
+  themes JSONB,
+  relevance_score REAL
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    di.document_id,
+    di.document_title,
+    -- Handle double-encoded JSON: if intelligence is a string, parse it first
+    CASE
+      WHEN jsonb_typeof(di.intelligence) = 'string'
+      THEN (di.intelligence#>>'{}')::jsonb->>'summary'
+      ELSE di.intelligence->>'summary'
+    END as summary,
+    CASE
+      WHEN jsonb_typeof(di.intelligence) = 'string'
+      THEN (di.intelligence#>>'{}')::jsonb->'key_quotes'
+      ELSE di.intelligence->'key_quotes'
+    END as key_quotes,
+    CASE
+      WHEN jsonb_typeof(di.intelligence) = 'string'
+      THEN (di.intelligence#>>'{}')::jsonb->'themes'
+      ELSE di.intelligence->'themes'
+    END as themes,
+    ts_rank(
+      to_tsvector('english', coalesce(di.document_title, '')),
+      plainto_tsquery('english', p_query)
+    ) as relevance_score
+  FROM public.document_intelligence di
+  WHERE di.client_id = p_client_id
+    AND (
+      to_tsvector('english', coalesce(di.document_title, '')) @@ plainto_tsquery('english', p_query)
+      OR
+      di.document_title ILIKE '%' || p_query || '%'
+    )
+  ORDER BY relevance_score DESC, di.updated_at DESC
+  LIMIT p_limit;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_document_intelligence(UUID, BIGINT) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION upsert_document_intelligence(BIGINT, UUID, TEXT, JSONB, TEXT, INTEGER) TO service_role;
+GRANT EXECUTE ON FUNCTION search_document_intelligence(UUID, TEXT, INTEGER) TO authenticated, service_role;
+""".strip()
+
 # Align vector dimensions on existing columns in case they were created without
 # a specified length in earlier runs.
 VECTOR_DIMENSION_PATCH_SQL = """
@@ -691,10 +914,17 @@ create index if not exists profiles_user_id_idx on public.profiles(user_id);
 alter table if exists public.conversations
   add column if not exists channel text;
 
+-- Add document_title and document_source_url to document_chunks for DocumentSense
+-- These are denormalized fields for efficient RAG context building
+alter table if exists public.document_chunks
+  add column if not exists document_title text,
+  add column if not exists document_source_url text;
+
 -- match_documents with agent filtering (1024-dim embeddings)
 -- NOTE: Searches document_chunks for fine-grained semantic matching
 -- Returns chunk-level results with document metadata for better RAG accuracy
 -- Uses agent_documents join table for agent assignment (standard pattern for all clients)
+-- Now includes document_title from chunks for document identity in RAG context
 -- Drop first to handle signature changes cleanly
 DROP FUNCTION IF EXISTS public.match_documents(vector, text, float8, integer);
 
@@ -712,7 +942,8 @@ returns table(
   chunk_index int,
   source_url text,
   source_type text,
-  similarity float8
+  similarity float8,
+  document_title text  -- Denormalized document title from chunk for RAG context
 )
 language plpgsql
 as $$
@@ -724,12 +955,13 @@ begin
   select
     dc.id::text as id,
     dc.document_id::text as document_id,
-    coalesce(d.title, 'Untitled')::text as title,
+    coalesce(dc.document_title, d.title, 'Untitled')::text as title,
     dc.content,
     dc.chunk_index,
-    coalesce(d.metadata->>'url', d.metadata->>'source_url', '')::text as source_url,
+    coalesce(dc.document_source_url, d.metadata->>'url', d.metadata->>'source_url', '')::text as source_url,
     coalesce(d.file_type, d.document_type, 'document')::text as source_type,
-    1 - (dc.embeddings <=> p_query_embedding) as similarity
+    1 - (dc.embeddings <=> p_query_embedding) as similarity,
+    coalesce(dc.document_title, d.title, 'Untitled')::text as document_title
   from public.document_chunks dc
   join public.documents d on dc.document_id = d.id
   join public.agent_documents ad on ad.document_id = d.id
@@ -879,6 +1111,14 @@ def apply_schema(project_ref: str, token: str, include_indexes: bool = True) -> 
     # Conversation summaries table
     ok_summaries, detail_summaries = execute_sql(project_ref, token, CONVERSATION_SUMMARIES_SQL)
     results.append(("conversation_summaries", ok_summaries, detail_summaries))
+
+    # DocumentSense / Document Intelligence tables
+    ok_di, detail_di = execute_sql(project_ref, token, DOCUMENT_INTELLIGENCE_SQL)
+    results.append(("document_intelligence", ok_di, detail_di))
+
+    # Document Intelligence RPC functions
+    ok_di_rpcs, detail_di_rpcs = execute_sql(project_ref, token, DOCUMENT_INTELLIGENCE_RPCS_SQL)
+    results.append(("document_intelligence_rpcs", ok_di_rpcs, detail_di_rpcs))
 
     if include_indexes:
         ok_indexes, detail_indexes = execute_sql(project_ref, token, IVFFLAT_PATCH_SQL)

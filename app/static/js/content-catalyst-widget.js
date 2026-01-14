@@ -24,6 +24,10 @@ class ContentCatalystWidget extends BaseWidget {
         this.articles = null;
         this.uploadedFile = null;
         this.pollInterval = null;
+        // Document picker state
+        this.selectedDocument = null;
+        this.documentList = [];
+        this.documentPickerOpen = false;
     }
 
     render(container) {
@@ -56,10 +60,21 @@ class ContentCatalystWidget extends BaseWidget {
             </div>
 
             <div class="cc-body p-4 space-y-4">
+                <!-- Always-visible Instructions Field -->
+                <div class="cc-instructions-field">
+                    <label class="cc-instructions-label">Instructions (optional)</label>
+                    <textarea
+                        id="cc-instructions-input"
+                        class="cc-instructions-textarea"
+                        rows="2"
+                        placeholder="Describe what you want to create, any specific angle, or additional context..."
+                    >${this.escapeHtml(this.config.suggested_topic || '')}</textarea>
+                </div>
+
                 <!-- Source Type Tabs -->
                 <div class="cc-source-tabs flex gap-2">
-                    <button type="button" class="cc-tab active flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all" data-source="text">
-                        💬 Text Topic
+                    <button type="button" class="cc-tab active flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all" data-source="document">
+                        📄 Document
                     </button>
                     <button type="button" class="cc-tab flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all" data-source="url">
                         🔗 URL
@@ -69,15 +84,23 @@ class ContentCatalystWidget extends BaseWidget {
                     </button>
                 </div>
 
-                <!-- Text Input (default) -->
-                <div class="cc-input-section" data-section="text">
-                    <label class="block text-white/70 text-sm mb-2">What would you like to write about?</label>
-                    <textarea
-                        id="cc-topic-input"
-                        class="w-full glass-input rounded-xl p-3 text-white resize-none"
-                        rows="3"
-                        placeholder="Describe the topic, key points, or paste content to expand on..."
-                    >${this.escapeHtml(this.config.suggested_topic || '')}</textarea>
+                <!-- Document Selection (default) -->
+                <div class="cc-input-section" data-section="document">
+                    <label class="block text-white/70 text-sm mb-2">Select a knowledge base document</label>
+                    <div class="cc-document-selection">
+                        ${this.selectedDocument ? `
+                            <div class="cc-selected-document" id="cc-select-document-btn">
+                                <span class="cc-selected-document-icon">📄</span>
+                                <span class="cc-selected-document-title">${this.escapeHtml(this.selectedDocument.title)}</span>
+                                <span class="cc-selected-document-change">Change</span>
+                            </div>
+                        ` : `
+                            <button type="button" id="cc-select-document-btn" class="w-full py-3 px-4 rounded-xl border-2 border-dashed border-white/20 text-white/60 hover:border-brand-teal/50 hover:text-white/80 transition-all flex items-center justify-center gap-2">
+                                <span>📄</span>
+                                <span>Click to select a document</span>
+                            </button>
+                        `}
+                    </div>
                 </div>
 
                 <!-- URL Input -->
@@ -160,8 +183,26 @@ class ContentCatalystWidget extends BaseWidget {
                     <span class="cc-submit-arrow">→</span>
                 </button>
             </div>
+
+            <!-- Document Picker Overlay (hidden by default) -->
+            <div class="cc-document-picker-overlay" id="cc-document-picker-overlay">
+                <div class="cc-document-picker" id="cc-document-picker">
+                    <div class="cc-document-picker-header">
+                        <h3>Select a Document</h3>
+                        <button type="button" class="cc-document-picker-close" id="cc-document-picker-close">×</button>
+                    </div>
+                    <div class="cc-document-picker-search">
+                        <input type="text" id="cc-document-search" placeholder="Search documents..." />
+                    </div>
+                    <div class="cc-document-picker-list" id="cc-document-list">
+                        <!-- Documents rendered here -->
+                    </div>
+                </div>
+            </div>
         `;
 
+        // Set default source type to document
+        this.config.sourceType = 'document';
         this.bindInputEvents();
     }
 
@@ -175,6 +216,24 @@ class ContentCatalystWidget extends BaseWidget {
         tabs.forEach(tab => {
             tab.addEventListener('click', () => this.switchSourceType(tab.dataset.source));
         });
+
+        // Document picker button
+        const selectDocBtn = this.element.querySelector('#cc-select-document-btn');
+        selectDocBtn?.addEventListener('click', () => this.openDocumentPicker());
+
+        // Document picker close button
+        const closePickerBtn = this.element.querySelector('#cc-document-picker-close');
+        closePickerBtn?.addEventListener('click', () => this.closeDocumentPicker());
+
+        // Document picker overlay click (close on background click)
+        const overlay = this.element.querySelector('#cc-document-picker-overlay');
+        overlay?.addEventListener('click', (e) => {
+            if (e.target === overlay) this.closeDocumentPicker();
+        });
+
+        // Document search input
+        const searchInput = this.element.querySelector('#cc-document-search');
+        searchInput?.addEventListener('input', (e) => this.filterDocuments(e.target.value));
 
         // File upload
         const uploadZone = this.element.querySelector('.cc-upload-zone');
@@ -222,6 +281,157 @@ class ContentCatalystWidget extends BaseWidget {
                 }
             });
         });
+    }
+
+    // Document Picker Methods
+    async openDocumentPicker() {
+        console.log('[cc-widget] Opening document picker');
+        this.documentPickerOpen = true;
+
+        const overlay = this.element.querySelector('#cc-document-picker-overlay');
+        const picker = this.element.querySelector('#cc-document-picker');
+        const list = this.element.querySelector('#cc-document-list');
+
+        // Show loading state
+        list.innerHTML = `
+            <div class="cc-document-picker-loading">
+                <div class="spinner"></div>
+                <p>Loading documents...</p>
+            </div>
+        `;
+
+        // Show overlay and picker with animation
+        overlay?.classList.add('show');
+        requestAnimationFrame(() => {
+            picker?.classList.add('show');
+        });
+
+        // Load documents
+        await this.loadDocuments();
+    }
+
+    closeDocumentPicker() {
+        console.log('[cc-widget] Closing document picker');
+        this.documentPickerOpen = false;
+
+        const overlay = this.element.querySelector('#cc-document-picker-overlay');
+        const picker = this.element.querySelector('#cc-document-picker');
+
+        // Animate out
+        picker?.classList.remove('show');
+        setTimeout(() => {
+            overlay?.classList.remove('show');
+        }, 300);
+
+        // Clear search
+        const searchInput = this.element.querySelector('#cc-document-search');
+        if (searchInput) searchInput.value = '';
+    }
+
+    async loadDocuments() {
+        console.log('[cc-widget] Loading documents for agent:', this.config.agentId);
+
+        try {
+            const url = `/api/v1/content-catalyst/documents/${this.config.agentId}?client_id=${this.config.clientId}`;
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                throw new Error('Failed to load documents');
+            }
+
+            const data = await response.json();
+            this.documentList = data.documents || [];
+            console.log('[cc-widget] Loaded documents:', this.documentList.length);
+
+            this.renderDocumentList(this.documentList);
+        } catch (error) {
+            console.error('[cc-widget] Failed to load documents:', error);
+            const list = this.element.querySelector('#cc-document-list');
+            list.innerHTML = `
+                <div class="cc-document-picker-empty">
+                    <p>Failed to load documents</p>
+                    <p style="font-size: 12px; margin-top: 8px;">${error.message}</p>
+                </div>
+            `;
+        }
+    }
+
+    renderDocumentList(documents) {
+        const list = this.element.querySelector('#cc-document-list');
+
+        if (!documents || documents.length === 0) {
+            list.innerHTML = `
+                <div class="cc-document-picker-empty">
+                    <p>No documents available</p>
+                    <p style="font-size: 12px; margin-top: 8px;">Upload documents to your knowledge base first</p>
+                </div>
+            `;
+            return;
+        }
+
+        list.innerHTML = documents.map(doc => `
+            <div class="cc-document-item ${this.selectedDocument?.id === doc.id ? 'selected' : ''}" data-doc-id="${doc.id}" data-doc-title="${this.escapeHtml(doc.title)}">
+                <div class="cc-document-icon">📄</div>
+                <div class="cc-document-info">
+                    <div class="cc-document-title">${this.escapeHtml(doc.title)}</div>
+                    <div class="cc-document-meta">${this.formatDate(doc.created_at)}</div>
+                </div>
+            </div>
+        `).join('');
+
+        // Bind click events
+        list.querySelectorAll('.cc-document-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const docId = parseInt(item.dataset.docId);
+                const docTitle = item.dataset.docTitle;
+                this.selectDocument(docId, docTitle);
+            });
+        });
+    }
+
+    filterDocuments(searchTerm) {
+        const term = searchTerm.toLowerCase().trim();
+        if (!term) {
+            this.renderDocumentList(this.documentList);
+            return;
+        }
+
+        const filtered = this.documentList.filter(doc =>
+            doc.title.toLowerCase().includes(term)
+        );
+        this.renderDocumentList(filtered);
+    }
+
+    selectDocument(docId, docTitle) {
+        console.log('[cc-widget] Selected document:', docId, docTitle);
+        this.selectedDocument = { id: docId, title: docTitle };
+
+        // Update the UI to show selected document
+        const selection = this.element.querySelector('.cc-document-selection');
+        if (selection) {
+            selection.innerHTML = `
+                <div class="cc-selected-document" id="cc-select-document-btn">
+                    <span class="cc-selected-document-icon">📄</span>
+                    <span class="cc-selected-document-title">${this.escapeHtml(docTitle)}</span>
+                    <span class="cc-selected-document-change">Change</span>
+                </div>
+            `;
+            // Rebind click event
+            selection.querySelector('#cc-select-document-btn')?.addEventListener('click', () => this.openDocumentPicker());
+        }
+
+        // Close the picker
+        this.closeDocumentPicker();
+    }
+
+    formatDate(dateStr) {
+        if (!dateStr) return '';
+        try {
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        } catch {
+            return dateStr;
+        }
     }
 
     switchSourceType(type) {
@@ -278,17 +488,25 @@ class ContentCatalystWidget extends BaseWidget {
         console.log('[cc-widget] Submit called, sourceType:', this.config.sourceType);
         console.log('[cc-widget] Config:', JSON.stringify(this.config, null, 2));
         console.log('[cc-widget] uploadedFile:', this.uploadedFile);
+        console.log('[cc-widget] selectedDocument:', this.selectedDocument);
 
-        const sourceType = this.config.sourceType || 'text';
+        const sourceType = this.config.sourceType || 'document';
         let sourceContent = '';
+        let documentId = null;
+        let documentTitle = null;
+
+        // Get text instructions (always available)
+        const textInstructions = this.element.querySelector('#cc-instructions-input')?.value?.trim() || '';
 
         // Get source content based on type
-        if (sourceType === 'text') {
-            sourceContent = this.element.querySelector('#cc-topic-input')?.value?.trim();
-            if (!sourceContent) {
-                alert('Please enter a topic or content');
+        if (sourceType === 'document') {
+            if (!this.selectedDocument) {
+                alert('Please select a document');
                 return;
             }
+            documentId = this.selectedDocument.id;
+            documentTitle = this.selectedDocument.title;
+            sourceContent = `Document: ${documentTitle}`;
         } else if (sourceType === 'url') {
             sourceContent = this.element.querySelector('#cc-url-input')?.value?.trim();
             if (!sourceContent) {
@@ -325,16 +543,30 @@ class ContentCatalystWidget extends BaseWidget {
         // Show progress phase
         this.renderProgressPhase();
 
+        // Build payload
+        const payload = {
+            source_type: sourceType,
+            source_content: sourceContent,
+            target_word_count: wordCount,
+            style_prompt: style || undefined,
+            use_perplexity: usePerplexity,
+            use_knowledge_base: useKnowledgeBase
+        };
+
+        // Add text instructions if provided
+        if (textInstructions) {
+            payload.text_instructions = textInstructions;
+        }
+
+        // Add document info if document source
+        if (sourceType === 'document' && documentId) {
+            payload.document_id = documentId;
+            payload.document_title = documentTitle;
+        }
+
         // Call the API
         try {
-            await this.startGeneration({
-                source_type: sourceType,
-                source_content: sourceContent,
-                target_word_count: wordCount,
-                style_prompt: style || undefined,
-                use_perplexity: usePerplexity,
-                use_knowledge_base: useKnowledgeBase
-            });
+            await this.startGeneration(payload);
         } catch (error) {
             console.error('[cc-widget] Generation failed:', error);
             this.renderError(error.message || 'Generation failed');

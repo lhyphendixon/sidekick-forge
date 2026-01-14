@@ -37,6 +37,8 @@ async def lifespan(app: FastAPI):
     ambient_worker_task = None
     learning_worker = None
     learning_worker_task = None
+    documentsense_worker = None
+    documentsense_worker_task = None
 
     # Startup
     logger.info("Starting Sidekick Forge Platform")
@@ -93,6 +95,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"UserSense learning worker failed to start: {e}")
 
+    # Start DocumentSense learning worker for document intelligence extraction
+    try:
+        from app.services.documentsense_learning_worker import documentsense_learning_worker
+
+        documentsense_worker = documentsense_learning_worker
+        documentsense_worker_task = asyncio.create_task(documentsense_worker.start())
+        logger.info("✅ DocumentSense learning worker started")
+    except Exception as e:
+        logger.warning(f"DocumentSense learning worker failed to start: {e}")
+
     try:
         yield
     finally:
@@ -116,6 +128,14 @@ async def lifespan(app: FastAPI):
                 logger.info("UserSense learning worker stopped")
             except Exception as e:
                 logger.error(f"Error stopping UserSense learning worker: {e}")
+
+        # Stop DocumentSense learning worker
+        if documentsense_worker:
+            try:
+                await documentsense_worker.stop()
+                logger.info("DocumentSense learning worker stopped")
+            except Exception as e:
+                logger.error(f"Error stopping DocumentSense learning worker: {e}")
 
         # Shutdown
         logger.info("Shutting down Sidekick Forge Platform")
@@ -181,6 +201,7 @@ from app.api.v1 import (
     knowledge_base,
     wordpress,
     content_catalyst,
+    documentsense,
 )
 from app.api import embed as embed_router
 from app.api import admin_preview_standalone
@@ -210,6 +231,7 @@ app.include_router(text_chat_proxy.router, prefix="/api/v1", tags=["text-chat"])
 app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-base"])
 app.include_router(wordpress.router, prefix="/api/v1", tags=["wordpress"])
 app.include_router(content_catalyst.router, prefix="/api/v1", tags=["content-catalyst"])
+app.include_router(documentsense.router, prefix="/api/v1", tags=["documentsense"])
 app.include_router(embed_router.router)
 # Expose admin preview helper endpoints (used by preview modal)
 app.include_router(admin_preview_standalone.router)
