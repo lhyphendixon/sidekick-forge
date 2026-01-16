@@ -287,7 +287,7 @@
                             </a>
                             {% else %}
                             {# Full navigation for Champion/Paragon/SuperAdmin #}
-                            {% if user.role in ['superadmin','admin'] %}
+                            {% if user.role == 'superadmin' %}
                             <a href="/admin/" onclick="closeMobileMenu()"
                                class="{% if request.url.path == '/admin/' %}nav-active text-brand-teal{% else %}text-gray-700 hover:text-brand-teal{% endif %} px-3 py-2 rounded-md text-sm font-medium transition-all">
                                 Dashboard
@@ -409,7 +409,7 @@
                 </a>
                 {% else %}
                 {# Full mobile navigation for Champion/Paragon/SuperAdmin #}
-                {% if user.role in ['superadmin','admin'] %}
+                {% if user.role == 'superadmin' %}
                 <a href="/admin/" onclick="closeMobileMenu()"
                    class="block rounded-md px-3 py-2 text-sm font-medium transition-all {% if request.url.path == '/admin/' %}bg-brand-teal/10 text-brand-teal border border-brand-teal/40{% else %}text-gray-800 hover:text-brand-teal hover:bg-gray-100{% endif %}">
                     Dashboard

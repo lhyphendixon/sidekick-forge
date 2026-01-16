@@ -9,7 +9,33 @@
     <button onclick="openAddUserModal()" class="btn-primary px-3 py-2 rounded text-sm">Add User</button>
     <a href="/admin/" class="text-sm text-gray-400 hover:text-brand-teal">Back to Dashboard</a>
   </div>
+</div>
+
+<!-- Search and Stats Bar -->
+<div class="bg-dark-surface border border-dark-border rounded-lg p-4 mb-4">
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <form method="GET" action="/admin/users" class="flex items-center gap-2 flex-1 max-w-md">
+      <div class="relative flex-1">
+        <input type="text" name="search" value="{{ search }}" placeholder="Search by email..."
+               class="w-full pl-10 pr-4 py-2 bg-dark-elevated border border-dark-border rounded-md text-dark-text focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+      </div>
+      <button type="submit" class="btn-primary px-4 py-2 rounded text-sm">Search</button>
+      {% if search %}
+      <a href="/admin/users" class="px-3 py-2 text-sm text-gray-400 hover:text-white border border-dark-border rounded">Clear</a>
+      {% endif %}
+    </form>
+    <div class="text-sm text-gray-400">
+      {% if search %}
+      Found <span class="text-white font-medium">{{ total_users }}</span> user{% if total_users != 1 %}s{% endif %} matching "{{ search }}"
+      {% else %}
+      <span class="text-white font-medium">{{ total_users }}</span> total user{% if total_users != 1 %}s{% endif %}
+      {% endif %}
+    </div>
   </div>
+</div>
 
 <div class="bg-dark-surface border border-dark-border rounded-lg p-4">
   <div class="overflow-x-auto">
@@ -49,7 +75,51 @@
       </tbody>
     </table>
   </div>
+
+  <!-- Pagination -->
+  {% if total_pages > 1 %}
+  <div class="mt-4 pt-4 border-t border-dark-border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div class="text-sm text-gray-400">
+      Showing {{ (page - 1) * per_page + 1 }} - {{ [(page * per_page), total_users] | min }} of {{ total_users }} users
+    </div>
+    <div class="flex items-center gap-2">
+      {% if page > 1 %}
+      <a href="/admin/users?page={{ page - 1 }}{% if search %}&search={{ search }}{% endif %}"
+         class="px-3 py-1.5 text-sm border border-dark-border rounded hover:border-brand-teal text-gray-300 hover:text-white transition-colors">
+        Previous
+      </a>
+      {% else %}
+      <span class="px-3 py-1.5 text-sm border border-dark-border rounded text-gray-600 cursor-not-allowed">Previous</span>
+      {% endif %}
+
+      <div class="flex items-center gap-1">
+        {% for p in range(1, total_pages + 1) %}
+          {% if p == page %}
+          <span class="px-3 py-1.5 text-sm bg-brand-teal text-white rounded font-medium">{{ p }}</span>
+          {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
+          <a href="/admin/users?page={{ p }}{% if search %}&search={{ search }}{% endif %}"
+             class="px-3 py-1.5 text-sm border border-dark-border rounded hover:border-brand-teal text-gray-300 hover:text-white transition-colors">
+            {{ p }}
+          </a>
+          {% elif p == page - 2 or p == page + 2 %}
+          <span class="px-1 text-gray-500">...</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+
+      {% if page < total_pages %}
+      <a href="/admin/users?page={{ page + 1 }}{% if search %}&search={{ search }}{% endif %}"
+         class="px-3 py-1.5 text-sm border border-dark-border rounded hover:border-brand-teal text-gray-300 hover:text-white transition-colors">
+        Next
+      </a>
+      {% else %}
+      <span class="px-3 py-1.5 text-sm border border-dark-border rounded text-gray-600 cursor-not-allowed">Next</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 </div>
+
 <!-- Add User Modal -->
 <div id="addUserModal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
   <div class="bg-dark-surface border border-dark-border rounded-lg p-6 w-full max-w-md">

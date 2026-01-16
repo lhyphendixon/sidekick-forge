@@ -2051,13 +2051,31 @@ function clearVoiceTranscriptError(){
       scrollBottom();
     }
     // Smart scroll - only auto-scroll if user is near bottom (within 150px)
-    function scrollBottom(force = false){
+    // Use force=true to always scroll (e.g., when typing indicator appears)
+    function scrollBottom(force = false, smooth = false){
       const el = document.getElementById('chatMessages');
       if (!el) return;
       const isNearBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 150;
       if (force || isNearBottom) {
-        el.scrollTop = el.scrollHeight;
+        if (smooth) {
+          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+        } else {
+          el.scrollTop = el.scrollHeight;
+        }
       }
+    }
+
+    // Scroll to position the top of an element at the top of the chat window
+    function scrollToElementTop(element, smooth = true){
+      if (!element) return;
+      // Use scrollIntoView with 'start' to align element's top with container's top
+      // Delay slightly to ensure element is in the DOM and has layout
+      setTimeout(() => {
+        element.scrollIntoView({
+          behavior: smooth ? 'smooth' : 'instant',
+          block: 'start'
+        });
+      }, 50);
     }
 
     async function sendMsg(evt){
@@ -2080,6 +2098,8 @@ function clearVoiceTranscriptError(){
       loadingDiv.id = 'tempLoadingIndicator';
       loadingDiv.innerHTML = `<div class="max-w-[80%] px-4 py-3 rounded-2xl msg-assistant"><div class="flex space-x-2"><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div></div></div>`;
       chatMessages.appendChild(loadingDiv);
+      // Always scroll to show the typing indicator (force=true, smooth=true)
+      scrollBottom(true, true);
 
       // stream (FormData to match server Form(...))
       const fd = new FormData();
@@ -2124,14 +2144,26 @@ function clearVoiceTranscriptError(){
             if (payload.error === 'unauthorized') { setAuthVisible(true); setChatVisible(false); }
           }
           if(payload.delta){
-            if (!inserted){ chatMessages.replaceChild(asstDiv, loadingDiv); inserted = true; }
+            if (!inserted){
+              chatMessages.replaceChild(asstDiv, loadingDiv);
+              inserted = true;
+              // Scroll to show the top of the new response so user can read from the beginning
+              scrollToElementTop(asstDiv, true);
+            }
             acc += String(payload.delta).replace(/\\n/g,'\n');
             asstBubble.innerHTML = (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(acc)) : acc;
+            // Don't auto-scroll during streaming - let user read from the top
           }
           if(payload.done && payload.full_text){
-            if (!inserted){ chatMessages.replaceChild(asstDiv, loadingDiv); inserted = true; }
+            if (!inserted){
+              chatMessages.replaceChild(asstDiv, loadingDiv);
+              inserted = true;
+              // Scroll to show the top of the response so user can read from the beginning
+              scrollToElementTop(asstDiv, true);
+            }
             acc = String(payload.full_text).replace(/\\n/g,'\n');
             asstBubble.innerHTML = (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(acc)) : acc;
+            // Don't scroll after final content - user is reading from the top
 
             // DEBUG: Log what we received from the backend
             console.log('[stream] DONE received - full_text length:', payload.full_text?.length, 'preview:', payload.full_text?.slice(0, 100));

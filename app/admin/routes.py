@@ -425,23 +425,39 @@ async def check_auth(request: Request):
 
 # Users management page
 @router.get("/users", response_class=HTMLResponse)
-async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_user)):
-    """Minimal Users page showing recent users and platform permissions."""
+async def users_page(
+    request: Request,
+    user: Dict[str, Any] = Depends(get_admin_user),
+    page: int = 1,
+    search: str = ""
+):
+    """Users page with pagination and search."""
     await supabase_manager.initialize()
     import httpx
     headers = {
         'apikey': os.getenv('SUPABASE_SERVICE_ROLE_KEY', ''),
         'Authorization': f"Bearer {os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')}",
     }
-    users: List[Dict[str, Any]] = []
+
+    # Pagination settings
+    per_page = 20
+
+    # Fetch all users (Supabase doesn't have good server-side search, so we filter client-side)
+    all_users: List[Dict[str, Any]] = []
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{os.getenv('SUPABASE_URL')}/auth/v1/admin/users", headers=headers, params={"per_page": 25})
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Fetch more users to allow for filtering
+            r = await client.get(f"{os.getenv('SUPABASE_URL')}/auth/v1/admin/users", headers=headers, params={"per_page": 1000})
             if r.status_code == 200:
                 data = r.json()
-                users = data.get('users', [])
+                all_users = data.get('users', [])
     except Exception:
-        users = []
+        all_users = []
+
+    # Apply search filter if provided
+    search_lower = search.strip().lower()
+    if search_lower:
+        all_users = [u for u in all_users if search_lower in (u.get('email') or '').lower()]
 
     scoped_ids = get_scoped_client_ids(user)
     allowed_ids: Set[str] = set()
@@ -461,14 +477,22 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
             return collected
 
         filtered_users: List[Dict[str, Any]] = []
-        for record in users:
+        for record in all_users:
             metadata = record.get('user_metadata') or {}
             admin_ids = extract_assignment_ids(metadata, ['admin_client_ids'])
             subscriber_ids = extract_assignment_ids(metadata, ['subscriber_client_ids'])
             combined = {str(cid) for cid in admin_ids + subscriber_ids}
             if combined & allowed_ids:
                 filtered_users.append(record)
-        users = filtered_users
+        all_users = filtered_users
+
+    # Calculate pagination
+    total_users = len(all_users)
+    total_pages = max(1, (total_users + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    users = all_users[start_idx:end_idx]
     # Prepare role id cache for RBAC if available
     role_id_map: Dict[str, Optional[str]] = {"super_admin": None, "admin": None, "subscriber": None}
     try:
@@ -570,7 +594,19 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
     except Exception:
         clients_ctx = []
     from app.config import settings
-    return templates.TemplateResponse("admin/users.html", {"request": request, "user": user, "users": enriched, "clients": clients_ctx, "supabase_url": settings.supabase_url, "supabase_anon_key": settings.supabase_anon_key})
+    return templates.TemplateResponse("admin/users.html", {
+        "request": request,
+        "user": user,
+        "users": enriched,
+        "clients": clients_ctx,
+        "supabase_url": settings.supabase_url,
+        "supabase_anon_key": settings.supabase_anon_key,
+        "page": page,
+        "total_pages": total_pages,
+        "total_users": total_users,
+        "search": search,
+        "per_page": per_page
+    })
 
 @router.post("/users/create")
 async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
@@ -1292,6 +1328,7 @@ async def get_all_agents() -> List[Dict[str, Any]]:
                         "slug": agent.slug,
                         "name": agent.name,
                         "description": getattr(agent, 'description', ''),
+                        "agent_image": getattr(agent, 'agent_image', '') or '',
                         "client_id": agent.client_id,
                         "client_name": client_map.get(agent.client_id, client.name),
                         "status": "active" if getattr(agent, 'active', getattr(agent, 'enabled', True)) else "inactive",
@@ -1322,8 +1359,8 @@ async def dashboard(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Main admin dashboard with HTMX"""
-    # Adventurer users should go directly to their sidekicks page
-    if admin_user.get("is_adventurer_only"):
+    # Only superadmins can access the dashboard; all others go to sidekicks page
+    if admin_user.get("role") != "superadmin":
         return RedirectResponse(url="/admin/agents", status_code=302)
 
     summary = await get_system_summary(admin_user)
@@ -4604,13 +4641,13 @@ style=\"border:0;width:100%;max-width:800px;height:640px\"
 allow=\"microphone; camera\"
 referrerpolicy=\"strict-origin-when-cross-origin\"></iframe>"""
     return HTMLResponse("""
-<div class=\"fixed inset-0 z-50 flex items-center justify-center bg-black/50\">
-  <div class=\"bg-dark-surface border border-dark-border rounded-lg p-4 max-w-lg w-full\">
+<div class=\"fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-sm\">
+  <div class=\"bg-black/70 border border-dark-border rounded-lg p-4 max-w-lg w-full shadow-xl\">
     <h3 class=\"text-lg text-dark-text mb-3\">Copy Embed Code</h3>
     <textarea id=\"embedCode\" class=\"w-full bg-dark-elevated text-dark-text border border-dark-border rounded p-2\" rows=\"6\" readonly>""" + iframe + """</textarea>
     <div class=\"mt-3 flex gap-2\">
       <button class=\"btn-primary px-3 py-2 rounded text-sm\" onclick=\"var b=this; navigator.clipboard.writeText(document.getElementById('embedCode').value).then(function(){ b.disabled=true; var t=b.textContent; b.textContent='Copied!'; setTimeout(function(){ b.textContent=t; b.disabled=false; },1200); });\">Copy</button>
-      <button class=\"px-3 py-2 rounded text-sm border border-dark-border\" hx-on:click=\"document.getElementById('modal-container').innerHTML=''\">Close</button>
+      <button class=\"px-3 py-2 rounded text-sm border border-dark-border text-dark-text hover:bg-dark-elevated\" hx-on:click=\"document.getElementById('modal-container').innerHTML=''\">Close</button>
     </div>
     <p class=\"text-dark-text-secondary text-xs mt-3\">Ensure your site origin is in this Sidekick's allowlist.</p>
   </div>
