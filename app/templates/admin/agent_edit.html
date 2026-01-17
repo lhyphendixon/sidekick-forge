@@ -208,6 +208,7 @@
                             class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                         <option value="bithuman" {% if agent.voice_settings.avatar_provider == 'bithuman' or not agent.voice_settings.avatar_provider %}selected{% endif %}>Bithuman (custom image upload)</option>
                         <option value="beyondpresence" {% if agent.voice_settings.avatar_provider == 'beyondpresence' %}selected{% endif %}>Beyond Presence (pre-built avatars)</option>
+                        <option value="tavus" {% if agent.voice_settings.avatar_provider == 'tavus' %}selected{% endif %}>Tavus (custom replicas)</option>
                     </select>
                     <p class="mt-1 text-xs text-gray-500">Choose your video avatar provider</p>
                 </div>
@@ -261,6 +262,24 @@
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
                                placeholder="b9be11b8-89fb-4227-8f86-4a881393cbdb">
                         <p class="mt-1 text-xs text-gray-500">Beyond Presence avatar ID (leave empty for default avatar)</p>
+                    </div>
+                </div>
+
+                <!-- Tavus-specific settings -->
+                <div id="tavusSettings" class="contents" style="display: none;">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Replica ID</label>
+                        <input type="text" id="tavusReplicaId" value="{{ agent.voice_settings.tavus_replica_id or '' }}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="r1234567890">
+                        <p class="mt-1 text-xs text-gray-500">Your Tavus replica ID</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Persona ID</label>
+                        <input type="text" id="tavusPersonaId" value="{{ agent.voice_settings.tavus_persona_id or '' }}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="p1234567890">
+                        <p class="mt-1 text-xs text-gray-500">Your Tavus persona ID (must be configured with pipeline_mode: echo and transport_type: livekit)</p>
                     </div>
                 </div>
 
@@ -397,13 +416,19 @@ function toggleAvatarProviderSettings() {
     const avatarProvider = document.getElementById('avatarProvider').value;
     const bithumanSettings = document.getElementById('bithumanSettings');
     const beyondPresenceSettings = document.getElementById('beyondPresenceSettings');
+    const tavusSettings = document.getElementById('tavusSettings');
+
+    // Hide all provider settings first
+    bithumanSettings.style.display = 'none';
+    beyondPresenceSettings.style.display = 'none';
+    tavusSettings.style.display = 'none';
 
     if (avatarProvider === 'beyondpresence') {
-        bithumanSettings.style.display = 'none';
         beyondPresenceSettings.style.display = 'contents';
+    } else if (avatarProvider === 'tavus') {
+        tavusSettings.style.display = 'contents';
     } else {
         bithumanSettings.style.display = 'contents';
-        beyondPresenceSettings.style.display = 'none';
         toggleBithumanMode();  // Also initialize Bithuman mode display
     }
 }
@@ -462,7 +487,9 @@ async function saveAgent() {
         avatar_model_path: avatarModelPath,
         avatar_image_url: avatarImageUrl,
         avatar_model_type: document.getElementById('avatarModelType').value || 'expression',
-        avatar_id: document.getElementById('avatarId').value || null
+        avatar_id: document.getElementById('avatarId').value || null,
+        tavus_replica_id: document.getElementById('tavusReplicaId')?.value || null,
+        tavus_persona_id: document.getElementById('tavusPersonaId')?.value || null
     });
     if (selectedProvider === 'cartesia') {
         mergedVoiceSettings.model = selectedModel || null;

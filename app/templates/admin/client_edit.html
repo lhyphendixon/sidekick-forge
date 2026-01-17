@@ -407,6 +407,12 @@
                         <input type="password" value="{{ client.settings.api_keys.bey_api_key or '' }}" name="bey_api_key" data-api-key="bey_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Tavus API Key (Video Avatar)</label>
+                        <input type="password" value="{{ client.settings.api_keys.tavus_api_key or '' }}" name="tavus_api_key" data-api-key="tavus_api_key"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                    </div>
                 </div>
             </div>
         </div>

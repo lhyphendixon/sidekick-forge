@@ -60,6 +60,7 @@ class APIKeys(BaseModel):
     # Avatar/Video Providers
     bithuman_api_secret: Optional[str] = None
     bey_api_key: Optional[str] = None
+    tavus_api_key: Optional[str] = None
 
 
 class EmbeddingSettings(BaseModel):

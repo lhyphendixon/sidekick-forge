@@ -12,6 +12,7 @@ livekit-plugins-cartesia==1.2.18
 livekit-plugins-turn-detector==1.2.18
 livekit-plugins-bithuman==1.2.18
 livekit-plugins-bey==1.2.18
+livekit-plugins-tavus==1.2.18
 mcp>=1.14.0,<2.0.0
 
 # Image Processing (for Bithuman avatar images)

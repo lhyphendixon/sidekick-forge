@@ -5585,7 +5585,8 @@ async def admin_update_client(
                 siliconflow_api_key=form.get("siliconflow_api_key") or (current_api_keys.siliconflow_api_key if hasattr(current_api_keys, 'siliconflow_api_key') else current_api_keys.get('siliconflow_api_key') if isinstance(current_api_keys, dict) else None),
                 jina_api_key=form.get("jina_api_key") or (current_api_keys.jina_api_key if hasattr(current_api_keys, 'jina_api_key') else current_api_keys.get('jina_api_key') if isinstance(current_api_keys, dict) else None),
                 bithuman_api_secret=form.get("bithuman_api_secret") or (current_api_keys.bithuman_api_secret if hasattr(current_api_keys, 'bithuman_api_secret') else current_api_keys.get('bithuman_api_secret') if isinstance(current_api_keys, dict) else None),
-                bey_api_key=form.get("bey_api_key") or (current_api_keys.bey_api_key if hasattr(current_api_keys, 'bey_api_key') else current_api_keys.get('bey_api_key') if isinstance(current_api_keys, dict) else None)
+                bey_api_key=form.get("bey_api_key") or (current_api_keys.bey_api_key if hasattr(current_api_keys, 'bey_api_key') else current_api_keys.get('bey_api_key') if isinstance(current_api_keys, dict) else None),
+                tavus_api_key=form.get("tavus_api_key") or (current_api_keys.tavus_api_key if hasattr(current_api_keys, 'tavus_api_key') else current_api_keys.get('tavus_api_key') if isinstance(current_api_keys, dict) else None)
             ),
             embedding=EmbeddingSettings(
                 provider=form.get("embedding_provider", current_embedding.provider if hasattr(current_embedding, 'provider') else current_embedding.get('provider', 'openai') if current_embedding else 'openai'),

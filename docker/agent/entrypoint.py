@@ -2454,6 +2454,34 @@ async def agent_job_handler(ctx: JobContext):
                         await avatar_session.start(session, room=ctx.room)
                         logger.info("✅ Beyond Presence avatar session started - video will be published")
 
+                    elif avatar_provider == "tavus":
+                        # Tavus avatar provider - lazy import
+                        from livekit.plugins import tavus
+
+                        tavus_api_key = api_keys.get("tavus_api_key")
+                        replica_id = voice_settings.get("tavus_replica_id")
+                        persona_id = voice_settings.get("tavus_persona_id")
+
+                        if not tavus_api_key:
+                            raise ValueError("Video chat with Tavus requires API key in client settings")
+                        if not replica_id or not persona_id:
+                            raise ValueError("Video chat with Tavus requires both replica_id and persona_id in agent settings")
+
+                        # Set environment variable for the plugin
+                        os.environ["TAVUS_API_KEY"] = tavus_api_key
+
+                        logger.info(f"🎭 Tavus: replica_id={replica_id}, persona_id={persona_id}")
+
+                        # Create Tavus avatar session
+                        avatar_session = tavus.AvatarSession(
+                            replica_id=replica_id,
+                            persona_id=persona_id
+                        )
+
+                        logger.info(f"🎬 Starting Tavus avatar session...")
+                        await avatar_session.start(session, room=ctx.room)
+                        logger.info("✅ Tavus avatar session started - video will be published")
+
                     else:
                         # Bithuman avatar provider (default)
                         avatar_model_path = voice_settings.get("avatar_model_path")
