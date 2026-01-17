@@ -1167,7 +1167,8 @@ async def _store_conversation_turn(
     session_id: Optional[str] = None,
     context_manager=None,  # Optional context manager for embeddings
     citations: Optional[List[Dict[str, Any]]] = None,  # Optional citations from RAG
-    metadata: Optional[Dict[str, Any]] = None  # Optional metadata
+    metadata: Optional[Dict[str, Any]] = None,  # Optional metadata
+    client_id: Optional[str] = None  # Required for multi-tenant schemas with RLS
 ) -> None:
     """
     Store a conversation turn using the unified transcript store.
@@ -1179,6 +1180,7 @@ async def _store_conversation_turn(
             'session_id': session_id,
             'agent_id': agent_id,
             'user_id': user_id,
+            'client_id': client_id,  # Required for multi-tenant schemas with RLS
             'user_text': user_message,
             'assistant_text': agent_response,
             'citations': citations,
@@ -1385,6 +1387,7 @@ async def handle_text_trigger_via_livekit(
                 context_manager=context_manager,
                 citations=citations,
                 metadata=turn_metadata,
+                client_id=str(client.id),  # Required for multi-tenant schemas with RLS
             )
         except Exception as store_err:
             logger.error(f"Failed to store unified text conversation turn: {store_err}")
@@ -1743,7 +1746,8 @@ async def handle_text_trigger(
                     session_id=request.session_id,
                     context_manager=context_manager,  # Pass context manager for embeddings
                     citations=citations,  # Include citations if available
-                    metadata=turn_metadata  # Include agent metadata plus tool execution context
+                    metadata=turn_metadata,  # Include agent metadata plus tool execution context
+                    client_id=str(client.id),  # Required for multi-tenant schemas with RLS
                 )
                 logger.info(f"✅ Text conversation turn stored for conversation_id={conversation_id} with {len(citations) if citations else 0} citations")
             except Exception as e:

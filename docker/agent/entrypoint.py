@@ -20,8 +20,8 @@ from datetime import datetime
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2026-01-03T02:20:00Z"
-AGENT_BUILD_HASH = "v1.6.0-video-chat"
+AGENT_BUILD_VERSION = "2026-01-17T19:33:37Z"
+AGENT_BUILD_HASH = "fix-transcript-storage"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
@@ -2122,21 +2122,63 @@ async def agent_job_handler(ctx: JobContext):
                 return existing + " " + incoming
 
 
-            def _strip_assistant_echo(txt_raw: str, txt_norm: str, recent_greet: str, last_assistant: str):
+            def _strip_assistant_echo(txt_raw: str, txt_norm: str, recent_greet: str, last_assistant: str, agent_speech_time: float = 0):
                 """
                 Remove assistant/greeting phrases that leaked into the mic.
                 Returns (clean_raw, clean_norm). If everything is stripped, returns ("", "").
+
+                Enhanced to handle:
+                - Exact phrase matches
+                - Partial/fuzzy matches (STT often mistranscribes)
+                - Common greeting phrase variations
+                - Word-level overlap detection
+                - Time-based echo window (more aggressive within 3 seconds of agent speech)
                 """
+                import re
+                import time as _time_mod
                 clean_raw = txt_raw or ""
                 clean_norm = txt_norm or ""
+
+                # Time-based echo window: if agent spoke within last 3 seconds, be more aggressive
+                echo_window_seconds = 3.0
+                in_echo_window = False
+                if agent_speech_time > 0:
+                    time_since_speech = _time_mod.time() - agent_speech_time
+                    in_echo_window = time_since_speech < echo_window_seconds
+                    if in_echo_window:
+                        logger.debug(f"🔇 In echo window ({time_since_speech:.1f}s since agent speech) - applying aggressive echo suppression")
+
+                # Common greeting phrases that may be echoed back (STT variations)
+                common_greeting_phrases = [
+                    "how can i help you",
+                    "how may i help you",
+                    "may i help you",
+                    "can i help you",
+                    "what can i help you with",
+                    "how can i assist you",
+                    "how may i assist you",
+                    "what can i do for you",
+                    "hi how can i help",
+                    "hello how can i help",
+                    "hi there how can i",
+                    "hello there",
+                    "hi there",
+                    "good morning",
+                    "good afternoon",
+                    "good evening",
+                    "nice to meet you",
+                    "pleasure to meet you",
+                    "welcome",
+                ]
 
                 echo_candidates = []
                 if recent_greet:
                     echo_candidates.append(recent_greet)
                 if last_assistant:
                     echo_candidates.append(last_assistant)
-                echo_candidates.append("how can i help you")  # common greeting phrase
+                echo_candidates.extend(common_greeting_phrases)
 
+                # First pass: exact substring matches
                 for phrase in echo_candidates:
                     if not phrase:
                         continue
@@ -2146,10 +2188,61 @@ async def agent_job_handler(ctx: JobContext):
                     if p_norm in clean_norm:
                         clean_norm = clean_norm.replace(p_norm, "").strip()
                         try:
-                            import re
                             clean_raw = re.sub(re.escape(phrase), "", clean_raw, flags=re.IGNORECASE).strip()
                         except Exception:
                             pass
+
+                # Second pass: word-level overlap detection
+                # If >60% of words in the transcript match words from assistant speech, it's likely echo
+                # Use lower threshold (40%) when in echo window
+                if clean_norm and (recent_greet or last_assistant):
+                    transcript_words = set(clean_norm.split())
+                    if len(transcript_words) >= 2:  # Only check if there are at least 2 words
+                        assistant_words = set()
+                        if recent_greet:
+                            assistant_words.update(_normalize_for_compare(recent_greet).split())
+                        if last_assistant:
+                            assistant_words.update(_normalize_for_compare(last_assistant).split())
+
+                        if assistant_words:
+                            # Remove common stop words from comparison
+                            stop_words = {"i", "a", "the", "to", "is", "it", "and", "or", "of", "in", "on", "at", "for", "with", "you", "me", "my", "your"}
+                            transcript_content_words = transcript_words - stop_words
+                            assistant_content_words = assistant_words - stop_words
+
+                            if transcript_content_words and assistant_content_words:
+                                overlap = transcript_content_words & assistant_content_words
+                                overlap_ratio = len(overlap) / len(transcript_content_words)
+
+                                # Use lower threshold when in echo window (agent just spoke)
+                                overlap_threshold = 0.4 if in_echo_window else 0.6
+
+                                if overlap_ratio >= overlap_threshold:
+                                    logger.info(f"🔇 Echo detected via word overlap ({overlap_ratio:.0%}, threshold={overlap_threshold}): transcript words={transcript_content_words}, assistant words overlap={overlap}")
+                                    clean_raw = ""
+                                    clean_norm = ""
+
+                # Third pass: check for very short transcripts that are likely just noise/echo
+                # If transcript is <= 4 words and shares ANY significant word with assistant speech, drop it
+                if clean_norm:
+                    words = clean_norm.split()
+                    if len(words) <= 4:
+                        assistant_text = ""
+                        if recent_greet:
+                            assistant_text += " " + _normalize_for_compare(recent_greet)
+                        if last_assistant:
+                            assistant_text += " " + _normalize_for_compare(last_assistant)
+
+                        if assistant_text:
+                            # Check for key words that indicate echo
+                            key_words = {"help", "assist", "welcome", "hello", "hi", "morning", "afternoon", "evening", "meet", "pleasure"}
+                            transcript_has_key = any(w in key_words for w in words)
+                            assistant_has_key = any(w in assistant_text for w in key_words)
+
+                            if transcript_has_key and assistant_has_key:
+                                logger.info(f"🔇 Short transcript ({len(words)} words) appears to be echo - dropping: '{clean_norm}'")
+                                clean_raw = ""
+                                clean_norm = ""
 
                 return clean_raw, clean_norm
 
@@ -2165,8 +2258,10 @@ async def agent_job_handler(ctx: JobContext):
                     txt_norm = _normalize_for_compare(txt)
                     recent_greet = getattr(session, "_recent_greeting_norm", "")
                     last_assistant = _normalize_for_compare(getattr(agent, "_last_assistant_commit", ""))
+                    # Get timestamp of last agent speech for echo window calculation
+                    agent_speech_time = getattr(session, "_last_agent_speech_time", 0) or getattr(agent, "_last_assistant_commit_time", 0) or 0
                     if txt_norm:
-                        stripped_raw, stripped_norm = _strip_assistant_echo(txt, txt_norm, recent_greet, last_assistant)
+                        stripped_raw, stripped_norm = _strip_assistant_echo(txt, txt_norm, recent_greet, last_assistant, agent_speech_time)
                         if stripped_norm != txt_norm:
                             logger.info("🔇 Stripped assistant echo from transcript (remaining='%s')", stripped_raw[:120])
                         txt, txt_norm = stripped_raw, stripped_norm
@@ -2352,8 +2447,13 @@ async def agent_job_handler(ctx: JobContext):
                     logger.debug(f"📝 agent_speech_committed received ({len(agent_text)} chars) - skipping storage (transcription_node handles it)")
 
                     # Just track for deduplication in case store_transcript is called elsewhere
+                    # Also track timestamp for echo window suppression
                     try:
+                        import time as _time_module
                         agent._last_assistant_commit = agent_text
+                        agent._last_assistant_commit_time = _time_module.time()
+                        session._last_agent_speech_time = _time_module.time()
+                        logger.debug(f"📝 Updated echo tracking: last_assistant_commit_time={agent._last_assistant_commit_time}")
                     except Exception:
                         pass
 
@@ -2454,33 +2554,31 @@ async def agent_job_handler(ctx: JobContext):
                         await avatar_session.start(session, room=ctx.room)
                         logger.info("✅ Beyond Presence avatar session started - video will be published")
 
-                    elif avatar_provider == "tavus":
-                        # Tavus avatar provider - lazy import
-                        from livekit.plugins import tavus
+                    elif avatar_provider == "liveavatar":
+                        # HeyGen LiveAvatar provider - lazy import
+                        from livekit.plugins import liveavatar
 
-                        tavus_api_key = api_keys.get("tavus_api_key")
-                        replica_id = voice_settings.get("tavus_replica_id")
-                        persona_id = voice_settings.get("tavus_persona_id")
+                        liveavatar_api_key = api_keys.get("liveavatar_api_key")
+                        avatar_id = voice_settings.get("liveavatar_avatar_id")
 
-                        if not tavus_api_key:
-                            raise ValueError("Video chat with Tavus requires API key in client settings")
-                        if not replica_id or not persona_id:
-                            raise ValueError("Video chat with Tavus requires both replica_id and persona_id in agent settings")
+                        if not liveavatar_api_key:
+                            raise ValueError("Video chat with HeyGen LiveAvatar requires API key in client settings")
+                        if not avatar_id:
+                            raise ValueError("Video chat with HeyGen LiveAvatar requires avatar_id in agent settings")
 
                         # Set environment variable for the plugin
-                        os.environ["TAVUS_API_KEY"] = tavus_api_key
+                        os.environ["LIVEAVATAR_API_KEY"] = liveavatar_api_key
 
-                        logger.info(f"🎭 Tavus: replica_id={replica_id}, persona_id={persona_id}")
+                        logger.info(f"🎭 HeyGen LiveAvatar: avatar_id={avatar_id}")
 
-                        # Create Tavus avatar session
-                        avatar_session = tavus.AvatarSession(
-                            replica_id=replica_id,
-                            persona_id=persona_id
+                        # Create LiveAvatar session
+                        avatar_session = liveavatar.AvatarSession(
+                            avatar_id=avatar_id
                         )
 
-                        logger.info(f"🎬 Starting Tavus avatar session...")
+                        logger.info(f"🎬 Starting HeyGen LiveAvatar session...")
                         await avatar_session.start(session, room=ctx.room)
-                        logger.info("✅ Tavus avatar session started - video will be published")
+                        logger.info("✅ HeyGen LiveAvatar session started - video will be published")
 
                     else:
                         # Bithuman avatar provider (default)
@@ -3019,8 +3117,11 @@ async def agent_job_handler(ctx: JobContext):
                                 # IMPORTANT: Store greeting text BEFORE calling say()
                                 # This ensures echo stripping can filter it out if user speaks during greeting
                                 try:
+                                    import time as _time_module
                                     session._recent_greeting_text = greeting_message
                                     session._recent_greeting_norm = greeting_norm
+                                    # Also store timestamp for time-based echo window
+                                    session._last_agent_speech_time = _time_module.time()
                                     logger.info(f"📝 Stored greeting for echo suppression: '{greeting_norm}'")
                                 except Exception:
                                     pass
@@ -3035,41 +3136,60 @@ async def agent_job_handler(ctx: JobContext):
                                 except Exception:
                                     pass
 
-                                # In VIDEO mode, don't wait for completion - DataStreamAudioOutput
-                                # sends audio to Bithuman which doesn't signal back when done.
-                                # Waiting causes timeout and blocks all subsequent responses.
+                                # In VIDEO mode, handling depends on avatar provider:
+                                # - LiveAvatar uses QueueAudioOutput which properly signals completion
+                                # - Bithuman/Beyond Presence use DataStreamAudioOutput which doesn't
                                 if is_video_mode:
-                                    # Give audio a moment to flush to Bithuman
-                                    await asyncio.sleep(2.0)
-                                    # CRITICAL: Interrupt the greeting speech handle AND directly clear
-                                    # the SDK's internal _current_speech state. Without this, the SDK
-                                    # thinks we're still speaking and won't generate new responses.
-                                    try:
-                                        if greeting_speech_handle and not greeting_speech_handle.done():
-                                            greeting_speech_handle.interrupt(force=True)
-                                            logger.info("🔇 Interrupted greeting speech handle for video mode")
-                                    except Exception as int_err:
-                                        logger.debug(f"Could not interrupt greeting handle: {int_err}")
-                                    # Also call session.interrupt to ensure all state is cleared
-                                    try:
-                                        session.interrupt(force=True)
-                                    except Exception:
-                                        pass
-                                    # CRITICAL FIX: Directly clear the activity's _current_speech
-                                    # The SDK's interrupt() doesn't clear this in video mode because
-                                    # DataStreamAudioOutput never signals completion
-                                    try:
-                                        activity = getattr(session, '_activity', None)
-                                        if activity and hasattr(activity, '_current_speech'):
-                                            activity._current_speech = None
-                                            logger.info("🔇 Cleared activity._current_speech for video mode")
-                                    except Exception as act_err:
-                                        logger.debug(f"Could not clear activity._current_speech: {act_err}")
-                                    try:
-                                        session._active_speech_handle = None
-                                    except Exception:
-                                        pass
-                                    logger.info("✅ Proactive greeting sent to Bithuman (video mode - no wait)")
+                                    # Check which avatar provider is in use
+                                    current_avatar_provider = voice_settings.get("avatar_provider", "bithuman") if 'voice_settings' in locals() else "bithuman"
+
+                                    if current_avatar_provider == "liveavatar":
+                                        # LiveAvatar: QueueAudioOutput properly signals completion
+                                        # Wait for the speech to complete normally (like voice mode)
+                                        try:
+                                            await asyncio.wait_for(greeting_speech_handle, timeout=10.0)
+                                            logger.info("✅ Proactive greeting completed (LiveAvatar - awaited completion)")
+                                        except asyncio.TimeoutError:
+                                            logger.warning("⚠️ LiveAvatar greeting timed out after 10s")
+                                        # Clear the stored handle after playout completes
+                                        try:
+                                            session._active_speech_handle = None
+                                        except Exception:
+                                            pass
+                                    else:
+                                        # Bithuman/Beyond Presence: DataStreamAudioOutput doesn't signal completion
+                                        # Use the interrupt workaround
+                                        # Give audio a moment to flush
+                                        await asyncio.sleep(2.0)
+                                        # CRITICAL: Interrupt the greeting speech handle AND directly clear
+                                        # the SDK's internal _current_speech state. Without this, the SDK
+                                        # thinks we're still speaking and won't generate new responses.
+                                        try:
+                                            if greeting_speech_handle and not greeting_speech_handle.done():
+                                                greeting_speech_handle.interrupt(force=True)
+                                                logger.info("🔇 Interrupted greeting speech handle for video mode")
+                                        except Exception as int_err:
+                                            logger.debug(f"Could not interrupt greeting handle: {int_err}")
+                                        # Also call session.interrupt to ensure all state is cleared
+                                        try:
+                                            session.interrupt(force=True)
+                                        except Exception:
+                                            pass
+                                        # CRITICAL FIX: Directly clear the activity's _current_speech
+                                        # The SDK's interrupt() doesn't clear this in video mode because
+                                        # DataStreamAudioOutput never signals completion
+                                        try:
+                                            activity = getattr(session, '_activity', None)
+                                            if activity and hasattr(activity, '_current_speech'):
+                                                activity._current_speech = None
+                                                logger.info("🔇 Cleared activity._current_speech for video mode")
+                                        except Exception as act_err:
+                                            logger.debug(f"Could not clear activity._current_speech: {act_err}")
+                                        try:
+                                            session._active_speech_handle = None
+                                        except Exception:
+                                            pass
+                                        logger.info("✅ Proactive greeting sent to Bithuman (video mode - no wait)")
                                 else:
                                     # Voice mode: wait for playout completion
                                     await asyncio.wait_for(greeting_speech_handle, timeout=6.0)

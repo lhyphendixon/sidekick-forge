@@ -51,6 +51,7 @@ async def store_turn(
     session_id = turn_data.get('session_id') or conversation_id
     agent_id = turn_data.get('agent_id')
     user_id = turn_data.get('user_id')
+    client_id = turn_data.get('client_id')  # Required for multi-tenant schemas with RLS
     user_text = turn_data.get('user_text', '')
     assistant_text = turn_data.get('assistant_text', '')
     citations = turn_data.get('citations', [])
@@ -104,16 +105,27 @@ async def store_turn(
             try:
                 existing = supabase_client.table("conversations").select("id").eq("id", conversation_id).limit(1).execute()
                 if not existing.data:
-                    supabase_client.table("conversations").insert(
-                        {
-                            "id": conversation_id,
-                            "agent_id": agent_id,
-                            "user_id": user_id,
-                            "channel": metadata.get("channel", "voice"),
-                            "created_at": timestamp,
-                            "updated_at": timestamp,
-                        }
-                    ).execute()
+                    conversation_row = {
+                        "id": conversation_id,
+                        "agent_id": agent_id,
+                        "user_id": user_id,
+                        "channel": metadata.get("channel", "voice"),
+                        "created_at": timestamp,
+                        "updated_at": timestamp,
+                    }
+                    # Try with client_id first (multi-tenant schemas), fall back without (dedicated tenant)
+                    if client_id:
+                        conversation_row["client_id"] = client_id
+                    try:
+                        supabase_client.table("conversations").insert(conversation_row).execute()
+                    except Exception as insert_exc:
+                        # If insert failed due to client_id column, retry without it (dedicated tenant schema)
+                        if client_id and ("client_id" in str(insert_exc).lower() or "column" in str(insert_exc).lower()):
+                            logger.info(f"Retrying conversation insert without client_id (dedicated tenant schema)")
+                            conversation_row.pop("client_id", None)
+                            supabase_client.table("conversations").insert(conversation_row).execute()
+                        else:
+                            raise
             except Exception as conversation_exc:
                 logger.warning(f"Failed to ensure conversation {conversation_id} exists: {conversation_exc}")
 
@@ -130,11 +142,15 @@ async def store_turn(
             "created_at": timestamp,
             "metadata": metadata
         }
-        
+
+        # Add client_id if available (required for multi-tenant schemas with RLS)
+        if client_id:
+            user_row["client_id"] = client_id
+
         # Add source field conditionally (in case column doesn't exist yet)
         # This makes the code backward compatible
         user_row["source"] = "text"
-        
+
         # Prepare assistant message row
         assistant_row = {
             "conversation_id": conversation_id,
@@ -148,7 +164,11 @@ async def store_turn(
             "created_at": timestamp,
             "metadata": metadata
         }
-        
+
+        # Add client_id if available (required for multi-tenant schemas with RLS)
+        if client_id:
+            assistant_row["client_id"] = client_id
+
         # Add source field conditionally
         assistant_row["source"] = "text"
         
@@ -158,8 +178,28 @@ async def store_turn(
             logger.info(f"📚 Including {len(citations)} citations in assistant transcript")
         
         # Store both rows (FastAPI uses sync Supabase client)
-        user_result = supabase_client.table("conversation_transcripts").insert(user_row).execute()
-        assistant_result = supabase_client.table("conversation_transcripts").insert(assistant_row).execute()
+        # Handle schemas that may not have client_id column (dedicated tenant vs shared pool)
+        try:
+            user_result = supabase_client.table("conversation_transcripts").insert(user_row).execute()
+        except Exception as user_insert_exc:
+            # If insert failed due to client_id column, retry without it (dedicated tenant schema)
+            if client_id and ("client_id" in str(user_insert_exc).lower() or "column" in str(user_insert_exc).lower()):
+                logger.info(f"Retrying user transcript insert without client_id (dedicated tenant schema)")
+                user_row.pop("client_id", None)
+                user_result = supabase_client.table("conversation_transcripts").insert(user_row).execute()
+            else:
+                raise
+
+        try:
+            assistant_result = supabase_client.table("conversation_transcripts").insert(assistant_row).execute()
+        except Exception as asst_insert_exc:
+            # If insert failed due to client_id column, retry without it (dedicated tenant schema)
+            if client_id and ("client_id" in str(asst_insert_exc).lower() or "column" in str(asst_insert_exc).lower()):
+                logger.info(f"Retrying assistant transcript insert without client_id (dedicated tenant schema)")
+                assistant_row.pop("client_id", None)
+                assistant_result = supabase_client.table("conversation_transcripts").insert(assistant_row).execute()
+            else:
+                raise
         
         # Extract row IDs if available
         if user_result.data and len(user_result.data) > 0:

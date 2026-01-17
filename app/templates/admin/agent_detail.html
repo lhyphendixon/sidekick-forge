@@ -447,80 +447,140 @@
             </div>
             <div class="p-6">
                 <div class="space-y-6">
-                    <!-- Bithuman Mode Selection -->
+                    <!-- Avatar Provider Selection -->
                     <div>
-                        <label class="block text-sm font-medium text-dark-text mb-2">Bithuman Mode</label>
-                        <select id="bithumanMode" onchange="toggleBithumanMode()" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
-                            <option value="local" {% if agent.voice_settings.avatar_model_path %}selected{% endif %}>Local/Self-Hosted (IMX model)</option>
-                            <option value="cloud" {% if not agent.voice_settings.avatar_model_path %}selected{% endif %}>Cloud (Image URL)</option>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Avatar Provider</label>
+                        <select id="avatarProvider" onchange="toggleAvatarProviderSettings()" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
+                            <option value="bithuman" {% if agent.voice_settings.avatar_provider == 'bithuman' or not agent.voice_settings.avatar_provider %}selected{% endif %}>Bithuman</option>
+                            <option value="beyondpresence" {% if agent.voice_settings.avatar_provider == 'beyondpresence' %}selected{% endif %}>Beyond Presence</option>
+                            <option value="liveavatar" {% if agent.voice_settings.avatar_provider == 'liveavatar' %}selected{% endif %}>HeyGen LiveAvatar</option>
                         </select>
                         <p class="text-xs text-dark-text-secondary mt-2">
-                            <strong>Local:</strong> Uses a downloaded .imx model file. Faster, runs on CPU, no cloud latency.<br>
-                            <strong>Cloud:</strong> Uses Bithuman's cloud API with an uploaded image.
+                            Choose your video avatar provider. Each requires the appropriate API key in client settings.
                         </p>
                     </div>
 
-                    <!-- Local Mode: IMX Model Path -->
-                    <div id="bithumanLocalSettings" {% if not agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
-                        <label class="block text-sm font-medium text-dark-text mb-2">IMX Model Path</label>
-                        <input type="text" id="avatarModelPath" value="{{ agent.voice_settings.avatar_model_path or '/app/models/farah_qubit.imx' }}"
-                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
-                               placeholder="/app/models/your_avatar.imx">
-                        <p class="text-xs text-dark-text-secondary mt-2">
-                            Path to the .imx model file inside the agent container. Models are stored in /app/models/
-                        </p>
-                    </div>
+                    <!-- Bithuman Settings -->
+                    <div id="bithumanSettings" {% if agent.voice_settings.avatar_provider and agent.voice_settings.avatar_provider != 'bithuman' %}style="display: none;"{% endif %}>
+                        <!-- Bithuman Mode Selection -->
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Bithuman Mode</label>
+                            <select id="bithumanMode" onchange="toggleBithumanMode()" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
+                                <option value="local" {% if agent.voice_settings.avatar_model_path %}selected{% endif %}>Local/Self-Hosted (IMX model)</option>
+                                <option value="cloud" {% if not agent.voice_settings.avatar_model_path %}selected{% endif %}>Cloud (Image URL)</option>
+                            </select>
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                <strong>Local:</strong> Uses a downloaded .imx model file. Faster, runs on CPU, no cloud latency.<br>
+                                <strong>Cloud:</strong> Uses Bithuman's cloud API with an uploaded image.
+                            </p>
+                        </div>
 
-                    <!-- Cloud Mode: Avatar Image Upload -->
-                    <div id="bithumanCloudSettings" {% if agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
-                        <label class="block text-sm font-medium text-dark-text mb-2">Avatar Image</label>
-                        <p class="text-xs text-dark-text-secondary mb-3">
-                            Upload a clear, front-facing portrait photo. This image will be animated during video chat.
-                        </p>
-                        <div class="flex items-start gap-4">
-                            <div id="avatarPreview" class="w-32 h-32 bg-dark-elevated border border-dark-border rounded-lg flex items-center justify-center overflow-hidden">
-                                {% if agent.voice_settings.avatar_image_url %}
-                                <img src="{{ agent.voice_settings.avatar_image_url }}" alt="Avatar" class="w-full h-full object-cover">
-                                {% else %}
-                                <svg class="w-12 h-12 text-dark-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                                </svg>
-                                {% endif %}
+                        <!-- Local Mode: IMX Model Path -->
+                        <div id="bithumanLocalSettings" class="mb-6" {% if not agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
+                            <label class="block text-sm font-medium text-dark-text mb-2">IMX Model Path</label>
+                            <input type="text" id="avatarModelPath" value="{{ agent.voice_settings.avatar_model_path or '/app/models/farah_qubit.imx' }}"
+                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
+                                   placeholder="/app/models/your_avatar.imx">
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                Path to the .imx model file inside the agent container. Models are stored in /app/models/
+                            </p>
+                        </div>
+
+                        <!-- Cloud Mode: Avatar Image Upload -->
+                        <div id="bithumanCloudSettings" class="mb-6" {% if agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
+                            <label class="block text-sm font-medium text-dark-text mb-2">Avatar Image</label>
+                            <p class="text-xs text-dark-text-secondary mb-3">
+                                Upload a clear, front-facing portrait photo. This image will be animated during video chat.
+                            </p>
+                            <div class="flex items-start gap-4">
+                                <div id="avatarPreview" class="w-32 h-32 bg-dark-elevated border border-dark-border rounded-lg flex items-center justify-center overflow-hidden">
+                                    {% if agent.voice_settings.avatar_image_url %}
+                                    <img src="{{ agent.voice_settings.avatar_image_url }}" alt="Avatar" class="w-full h-full object-cover">
+                                    {% else %}
+                                    <svg class="w-12 h-12 text-dark-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                    </svg>
+                                    {% endif %}
+                                </div>
+                                <div class="flex-1">
+                                    <input type="file" id="avatarImageInput" accept="image/jpeg,image/png,image/webp" class="hidden" onchange="handleAvatarUpload(this)">
+                                    <input type="hidden" id="avatarImageUrl" value="{{ agent.voice_settings.avatar_image_url or '' }}">
+                                    <button type="button" onclick="document.getElementById('avatarImageInput').click()"
+                                            class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md text-sm transition-colors">
+                                        <i class="bi bi-upload mr-2"></i>Upload Image
+                                    </button>
+                                    <p class="text-xs text-dark-text-secondary mt-2">
+                                        Recommended: Square image, at least 512x512px. JPG, PNG, or WebP.
+                                    </p>
+                                </div>
                             </div>
-                            <div class="flex-1">
-                                <input type="file" id="avatarImageInput" accept="image/jpeg,image/png,image/webp" class="hidden" onchange="handleAvatarUpload(this)">
-                                <input type="hidden" id="avatarImageUrl" value="{{ agent.voice_settings.avatar_image_url or '' }}">
-                                <button type="button" onclick="document.getElementById('avatarImageInput').click()"
-                                        class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md text-sm transition-colors">
-                                    <i class="bi bi-upload mr-2"></i>Upload Image
-                                </button>
-                                <p class="text-xs text-dark-text-secondary mt-2">
-                                    Recommended: Square image, at least 512x512px. JPG, PNG, or WebP.
-                                </p>
-                            </div>
+                        </div>
+
+                        <!-- Avatar Model Type -->
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Animation Style</label>
+                            <select id="avatarModelType" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
+                                <option value="expression" {% if agent.voice_settings.avatar_model_type == 'expression' or not agent.voice_settings.avatar_model_type %}selected{% endif %}>Expression (Dynamic emotions)</option>
+                                <option value="essence" {% if agent.voice_settings.avatar_model_type == 'essence' %}selected{% endif %}>Essence (Consistent style)</option>
+                            </select>
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                <strong>Expression:</strong> Dynamic facial expressions that respond to conversation tone.<br>
+                                <strong>Essence:</strong> More consistent, predefined expressions.
+                            </p>
+                        </div>
+
+                        <!-- Bithuman Link -->
+                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
+                            <p class="text-xs text-dark-text-secondary">
+                                <i class="bi bi-info-circle mr-1"></i>
+                                Video chat is powered by <a href="https://www.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Bithuman</a>.
+                                Ensure the Bithuman API Secret is configured in the client settings.
+                            </p>
                         </div>
                     </div>
 
-                    <!-- Avatar Model Type -->
-                    <div>
-                        <label class="block text-sm font-medium text-dark-text mb-2">Animation Style</label>
-                        <select id="avatarModelType" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
-                            <option value="expression" {% if agent.voice_settings.avatar_model_type == 'expression' or not agent.voice_settings.avatar_model_type %}selected{% endif %}>Expression (Dynamic emotions)</option>
-                            <option value="essence" {% if agent.voice_settings.avatar_model_type == 'essence' %}selected{% endif %}>Essence (Consistent style)</option>
-                        </select>
-                        <p class="text-xs text-dark-text-secondary mt-2">
-                            <strong>Expression:</strong> Dynamic facial expressions that respond to conversation tone.<br>
-                            <strong>Essence:</strong> More consistent, predefined expressions.
-                        </p>
+                    <!-- Beyond Presence Settings -->
+                    <div id="beyondPresenceSettings" {% if agent.voice_settings.avatar_provider != 'beyondpresence' %}style="display: none;"{% endif %}>
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Avatar ID</label>
+                            <input type="text" id="beyondPresenceAvatarId" value="{{ agent.voice_settings.avatar_id or '' }}"
+                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
+                                   placeholder="e.g., anna_professional">
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                Enter your Beyond Presence avatar ID. Leave empty for the default avatar.
+                            </p>
+                        </div>
+
+                        <!-- Beyond Presence Link -->
+                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
+                            <p class="text-xs text-dark-text-secondary">
+                                <i class="bi bi-info-circle mr-1"></i>
+                                Video chat is powered by <a href="https://www.beyondpresence.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Beyond Presence</a>.
+                                Ensure the Beyond Presence API Key is configured in the client settings.
+                            </p>
+                        </div>
                     </div>
 
-                    <!-- Bithuman Link -->
-                    <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
-                        <p class="text-xs text-dark-text-secondary">
-                            <i class="bi bi-info-circle mr-1"></i>
-                            Video chat is powered by <a href="https://www.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Bithuman</a>.
-                            Ensure the Bithuman API Secret is configured in the client settings.
-                        </p>
+                    <!-- HeyGen LiveAvatar Settings -->
+                    <div id="liveavatarSettings" {% if agent.voice_settings.avatar_provider != 'liveavatar' %}style="display: none;"{% endif %}>
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Avatar ID</label>
+                            <input type="text" id="liveavatarAvatarId" value="{{ agent.voice_settings.liveavatar_avatar_id or '' }}"
+                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
+                                   placeholder="e.g., avatar_abc123">
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                Your HeyGen LiveAvatar avatar ID. Choose from public avatars or create custom ones at <a href="https://app.liveavatar.com/home" target="_blank" class="text-purple-400 hover:text-purple-300">app.liveavatar.com</a>.
+                            </p>
+                        </div>
+
+                        <!-- HeyGen LiveAvatar Link -->
+                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
+                            <p class="text-xs text-dark-text-secondary">
+                                <i class="bi bi-info-circle mr-1"></i>
+                                Video chat is powered by <a href="https://www.heygen.com" target="_blank" class="text-purple-400 hover:text-purple-300">HeyGen LiveAvatar</a>.
+                                Ensure the LiveAvatar API Key is configured in the client settings.
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1126,17 +1186,40 @@ async function saveAgent() {
 
     // Avatar settings (add to voiceSettings)
     if (videoChatEnabled) {
-        const bithumanMode = document.getElementById('bithumanMode')?.value || 'cloud';
+        const avatarProvider = document.getElementById('avatarProvider')?.value || 'bithuman';
+        voiceSettings.avatar_provider = avatarProvider;
 
-        // Set either model_path (local) OR image_url (cloud), not both
-        if (bithumanMode === 'local') {
-            voiceSettings.avatar_model_path = document.getElementById('avatarModelPath')?.value || null;
-            voiceSettings.avatar_image_url = null;  // Clear cloud setting
-        } else {
-            voiceSettings.avatar_image_url = document.getElementById('avatarImageUrl')?.value || null;
-            voiceSettings.avatar_model_path = null;  // Clear local setting
+        if (avatarProvider === 'bithuman') {
+            const bithumanMode = document.getElementById('bithumanMode')?.value || 'cloud';
+            // Set either model_path (local) OR image_url (cloud), not both
+            if (bithumanMode === 'local') {
+                voiceSettings.avatar_model_path = document.getElementById('avatarModelPath')?.value || null;
+                voiceSettings.avatar_image_url = null;  // Clear cloud setting
+            } else {
+                voiceSettings.avatar_image_url = document.getElementById('avatarImageUrl')?.value || null;
+                voiceSettings.avatar_model_path = null;  // Clear local setting
+            }
+            voiceSettings.avatar_model_type = document.getElementById('avatarModelType')?.value || 'expression';
+            // Clear other provider settings
+            voiceSettings.avatar_id = null;
+            voiceSettings.liveavatar_avatar_id = null;
+        } else if (avatarProvider === 'beyondpresence') {
+            voiceSettings.avatar_id = document.getElementById('beyondPresenceAvatarId')?.value || null;
+            // Clear Bithuman settings
+            voiceSettings.avatar_model_path = null;
+            voiceSettings.avatar_image_url = null;
+            voiceSettings.avatar_model_type = null;
+            // Clear LiveAvatar settings
+            voiceSettings.liveavatar_avatar_id = null;
+        } else if (avatarProvider === 'liveavatar') {
+            voiceSettings.liveavatar_avatar_id = document.getElementById('liveavatarAvatarId')?.value || null;
+            // Clear Bithuman settings
+            voiceSettings.avatar_model_path = null;
+            voiceSettings.avatar_image_url = null;
+            voiceSettings.avatar_model_type = null;
+            // Clear Beyond Presence settings
+            voiceSettings.avatar_id = null;
         }
-        voiceSettings.avatar_model_type = document.getElementById('avatarModelType')?.value || 'expression';
     }
 
     const updateData = {
@@ -1623,6 +1706,28 @@ function toggleBithumanMode() {
     }
 }
 
+function toggleAvatarProviderSettings() {
+    const provider = document.getElementById('avatarProvider')?.value || 'bithuman';
+    const bithumanSettings = document.getElementById('bithumanSettings');
+    const beyondPresenceSettings = document.getElementById('beyondPresenceSettings');
+    const liveavatarSettings = document.getElementById('liveavatarSettings');
+
+    // Hide all provider settings first
+    if (bithumanSettings) bithumanSettings.style.display = 'none';
+    if (beyondPresenceSettings) beyondPresenceSettings.style.display = 'none';
+    if (liveavatarSettings) liveavatarSettings.style.display = 'none';
+
+    // Show the selected provider's settings
+    if (provider === 'bithuman') {
+        if (bithumanSettings) bithumanSettings.style.display = 'block';
+        toggleBithumanMode();
+    } else if (provider === 'beyondpresence') {
+        if (beyondPresenceSettings) beyondPresenceSettings.style.display = 'block';
+    } else if (provider === 'liveavatar') {
+        if (liveavatarSettings) liveavatarSettings.style.display = 'block';
+    }
+}
+
 async function handleAvatarUpload(input) {
     if (!input.files || !input.files[0]) return;
 
@@ -1684,6 +1789,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try { updateCartesiaEmotionSettings(); } catch (err) { console.warn('init updateCartesiaEmotionSettings', err); }
     try { await checkUserSenseStatus(); } catch (err) { console.warn('init checkUserSenseStatus', err); }
     try { await checkDocumentSenseStatus(); } catch (err) { console.warn('init checkDocumentSenseStatus', err); }
+    try { toggleAvatarProviderSettings(); } catch (err) { console.warn('init toggleAvatarProviderSettings', err); }
     document.getElementById('config_cartesia_model')?.addEventListener('change', updateCartesiaEmotionSettings);
     document.getElementById('config_cartesia_emotions_enabled')?.addEventListener('change', updateCartesiaEmotionSettings);
 

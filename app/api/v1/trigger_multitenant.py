@@ -263,32 +263,61 @@ async def handle_voice_trigger(
     }
 
     # Attach embedding settings (client-level) - required for RAG context
-    try:
-        embedding_cfg = {}
-        if hasattr(platform_client.settings, "embedding") and platform_client.settings.embedding:
-            embedding_cfg = platform_client.settings.embedding.dict()
-        elif isinstance(getattr(platform_client, "additional_settings", None), dict):
-            embedding_cfg = platform_client.additional_settings.get("embedding", {}) or {}
-        # Fallback: if embedding config is still empty, derive a safe default so the context manager can initialize
-        if not embedding_cfg:
-            embedding_cfg = {
-                "provider": "siliconflow",
-                "document_model": "Qwen/Qwen3-Embedding-4B",
-                "conversation_model": "Qwen/Qwen3-Embedding-4B",
-                "dimension": 1024,
-            }
-            logger.info("Voice trigger: using default embedding config (siliconflow 4B)")
-        agent_context["embedding"] = embedding_cfg
-        logger.info(f"Voice trigger: attached embedding config - provider={embedding_cfg.get('provider')}")
-    except Exception as embedding_err:
-        logger.warning("Voice trigger: failed to attach embedding settings: %s", embedding_err)
+    # NO FALLBACK POLICY: Embedding config MUST be explicitly configured on the client
+    embedding_cfg = {}
+    # Check platform_client.settings.embedding first (ClientSettings model)
+    if hasattr(platform_client.settings, "embedding") and platform_client.settings.embedding:
+        emb = platform_client.settings.embedding
+        # Check if it's a dict-like object with model_dump or dict
+        if hasattr(emb, 'model_dump'):
+            embedding_cfg = emb.model_dump()
+        elif hasattr(emb, 'dict'):
+            embedding_cfg = emb.dict()
+        elif isinstance(emb, dict):
+            embedding_cfg = emb
+    # Check additional_settings in PlatformClientSettings (platform_client.settings.additional_settings)
+    if not embedding_cfg and hasattr(platform_client.settings, "additional_settings"):
+        additional = platform_client.settings.additional_settings
+        if isinstance(additional, dict) and additional.get("embedding"):
+            embedding_cfg = additional.get("embedding", {})
+            logger.info(f"Voice trigger: found embedding in additional_settings: {embedding_cfg.get('provider')}")
+    # Also check if additional_settings is directly on platform_client (legacy)
+    if not embedding_cfg and isinstance(getattr(platform_client, "additional_settings", None), dict):
+        embedding_cfg = platform_client.additional_settings.get("embedding", {}) or {}
+
+    # NO FALLBACK: Require explicit embedding configuration
+    if not embedding_cfg or not embedding_cfg.get("provider"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Client '{client_id}' has no embedding configuration. Embedding provider and model must be explicitly configured in client settings."
+        )
+    if not embedding_cfg.get("document_model"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Client '{client_id}' embedding configuration missing document_model. Must be explicitly configured."
+        )
+
+    agent_context["embedding"] = embedding_cfg
+    logger.info(f"Voice trigger: attached embedding config - provider={embedding_cfg.get('provider')}, model={embedding_cfg.get('document_model')}")
 
     # Attach rerank settings (client-level)
     try:
         rerank_cfg = {}
         if hasattr(platform_client.settings, "rerank") and platform_client.settings.rerank:
-            rerank_cfg = platform_client.settings.rerank.dict()
-        elif isinstance(getattr(platform_client, "additional_settings", None), dict):
+            rr = platform_client.settings.rerank
+            if hasattr(rr, 'model_dump'):
+                rerank_cfg = rr.model_dump()
+            elif hasattr(rr, 'dict'):
+                rerank_cfg = rr.dict()
+            elif isinstance(rr, dict):
+                rerank_cfg = rr
+        # Check additional_settings in PlatformClientSettings
+        if not rerank_cfg and hasattr(platform_client.settings, "additional_settings"):
+            additional = platform_client.settings.additional_settings
+            if isinstance(additional, dict) and additional.get("rerank"):
+                rerank_cfg = additional.get("rerank", {})
+        # Also check if additional_settings is directly on platform_client (legacy)
+        if not rerank_cfg and isinstance(getattr(platform_client, "additional_settings", None), dict):
             rerank_cfg = platform_client.additional_settings.get("rerank", {}) or {}
         if rerank_cfg:
             agent_context["rerank"] = rerank_cfg

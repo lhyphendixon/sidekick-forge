@@ -477,6 +477,7 @@ async def embed_text_stream(
                                 "session_id": session_id,
                                 "agent_id": str(agent.id) if agent.id else None,
                                 "user_id": effective_user_id,
+                                "client_id": client_id,  # Required for multi-tenant schemas with RLS
                                 "user_text": message,
                                 "assistant_text": full_text,
                                 "citations": citations,
@@ -593,9 +594,18 @@ async def generate_conversation_title(
             title = response.choices[0].message.content.strip()
 
         # Update the conversation with the generated title
-        client_sb.table("conversations").update({
-            "conversation_title": title
-        }).eq("id", conversation_id).execute()
+        # Handle schemas that may not have conversation_title column
+        try:
+            client_sb.table("conversations").update({
+                "conversation_title": title
+            }).eq("id", conversation_id).execute()
+        except Exception as update_err:
+            # If conversation_title column doesn't exist, log and continue
+            # The title was still generated successfully, just can't persist it
+            if "conversation_title" in str(update_err).lower() or "column" in str(update_err).lower():
+                logger.info(f"Conversations table missing conversation_title column, skipping title persistence")
+            else:
+                raise
 
         return {"success": True, "title": title, "conversation_id": conversation_id}
 
@@ -641,25 +651,31 @@ async def list_embed_conversations(
             except Exception as e:
                 logger.warning(f"Failed to look up agent_id for slug {agent_slug}: {e}")
 
-        # Build query - use effective_user_id which may be mapped for platform admins
-        query = client_sb.table("conversations").select("*").eq("user_id", effective_user_id)
+        # Try to exclude deleted conversations, but handle schemas that don't have status column
+        # Build queries fresh each time since Supabase query builder mutates the object
+        def build_base_query():
+            q = client_sb.table("conversations").select("*").eq("user_id", effective_user_id)
+            if effective_agent_id:
+                q = q.eq("agent_id", effective_agent_id)
+            return q
 
-        # Filter by agent if we have an agent_id
-        if effective_agent_id:
-            query = query.eq("agent_id", effective_agent_id)
-
-        # Exclude deleted conversations (handle NULL status)
-        # Use or_ filter: status is null OR status is not 'deleted'
-        query = query.or_("status.is.null,status.neq.deleted")
-
-        # Order by most recent interaction first
-        query = query.order("updated_at", desc=True).order("created_at", desc=True)
-
-        # Apply pagination
-        query = query.limit(limit).offset(offset)
-
-        result = query.execute()
-        conversations = result.data or []
+        try:
+            query_with_status = build_base_query().or_("status.is.null,status.neq.deleted")
+            query_with_status = query_with_status.order("updated_at", desc=True).order("created_at", desc=True)
+            query_with_status = query_with_status.limit(limit).offset(offset)
+            result = query_with_status.execute()
+            conversations = result.data or []
+        except Exception as status_err:
+            # If status column doesn't exist, query without it
+            if "status" in str(status_err).lower() or "column" in str(status_err).lower():
+                logger.info("Conversations table missing status column, querying without status filter")
+                query_no_status = build_base_query()
+                query_no_status = query_no_status.order("updated_at", desc=True).order("created_at", desc=True)
+                query_no_status = query_no_status.limit(limit).offset(offset)
+                result = query_no_status.execute()
+                conversations = result.data or []
+            else:
+                raise
 
         # Batch fetch message counts and last messages to avoid N+1 queries
         if conversations:
@@ -788,18 +804,27 @@ async def get_most_recent_conversation(
             except Exception as e:
                 logger.warning(f"Failed to look up agent_id for slug {agent_slug}: {e}")
 
-        # Build query for most recent conversation - use effective_user_id which may be mapped for platform admins
-        query = client_sb.table("conversations").select("*").eq("user_id", effective_user_id)
+        # Try to exclude deleted conversations, but handle schemas that don't have status column
+        # Build queries fresh each time since Supabase query builder mutates the object
+        def build_base_query():
+            q = client_sb.table("conversations").select("*").eq("user_id", effective_user_id)
+            if effective_agent_id:
+                q = q.eq("agent_id", effective_agent_id)
+            return q
 
-        # Filter by agent if we have an agent_id
-        if effective_agent_id:
-            query = query.eq("agent_id", effective_agent_id)
-
-        # Exclude deleted conversations (handle NULL status)
-        query = query.or_("status.is.null,status.neq.deleted")
-        query = query.order("updated_at", desc=True).order("created_at", desc=True).limit(1)
-
-        result = query.execute()
+        try:
+            query_with_status = build_base_query().or_("status.is.null,status.neq.deleted")
+            query_with_status = query_with_status.order("updated_at", desc=True).order("created_at", desc=True).limit(1)
+            result = query_with_status.execute()
+        except Exception as status_err:
+            # If status column doesn't exist, query without it
+            if "status" in str(status_err).lower() or "column" in str(status_err).lower():
+                logger.info("Conversations table missing status column, querying without status filter")
+                query_no_status = build_base_query()
+                query_no_status = query_no_status.order("updated_at", desc=True).order("created_at", desc=True).limit(1)
+                result = query_no_status.execute()
+            else:
+                raise
 
         if not result.data:
             return {"success": True, "conversation": None}

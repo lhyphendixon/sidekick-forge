@@ -1060,6 +1060,10 @@ class SidekickAgent(voice.Agent):
                 "source": "voice",  # Mark as voice transcript for SSE filtering
             }
 
+            # Add client_id if available (required for multi-tenant schemas with RLS)
+            if self._client_id:
+                row["client_id"] = self._client_id
+
             if row_metadata:
                 row["metadata"] = row_metadata
             
@@ -1137,7 +1141,16 @@ class SidekickAgent(voice.Agent):
                 def _insert():
                     return self._supabase_client.table("conversation_transcripts").insert(row).execute()
 
-                result = await asyncio.to_thread(_insert)
+                try:
+                    result = await asyncio.to_thread(_insert)
+                except Exception as insert_exc:
+                    # If insert failed due to client_id column, retry without it (dedicated tenant schema)
+                    if self._client_id and ("client_id" in str(insert_exc).lower() or "column" in str(insert_exc).lower()):
+                        logger.info(f"Retrying transcript insert without client_id (dedicated tenant schema)")
+                        row.pop("client_id", None)
+                        result = await asyncio.to_thread(_insert)
+                    else:
+                        raise
             # Return inserted row id if available
             try:
                 if result and getattr(result, 'data', None):

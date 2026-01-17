@@ -61,7 +61,7 @@ class VoiceSettings(BaseModel):
 
     # Video avatar settings
     avatar_provider: Optional[str] = Field(
-        default="bithuman", description="Avatar provider: 'bithuman', 'beyondpresence', or 'tavus'"
+        default="bithuman", description="Avatar provider: 'bithuman', 'beyondpresence', or 'liveavatar'"
     )
     avatar_image_url: Optional[str] = Field(
         default=None, description="URL to avatar image for video chat (Bithuman cloud mode)"
@@ -75,11 +75,8 @@ class VoiceSettings(BaseModel):
     avatar_id: Optional[str] = Field(
         default=None, description="Avatar ID for Beyond Presence (pre-built avatar selection)"
     )
-    tavus_replica_id: Optional[str] = Field(
-        default=None, description="Replica ID for Tavus avatar"
-    )
-    tavus_persona_id: Optional[str] = Field(
-        default=None, description="Persona ID for Tavus avatar"
+    liveavatar_avatar_id: Optional[str] = Field(
+        default=None, description="Avatar ID for HeyGen LiveAvatar"
     )
 
 

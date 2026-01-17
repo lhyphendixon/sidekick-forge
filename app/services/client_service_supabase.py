@@ -306,6 +306,13 @@ class ClientService:
                     additional_settings["api_keys"]["bey_api_key"] = api_keys.bey_api_key
                     self.logger.info(f"BEY SERVICE DEBUG - adding to additional_settings: {api_keys.bey_api_key[:20] if api_keys.bey_api_key else 'None'}...")
 
+                # liveavatar_api_key (HeyGen LiveAvatar) - store in additional_settings.api_keys
+                if api_keys.liveavatar_api_key is not None:
+                    if "api_keys" not in additional_settings:
+                        additional_settings["api_keys"] = {}
+                    additional_settings["api_keys"]["liveavatar_api_key"] = api_keys.liveavatar_api_key
+                    self.logger.info(f"LIVEAVATAR SERVICE DEBUG - adding to additional_settings: {api_keys.liveavatar_api_key[:20] if api_keys.liveavatar_api_key else 'None'}...")
+
             # Note: We don't have a settings column in the platform database
             # All settings are stored in individual columns
         
@@ -723,12 +730,14 @@ class ClientService:
         # Extract additional fields from additional_settings JSONB
         additional = db_row.get("additional_settings", {}) or {}
 
-        # Extract API keys stored in additional_settings.api_keys (like bithuman_api_secret, bey_api_key)
+        # Extract API keys stored in additional_settings.api_keys (like bithuman_api_secret, bey_api_key, liveavatar_api_key)
         additional_api_keys = additional.get("api_keys", {}) or {}
         if additional_api_keys.get("bithuman_api_secret"):
             settings_dict["api_keys"]["bithuman_api_secret"] = additional_api_keys["bithuman_api_secret"]
         if additional_api_keys.get("bey_api_key"):
             settings_dict["api_keys"]["bey_api_key"] = additional_api_keys["bey_api_key"]
+        if additional_api_keys.get("liveavatar_api_key"):
+            settings_dict["api_keys"]["liveavatar_api_key"] = additional_api_keys["liveavatar_api_key"]
 
         if db_row.get("supabase_project_ref") and "supabase_project_ref" not in additional:
             additional["supabase_project_ref"] = db_row.get("supabase_project_ref")
