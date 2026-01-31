@@ -158,25 +158,25 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Client ID</label>
                         <input type="text" value="{{ client.id }}" disabled
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Client Name</label>
                         <input type="text" id="clientName" name="name" value="{{ client.name }}" required
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                 </div>
                 
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Description</label>
                     <textarea id="clientDescription" name="description" rows="2"
-                              class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">{{ client.description or '' }}</textarea>
+                              class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">{{ client.description or '' }}</textarea>
                 </div>
                 
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Domain</label>
                     <input type="text" id="clientDomain" name="domain" value="{{ client.domain or '' }}"
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal"
                            placeholder="e.g., myclient.com">
                 </div>
                 
@@ -184,7 +184,7 @@
                     <label class="flex items-center">
                         <input type="hidden" name="active" value="false">
                         <input type="checkbox" id="clientActive" name="active" value="true" {% if client.active %}checked{% endif %}
-                               class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                               class="h-4 w-4 text-brand-teal focus:ring-brand-teal border-gray-300 rounded">
                         <span class="ml-2 text-sm text-gray-700">Active</span>
                     </label>
                 </div>
@@ -209,7 +209,7 @@
                            value="{{ client.get('supabase_project_url') or (client.get('settings') or {}).get('supabase', {}).get('url', '') }}"
                            {% if client.auto_provision %}readonly{% else %}required{% endif %}
                             placeholder="{% if client.get('auto_provision') and (client.get('provisioning_status') != 'ready') %}Provisioning…{% else %}https://your-project.supabase.co{% endif %}"
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
                            data-managed-field="supabase-url">
                 </div>
                 
@@ -222,7 +222,7 @@
                                value="{{ client.get('supabase_anon_key') or (client.get('settings') or {}).get('supabase', {}).get('anon_key', '') }}"
                                {% if client.auto_provision %}readonly{% else %}required{% endif %}
                                placeholder="{% if client.get('auto_provision') and (client.get('provisioning_status') != 'ready') %}Pending…{% else %}Paste anon key{% endif %}"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
                                data-managed-field="supabase-anon">
                     </div>
                     <div>
@@ -233,7 +233,7 @@
                                value="{{ client.get('supabase_service_role_key') or (client.get('settings') or {}).get('supabase', {}).get('service_role_key', '') }}"
                                {% if client.auto_provision %}readonly{% else %}required{% endif %}
                                placeholder="{% if client.get('auto_provision') and (client.get('provisioning_status') != 'ready') %}Provisioning…{% else %}Supabase service key{% endif %}"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
                                data-managed-field="supabase-service">
                     </div>
                 </div>
@@ -267,7 +267,7 @@
                            value="{{ livekit_settings.get('server_url') or livekit_settings.get('url', '') }}"
                            {% if client.auto_provision %}readonly{% else %}required{% endif %}
                            placeholder="{% if client.get('auto_provision') and (client.get('provisioning_status') != 'ready') %}Pending…{% else %}https://livekit.yourdomain.com{% endif %}"
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
                            data-managed-field="livekit-url">
                 </div>
                 
@@ -280,7 +280,7 @@
                                value="{{ livekit_settings.get('api_key', '') }}"
                                {% if client.auto_provision %}readonly{% else %}required{% endif %}
                                placeholder="{% if client.get('auto_provision') and (client.get('provisioning_status') != 'ready') %}Provisioning…{% else %}lk_****************{% endif %}"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
                                data-managed-field="livekit-key">
                     </div>
                     <div>
@@ -291,18 +291,91 @@
                                value="{{ livekit_settings.get('api_secret', '') }}"
                                {% if client.auto_provision %}readonly{% else %}required{% endif %}
                                placeholder="{% if client.get('auto_provision') and (client.get('provisioning_status') != 'ready') %}Provisioning…{% else %}Paste secret{% endif %}"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500 {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal {% if client.auto_provision %}bg-gray-50 text-gray-600{% endif %}"
                                data-managed-field="livekit-secret">
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- API Keys Section -->
+        <!-- Platform Keys / BYOK Configuration -->
         <div class="bg-white shadow rounded-lg mt-6">
             <div class="px-6 py-4 border-b">
+                <h2 class="text-lg font-medium text-gray-900">API Key Mode</h2>
+                <p class="text-sm text-gray-600 mt-1">Choose whether to use platform-managed API keys or bring your own.</p>
+            </div>
+            <div class="px-6 py-4 space-y-4">
+                <!-- Current Tier Display -->
+                <div class="flex items-center gap-2">
+                    <span class="text-sm text-gray-600">Current Tier:</span>
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
+                        {% if client.tier == 'paragon' %}bg-purple-100 text-purple-800
+                        {% elif client.tier == 'champion' %}bg-blue-100 text-blue-800
+                        {% else %}bg-green-100 text-green-800{% endif %}">
+                        {{ (client.tier or 'champion') | capitalize }}
+                    </span>
+                </div>
+
+                <!-- BYOK Toggle -->
+                <div class="flex items-start gap-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <div class="flex items-center h-5 mt-0.5">
+                        <input type="hidden" name="uses_platform_keys" value="true">
+                        <input type="checkbox"
+                               id="usesPlatformKeys"
+                               name="uses_platform_keys"
+                               value="false"
+                               {% if not client.uses_platform_keys %}checked{% endif %}
+                               {% if client.tier == 'adventurer' %}disabled{% endif %}
+                               class="h-4 w-4 text-brand-teal focus:ring-brand-teal border-gray-300 rounded"
+                               onchange="toggleApiKeysSection(this.checked)">
+                    </div>
+                    <div class="flex-1">
+                        <label for="usesPlatformKeys" class="text-sm font-medium text-gray-900">
+                            Bring Your Own API Keys
+                        </label>
+                        <p class="text-sm text-gray-500 mt-1">
+                            When enabled, you provide your own API keys for LLM, voice, and embedding services.
+                            When disabled, sidekicks use platform-managed keys and usage is tracked against your plan quota.
+                        </p>
+                        {% if client.tier == 'adventurer' %}
+                        <p class="text-sm text-amber-600 mt-2">
+                            <svg class="inline h-4 w-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                            </svg>
+                            Adventurer tier uses platform-managed keys. Upgrade to Champion to use your own keys.
+                        </p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Platform Keys Info (shown when BYOK disabled) -->
+                <div id="platformKeysInfo" class="{% if not client.uses_platform_keys %}hidden{% endif %} rounded-md bg-brand-teal/10 border border-brand-teal/20 px-4 py-3">
+                    <div class="flex">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-brand-teal" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div class="ml-3 text-sm text-brand-teal">
+                            <p><strong>Platform Keys Enabled</strong></p>
+                            <p class="mt-1">Your sidekicks will use platform-managed API keys for Cerebras LLM, Cartesia voice, and SiliconFlow embeddings. Usage is tracked against your plan quota.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Keys Section -->
+        <div id="apiKeysSection" class="bg-white shadow rounded-lg mt-6 {% if client.uses_platform_keys %}opacity-50{% endif %}">
+            <div class="px-6 py-4 border-b">
                 <h2 class="text-lg font-medium text-gray-900">API Keys</h2>
-                <p class="text-sm text-gray-600 mt-1">API keys synced from Supabase. You can edit them here and save changes.</p>
+                <p class="text-sm text-gray-600 mt-1">
+                    {% if client.uses_platform_keys %}
+                    Platform keys are enabled. These fields are for reference only.
+                    {% else %}
+                    API keys synced from Supabase. You can edit them here and save changes.
+                    {% endif %}
+                </p>
             </div>
             <div class="px-6 py-4">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -311,37 +384,37 @@
                         <label class="block text-sm font-medium text-gray-700">OpenAI API Key</label>
                         <input type="password" name="openai_api_key" value="{{ client.settings.api_keys.openai_api_key or '' }}"
                                data-api-key="openai_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Groq API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.groq_api_key or '' }}" name="groq_api_key" data-api-key="groq_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Cerebras API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.cerebras_api_key or '' }}" name="cerebras_api_key" data-api-key="cerebras_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">DeepInfra API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.deepinfra_api_key or '' }}" name="deepinfra_api_key" data-api-key="deepinfra_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Replicate API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.replicate_api_key or '' }}" name="replicate_api_key" data-api-key="replicate_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Perplexity API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.perplexity_api_key or '' }}" name="perplexity_api_key" data-api-key="perplexity_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal"
                                placeholder="pplx-...">
                         <p class="text-xs text-gray-500 mt-1">Used by the Perplexity Ask MCP ability when no agent-specific override is provided.</p>
                     </div>
@@ -350,68 +423,76 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Deepgram API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.deepgram_api_key or '' }}" name="deepgram_api_key" data-api-key="deepgram_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">ElevenLabs API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.elevenlabs_api_key or '' }}" name="elevenlabs_api_key" data-api-key="elevenlabs_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Cartesia API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.cartesia_api_key or '' }}" name="cartesia_api_key" data-api-key="cartesia_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Speechify API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.speechify_api_key or '' }}" name="speechify_api_key" data-api-key="speechify_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
-                    
+
+                    <!-- Transcription Providers -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">AssemblyAI API Key</label>
+                        <input type="password" value="{{ client.settings.api_keys.assemblyai_api_key or '' }}" name="assemblyai_api_key" data-api-key="assemblyai_api_key"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal"
+                               placeholder="For LINGUA transcription ability">
+                    </div>
+
                     <!-- Embedding/Reranking Providers -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Novita API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.novita_api_key or '' }}" name="novita_api_key" data-api-key="novita_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Cohere API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.cohere_api_key or '' }}" name="cohere_api_key" data-api-key="cohere_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">SiliconFlow API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.siliconflow_api_key or '' }}" name="siliconflow_api_key" data-api-key="siliconflow_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Jina API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.jina_api_key or '' }}" name="jina_api_key" data-api-key="jina_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Bithuman API Secret (Video Avatar)</label>
                         <input type="password" value="{{ client.settings.api_keys.bithuman_api_secret or '' }}" name="bithuman_api_secret" data-api-key="bithuman_api_secret"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Beyond Presence API Key (Video Avatar)</label>
                         <input type="password" value="{{ client.settings.api_keys.bey_api_key or '' }}" name="bey_api_key" data-api-key="bey_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Tavus API Key (Video Avatar)</label>
                         <input type="password" value="{{ client.settings.api_keys.tavus_api_key or '' }}" name="tavus_api_key" data-api-key="tavus_api_key"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     </div>
                 </div>
             </div>
@@ -429,7 +510,7 @@
                         <label class="block text-sm font-medium text-gray-700">Embedding Provider</label>
                         <select id="embeddingProvider" name="embedding_provider"
                                 onchange="updateEmbeddingModels()"
-                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                             <option value="local" {% if client.settings.get('embedding', {}).get('provider') in ['local', 'on-prem', 'bge-local', 'bge', 'bge-m3'] %}selected{% endif %}>Local (BGE-M3 On-Prem)</option>
                             <option value="openai" {% if client.settings.get('embedding', {}).get('provider') == 'openai' %}selected{% endif %}>OpenAI</option>
                             <option value="deepinfra" {% if client.settings.get('embedding', {}).get('provider') == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
@@ -441,7 +522,7 @@
                         <label class="block text-sm font-medium text-gray-700">Document Embedding Model</label>
                         <select id="documentEmbeddingModel" name="document_embedding_model"
                                 onchange="updateDimensionVisibility()"
-                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                             <!-- Options populated by JavaScript -->
                         </select>
                     </div>
@@ -449,7 +530,7 @@
                         <label class="block text-sm font-medium text-gray-700">Conversation Embedding Model</label>
                         <select id="conversationEmbeddingModel" name="conversation_embedding_model"
                                 onchange="updateDimensionVisibility()"
-                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                             <!-- Options populated by JavaScript -->
                         </select>
                     </div>
@@ -459,7 +540,7 @@
                 <div id="embeddingDimensionSection" style="display: none;">
                     <label class="block text-sm font-medium text-gray-700">Embedding Dimension</label>
                     <select id="embeddingDimension" name="embedding_dimension" 
-                            class="mt-1 block w-full md:w-1/3 border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            class="mt-1 block w-full md:w-1/3 border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                         <option value="">Auto (Model Default)</option>
                         <option value="1024" {% if client.settings.get('embedding', {}).get('dimension') == 1024 %}selected{% endif %}>1024 dimensions</option>
                         <option value="2048" {% if client.settings.get('embedding', {}).get('dimension') == 2048 %}selected{% endif %}>2048 dimensions</option>
@@ -495,7 +576,7 @@
                 <div class="flex items-center">
                     <input type="checkbox" id="usersenseEnabled" name="usersense_enabled"
                            {% if client.usersense_enabled %}checked{% endif %}
-                           class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                           class="h-4 w-4 text-brand-teal focus:ring-brand-teal border-gray-300 rounded">
                     <label for="usersenseEnabled" class="ml-2 text-sm text-gray-700">
                         Enable UserSense for this client
                     </label>
@@ -551,14 +632,14 @@
                     </div>
                 </div>
 
-                <div class="rounded-md bg-blue-50 border border-blue-100 px-4 py-3">
+                <div class="rounded-md bg-brand-teal/10 border border-brand-teal/20 px-4 py-3">
                     <div class="flex">
                         <div class="flex-shrink-0">
-                            <svg class="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                            <svg class="h-5 w-5 text-brand-teal" viewBox="0 0 20 20" fill="currentColor">
                                 <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
                             </svg>
                         </div>
-                        <div class="ml-3 text-sm text-blue-700">
+                        <div class="ml-3 text-sm text-brand-teal">
                             <p>When enabled, UserSense automatically reflects on completed conversations to update user understanding. This ambient ability runs in the background after sessions end (minimum 3 messages required).</p>
                             <p class="mt-2">Users will see a subtle "User Understanding Expanded" notification when their profile is updated.</p>
                         </div>
@@ -612,7 +693,7 @@
             <a href="/admin/clients" class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
                 Cancel
             </a>
-            <button type="submit" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
+            <button type="submit" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-brand-teal hover:bg-brand-teal/80">
                 Save Changes
             </button>
         </div>
@@ -661,6 +742,22 @@ const autoProvisionEnabled = {{ 'true' if client.get('auto_provision') else 'fal
 const provisioningPollIntervalMs = 5000;
 let provisioningPollHandle = null;
 
+// Toggle API keys section visibility based on BYOK setting
+function toggleApiKeysSection(byokEnabled) {
+    const apiKeysSection = document.getElementById('apiKeysSection');
+    const platformKeysInfo = document.getElementById('platformKeysInfo');
+
+    if (byokEnabled) {
+        // BYOK enabled - show API keys section, hide platform info
+        apiKeysSection.classList.remove('opacity-50');
+        platformKeysInfo.classList.add('hidden');
+    } else {
+        // Platform keys - dim API keys section, show platform info
+        apiKeysSection.classList.add('opacity-50');
+        platformKeysInfo.classList.remove('hidden');
+    }
+}
+
 const provisioningInitialSnapshot = {{ {
     "provisioning_status": client.get('provisioning_status') or "unknown",
     "provisioning_error": client.get('provisioning_error'),
@@ -693,7 +790,7 @@ const provisioningStatusConfig = {
     },
     schema_syncing: {
         label: 'Syncing Schema',
-        classes: 'bg-blue-100 text-blue-800 border border-blue-200',
+        classes: 'bg-brand-teal/10 text-brand-teal border border-brand-teal/30',
         message: 'Applying database schema and seeding tenant data.'
     },
     failed: {

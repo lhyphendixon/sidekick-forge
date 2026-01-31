@@ -53,6 +53,18 @@ class ToolsService:
             return self.client_service.supabase
         return await self.client_service.get_client_supabase_client(client_id, auto_sync=False)
 
+    # Global icon mapping for built-in abilities (by slug)
+    BUILTIN_ICONS: Dict[str, str] = {
+        "perplexity_ask": "/static/images/abilities/web-search.svg",
+        "web_search": "/static/images/abilities/web-search.svg",
+        "usersense": "/static/images/abilities/usersense.svg",
+        "documentsense": "/static/images/abilities/documentsense.svg",
+        "content_catalyst": "/static/images/abilities/content-catalyst.svg",
+        "crypto_price_check": "/static/images/abilities/crypto-price.svg",
+        "asana_tasks": "/static/images/abilities/asana.svg",
+        "lingua": "/static/images/abilities/lingua.svg",
+    }
+
     @staticmethod
     def _normalize_tool_row(row: Dict[str, Any], client_id: Optional[str] = None) -> Dict[str, Any]:
         data = dict(row)
@@ -60,6 +72,10 @@ class ToolsService:
         data["scope"] = scope
         if scope == "client" and not data.get("client_id"):
             data["client_id"] = client_id
+        # Apply global icon for known built-in abilities
+        slug = data.get("slug", "")
+        if slug in ToolsService.BUILTIN_ICONS:
+            data["icon_url"] = ToolsService.BUILTIN_ICONS[slug]
         return data
 
     @staticmethod
@@ -273,6 +289,93 @@ class ToolsService:
         rows = [{"agent_id": agent_id, "tool_id": tid} for tid in tool_ids]
         if rows:
             platform_sb.table("agent_tools").insert(rows).execute()
+
+    async def get_agents_for_tools(
+        self, tool_ids: List[str], scoped_client_ids: Optional[List[str]] = None
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get which agents have each tool enabled.
+        Returns a dict mapping tool_id -> list of {id, name, agent_image, client_id}.
+        """
+        import asyncio
+        from uuid import UUID
+
+        if not tool_ids:
+            return {}
+
+        platform_sb = self.client_service.supabase
+
+        # Get all agent_tools mappings for the given tool IDs
+        at_result = platform_sb.table("agent_tools").select(
+            "agent_id, tool_id"
+        ).in_("tool_id", tool_ids).execute()
+
+        if not at_result.data:
+            return {tid: [] for tid in tool_ids}
+
+        # Collect unique agent IDs
+        agent_ids_needed = set(row["agent_id"] for row in at_result.data)
+
+        # If no agents are assigned to any tools, return early
+        if not agent_ids_needed:
+            return {tid: [] for tid in tool_ids}
+
+        # Fetch agent details from all clients using the multitenant service
+        from app.services.client_service_multitenant import ClientService as PlatformClientService
+        from app.services.agent_service_multitenant import AgentService as PlatformAgentService
+
+        try:
+            client_service = PlatformClientService()
+            agent_service = PlatformAgentService()
+            clients = await client_service.get_clients()
+
+            # Filter clients if scoped
+            if scoped_client_ids is not None:
+                scoped_set = set(scoped_client_ids)
+                clients = [c for c in clients if c.id in scoped_set]
+
+            # Fetch agents from all clients in parallel
+            async def fetch_client_agents(client):
+                try:
+                    client_uuid = UUID(client.id)
+                    return await agent_service.get_agents(client_uuid)
+                except Exception:
+                    return []
+
+            # Run all client fetches in parallel
+            all_agent_lists = await asyncio.gather(
+                *[fetch_client_agents(c) for c in clients],
+                return_exceptions=True
+            )
+
+            # Collect matching agents
+            agents_by_id: Dict[str, Dict[str, Any]] = {}
+            for agent_list in all_agent_lists:
+                if isinstance(agent_list, Exception) or not agent_list:
+                    continue
+                for agent in agent_list:
+                    if agent.id in agent_ids_needed:
+                        agents_by_id[agent.id] = {
+                            "id": agent.id,
+                            "name": getattr(agent, "name", None) or "Unnamed Sidekick",
+                            "agent_image": getattr(agent, "agent_image", None),
+                            "client_id": agent.client_id,
+                        }
+                        # Early exit if we found all needed agents
+                        if len(agents_by_id) == len(agent_ids_needed):
+                            break
+        except Exception:
+            # If multitenant services fail, return empty agent lists
+            return {tid: [] for tid in tool_ids}
+
+        # Build the mapping
+        result: Dict[str, List[Dict[str, Any]]] = {tid: [] for tid in tool_ids}
+        for row in at_result.data:
+            agent = agents_by_id.get(row["agent_id"])
+            if agent:
+                result[row["tool_id"]].append(agent)
+
+        return result
 
     async def _augment_tool_for_agent(self, tool: ToolOut, client_id: str) -> ToolOut:
         if (tool.slug or "") == "perplexity_ask" and tool.enabled:
