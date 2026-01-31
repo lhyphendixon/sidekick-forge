@@ -146,8 +146,12 @@
         </div>
         {% endif %}
 
-        <!-- Channels -->
-        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+        <!-- Channels (Coming Soon) -->
+        <div class="relative mb-6">
+            <div class="absolute inset-0 z-10 flex items-center justify-center">
+                <span class="bg-dark-bg/80 text-brand-teal border border-brand-teal/40 px-4 py-2 rounded-full text-sm font-semibold tracking-wide">Coming Soon</span>
+            </div>
+        <div class="bg-dark-surface rounded-lg border border-dark-border opacity-40 pointer-events-none">
             <div class="border-b border-dark-border px-6 py-4">
                 <h5 class="text-lg font-semibold text-dark-text">Channels</h5>
             </div>
@@ -178,6 +182,7 @@
                 </div>
             </div>
         </div>
+        </div><!-- end Coming Soon wrapper -->
 
         {% if user.is_adventurer_only %}
         <!-- Usage & Quotas (Adventurer only) -->
@@ -415,6 +420,24 @@
                                 <i class="bi bi-eye"></i>
                             </button>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Transcription Providers -->
+                <h6 class="text-md font-medium text-dark-text mb-4">Transcription Providers</h6>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">AssemblyAI API Key</label>
+                        <div class="relative">
+                            <input type="password" id="assemblyaiKey" name="assemblyai_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('assemblyai_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('assemblyaiKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-1">Required for LINGUA transcription ability</p>
                     </div>
                 </div>
 
@@ -779,7 +802,7 @@
                                     Regenerate Shared Secret
                                 </button>
                             </form>
-                            <button type="button" onclick="deleteWordpressSite('{{ site.id }}', '{{ client.id }}')" class="px-3 py-1.5 text-sm rounded bg-red-600 hover:bg-red-700 text-white transition-colors">
+                            <button type="button" onclick="deleteWordpressSite({{ site.id|tojson }}, {{ client.id|tojson }})" class="px-3 py-1.5 text-sm rounded bg-red-600 hover:bg-red-700 text-white transition-colors">
                                 Delete
                             </button>
                         </div>
