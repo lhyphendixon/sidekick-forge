@@ -8,11 +8,21 @@ from app.services.perplexity_mcp_manager import get_perplexity_mcp_manager
 
 
 class ToolsService:
+    # Class-level flag to only seed default tools once per process
+    _default_tools_seeded = False
+    # Cache for table existence checks (table_name -> exists)
+    _table_exists_cache: Dict[str, bool] = {}
+
     def __init__(self, client_service: ClientService) -> None:
         self.client_service = client_service
 
     def _ensure_default_global_tools(self) -> None:
-        """Seed built-in global abilities (non-destructive)."""
+        """Seed built-in global abilities (non-destructive). Only runs once per process."""
+        # Skip if already seeded in this process
+        if ToolsService._default_tools_seeded:
+            return
+        ToolsService._default_tools_seeded = True
+
         platform_sb = self.client_service.supabase
         if not self._table_exists(platform_sb, "tools"):
             return
@@ -96,12 +106,18 @@ class ToolsService:
             data["icon_url"] = ToolsService.BUILTIN_ICONS[slug]
         return data
 
-    @staticmethod
-    def _table_exists(sb: SupabaseClient, table_name: str) -> bool:
+    @classmethod
+    def _table_exists(cls, sb: SupabaseClient, table_name: str) -> bool:
+        # Use cache key based on supabase URL + table name
+        cache_key = f"{id(sb)}:{table_name}"
+        if cache_key in cls._table_exists_cache:
+            return cls._table_exists_cache[cache_key]
         try:
             sb.table(table_name).select("id").limit(1).execute()
+            cls._table_exists_cache[cache_key] = True
             return True
         except Exception:
+            cls._table_exists_cache[cache_key] = False
             return False
 
     async def _find_tool_record(

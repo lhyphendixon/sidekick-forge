@@ -23,7 +23,7 @@
     {% else %}
     <input type="hidden" id="clientFilter" value="{{ default_client_id or '' }}" data-default="{{ default_client_id or '' }}" />
     {% endif %}
-    <input id="searchInput" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" placeholder="Search abilities..." oninput="refreshTools()" />
+    <input id="searchInput" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" placeholder="Search abilities..." oninput="debouncedRefreshTools()" />
     <select id="typeFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
       <option value="">All types</option>
       <option value="mcp">MCP</option>
@@ -1097,6 +1097,13 @@ function buildConfigFromForm(prefix, type, toolName = ''){
   return applyHiddenInstructions(prefix, {});
 }
 
+// Debounce helper for search input
+let searchDebounceTimer = null;
+function debouncedRefreshTools() {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => refreshTools(), 300);
+}
+
 async function refreshTools(){
   const search = document.getElementById('searchInput').value.trim();
   const type = document.getElementById('typeFilter').value;
@@ -1110,12 +1117,14 @@ async function refreshTools(){
   const activeEmpty = document.getElementById('activeToolsEmpty');
   const ambientEmpty = document.getElementById('ambientToolsEmpty');
 
-  activeGrid.innerHTML = '';
+  // Show loading state
+  activeGrid.innerHTML = '<div class="col-span-full text-center py-8 text-dark-text-secondary"><div class="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-brand-teal mr-2"></div>Loading abilities...</div>';
   ambientGrid.innerHTML = '';
   activeEmpty.classList.add('hidden');
   ambientEmpty.classList.add('hidden');
 
   if(scope === 'client' && !clientId){
+    activeGrid.innerHTML = '';
     activeEmpty.textContent = 'Select a client to view client-scoped abilities.';
     activeEmpty.classList.remove('hidden');
     ambientEmpty.textContent = 'Select a client to view client-scoped abilities.';
@@ -1136,6 +1145,7 @@ async function refreshTools(){
     const url = `${ADMIN_TOOLS_BASE}${query ? `?${query}` : ''}`;
     data = await fetchJSON(url);
   }catch(err){
+    activeGrid.innerHTML = '';
     activeEmpty.textContent = `Failed to load abilities: ${err.message}`;
     activeEmpty.classList.remove('hidden');
     activeEmpty.classList.add('text-brand-salmon');
