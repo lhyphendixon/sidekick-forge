@@ -5583,19 +5583,20 @@ async def monitoring_activity_timeline_partial(
     client_id: Optional[str] = None,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Activity timeline partial for HTMX auto-refresh - shows real events from livekit_events"""
+    """Activity timeline partial for HTMX auto-refresh - shows events from livekit_events and activity_log"""
     from app.integrations.supabase_client import supabase_manager
+    import json as json_lib
 
     scoped_ids = get_scoped_client_ids(admin_user)
     recent_events = []
 
+    # Fetch LiveKit events
     try:
-        # Fetch recent events from livekit_events table (last 20)
         result = await supabase_manager.execute_query(
             supabase_manager.admin_client.table("livekit_events")
             .select("*")
             .order("created_at", desc=True)
-            .limit(20)
+            .limit(15)
         )
 
         if result and result.data:
@@ -5603,8 +5604,7 @@ async def monitoring_activity_timeline_partial(
                 metadata = event.get("metadata", {})
                 if isinstance(metadata, str):
                     try:
-                        import json
-                        metadata = json.loads(metadata)
+                        metadata = json_lib.loads(metadata)
                     except:
                         metadata = {}
 
@@ -5621,47 +5621,165 @@ async def monitoring_activity_timeline_partial(
                 created_at = event.get("created_at", "")
                 agent_name = metadata.get("agent_name", "")
 
-                # Format the event for display
+                # Format LiveKit events for display
                 if event_type == "room_finished":
                     if duration and duration > 0:
                         minutes = round(duration / 60, 1)
                         title = f"Voice conversation ended"
                         subtitle = f"{agent_name or 'Sidekick'} • {minutes} min"
                         color = "brand-teal"
+                        icon = "microphone"
                     else:
                         title = f"Room closed"
                         subtitle = agent_name or room_name or "Unknown"
                         color = "dark-text-secondary"
+                        icon = "x-circle"
                 elif event_type == "room_started":
                     title = f"Voice conversation started"
                     subtitle = agent_name or room_name or "New session"
                     color = "brand-teal"
+                    icon = "microphone"
                 elif event_type == "participant_joined":
                     identity = event.get("participant_identity", "")
                     title = f"User joined"
                     subtitle = identity.replace("user_", "") if identity else "Anonymous"
                     color = "brand-orange"
+                    icon = "user-plus"
                 elif event_type == "participant_left":
                     identity = event.get("participant_identity", "")
                     title = f"User left"
                     subtitle = identity.replace("user_", "") if identity else "Anonymous"
                     color = "dark-text-secondary"
+                    icon = "user-minus"
                 else:
                     title = event_type.replace("_", " ").title()
                     subtitle = agent_name or room_name or ""
                     color = "dark-text-secondary"
+                    icon = "activity"
 
                 recent_events.append({
                     "title": title,
                     "subtitle": subtitle,
                     "color": color,
+                    "icon": icon,
                     "created_at": created_at,
                     "time_ago": format_time_ago(created_at) if created_at else "Just now",
                     "event_type": event_type,
+                    "source": "livekit",
                 })
 
     except Exception as e:
-        logger.warning(f"Failed to fetch livekit_events: {e}")
+        logger.debug(f"livekit_events table may not exist yet: {e}")
+
+    # Fetch activity log events
+    try:
+        activity_result = await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("activity_log")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(15)
+        )
+
+        if activity_result and activity_result.data:
+            for activity in activity_result.data:
+                # Filter by client access if scoped
+                activity_client_id = str(activity.get("client_id", ""))
+                if scoped_ids is not None and activity_client_id and activity_client_id not in scoped_ids:
+                    continue
+                if client_id and activity_client_id and activity_client_id != client_id:
+                    continue
+
+                activity_type = activity.get("activity_type", "")
+                action = activity.get("action", "")
+                resource_name = activity.get("resource_name", "")
+                resource_type = activity.get("resource_type", "")
+                created_at = activity.get("created_at", "")
+                details = activity.get("details", {})
+
+                # Format activity events for display
+                if activity_type == "sidekick_created":
+                    title = "Sidekick created"
+                    subtitle = resource_name or "New sidekick"
+                    color = "brand-teal"
+                    icon = "robot"
+                elif activity_type == "sidekick_updated":
+                    title = "Sidekick updated"
+                    subtitle = resource_name
+                    color = "brand-orange"
+                    icon = "edit"
+                elif activity_type == "sidekick_deleted":
+                    title = "Sidekick deleted"
+                    subtitle = resource_name
+                    color = "brand-salmon"
+                    icon = "trash"
+                elif activity_type == "ability_run":
+                    title = "Ability started"
+                    subtitle = resource_name
+                    color = "purple-400"
+                    icon = "zap"
+                elif activity_type == "ability_completed":
+                    title = "Ability completed"
+                    subtitle = resource_name
+                    color = "brand-teal"
+                    icon = "zap"
+                elif activity_type == "ability_failed":
+                    title = "Ability failed"
+                    subtitle = resource_name
+                    color = "brand-salmon"
+                    icon = "x-circle"
+                elif activity_type == "document_uploaded":
+                    title = "Document uploaded"
+                    subtitle = resource_name
+                    color = "brand-orange"
+                    icon = "file-text"
+                elif activity_type == "document_processed":
+                    title = "Document processed"
+                    subtitle = resource_name
+                    color = "brand-teal"
+                    icon = "file-text"
+                elif activity_type == "conversation_started":
+                    title = "Text conversation started"
+                    subtitle = resource_name or "New chat"
+                    color = "brand-orange"
+                    icon = "message-circle"
+                elif activity_type == "conversation_ended":
+                    title = "Conversation ended"
+                    subtitle = resource_name or "Chat ended"
+                    color = "dark-text-secondary"
+                    icon = "message-circle"
+                elif activity_type == "voice_call_started":
+                    title = "Voice call started"
+                    subtitle = resource_name
+                    color = "brand-teal"
+                    icon = "microphone"
+                elif activity_type == "voice_call_ended":
+                    title = "Voice call ended"
+                    subtitle = resource_name
+                    color = "dark-text-secondary"
+                    icon = "microphone"
+                else:
+                    title = activity_type.replace("_", " ").title()
+                    subtitle = resource_name or resource_type or ""
+                    color = "dark-text-secondary"
+                    icon = "activity"
+
+                recent_events.append({
+                    "title": title,
+                    "subtitle": subtitle,
+                    "color": color,
+                    "icon": icon,
+                    "created_at": created_at,
+                    "time_ago": format_time_ago(created_at) if created_at else "Just now",
+                    "event_type": activity_type,
+                    "source": "activity_log",
+                })
+
+    except Exception as e:
+        logger.debug(f"activity_log table may not exist yet: {e}")
+
+    # Sort all events by created_at descending and limit to 20
+    recent_events.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    recent_events = recent_events[:20]
 
     return templates.TemplateResponse("admin/partials/monitoring/activity_timeline.html", {
         "request": request,

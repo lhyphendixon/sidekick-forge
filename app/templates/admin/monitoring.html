@@ -47,19 +47,25 @@
     /* Activity timeline */
     .activity-item {
         position: relative;
-        padding-left: 24px;
+        padding-left: 40px;
+        min-height: 48px;
     }
     .activity-item::before {
         content: '';
         position: absolute;
-        left: 5px;
-        top: 24px;
-        bottom: -16px;
+        left: 15px;
+        top: 36px;
+        bottom: -12px;
         width: 2px;
         background: rgba(255, 255, 255, 0.1);
     }
     .activity-item:last-child::before {
         display: none;
+    }
+    .activity-icon {
+        position: absolute;
+        left: 0;
+        top: 0;
     }
     .activity-dot {
         position: absolute;

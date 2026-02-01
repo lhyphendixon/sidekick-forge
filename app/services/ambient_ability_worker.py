@@ -4,12 +4,14 @@ Ambient Ability Worker - background worker that processes ambient ability runs.
 
 import asyncio
 import logging
+import time
 from typing import Dict, Any
 
 from app.models.ambient import AmbientAbilityRun, AmbientRunStatus
 from app.services.ambient_ability_service import ambient_ability_service
 from app.services.usersense_executor import usersense_executor
 from app.services.webhook_executor import webhook_executor
+from app.services.activity_logging_service import activity_logger
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +108,30 @@ class AmbientAbilityWorker:
             AmbientRunStatus.RUNNING
         )
 
+        # Track execution time
+        start_time = time.time()
+
+        # Log ability start
+        try:
+            await activity_logger.log_ability_run(
+                client_id=run.client_id,
+                agent_id=None,  # Abilities may not be agent-specific
+                ability_name=run.ability_slug or "unknown",
+                ability_id=str(run.ability_id) if run.ability_id else None,
+                details={
+                    "trigger_type": run.trigger_type,
+                    "ability_type": run.ability_type
+                }
+            )
+        except Exception as log_err:
+            logger.warning(f"Failed to log ability start: {log_err}")
+
         try:
             # Execute based on ability type
             result = await self._dispatch_execution(run)
+
+            # Calculate duration
+            duration_ms = int((time.time() - start_time) * 1000)
 
             # Mark as completed
             await ambient_ability_service.update_run_status(
@@ -122,6 +145,19 @@ class AmbientAbilityWorker:
                 f"(run_id: {str(run.id)[:8]}...)"
             )
 
+            # Log ability completion
+            try:
+                await activity_logger.log_ability_completed(
+                    client_id=run.client_id,
+                    agent_id=None,
+                    ability_name=run.ability_slug or "unknown",
+                    ability_id=str(run.ability_id) if run.ability_id else None,
+                    duration_ms=duration_ms,
+                    result_summary=result.get("summary") if isinstance(result, dict) else None
+                )
+            except Exception as log_err:
+                logger.warning(f"Failed to log ability completion: {log_err}")
+
         except Exception as e:
             logger.error(f"Ambient ability {run.ability_slug} failed: {e}")
             await ambient_ability_service.update_run_status(
@@ -129,6 +165,19 @@ class AmbientAbilityWorker:
                 AmbientRunStatus.FAILED,
                 error=str(e)
             )
+
+            # Log ability failure
+            try:
+                await activity_logger.log_ability_failed(
+                    client_id=run.client_id,
+                    agent_id=None,
+                    ability_name=run.ability_slug or "unknown",
+                    error=str(e),
+                    ability_id=str(run.ability_id) if run.ability_id else None
+                )
+            except Exception as log_err:
+                logger.warning(f"Failed to log ability failure: {log_err}")
+
             raise
 
     async def _dispatch_execution(self, run: AmbientAbilityRun) -> Dict[str, Any]:

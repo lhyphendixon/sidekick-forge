@@ -2,13 +2,14 @@
 Multi-tenant Agent management endpoints for Sidekick Forge Platform
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from uuid import UUID
 import logging
 
 from app.models.agent import Agent, AgentCreate, AgentUpdate
 from app.services.agent_service_multitenant import AgentService
 from app.services.client_connection_manager import ClientConfigurationError
+from app.services.activity_logging_service import activity_logger
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +80,12 @@ async def get_agent(
 @router.post("/agents", response_model=Agent)
 async def create_agent(
     agent: AgentCreate,
+    background_tasks: BackgroundTasks,
     client_id: UUID = Query(..., description="Client ID to create agent for")
 ) -> Agent:
     """
     Create a new agent for a client
-    
+
     This endpoint creates a new agent configuration for the specified client.
     """
     try:
@@ -98,8 +100,18 @@ async def create_agent(
         created_agent = await agent_service.create_agent(client_id, agent)
         if not created_agent:
             raise HTTPException(status_code=400, detail="Failed to create agent")
-        
+
         logger.info(f"Created agent '{agent.slug}' for client {client_id}")
+
+        # Log activity in background
+        background_tasks.add_task(
+            activity_logger.log_sidekick_created,
+            client_id=client_id,
+            agent_id=UUID(created_agent.id) if created_agent.id else None,
+            agent_name=created_agent.name,
+            agent_slug=created_agent.slug
+        )
+
         return created_agent
     except ClientConfigurationError as e:
         logger.error(f"Client configuration error: {e}")
@@ -120,6 +132,7 @@ async def create_agent(
 async def update_agent(
     agent_slug: str,
     agent_update: AgentUpdate,
+    background_tasks: BackgroundTasks,
     client_id: str = Query(..., description="Client ID of the agent (UUID or 'global')")
 ) -> Agent:
     """
@@ -206,6 +219,16 @@ async def update_agent(
                 )
 
             logger.info(f"Updated agent '{agent_slug}' for client {client_id}")
+
+            # Log activity in background
+            background_tasks.add_task(
+                activity_logger.log_sidekick_updated,
+                client_id=client_uuid,
+                agent_id=UUID(updated_agent.id) if updated_agent.id else None,
+                agent_name=updated_agent.name,
+                changes=json.loads(agent_update.json(exclude_unset=True))
+            )
+
             return updated_agent
     except HTTPException:
         raise
@@ -222,22 +245,38 @@ async def update_agent(
 @router.delete("/agents/{agent_slug}")
 async def delete_agent(
     agent_slug: str,
+    background_tasks: BackgroundTasks,
     client_id: UUID = Query(..., description="Client ID of the agent")
 ) -> dict:
     """
     Delete an agent
-    
+
     This endpoint deletes an agent configuration from the client's database.
     """
     try:
+        # Get agent info before deletion for logging
+        agent_before = await agent_service.get_agent(client_id, agent_slug)
+        agent_id = UUID(agent_before.id) if agent_before and agent_before.id else None
+        agent_name = agent_before.name if agent_before else agent_slug
+
         success = await agent_service.delete_agent(client_id, agent_slug)
         if not success:
             raise HTTPException(
                 status_code=404,
                 detail=f"Agent '{agent_slug}' not found for client {client_id}"
             )
-        
+
         logger.info(f"Deleted agent '{agent_slug}' for client {client_id}")
+
+        # Log activity in background
+        if agent_id:
+            background_tasks.add_task(
+                activity_logger.log_sidekick_deleted,
+                client_id=client_id,
+                agent_id=agent_id,
+                agent_name=agent_name
+            )
+
         return {"success": True, "message": f"Agent '{agent_slug}' deleted successfully"}
     except HTTPException:
         raise

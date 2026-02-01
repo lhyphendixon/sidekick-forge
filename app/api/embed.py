@@ -87,6 +87,8 @@ async def embed_sidekick(
     agent_name = agent_slug.replace("-", " ").title()  # Default: convert slug to title case
     agent_image = None  # Default: no image
     agent_id = None  # Will be populated from database lookup
+    agent_description = ""  # Agent description for info modal
+    agent_tools = []  # List of assigned tools for info modal
     try:
         from supabase import create_client
 
@@ -99,7 +101,7 @@ async def embed_sidekick(
         # Get agent settings from client database (chat mode settings, Supertab, and display info)
         if client_supabase_url and client_service_key:
             client_sb = create_client(client_supabase_url, client_service_key)
-            agent_result = client_sb.table("agents").select("id, name, agent_image, supertab_enabled, supertab_experience_id, supertab_price, supertab_cta, voice_chat_enabled, text_chat_enabled, video_chat_enabled").eq("slug", agent_slug).maybe_single().execute()
+            agent_result = client_sb.table("agents").select("id, name, description, agent_image, supertab_enabled, supertab_experience_id, supertab_price, supertab_cta, voice_chat_enabled, text_chat_enabled, video_chat_enabled").eq("slug", agent_slug).maybe_single().execute()
 
             if agent_result.data:
                 # Get agent ID
@@ -110,6 +112,33 @@ async def embed_sidekick(
                     agent_name = agent_result.data.get("name")
                 if agent_result.data.get("agent_image"):
                     agent_image = agent_result.data.get("agent_image")
+                if agent_result.data.get("description"):
+                    agent_description = agent_result.data.get("description")
+
+                # Fetch assigned tools for this agent
+                if agent_id:
+                    try:
+                        # Get tool IDs from agent_tools table (platform DB)
+                        agent_tools_result = platform_sb.table("agent_tools").select("tool_id").eq("agent_id", agent_id).execute()
+                        tool_ids = [r["tool_id"] for r in (agent_tools_result.data or [])]
+
+                        if tool_ids:
+                            # Get tool details from tools table (platform DB) - only active phase tools
+                            tools_result = platform_sb.table("tools").select("name, slug, description, icon_url, execution_phase").in_("id", tool_ids).eq("enabled", True).execute()
+                            if tools_result.data:
+                                # Filter to only show active (conversation) abilities, not ambient
+                                agent_tools = [
+                                    {
+                                        "name": t.get("name", ""),
+                                        "slug": t.get("slug", ""),
+                                        "description": t.get("description", ""),
+                                        "icon_url": t.get("icon_url", "")
+                                    }
+                                    for t in tools_result.data
+                                    if t.get("execution_phase") == "active"
+                                ]
+                    except Exception as tools_err:
+                        logger.warning(f"[embed] Failed to fetch agent tools: {tools_err}")
 
                 # Get chat mode settings (default to True if not set)
                 voice_chat_enabled = agent_result.data.get("voice_chat_enabled", True)
@@ -152,6 +181,8 @@ async def embed_sidekick(
             "agent_slug": agent_slug,
             "agent_name": agent_name,
             "agent_image": agent_image,
+            "agent_description": agent_description,
+            "agent_tools": agent_tools,
             "theme": theme,
             "supabase_url": settings.supabase_url,
             "supabase_anon_key": settings.supabase_anon_key,
