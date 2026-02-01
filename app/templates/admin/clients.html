@@ -443,19 +443,36 @@ async function confirmDeleteClient(clientId, clientName) {
         return;
     }
 
+    console.log('Deleting client:', clientId, clientName);
+
     try {
-        let response = await fetch(`/api/v2/clients/${clientId}`, { method: 'DELETE' });
+        const url = `/api/v2/clients/${clientId}`;
+        console.log('DELETE request to:', url);
 
-        if (!response.ok && response.status !== 404) {
+        let response = await fetch(url, { method: 'DELETE' });
+        console.log('Response status:', response.status);
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Delete failed:', response.status, errorText);
+
+            // Try v1 fallback
+            console.log('Trying v1 fallback...');
             response = await fetch(`/api/v1/clients/${clientId}`, { method: 'DELETE' });
+            console.log('v1 Response status:', response.status);
+
+            if (!response.ok) {
+                const v1ErrorText = await response.text();
+                console.error('v1 Delete also failed:', response.status, v1ErrorText);
+                alert(`Error deleting client: ${response.status} - ${v1ErrorText}`);
+                return;
+            }
         }
 
-        if (response.ok) {
-            window.location.reload();
-        } else {
-            alert('Error deleting client');
-        }
+        console.log('Delete successful, reloading...');
+        window.location.reload();
     } catch (error) {
+        console.error('Delete error:', error);
         alert('Error deleting client: ' + error.message);
     }
 }
