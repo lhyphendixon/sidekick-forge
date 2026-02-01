@@ -30,7 +30,7 @@ def apply_rag_functions(service_key):
         p_match_count integer
     )
     RETURNS TABLE(
-        id bigint,
+        id uuid,
         title text,
         content text,
         similarity float8

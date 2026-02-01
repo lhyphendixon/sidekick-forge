@@ -193,6 +193,10 @@ class DocumentSenseLearningWorker:
                 summary=f"Extracted intelligence from {successful} documents ({failed} failed)"
             )
 
+            # Check if there are more documents to process and queue a follow-up job
+            if successful > 0:
+                await self._queue_followup_if_needed(client_id, client_sb)
+
         except Exception as e:
             logger.error(f"Batch extraction failed: {e}", exc_info=True)
             await self._complete_job(job_id, success=False, error=str(e))
@@ -303,6 +307,54 @@ class DocumentSenseLearningWorker:
 
         except Exception as e:
             logger.error(f"Failed to complete DocumentSense job: {e}")
+
+    async def _queue_followup_if_needed(self, client_id: str, client_sb):
+        """
+        Check if there are more documents needing extraction and queue a follow-up job.
+        This ensures all documents get processed without manual intervention.
+        """
+        try:
+            # Count documents that still need processing
+            # Get documents with 'ready' status
+            documents_result = client_sb.table('documents').select(
+                'id'
+            ).eq('status', 'ready').limit(MAX_DOCUMENTS_PER_JOB + 1).execute()
+
+            documents = documents_result.data or []
+
+            # Filter out documents that already have intelligence
+            remaining_count = 0
+            for doc in documents:
+                intel_result = client_sb.table('document_intelligence').select(
+                    'id'
+                ).eq('document_id', doc['id']).eq('client_id', client_id).limit(1).execute()
+
+                if not intel_result.data:
+                    remaining_count += 1
+                    # Once we know there's at least one remaining, we can stop counting
+                    if remaining_count >= 1:
+                        break
+
+            if remaining_count > 0:
+                logger.info(f"Found more documents needing extraction for client {client_id}, queueing follow-up job")
+
+                # Queue a new job via the platform RPC
+                from supabase import create_client
+                platform_sb = create_client(
+                    settings.supabase_url,
+                    settings.supabase_service_role_key
+                )
+
+                result = platform_sb.rpc('queue_client_documentsense_extraction', {
+                    'p_client_id': client_id
+                }).execute()
+
+                logger.info(f"Follow-up DocumentSense job queued for client {client_id}")
+            else:
+                logger.info(f"All documents processed for client {client_id}, no follow-up needed")
+
+        except Exception as e:
+            logger.warning(f"Failed to check/queue follow-up DocumentSense job: {e}")
 
 
 # Singleton instance

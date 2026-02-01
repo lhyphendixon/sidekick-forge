@@ -93,9 +93,7 @@ async def handle_room_started(event_data: dict):
 async def handle_room_finished(event_data: dict):
     """Handle room finished event"""
     room = event_data.get("room", {})
-    room_name = room.get("name")
-
-    logger.info(f"Room finished: {room_name}")
+    room_name = room.get("name", "")
 
     # Update conversation status if linked
     metadata = room.get("metadata", {})
@@ -118,36 +116,62 @@ async def handle_room_finished(event_data: dict):
 
     # Track voice usage for quota metering (per-agent)
     # Duration is in seconds from LiveKit
-    duration_seconds = room.get("duration", 0)
+    raw_duration = room.get("duration")
     client_id = metadata.get("client_id")
     agent_id = metadata.get("agent_id")
+    is_text_room = room_name.startswith("text-") if room_name else False
 
-    # Only track voice usage for non-text rooms with valid IDs
-    if duration_seconds and client_id and agent_id and not room_name.startswith("text-"):
-        try:
-            await usage_tracking_service.initialize()
-            is_within_quota, quota_status = await usage_tracking_service.increment_agent_voice_usage(
-                client_id=str(client_id),
-                agent_id=str(agent_id),
-                seconds=int(duration_seconds),
-            )
-            logger.info(
-                "Tracked voice usage: agent=%s, client=%s, duration=%ds, total=%d/%d seconds (%.1f%%)",
-                agent_id, client_id, duration_seconds,
-                quota_status.used, quota_status.limit, quota_status.percent_used
-            )
-            if not is_within_quota:
-                logger.warning(
-                    "Voice quota exceeded for agent %s (client %s): %d/%d seconds",
-                    agent_id, client_id, quota_status.used, quota_status.limit
-                )
-        except Exception as usage_err:
-            logger.warning("Failed to track voice usage: %s", usage_err)
-    elif duration_seconds and not room_name.startswith("text-"):
+    # Log room finished event with diagnostic info including all room fields
+    room_fields = {k: v for k, v in room.items() if k not in ("metadata",)}  # Exclude large metadata
+    logger.info(
+        "Room finished: room=%s, duration=%s (type=%s), client_id=%s, agent_id=%s, is_text=%s, room_fields=%s",
+        room_name, raw_duration, type(raw_duration).__name__, client_id, agent_id, is_text_room, room_fields
+    )
+
+    # Convert duration to int, handling None/null cases
+    try:
+        duration_seconds = int(raw_duration) if raw_duration is not None else 0
+    except (TypeError, ValueError):
         logger.warning(
-            "Room finished with duration %ds but missing metadata for usage tracking: client_id=%s, agent_id=%s",
-            duration_seconds, client_id, agent_id
+            "Invalid duration value in room_finished event: %s (type=%s)",
+            raw_duration, type(raw_duration).__name__
         )
+        duration_seconds = 0
+
+    # Only track voice usage for non-text rooms
+    if not is_text_room:
+        if duration_seconds > 0 and client_id and agent_id:
+            try:
+                await usage_tracking_service.initialize()
+                is_within_quota, quota_status = await usage_tracking_service.increment_agent_voice_usage(
+                    client_id=str(client_id),
+                    agent_id=str(agent_id),
+                    seconds=duration_seconds,
+                )
+                logger.info(
+                    "Tracked voice usage: agent=%s, client=%s, duration=%ds, total=%d/%d seconds (%.1f%%)",
+                    agent_id, client_id, duration_seconds,
+                    quota_status.used, quota_status.limit, quota_status.percent_used
+                )
+                if not is_within_quota:
+                    logger.warning(
+                        "Voice quota exceeded for agent %s (client %s): %d/%d seconds",
+                        agent_id, client_id, quota_status.used, quota_status.limit
+                    )
+            except Exception as usage_err:
+                logger.error("Failed to track voice usage: %s", usage_err, exc_info=True)
+        elif duration_seconds > 0:
+            # Duration exists but missing client_id or agent_id
+            logger.warning(
+                "Room finished with duration %ds but missing metadata for usage tracking: client_id=%s, agent_id=%s, room=%s",
+                duration_seconds, client_id, agent_id, room_name
+            )
+        elif duration_seconds == 0:
+            # Duration is 0 - this could indicate an issue with LiveKit or very short call
+            logger.warning(
+                "Room finished with zero duration - voice usage NOT tracked: room=%s, client_id=%s, agent_id=%s, raw_duration=%s",
+                room_name, client_id, agent_id, raw_duration
+            )
 
     # Log room event
     event_log = {

@@ -452,21 +452,24 @@ async def _run_text_mode_interaction(
     except Exception as clear_err:
         logger.warning(f"⚠️ Failed to clear stale metadata: {clear_err}")
     # Proactively retrieve citations/rerank context for text mode (on_user_turn_completed may not fire)
-    # NO FALLBACK POLICY: If RAG retrieval fails, we fail the request rather than hallucinating
+    # Perform RAG retrieval - empty context is OK for conversational queries
     rag_context = ""
     if hasattr(agent, "_retrieve_with_citations") and callable(getattr(agent, "_retrieve_with_citations")):
-        await agent._retrieve_with_citations(user_message)
-        logger.info("📚 Text-mode: pre-fetched citations for user message (count=%s)", len(getattr(agent, "_current_citations", []) or []))
-        # Get the RAG context text for injection into the prompt
-        rag_context = getattr(agent, "_current_rag_context", "") or ""
-        if rag_context:
-            logger.info(f"📚 Text-mode: RAG context retrieved ({len(rag_context)} chars)")
-        else:
-            logger.error("❌ RAG context retrieval returned empty - NO FALLBACK POLICY prevents hallucination")
-            raise ValueError("RAG context retrieval failed - empty context returned. Check document indexing and embeddings.")
+        try:
+            await agent._retrieve_with_citations(user_message)
+            logger.info("📚 Text-mode: pre-fetched citations for user message (count=%s)", len(getattr(agent, "_current_citations", []) or []))
+            # Get the RAG context text for injection into the prompt
+            rag_context = getattr(agent, "_current_rag_context", "") or ""
+            if rag_context:
+                logger.info(f"📚 Text-mode: RAG context retrieved ({len(rag_context)} chars)")
+            else:
+                # Empty context is OK for conversational queries - agent can respond without RAG
+                logger.info("📚 Text-mode: RAG context empty - continuing without document context (conversational query)")
+        except Exception as e:
+            # Log RAG errors but continue - agent can still respond conversationally
+            logger.warning(f"⚠️ Text-mode: RAG retrieval issue: {type(e).__name__}: {e}")
     else:
-        logger.error("❌ Agent does not have _retrieve_with_citations method - cannot proceed")
-        raise ValueError("Agent not configured for RAG retrieval")
+        logger.warning("⚠️ Text-mode: Agent does not have _retrieve_with_citations method - continuing without RAG")
 
     # Call LLM directly (no TTS) to avoid LiveKit TTS failures in text-only mode
     try:
@@ -2123,43 +2126,39 @@ async def agent_job_handler(ctx: JobContext):
                 except Exception as e:
                     logger.error(f"Failed to capture user speech: {e}")
 
-            # Deterministic finalize: commit assistant transcript on agent_speech_committed
-            # NOTE: For voice mode, transcription_node handles all assistant transcript storage
-            # This handler is now a NO-OP for assistant transcripts to prevent duplicates
-            @session.on("agent_speech_committed")
-            def on_agent_speech(msg: llm.ChatMessage):
+            # Turn boundary detection using agent_state_changed event
+            # When agent transitions from "speaking" to another state, reset user turn state
+            # This ensures each new user utterance starts a fresh turn
+            @session.on("agent_state_changed")
+            def on_agent_state_changed(ev):
                 try:
-                    agent_text = None
-                    if hasattr(msg, 'content'):
-                        if isinstance(msg.content, str):
-                            agent_text = msg.content
-                        elif isinstance(msg.content, list):
-                            for part in msg.content:
-                                if isinstance(part, dict) and part.get("type") == "text":
-                                    agent_text = part.get("text")
-                                    break
-                    if not agent_text:
-                        return
+                    import time as _time_module
+                    old_state = getattr(ev, 'old_state', None)
+                    new_state = getattr(ev, 'new_state', None)
 
-                    # ALWAYS skip assistant transcript storage here - transcription_node handles it
-                    # The transcription_node provides better streaming UX and is the authoritative source
-                    logger.debug(f"📝 agent_speech_committed received ({len(agent_text)} chars) - skipping storage (transcription_node handles it)")
+                    logger.info(f"📝 agent_state_changed: {old_state} → {new_state}")
 
-                    # Just track for deduplication in case store_transcript is called elsewhere
-                    try:
-                        agent._last_assistant_commit = agent_text
-                    except Exception:
-                        pass
-
-                    # Reset user transcript state for next turn
-                    try:
-                        session._user_transcript_committed = False
-                        session._user_transcript_committed_text = ""
-                        session._user_transcript_committed_turn = None
-                    except Exception:
-                        pass
+                    # Reset turn state when agent finishes speaking
+                    # This happens when agent goes from "speaking" to "listening" or "idle"
+                    if old_state == "speaking" and new_state in ("listening", "idle", "thinking"):
+                        logger.info("📝 Turn boundary detected - agent finished speaking, resetting user turn state")
+                        try:
+                            session._last_agent_speech_time = _time_module.time()
+                            session._user_transcript_committed = False
+                            session._user_transcript_committed_text = ""
+                            session._user_transcript_committed_turn = None
+                            # Clear the turn text buffer - this marks the true turn boundary
+                            prev_turn_text = getattr(session, '_current_turn_text', '') or ''
+                            session._current_turn_text = ""
+                            agent._current_turn_text = ""
+                            # Reset user_turn_id when assistant completes - allows new turn to start fresh
+                            prev_turn_id = getattr(agent, '_user_turn_id', None)
+                            agent._user_turn_id = None
+                            logger.info(f"📝 Turn reset complete: prev_turn_text_len={len(prev_turn_text)}, prev_turn_id={prev_turn_id[:8] if prev_turn_id else None}")
+                        except Exception as reset_err:
+                            logger.error(f"❌ Failed to reset turn state: {reset_err}")
                 except Exception as e:
-                    logger.error(f"Failed in agent_speech_committed handler: {e}")
+                    logger.error(f"Failed in agent_state_changed handler: {e}")
 
             # Store session reference on agent for access in on_user_turn_completed
             agent._agent_session = session

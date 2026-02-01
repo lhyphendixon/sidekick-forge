@@ -794,7 +794,27 @@ class ToolRegistry:
             oauth_service = None
 
         try:
-            return build_helpscout_tool(t, merged_cfg, oauth_service=oauth_service)
+            raw_tool = build_helpscout_tool(t, merged_cfg, oauth_service=oauth_service)
+
+            # Wrap the tool to inject runtime context (including client_id) into metadata
+            async def _wrapped_helpscout_tool(**kwargs: Any) -> Any:
+                # Get runtime context which contains client_id
+                runtime_ctx = self._runtime_context.get(slug) or {}
+
+                # Merge runtime context into metadata
+                metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
+                merged_metadata = dict(runtime_ctx)
+                merged_metadata.update(metadata)
+                kwargs["metadata"] = merged_metadata
+
+                return await raw_tool(**kwargs)
+
+            # Copy tool metadata from raw tool to wrapped tool
+            for attr in ("__livekit_raw_tool_info", "__livekit_tool_info"):
+                if hasattr(raw_tool, attr):
+                    setattr(_wrapped_helpscout_tool, attr, getattr(raw_tool, attr))
+
+            return _wrapped_helpscout_tool
         except HelpScoutAbilityConfigError as exc:
             message = f"HelpScout ability is not ready: {exc}"
             try:

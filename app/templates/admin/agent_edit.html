@@ -37,7 +37,7 @@
             {% if user.role in ['superadmin','admin'] %}
             <div class="flex gap-2">
                 <button onclick="refreshFromSupabase()" 
-                        class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium">
+                        class="bg-brand-teal hover:bg-brand-teal/80 text-white px-4 py-2 rounded text-sm font-medium">
                     <svg class="-ml-0.5 mr-2 h-4 w-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                     </svg>
@@ -64,7 +64,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Agent Name*</label>
                     <input type="text" id="agentName" value="{{ agent.name }}" required
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                 </div>
                 
                 <div>
@@ -77,20 +77,20 @@
                 <div class="md:col-span-2">
                     <label class="block text-sm font-medium text-gray-700">Description</label>
                     <textarea id="agentDescription" rows="2"
-                              class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">{{ agent.description or '' }}</textarea>
+                              class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">{{ agent.description or '' }}</textarea>
                 </div>
                 
                 <div class="md:col-span-2">
                     <label class="block text-sm font-medium text-gray-700">Agent Background Image URL</label>
                     <input type="url" id="agentImage" value="{{ agent.agent_image or '' }}"
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal"
                            placeholder="https://example.com/image.jpg">
                 </div>
                 
                 <div class="md:col-span-2">
                     <label class="block text-sm font-medium text-gray-700">System Prompt*</label>
                     <textarea id="systemPrompt" rows="6" required
-                              class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">{{ agent.system_prompt }}</textarea>
+                              class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">{{ agent.system_prompt }}</textarea>
                     <p class="mt-1 text-xs text-gray-500">This defines how your agent behaves and responds</p>
                 </div>
 
@@ -102,7 +102,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Voice Provider</label>
                     <select id="voiceProvider"
-                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                         <option value="livekit" {% if agent.voice_settings.provider == "livekit" %}selected{% endif %}>LiveKit</option>
                         <option value="openai" {% if agent.voice_settings.provider == "openai" %}selected{% endif %}>OpenAI</option>
                         <option value="elevenlabs" {% if agent.voice_settings.provider == "elevenlabs" %}selected{% endif %}>ElevenLabs</option>
@@ -115,7 +115,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Voice ID</label>
                     <input type="text" id="voiceId" value="{{ agent.voice_settings.voice_id or 'alloy' }}"
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     <p class="mt-1 text-xs text-gray-500">Voice model or ID for the selected provider</p>
                 </div>
                 
@@ -123,7 +123,7 @@
                 <div id="ttsModelContainer" class="hidden">
                     <label class="block text-sm font-medium text-gray-700">TTS Model</label>
                     <select id="ttsModel"
-                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                         <option value="">Select a TTS model</option>
                         <optgroup label="Cartesia">
                             <option value="sonic-english" {% if agent.voice_settings.model == 'sonic-english' %}selected{% endif %}>sonic-english</option>
@@ -134,65 +134,37 @@
                     <p class="mt-1 text-xs text-gray-500">Required when provider is Cartesia. Choose an explicit model.</p>
                 </div>
 
+                <!-- TTS Speed Control -->
+                <div id="ttsSpeedContainer" class="hidden">
+                    <label class="block text-sm font-medium text-gray-700">Speech Speed</label>
+                    <div class="flex items-center gap-3 mt-1">
+                        <input type="range" id="ttsSpeed" min="0.6" max="1.5" step="0.05"
+                               value="{{ agent.voice_settings.tts_speed or 1.0 }}"
+                               class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-brand-teal"
+                               oninput="document.getElementById('ttsSpeedValue').textContent = this.value + 'x'">
+                        <span id="ttsSpeedValue" class="text-sm font-medium text-gray-700 w-12">{{ agent.voice_settings.tts_speed or 1.0 }}x</span>
+                    </div>
+                    <p class="mt-1 text-xs text-gray-500">
+                        Speed multiplier: 0.6x (slow) to 1.5x (fast). Default is 1.0x (normal).
+                    </p>
+                </div>
+
                 <div id="cartesiaEmotionsContainer" class="hidden md:col-span-2 border rounded-md border-gray-200 p-4 bg-gray-50">
                     <label class="flex items-center text-sm font-medium text-gray-700">
                         <input type="checkbox" id="cartesiaEmotionsEnabled"
-                               class="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50"
+                               class="rounded border-gray-300 text-brand-teal shadow-sm focus:border-brand-teal/50 focus:ring focus:ring-brand-teal/30 focus:ring-opacity-50"
                                {% if agent.voice_settings.cartesia_emotions_enabled %}checked{% endif %}>
-                        <span class="ml-2">Enable Cartesia Sonic-3 emotions</span>
+                        <span class="ml-2">Enable dynamic emotion expression</span>
                     </label>
                     <p class="text-xs text-gray-500 mt-1">
-                        When enabled, Sonic-3 can vary tone, volume, and speed using Cartesia's SSML <emotion> tags.
+                        When enabled, the agent will dynamically express emotions (excited, sympathetic, curious, etc.) based on conversation context.
                     </p>
-                    <div id="cartesiaEmotionFields" class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4 hidden">
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600">Default Emotion Style</label>
-                            <select id="cartesiaEmotionStyle"
-                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
-                                {% set emotion_style = agent.voice_settings.cartesia_emotion_style or 'neutral' %}
-                                {% set emotion_options = ['neutral','joy','sad','angry','compassionate','excited','empathetic'] %}
-                                {% for option in emotion_options %}
-                                <option value="{{ option }}" {% if emotion_style == option %}selected{% endif %}>{{ option|capitalize }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600">Emotion Intensity</label>
-                            <select id="cartesiaEmotionIntensity"
-                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
-                                {% set emotion_intensity = agent.voice_settings.cartesia_emotion_intensity or 3 %}
-                                {% for level in [1,2,3,4,5] %}
-                                <option value="{{ level }}" {% if emotion_intensity == level %}selected{% endif %}>Level {{ level }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600">Volume Hint</label>
-                            <select id="cartesiaEmotionVolume"
-                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
-                                {% set volume_value = agent.voice_settings.cartesia_emotion_volume or 'medium' %}
-                                {% for option in ['x-soft','soft','medium','loud','x-loud'] %}
-                                <option value="{{ option }}" {% if volume_value == option %}selected{% endif %}>{{ option }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-600">Speed Hint</label>
-                            <select id="cartesiaEmotionSpeed"
-                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500">
-                                {% set speed_value = agent.voice_settings.cartesia_emotion_speed or 'medium' %}
-                                {% for option in ['x-slow','slow','medium','fast','x-fast'] %}
-                                <option value="{{ option }}" {% if speed_value == option %}selected{% endif %}>{{ option }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                    </div>
                 </div>
 
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Temperature</label>
                     <input type="number" id="temperature" min="0" max="2" step="0.1" value="{{ agent.voice_settings.temperature or 0.7 }}"
-                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     <p class="mt-1 text-xs text-gray-500">Controls creativity (0.0 - 2.0)</p>
                 </div>
 
@@ -205,7 +177,7 @@
                 <div class="md:col-span-2">
                     <label class="block text-sm font-medium text-gray-700">Avatar Provider</label>
                     <select id="avatarProvider" onchange="toggleAvatarProviderSettings()"
-                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                         <option value="bithuman" {% if agent.voice_settings.avatar_provider == 'bithuman' or not agent.voice_settings.avatar_provider %}selected{% endif %}>Bithuman (custom image upload)</option>
                         <option value="beyondpresence" {% if agent.voice_settings.avatar_provider == 'beyondpresence' %}selected{% endif %}>Beyond Presence (pre-built avatars)</option>
                         <option value="liveavatar" {% if agent.voice_settings.avatar_provider == 'liveavatar' %}selected{% endif %}>HeyGen LiveAvatar</option>
@@ -213,40 +185,80 @@
                     <p class="mt-1 text-xs text-gray-500">Choose your video avatar provider</p>
                 </div>
 
-                <!-- Bithuman-specific settings -->
+                <!-- Bithuman-specific settings (Local mode only - requires .imx model) -->
                 <div id="bithumanSettings" class="contents">
                     <div class="md:col-span-2">
-                        <label class="block text-sm font-medium text-gray-700">Bithuman Mode</label>
-                        <select id="bithumanMode" onchange="toggleBithumanMode()"
-                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
-                            <option value="local" {% if agent.voice_settings.avatar_model_path %}selected{% endif %}>Local/Self-Hosted (IMX model file)</option>
-                            <option value="cloud" {% if not agent.voice_settings.avatar_model_path %}selected{% endif %}>Cloud (image URL)</option>
-                        </select>
-                        <p class="mt-1 text-xs text-gray-500">Local mode uses a downloaded .imx model (faster, runs on CPU). Cloud mode uses Bithuman's API.</p>
-                    </div>
+                        <label class="block text-sm font-medium text-gray-700">IMX Model File <span class="text-red-500">*</span></label>
 
-                    <!-- Local mode: IMX model path -->
-                    <div id="bithumanLocalSettings" class="md:col-span-2" {% if not agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
-                        <label class="block text-sm font-medium text-gray-700">IMX Model Path</label>
-                        <input type="text" id="avatarModelPath" value="{{ agent.voice_settings.avatar_model_path or '/app/models/farah_qubit.imx' }}"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
-                               placeholder="/app/models/your_avatar.imx">
-                        <p class="mt-1 text-xs text-gray-500">Path to the .imx model file inside the agent container. Models are stored in /app/models/</p>
-                    </div>
+                        <!-- Current model indicator -->
+                        <div id="currentImxModel" class="mt-2 mb-3">
+                            {% if agent.voice_settings.avatar_model_path and agent.voice_settings.avatar_model_path.startswith('supabase://') %}
+                            <div class="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-md">
+                                <svg class="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                </svg>
+                                <span class="text-sm text-green-700">IMX model uploaded</span>
+                                <span class="text-xs text-green-600 font-mono">{{ agent.voice_settings.avatar_model_path.split('/')[-1] }}</span>
+                            </div>
+                            {% elif agent.voice_settings.avatar_model_path %}
+                            <div class="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                                <svg class="w-5 h-5 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                </svg>
+                                <span class="text-sm text-yellow-700">Legacy path (needs upload): <span class="font-mono">{{ agent.voice_settings.avatar_model_path }}</span></span>
+                            </div>
+                            {% else %}
+                            <div class="flex items-center gap-2 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                                <svg class="w-5 h-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clip-rule="evenodd"/>
+                                </svg>
+                                <span class="text-sm text-gray-500">No IMX model uploaded yet</span>
+                            </div>
+                            {% endif %}
+                        </div>
 
-                    <!-- Cloud mode: Image URL -->
-                    <div id="bithumanCloudSettings" {% if agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
-                        <label class="block text-sm font-medium text-gray-700">Avatar Image URL</label>
-                        <input type="text" id="avatarImageUrl" value="{{ agent.voice_settings.avatar_image_url or '' }}"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
-                               placeholder="https://example.com/avatar.jpg">
-                        <p class="mt-1 text-xs text-gray-500">URL to a portrait image for the video avatar (512x512 or larger recommended)</p>
+                        <!-- Hidden field to store the path -->
+                        <input type="hidden" id="avatarModelPath" value="{{ agent.voice_settings.avatar_model_path or '' }}">
+
+                        <!-- File upload zone -->
+                        <div id="imxUploadZone"
+                             class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md hover:border-brand-teal transition-colors cursor-pointer">
+                            <div class="space-y-1 text-center">
+                                <svg id="imxUploadIcon" class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                                <div class="flex text-sm text-gray-600">
+                                    <label class="relative cursor-pointer rounded-md font-medium text-brand-teal hover:text-brand-blue focus-within:outline-none">
+                                        <span>Upload an IMX file</span>
+                                        <input id="imxFileInput" type="file" class="sr-only" accept=".imx">
+                                    </label>
+                                    <p class="pl-1">or drag and drop</p>
+                                </div>
+                                <p class="text-xs text-gray-500">.imx files only, up to 500MB</p>
+                            </div>
+                        </div>
+
+                        <!-- Upload progress -->
+                        <div id="imxUploadProgress" class="hidden mt-3">
+                            <div class="flex items-center gap-3">
+                                <div class="flex-1 bg-gray-200 rounded-full h-2">
+                                    <div id="imxProgressBar" class="bg-brand-teal h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                </div>
+                                <span id="imxProgressText" class="text-sm text-gray-600">0%</span>
+                            </div>
+                            <p id="imxUploadStatus" class="text-xs text-gray-500 mt-1">Uploading...</p>
+                        </div>
+
+                        <!-- Upload result message -->
+                        <div id="imxUploadResult" class="hidden mt-3"></div>
+
+                        <p class="mt-2 text-xs text-gray-500">Upload your .imx model file. Create IMX models at <a href="https://imaginex.bithuman.ai" target="_blank" class="text-brand-teal hover:underline">Bithuman ImagineX Console</a>.</p>
                     </div>
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Avatar Model Type</label>
                         <select id="avatarModelType"
-                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                             <option value="expression" {% if agent.voice_settings.avatar_model_type == 'expression' or not agent.voice_settings.avatar_model_type %}selected{% endif %}>Expression (dynamic emotions)</option>
                             <option value="essence" {% if agent.voice_settings.avatar_model_type == 'essence' %}selected{% endif %}>Essence (consistent expression)</option>
                         </select>
@@ -259,7 +271,7 @@
                     <div class="md:col-span-2">
                         <label class="block text-sm font-medium text-gray-700">Avatar ID</label>
                         <input type="text" id="avatarId" value="{{ agent.voice_settings.avatar_id or '' }}"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal"
                                placeholder="b9be11b8-89fb-4227-8f86-4a881393cbdb">
                         <p class="mt-1 text-xs text-gray-500">Beyond Presence avatar ID (leave empty for default avatar)</p>
                     </div>
@@ -270,9 +282,63 @@
                     <div class="md:col-span-2">
                         <label class="block text-sm font-medium text-gray-700">Avatar ID</label>
                         <input type="text" id="liveavatarAvatarId" value="{{ agent.voice_settings.liveavatar_avatar_id or '' }}"
-                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal"
                                placeholder="avatar_abc123">
-                        <p class="mt-1 text-xs text-gray-500">Your HeyGen LiveAvatar avatar ID. Find avatars at <a href="https://app.liveavatar.com/home" target="_blank" class="text-blue-500">app.liveavatar.com</a></p>
+                        <p class="mt-1 text-xs text-gray-500">Your HeyGen LiveAvatar avatar ID. Find avatars at <a href="https://app.liveavatar.com/home" target="_blank" class="text-brand-teal">app.liveavatar.com</a></p>
+                    </div>
+                </div>
+
+                <!-- Sound Settings -->
+                <div class="md:col-span-2 border-t pt-6">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Sound Settings</h3>
+                    <p class="text-sm text-gray-500 mb-4">Configure ambient and thinking sounds for voice/video chat to enhance immersion and reduce silence during processing.</p>
+                </div>
+
+                {% set sound_settings = agent.sound_settings or {} %}
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Thinking Sound</label>
+                    <select id="thinkingSound" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
+                        <option value="none" {% if sound_settings.thinking_sound == 'none' or not sound_settings.thinking_sound %}selected{% endif %}>None (silent, default)</option>
+                        <option value="keyboard" {% if sound_settings.thinking_sound == 'keyboard' %}selected{% endif %}>Keyboard Typing</option>
+                        <option value="beta1" {% if sound_settings.thinking_sound == 'beta1' %}selected{% endif %}>Thinking Sound Beta 1</option>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500">Plays during RAG searches and tool calls to fill silence while the agent is "thinking"</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Thinking Sound Volume</label>
+                    <input type="range" id="thinkingSoundVolume" min="0" max="100" step="5"
+                           value="{{ (sound_settings.thinking_volume or 0.3) * 100 | int }}"
+                           class="mt-1 block w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+                    <div class="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>Quiet</span>
+                        <span id="thinkingVolumeDisplay">{{ ((sound_settings.thinking_volume or 0.3) * 100) | int }}%</span>
+                        <span>Loud</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Ambient Sound</label>
+                    <select id="ambientSound" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
+                        <option value="none" {% if sound_settings.ambient_sound == 'none' or not sound_settings.ambient_sound %}selected{% endif %}>None (default)</option>
+                        <option value="office" {% if sound_settings.ambient_sound == 'office' %}selected{% endif %}>Office Ambience</option>
+                        <option value="forest" {% if sound_settings.ambient_sound == 'forest' %}selected{% endif %}>Forest / Nature</option>
+                        <option value="city" {% if sound_settings.ambient_sound == 'city' %}selected{% endif %}>City Ambience</option>
+                        <option value="crowded_room" {% if sound_settings.ambient_sound == 'crowded_room' %}selected{% endif %}>Crowded Room</option>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500">Background ambience that plays continuously during voice/video chat</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Ambient Sound Volume</label>
+                    <input type="range" id="ambientSoundVolume" min="0" max="100" step="5"
+                           value="{{ (sound_settings.ambient_volume or 0.15) * 100 | int }}"
+                           class="mt-1 block w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+                    <div class="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>Quiet</span>
+                        <span id="ambientVolumeDisplay">{{ ((sound_settings.ambient_volume or 0.15) * 100) | int }}%</span>
+                        <span>Loud</span>
                     </div>
                 </div>
 
@@ -284,7 +350,7 @@
                 <div class="md:col-span-2">
                     <label class="flex items-center">
                         <input type="checkbox" id="showCitations" {% if agent.show_citations %}checked{% endif %}
-                               class="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50">
+                               class="rounded border-gray-300 text-brand-teal shadow-sm focus:border-brand-teal/50 focus:ring focus:ring-brand-teal/30 focus:ring-opacity-50">
                         <span class="ml-2 text-sm text-gray-700">Show RAG citations in responses</span>
                     </label>
                     <p class="ml-6 mt-1 text-xs text-gray-500">When enabled, the agent will display source citations for RAG-based responses</p>
@@ -298,7 +364,7 @@
                 <div class="md:col-span-2">
                     <label class="flex items-center">
                         <input type="checkbox" id="agentEnabled" {% if agent.enabled %}checked{% endif %}
-                               class="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50">
+                               class="rounded border-gray-300 text-brand-teal shadow-sm focus:border-brand-teal/50 focus:ring focus:ring-brand-teal/30 focus:ring-opacity-50">
                         <span class="ml-2 text-sm text-gray-700">Agent is enabled and active</span>
                     </label>
                 </div>
@@ -321,7 +387,7 @@
                         Cancel
                     </a>
                     <button type="button" onclick="withButtonLoading(this, saveAgent)"
-                            class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                            class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-brand-teal hover:bg-brand-teal/80 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-teal">
                         <svg class="-ml-0.5 mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
                         </svg>
@@ -362,11 +428,22 @@ const existingVoiceSettings = {{ agent.voice_settings | tojson | safe }};
 function updateTTSUI() {
     const provider = document.getElementById('voiceProvider').value;
     const ttsModelContainer = document.getElementById('ttsModelContainer');
+    const ttsSpeedContainer = document.getElementById('ttsSpeedContainer');
+
+    // Show TTS model selector for Cartesia
     if (provider === 'cartesia') {
         ttsModelContainer.classList.remove('hidden');
     } else {
         ttsModelContainer.classList.add('hidden');
     }
+
+    // Show TTS speed control for Cartesia (and potentially other providers)
+    if (provider === 'cartesia') {
+        ttsSpeedContainer.classList.remove('hidden');
+    } else {
+        ttsSpeedContainer.classList.add('hidden');
+    }
+
     updateCartesiaEmotionControls();
 }
 
@@ -374,19 +451,15 @@ function updateCartesiaEmotionControls() {
     const provider = document.getElementById('voiceProvider').value;
     const model = document.getElementById('ttsModel') ? document.getElementById('ttsModel').value : '';
     const emotionsContainer = document.getElementById('cartesiaEmotionsContainer');
-    const toggle = document.getElementById('cartesiaEmotionsEnabled');
-    const fields = document.getElementById('cartesiaEmotionFields');
-    const shouldShow = provider === 'cartesia' && model === 'sonic-3';
+    // Show emotion toggle for Cartesia sonic models
+    const shouldShow = provider === 'cartesia' && (model === 'sonic-3' || model?.startsWith('sonic'));
     if (emotionsContainer) {
         emotionsContainer.classList.toggle('hidden', !shouldShow);
-    }
-    if (fields) {
-        const showFields = shouldShow && toggle?.checked;
-        fields.classList.toggle('hidden', !showFields);
     }
 }
 
 function handleEmotionToggle() {
+    // No longer needed for static fields, but keep for compatibility
     updateCartesiaEmotionControls();
 }
 
@@ -422,28 +495,13 @@ function toggleAvatarProviderSettings() {
         liveavatarSettings.style.display = 'contents';
     } else {
         bithumanSettings.style.display = 'contents';
-        toggleBithumanMode();  // Also initialize Bithuman mode display
-    }
-}
-
-function toggleBithumanMode() {
-    const mode = document.getElementById('bithumanMode').value;
-    const localSettings = document.getElementById('bithumanLocalSettings');
-    const cloudSettings = document.getElementById('bithumanCloudSettings');
-
-    if (mode === 'local') {
-        localSettings.style.display = 'block';
-        cloudSettings.style.display = 'none';
-    } else {
-        localSettings.style.display = 'none';
-        cloudSettings.style.display = 'block';
     }
 }
 
 // Initialize avatar provider settings on page load
 document.addEventListener('DOMContentLoaded', function() {
     toggleAvatarProviderSettings();
-    toggleBithumanMode();
+    updateTTSUI();  // Show/hide TTS speed control based on provider
 });
 
 async function saveAgent() {
@@ -458,17 +516,11 @@ async function saveAgent() {
 
     // Merge with existing voice settings to avoid dropping required fields
     const avatarProvider = document.getElementById('avatarProvider').value;
-    const bithumanMode = document.getElementById('bithumanMode')?.value || 'cloud';
 
-    // For Bithuman, set either model_path (local) OR image_url (cloud), not both
+    // For Bithuman, only local .imx model is supported
     let avatarModelPath = null;
-    let avatarImageUrl = null;
     if (avatarProvider === 'bithuman') {
-        if (bithumanMode === 'local') {
-            avatarModelPath = document.getElementById('avatarModelPath').value || null;
-        } else {
-            avatarImageUrl = document.getElementById('avatarImageUrl').value || null;
-        }
+        avatarModelPath = document.getElementById('avatarModelPath').value || null;
     }
 
     const mergedVoiceSettings = Object.assign({}, existingVoiceSettings || {}, {
@@ -478,38 +530,25 @@ async function saveAgent() {
         temperature: parseFloat(document.getElementById('temperature').value),
         avatar_provider: avatarProvider,
         avatar_model_path: avatarModelPath,
-        avatar_image_url: avatarImageUrl,
+        avatar_image_url: null,  // Cloud mode removed - local .imx only
         avatar_model_type: document.getElementById('avatarModelType').value || 'expression',
         avatar_id: document.getElementById('avatarId').value || null,
         liveavatar_avatar_id: document.getElementById('liveavatarAvatarId')?.value || null
     });
     if (selectedProvider === 'cartesia') {
         mergedVoiceSettings.model = selectedModel || null;
-        mergedVoiceSettings.cartesia_emotions_enabled = false;
-        if (selectedModel === 'sonic-3') {
-            const toggle = document.getElementById('cartesiaEmotionsEnabled');
-            if (toggle && toggle.checked) {
-                mergedVoiceSettings.cartesia_emotions_enabled = true;
-                mergedVoiceSettings.cartesia_emotion_style = document.getElementById('cartesiaEmotionStyle')?.value || 'neutral';
-                mergedVoiceSettings.cartesia_emotion_intensity = parseInt(document.getElementById('cartesiaEmotionIntensity')?.value || '3', 10);
-                mergedVoiceSettings.cartesia_emotion_volume = document.getElementById('cartesiaEmotionVolume')?.value || 'medium';
-                mergedVoiceSettings.cartesia_emotion_speed = document.getElementById('cartesiaEmotionSpeed')?.value || 'medium';
-            } else {
-                mergedVoiceSettings.cartesia_emotion_style = null;
-                mergedVoiceSettings.cartesia_emotion_intensity = null;
-                mergedVoiceSettings.cartesia_emotion_volume = null;
-                mergedVoiceSettings.cartesia_emotion_speed = null;
-            }
-        } else {
-            mergedVoiceSettings.cartesia_emotions_enabled = false;
-            mergedVoiceSettings.cartesia_emotion_style = null;
-            mergedVoiceSettings.cartesia_emotion_intensity = null;
-            mergedVoiceSettings.cartesia_emotion_volume = null;
-            mergedVoiceSettings.cartesia_emotion_speed = null;
+        // Get TTS speed value
+        const ttsSpeedEl = document.getElementById('ttsSpeed');
+        if (ttsSpeedEl) {
+            mergedVoiceSettings.tts_speed = parseFloat(ttsSpeedEl.value);
         }
+        // Dynamic emotion expression - agent chooses emotions based on context
+        const emotionToggle = document.getElementById('cartesiaEmotionsEnabled');
+        mergedVoiceSettings.cartesia_emotions_enabled = emotionToggle?.checked || false;
     } else {
         // Clear model if switching away from Cartesia
         mergedVoiceSettings.model = null;
+        mergedVoiceSettings.cartesia_emotions_enabled = false;
     }
 
     const updateData = {
@@ -518,6 +557,7 @@ async function saveAgent() {
         agent_image: document.getElementById('agentImage').value || null,
         system_prompt: document.getElementById('systemPrompt').value,
         voice_settings: mergedVoiceSettings,
+        sound_settings: collectSoundSettings(),
         show_citations: document.getElementById('showCitations').checked,
         enabled: document.getElementById('agentEnabled').checked
     };
@@ -602,7 +642,7 @@ function showNotification(message, type = 'info') {
     notification.className = `fixed top-4 right-4 z-50 p-4 rounded-md shadow-lg max-w-sm ${
         type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' :
         type === 'error' ? 'bg-red-100 text-red-800 border border-red-200' :
-        'bg-blue-100 text-blue-800 border border-blue-200'
+        'bg-brand-teal/10 text-brand-teal border border-brand-teal/30'
     }`;
     notification.textContent = message;
     
@@ -617,6 +657,35 @@ function showNotification(message, type = 'info') {
     }, 5000);
 }
 
+// Sound settings volume slider updates
+function initSoundSettings() {
+    const thinkingVolumeSlider = document.getElementById('thinkingSoundVolume');
+    const thinkingVolumeDisplay = document.getElementById('thinkingVolumeDisplay');
+    const ambientVolumeSlider = document.getElementById('ambientSoundVolume');
+    const ambientVolumeDisplay = document.getElementById('ambientVolumeDisplay');
+
+    if (thinkingVolumeSlider && thinkingVolumeDisplay) {
+        thinkingVolumeSlider.addEventListener('input', function() {
+            thinkingVolumeDisplay.textContent = this.value + '%';
+        });
+    }
+
+    if (ambientVolumeSlider && ambientVolumeDisplay) {
+        ambientVolumeSlider.addEventListener('input', function() {
+            ambientVolumeDisplay.textContent = this.value + '%';
+        });
+    }
+}
+
+function collectSoundSettings() {
+    return {
+        thinking_sound: document.getElementById('thinkingSound')?.value || 'none',
+        thinking_volume: (parseInt(document.getElementById('thinkingSoundVolume')?.value || '30', 10)) / 100,
+        ambient_sound: document.getElementById('ambientSound')?.value || 'none',
+        ambient_volume: (parseInt(document.getElementById('ambientSoundVolume')?.value || '15', 10)) / 100
+    };
+}
+
 // Auto-load agent data on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Page loaded with agent data from server
@@ -624,7 +693,180 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize TTS UI state
     initCartesiaDefaults();
     updateTTSUI();
+    initSoundSettings();
+    initImxUpload();
     document.getElementById('voiceProvider').addEventListener('change', updateTTSUI);
 });
+
+// ==== IMX Model File Upload ====
+function initImxUpload() {
+    const uploadZone = document.getElementById('imxUploadZone');
+    const fileInput = document.getElementById('imxFileInput');
+
+    if (!uploadZone || !fileInput) return;
+
+    // Click to upload
+    uploadZone.addEventListener('click', () => fileInput.click());
+
+    // File selected
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) {
+            handleImxUpload(e.target.files[0]);
+        }
+    });
+
+    // Drag and drop
+    uploadZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadZone.classList.add('border-brand-teal', 'bg-brand-teal/5');
+    });
+
+    uploadZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('border-brand-teal', 'bg-brand-teal/5');
+    });
+
+    uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('border-brand-teal', 'bg-brand-teal/5');
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+            handleImxUpload(e.dataTransfer.files[0]);
+        }
+    });
+}
+
+async function handleImxUpload(file) {
+    // Validate file extension
+    if (!file.name.toLowerCase().endsWith('.imx')) {
+        showImxResult('error', 'Invalid file type. Only .imx files are allowed.');
+        return;
+    }
+
+    // Validate file size (500MB)
+    const maxSize = 500 * 1024 * 1024;
+    if (file.size > maxSize) {
+        showImxResult('error', 'File too large. Maximum size is 500MB.');
+        return;
+    }
+
+    const progressContainer = document.getElementById('imxUploadProgress');
+    const progressBar = document.getElementById('imxProgressBar');
+    const progressText = document.getElementById('imxProgressText');
+    const statusText = document.getElementById('imxUploadStatus');
+    const uploadZone = document.getElementById('imxUploadZone');
+    const resultContainer = document.getElementById('imxUploadResult');
+
+    // Hide result, show progress
+    resultContainer.classList.add('hidden');
+    progressContainer.classList.remove('hidden');
+    uploadZone.style.opacity = '0.5';
+    uploadZone.style.pointerEvents = 'none';
+
+    // Create FormData
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const xhr = new XMLHttpRequest();
+
+        // Track upload progress
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const percent = Math.round((e.loaded / e.total) * 100);
+                progressBar.style.width = percent + '%';
+                progressText.textContent = percent + '%';
+                statusText.textContent = percent < 100 ? 'Uploading...' : 'Processing...';
+            }
+        });
+
+        // Handle completion
+        xhr.addEventListener('load', () => {
+            progressContainer.classList.add('hidden');
+            uploadZone.style.opacity = '1';
+            uploadZone.style.pointerEvents = 'auto';
+
+            if (xhr.status === 200) {
+                const result = JSON.parse(xhr.responseText);
+                if (result.success) {
+                    // Update hidden field with storage path
+                    document.getElementById('avatarModelPath').value = result.storage_path;
+
+                    // Update the current model indicator
+                    updateImxModelIndicator(result.storage_path);
+
+                    showImxResult('success', 'IMX model uploaded successfully! Click "Save Changes" to apply.');
+                } else {
+                    showImxResult('error', result.message || 'Upload failed');
+                }
+            } else {
+                let errorMsg = 'Upload failed';
+                try {
+                    const error = JSON.parse(xhr.responseText);
+                    errorMsg = error.detail || error.message || errorMsg;
+                } catch (e) {}
+                showImxResult('error', errorMsg);
+            }
+        });
+
+        // Handle error
+        xhr.addEventListener('error', () => {
+            progressContainer.classList.add('hidden');
+            uploadZone.style.opacity = '1';
+            uploadZone.style.pointerEvents = 'auto';
+            showImxResult('error', 'Network error during upload');
+        });
+
+        // Send request
+        xhr.open('POST', `/api/v1/agents/client/{{ agent.client_id }}/{{ agent.slug }}/upload-imx`);
+        xhr.send(formData);
+
+    } catch (error) {
+        progressContainer.classList.add('hidden');
+        uploadZone.style.opacity = '1';
+        uploadZone.style.pointerEvents = 'auto';
+        showImxResult('error', 'Error: ' + error.message);
+    }
+}
+
+function showImxResult(type, message) {
+    const container = document.getElementById('imxUploadResult');
+    container.classList.remove('hidden');
+
+    if (type === 'success') {
+        container.innerHTML = `
+            <div class="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-md">
+                <svg class="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                <span class="text-sm text-green-700">${message}</span>
+            </div>
+        `;
+    } else {
+        container.innerHTML = `
+            <div class="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-md">
+                <svg class="w-5 h-5 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                </svg>
+                <span class="text-sm text-red-700">${message}</span>
+            </div>
+        `;
+    }
+}
+
+function updateImxModelIndicator(storagePath) {
+    const container = document.getElementById('currentImxModel');
+    const filename = storagePath.split('/').pop() || 'model.imx';
+
+    container.innerHTML = `
+        <div class="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-md">
+            <svg class="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+            </svg>
+            <span class="text-sm text-green-700">IMX model uploaded</span>
+            <span class="text-xs text-green-600 font-mono">${filename}</span>
+        </div>
+    `;
+}
+
 </script>
 {% endblock %}

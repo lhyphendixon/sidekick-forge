@@ -54,6 +54,14 @@ class ClientService:
                 additional_settings = json.loads(additional_settings)
             except json.JSONDecodeError:
                 additional_settings = {}
+
+        # Propagate top-level DB columns into additional_settings for downstream access
+        if client_data.get("uses_platform_keys") is not None:
+            additional_settings["uses_platform_keys"] = client_data["uses_platform_keys"]
+        if client_data.get("hosting_type"):
+            additional_settings["hosting_type"] = client_data["hosting_type"]
+        if client_data.get("tier"):
+            additional_settings["tier"] = client_data["tier"]
         
         # Parse LiveKit credentials if available
         livekit_config = None
@@ -214,6 +222,8 @@ class ClientService:
                 })
                 if hasattr(keys, 'anthropic_api_key'):
                     data["anthropic_api_key"] = keys.anthropic_api_key
+                if hasattr(keys, 'assemblyai_api_key'):
+                    data["assemblyai_api_key"] = keys.assemblyai_api_key
 
             # Add LiveKit config if provided
             if client_data.settings and client_data.settings.livekit_config:
@@ -319,6 +329,8 @@ class ClientService:
                 })
                 if hasattr(keys, 'anthropic_api_key'):
                     update_data["anthropic_api_key"] = keys.anthropic_api_key
+                if hasattr(keys, 'assemblyai_api_key'):
+                    update_data["assemblyai_api_key"] = keys.assemblyai_api_key
 
             # Update Firecrawl API key if provided
             if client_update.firecrawl_api_key is not None:

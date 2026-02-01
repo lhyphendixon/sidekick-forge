@@ -284,8 +284,9 @@ class ProvisioningWorker:
         """
         Process Adventurer tier setup (shared pool).
 
-        For shared hosting, we don't create a Supabase project.
-        We set up default API configuration with platform keys and mark as ready.
+        Assigns the client to the shared Supabase pool project so tenant data
+        (documents, agents, conversations) is stored in an isolated DB —
+        separate from the platform admin database.
         """
         logger.info("Processing shared_pool_setup job for client %s (Adventurer tier)", job.client_id)
 
@@ -295,38 +296,53 @@ class ProvisioningWorker:
             "provisioning_started_at": datetime.utcnow().isoformat(),
         })
 
-        # Verify shared pool is available (optional - may not have table yet)
-        def _verify_pool() -> bool:
+        # Fetch shared pool credentials from shared_pool_config
+        pool_config = None
+
+        def _fetch_pool() -> dict | None:
             try:
                 result = (
                     self.platform_db
                     .table("shared_pool_config")
-                    .select("id, pool_name, current_client_count, max_clients")
+                    .select("id, pool_name, supabase_url, supabase_service_role_key, supabase_anon_key, supabase_project_ref, current_client_count, max_clients")
                     .eq("is_active", True)
                     .eq("pool_name", "adventurer_pool")
                     .single()
                     .execute()
                 )
-                if not result.data:
-                    # No pool config found - allow anyway for now
-                    logger.warning("No shared_pool_config found, proceeding with default setup")
-                    return True
-
-                # Check if pool has capacity
-                current = result.data.get("current_client_count", 0)
-                max_clients = result.data.get("max_clients", 1000)
-                return current < max_clients
+                return result.data if result.data else None
             except Exception as e:
-                # Table may not exist yet - allow provisioning to continue
-                logger.warning(f"shared_pool_config check failed: {e}, proceeding anyway")
-                return True
+                logger.error(f"Failed to fetch shared_pool_config: {e}")
+                return None
 
-        pool_available = await asyncio.to_thread(_verify_pool)
+        pool_config = await asyncio.to_thread(_fetch_pool)
 
-        if not pool_available:
+        if not pool_config:
             await self._record_failure(
                 job,
-                "Shared pool not available or at capacity. Cannot provision Adventurer tier."
+                "Shared pool configuration not found. Cannot provision Adventurer tier."
+            )
+            return
+
+        # Check capacity
+        current = pool_config.get("current_client_count", 0)
+        max_clients = pool_config.get("max_clients", 500)
+        if current >= max_clients:
+            await self._record_failure(
+                job,
+                "Shared pool at capacity. Cannot provision Adventurer tier."
+            )
+            return
+
+        pool_url = pool_config.get("supabase_url")
+        pool_service_key = pool_config.get("supabase_service_role_key")
+        pool_anon_key = pool_config.get("supabase_anon_key", "")
+        pool_project_ref = pool_config.get("supabase_project_ref", "")
+
+        if not pool_url or not pool_service_key:
+            await self._record_failure(
+                job,
+                "Shared pool credentials incomplete (missing URL or service role key)."
             )
             return
 
@@ -335,7 +351,7 @@ class ProvisioningWorker:
         default_api_config = {
             "llm": {
                 "provider": "cerebras",
-                "model": "glm-4-9b-chat",  # GLM 4.6
+                "model": "zai-glm-4.7",  # Cerebras GLM 4.7 (reasoning toggle enabled)
             },
             "stt": {
                 "provider": "cartesia",
@@ -373,22 +389,38 @@ class ProvisioningWorker:
 
         await asyncio.to_thread(_init_usage)
 
-        # Mark client as ready with shared hosting and default config
+        # Mark client as ready with shared pool credentials
         await self._update_client(job.client_id, {
             "tier": "adventurer",
             "hosting_type": "shared",
             "max_sidekicks": 1,
-            "uses_platform_keys": True,  # Use platform API keys by default
+            "uses_platform_keys": True,
             "default_api_config": default_api_config,
-            "supabase_url": None,  # Uses shared pool
-            "supabase_service_role_key": None,
+            "supabase_url": pool_url,
+            "supabase_service_role_key": pool_service_key,
+            "supabase_anon_key": pool_anon_key,
+            "supabase_project_ref": pool_project_ref,
             "provisioning_status": "completed",
             "provisioning_completed_at": datetime.utcnow().isoformat(),
             "provisioning_error": None,
         })
 
+        # Increment pool client count
+        def _increment_pool_count() -> None:
+            try:
+                self.platform_db.table("shared_pool_config").update({
+                    "current_client_count": current + 1,
+                }).eq("id", pool_config["id"]).execute()
+            except Exception as e:
+                logger.warning(f"Failed to increment shared pool client count: {e}")
+
+        await asyncio.to_thread(_increment_pool_count)
+
         await self._delete_job(job.id)
-        logger.info("Client %s provisioning complete (Adventurer tier, shared pool, platform keys)", job.client_id)
+        logger.info(
+            "Client %s provisioning complete (Adventurer tier, shared pool %s, platform keys)",
+            job.client_id, pool_project_ref,
+        )
 
 
 async def provision_client_by_tier(

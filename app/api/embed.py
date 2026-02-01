@@ -400,7 +400,8 @@ async def embed_text_stream(
                 if tools_payload:
                     logger.info(f"[embed-stream] tool slugs: {[t.get('slug') for t in tools_payload]}")
                     agent_context["tools"] = tools_payload
-                trigger_api._apply_tool_prompt_sections(agent_context, tools_payload)
+                tools_config = trigger_api._extract_agent_tools_config(agent)
+                trigger_api._apply_tool_prompt_sections(agent_context, tools_payload, tools_config)
                 agent_context["user_message"] = message
 
                 # Create room and dispatch
@@ -1106,4 +1107,147 @@ async def get_user_overview_api(
         raise
     except Exception as e:
         logger.error(f"Failed to get user overview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/embed/connection-details/{client_id}/{agent_slug}")
+async def get_react_embed_connection_details(
+    client_id: str,
+    agent_slug: str,
+    user_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+):
+    """
+    Get connection details for the React embed popup.
+    This endpoint triggers a voice session and returns the LiveKit connection info
+    along with Supabase credentials needed for citation display.
+
+    This is designed to be called by the React embed's useConnectionDetails hook
+    when NEXT_PUBLIC_CONN_DETAILS_ENDPOINT is configured to point here.
+    """
+    try:
+        import uuid as uuid_module
+        from app.integrations.livekit_client import livekit_manager
+
+        # Generate IDs if not provided
+        effective_user_id = user_id or str(uuid_module.uuid4())
+        effective_conversation_id = conversation_id or str(uuid_module.uuid4())
+        room_name = f"react-embed-{effective_conversation_id[:8]}-{uuid_module.uuid4().hex[:8]}"
+
+        # Get client Supabase credentials for the frontend
+        client_supabase_url, client_supabase_anon_key = await SupabaseCredentialManager.get_frontend_credentials(
+            client_id,
+            allow_platform_ids={"global"},
+        )
+
+        # Get full client credentials for agent context
+        client_creds = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
+        if not client_creds:
+            raise HTTPException(status_code=400, detail="Client Supabase not configured")
+        _, _, client_service_key = client_creds
+
+        # Get agent from client database
+        from supabase import create_client
+        client_sb = create_client(client_supabase_url, client_service_key)
+        agent_result = client_sb.table("agents").select("id, name, slug, enabled, voice_settings, system_prompt").eq("slug", agent_slug).maybe_single().execute()
+
+        if not agent_result.data or not agent_result.data.get("enabled", True):
+            raise HTTPException(status_code=404, detail="Agent not found or disabled")
+
+        agent_data = agent_result.data
+
+        # Get client info
+        client_service = MultitenantClientService()
+        client = await client_service.get_client(client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+        # Initialize LiveKit
+        if not livekit_manager._initialized:
+            await livekit_manager.initialize()
+
+        # Create room and get user token
+        from livekit import api
+
+        # Ensure room exists
+        await trigger_api.ensure_livekit_room_exists(
+            livekit_manager,
+            room_name,
+            agent_name=settings.livekit_agent_name,
+            agent_slug=agent_slug,
+            user_id=effective_user_id,
+            agent_config={
+                "agent_slug": agent_slug,
+                "client_id": client_id,
+                "conversation_id": effective_conversation_id,
+            },
+            enable_agent_dispatch=False,  # We'll dispatch explicitly
+        )
+
+        # Create user token
+        user_token = api.AccessToken(
+            api_key=livekit_manager.api_key,
+            api_secret=livekit_manager.api_secret,
+        ).with_identity(effective_user_id).with_name("user").with_grants(
+            api.VideoGrants(
+                room_join=True,
+                room=room_name,
+                can_publish=True,
+                can_subscribe=True,
+            )
+        ).to_jwt()
+
+        # Build agent context for dispatch
+        agent_service = MultitentAgentService()
+        from uuid import UUID
+        client_uuid = UUID(client_id)
+        api_keys = await agent_service.get_client_api_keys(client_uuid)
+
+        # Create a minimal agent object for dispatch
+        class MinimalAgent:
+            def __init__(self, data):
+                self.id = data.get("id")
+                self.slug = data.get("slug")
+                self.name = data.get("name")
+                self.system_prompt = data.get("system_prompt", "")
+                self.voice_settings = data.get("voice_settings") or {}
+                self.tools_config = {}
+
+        agent = MinimalAgent(agent_data)
+
+        # Dispatch agent job
+        await trigger_api.dispatch_agent_job(
+            livekit_manager=livekit_manager,
+            room_name=room_name,
+            agent=agent,
+            client=client,
+            user_id=effective_user_id,
+            conversation_id=effective_conversation_id,
+            session_id=str(uuid_module.uuid4()),
+            api_keys=api_keys,
+            agent_context={
+                "agent_slug": agent_slug,
+                "client_id": client_id,
+                "conversation_id": effective_conversation_id,
+                "supabase_url": client_supabase_url,
+                "supabase_anon_key": client_supabase_anon_key,
+                "supabase_service_role_key": client_service_key,
+            },
+        )
+
+        # Return connection details in format expected by React embed
+        return {
+            "serverUrl": livekit_manager.url.replace("https://", "wss://").replace("http://", "ws://"),
+            "roomName": room_name,
+            "participantName": "user",
+            "participantToken": user_token,
+            "conversationId": effective_conversation_id,
+            "supabaseUrl": client_supabase_url,
+            "supabaseAnonKey": client_supabase_anon_key,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get React embed connection details: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

@@ -33,6 +33,38 @@ def _normalize_text(value: str) -> str:
     return text
 
 
+def _strip_ssml_tags(text: str) -> str:
+    """
+    Strip Cartesia SSML emotion tags and laughter markers from transcript text.
+
+    These tags are meant for TTS rendering only and should not appear in
+    the displayed transcript.
+
+    Strips:
+    - <emotion value="..." /> (self-closing emotion tags)
+    - <emotion value="...">...</emotion> (wrapping emotion tags, just in case)
+    - [laughter] markers
+    """
+    if not text:
+        return text
+
+    # Strip self-closing emotion tags: <emotion value="..." />
+    text = re.sub(r'<emotion\s+value="[^"]*"\s*/>', '', text)
+
+    # Strip wrapping emotion tags: <emotion value="...">text</emotion>
+    # Just remove the tags, keep the content inside
+    text = re.sub(r'<emotion\s+value="[^"]*">', '', text)
+    text = re.sub(r'</emotion>', '', text)
+
+    # Strip [laughter] markers
+    text = re.sub(r'\[laughter\]', '', text, flags=re.IGNORECASE)
+
+    # Clean up any double spaces left behind
+    text = re.sub(r'  +', ' ', text)
+
+    return text.strip()
+
+
 class SidekickAgent(voice.Agent):
     """
     LiveKit-compliant Agent that injects RAG context at the documented node
@@ -48,12 +80,14 @@ class SidekickAgent(voice.Agent):
         llm=None,
         tts=None,
         vad=None,
+        tools: Optional[List[Any]] = None,
+        chat_ctx=None,  # Initial chat context for conversation history
         context_manager=None,
         user_id: Optional[str] = None,
         client_id: Optional[str] = None,
         agent_config: Optional[Dict[str, Any]] = None,
     ) -> None:
-        super().__init__(instructions=instructions, stt=stt, llm=llm, tts=tts, vad=vad)
+        super().__init__(instructions=instructions, stt=stt, llm=llm, tts=tts, vad=vad, tools=tools, chat_ctx=chat_ctx)
         self._context_manager = context_manager
         self._user_id = user_id
         self._client_id = client_id
@@ -67,6 +101,14 @@ class SidekickAgent(voice.Agent):
         
         # Feature flag for citations (can be configured per agent)
         self._citations_enabled = self._agent_config.get('show_citations', True)
+        # Wizard mode flag - skip RAG processing entirely
+        self._is_wizard_mode = self._agent_config.get('is_wizard_mode', False)
+
+        # GLM reasoning toggle - disabled by default for fast voice responses
+        # When using GLM-4.7 models, reasoning can be enabled on-demand for complex tasks
+        self._reasoning_enabled: bool = False
+        self._is_glm_model: bool = False
+        self._glm_model_name: str = ""
         
         # Transcript tracking
         self._current_user_transcript = ""
@@ -77,6 +119,9 @@ class SidekickAgent(voice.Agent):
         self._client_conversation_id = None
         self._agent_id = None
         self._current_turn_id: Optional[str] = None
+        # Separate user turn tracking to persist across pauses until assistant completes
+        # This allows user speech chunks to be merged even if user pauses mid-sentence
+        self._user_turn_id: Optional[str] = None
         self._latest_tool_results: List[Dict[str, Any]] = []
         # Strategy: store final assistant transcript once per turn via session events
         self._suppress_on_assistant_transcript = True
@@ -99,6 +144,19 @@ class SidekickAgent(voice.Agent):
         """Enable text-only mode response capture."""
         self._text_mode_enabled = True
         self._text_response_collector = collector
+
+    def configure_for_glm_model(self, model_name: str) -> None:
+        """
+        Configure agent for GLM model with dynamic reasoning toggle.
+
+        GLM-4.7 supports a reasoning mode that can be enabled/disabled per request.
+        By default, reasoning is DISABLED for fast voice responses.
+        The agent can enable reasoning on-demand for complex tasks via a system tool.
+        """
+        self._is_glm_model = True
+        self._glm_model_name = model_name
+        self._reasoning_enabled = False  # Default: fast responses for voice chat
+        logger.info(f"🧠 GLM model configured ({model_name}), reasoning disabled by default for fast voice responses")
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
@@ -245,21 +303,24 @@ class SidekickAgent(voice.Agent):
             except Exception:
                 session_last = None
 
-            committed_candidates: List[str] = []
-            if session_last:
-                committed_candidates.append(session_last)
-            if self._last_committed_text:
-                committed_candidates.append(self._last_committed_text)
+            # Only use committed_candidates as fallback if we don't have text from new_message
+            # This prevents old turn's text from overriding new turn's message
+            if not user_text:
+                committed_candidates: List[str] = []
+                if session_last:
+                    committed_candidates.append(session_last)
+                if self._last_committed_text:
+                    committed_candidates.append(self._last_committed_text)
 
-            if committed_candidates:
-                best_candidate = max(committed_candidates, key=len)
-                if not user_text or len(best_candidate) > len(user_text):
+                if committed_candidates:
+                    best_candidate = max(committed_candidates, key=len)
                     user_text = best_candidate
+                    logger.info(f"DEBUG: Using committed candidate as fallback: {user_text[:100]}")
                     try:
                         if hasattr(new_message, "content") and isinstance(best_candidate, str):
-                            new_message.content = best_candidate
+                            new_message.content = [best_candidate]
                     except Exception:
-                        logger.debug("Unable to overwrite new_message.content with committed candidate")
+                        logger.debug("Unable to set new_message.content from committed candidate")
 
             if not user_text:
                 # Try to read latest text captured on session or agent (populated by event handler)
@@ -311,15 +372,23 @@ class SidekickAgent(voice.Agent):
                 logger.info("on_user_turn_completed: context manager not available; skipping RAG injection")
                 return
 
+            # WIZARD MODE: Skip all RAG processing - wizard has no documents
+            if self._is_wizard_mode:
+                logger.info("🧙 on_user_turn_completed: wizard mode - skipping RAG injection entirely")
+                return
+
             # Perform RAG retrieval with citations if enabled
-            # NO FALLBACK POLICY: If RAG retrieval fails, we fail the request rather than hallucinating
+            # Empty RAG context is acceptable for conversational queries that don't match documents
+            logger.info(f"📚 [RAG-CHECK] citations_enabled={self._citations_enabled}, client_id={bool(self._client_id)}")
             if self._citations_enabled and self._client_id:
+                logger.info(f"📚 [RAG-CHECK] Starting RAG retrieval for: '{user_text[:50]}...'")
                 await self._retrieve_with_citations(user_text)
+                logger.info(f"📚 [RAG-CHECK] RAG retrieval complete: {len(self._current_citations)} citations retrieved")
                 # Check if we got any RAG context
                 rag_context = getattr(self, "_current_rag_context", "") or ""
                 if not rag_context:
-                    logger.error("❌ RAG context retrieval returned empty - NO FALLBACK POLICY prevents hallucination")
-                    raise ValueError("RAG context retrieval failed - empty context returned. Check document indexing and embeddings.")
+                    # Empty context is OK for conversational queries - agent can respond without RAG
+                    logger.info("📚 RAG context retrieval returned empty - continuing without document context (conversational query)")
 
             logger.info("on_user_turn_completed: building RAG context for current turn")
             # Skip knowledge RAG if citations_service already did it (avoid duplicate searches)
@@ -345,13 +414,13 @@ class SidekickAgent(voice.Agent):
                 )
                 logger.info("✅ RAG context injected into turn_ctx for this turn")
             else:
-                # NO FALLBACK POLICY: If no enhanced prompt is available, this is a critical error
-                logger.error("❌ on_user_turn_completed: no enhanced prompt returned - NO FALLBACK POLICY prevents hallucination")
-                raise ValueError("RAG context building failed - no enhanced prompt returned. Check RAG configuration.")
+                # No enhanced prompt - this is OK for conversational queries
+                # The agent can respond using just its system prompt without RAG context
+                logger.info("📚 No enhanced prompt returned - continuing with base system prompt (conversational query)")
         except Exception as e:
-            # NO FALLBACK POLICY: Let RAG errors propagate up rather than silently continuing
-            logger.error(f"❌ on_user_turn_completed: RAG processing failed - NO FALLBACK POLICY: {type(e).__name__}: {e}")
-            raise  # Re-raise the exception to prevent hallucinated responses
+            # Log RAG errors but continue - agent can still respond conversationally
+            logger.warning(f"⚠️ on_user_turn_completed: RAG processing issue: {type(e).__name__}: {e}")
+            # Don't re-raise - allow the agent to continue and respond without RAG context
 
     async def _retrieve_with_citations(self, user_text: str) -> None:
         """
@@ -401,7 +470,7 @@ class SidekickAgent(voice.Agent):
                 logger.info("No agent_slug configured for citations")
                 return
             
-            # Collect dataset constraints if provided for this agent
+            # Collect optional dataset constraints (deprecated — match_documents uses agent_slug)
             dataset_ids = []
             try:
                 if isinstance(self._agent_config, dict) and self._agent_config.get('dataset_ids'):
@@ -467,6 +536,11 @@ class SidekickAgent(voice.Agent):
                 max_docs = rag_results_limit
 
             # Perform RAG retrieval with citations
+            # Determine hosting type for shared pool tenant isolation
+            hosting_type = None
+            if isinstance(self._agent_config, dict):
+                hosting_type = self._agent_config.get("hosting_type")
+
             result = await rag_citations_service.retrieve_with_citations(
                 query=user_text,
                 client_id=self._client_id,
@@ -482,6 +556,7 @@ class SidekickAgent(voice.Agent):
                 rerank_provider=rerank_provider,
                 rerank_model=rerank_model,
                 api_keys=api_keys,
+                hosting_type=hosting_type,
             )
             
             # Store RAG context for LLM injection (this is the actual document content)
@@ -539,13 +614,62 @@ class SidekickAgent(voice.Agent):
         return self._current_message_id
 
     # ------------------------------------------------------------------
-    # LLM output capture for markdown-preserved transcripts
+    # LLM node override for GLM reasoning toggle
     # ------------------------------------------------------------------
 
-    # NOTE: llm_node override disabled - was causing pipeline issues
-    # The _enhance_text_for_display function will work on the accumulated TTS text instead
-    # def llm_node(self, chat_ctx, tools, model_settings):
-    #     ... disabled ...
+    async def llm_node(
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: List[Any],
+        model_settings: Any
+    ) -> AsyncIterable[llm.ChatChunk]:
+        """
+        Override llm_node to inject disable_reasoning parameter for GLM models.
+
+        When using GLM-4.7, we pass `disable_reasoning: True/False` via extra_body
+        to control whether the model uses its extended reasoning capabilities.
+        Reasoning is disabled by default for fast voice responses.
+
+        This follows LiveKit's activity pattern for proper integration.
+        """
+        from livekit.agents.voice import Agent as BaseAgent
+        from livekit.agents import NOT_GIVEN
+
+        # For non-GLM models, use the default implementation
+        if not self._is_glm_model:
+            async for chunk in BaseAgent.default.llm_node(self, chat_ctx, tools, model_settings):
+                yield chunk
+            return
+
+        # For GLM models, inject the disable_reasoning parameter
+        # Build extra_kwargs with reasoning toggle
+        extra_body = {"disable_reasoning": not self._reasoning_enabled}
+
+        if self._reasoning_enabled:
+            logger.info(f"🧠 GLM: Reasoning ENABLED for this request (model: {self._glm_model_name})")
+        else:
+            logger.info(f"🧠 GLM: Reasoning DISABLED for fast response (model: {self._glm_model_name})")
+
+        # Use LiveKit's activity pattern for proper integration
+        try:
+            activity = self._get_activity_or_raise()
+            assert activity.llm is not None, "llm_node called but no LLM is available"
+
+            tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
+            conn_options = activity.session.conn_options.llm_conn_options
+
+            async with activity.llm.chat(
+                chat_ctx=chat_ctx,
+                tools=tools,
+                tool_choice=tool_choice,
+                conn_options=conn_options,
+                extra_kwargs={"extra_body": extra_body},
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
+        except Exception as e:
+            logger.error(f"🧠 GLM llm_node error: {e}")
+            raise
 
     # ------------------------------------------------------------------
     # Text formatting for display
@@ -558,6 +682,7 @@ class SidekickAgent(voice.Agent):
         Applies formatting progressively as text streams in.
 
         Key formatting:
+        - Strip malformed tool calls that LLMs sometimes output inline
         - Double line breaks between paragraphs (every 2 sentences)
         - Bold for key terms and transition words
         - Proper list formatting
@@ -566,6 +691,19 @@ class SidekickAgent(voice.Agent):
             return text
 
         enhanced = text
+
+        # Strip malformed tool call text that some LLMs output inline
+        # Pattern: "tool_call: function_name: xxx arguments: yyy response_id: zzz"
+        enhanced = re.sub(
+            r"tool_call:\s*function_name:\s*\S+\s*arguments:\s*[^T]*?response_id:\s*\S+",
+            "",
+            enhanced,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        # Also strip variations like "tool_call: {...}" JSON format
+        enhanced = re.sub(r"tool_call:\s*\{[^}]+\}", "", enhanced, flags=re.IGNORECASE)
+        # Strip "function_call:" patterns as well
+        enhanced = re.sub(r"function_call:\s*\{[^}]+\}", "", enhanced, flags=re.IGNORECASE)
 
         # Normalize multiple spaces to single space
         enhanced = re.sub(r'  +', ' ', enhanced)
@@ -670,9 +808,35 @@ class SidekickAgent(voice.Agent):
 
     @staticmethod
     def _sanitize_tts_text(text: str) -> str:
-        """Remove Markdown asterisks so TTS engines don't verbalize them."""
+        """Remove Markdown asterisks and malformed tool calls so TTS engines don't verbalize them."""
         if not text:
             return text
+
+        # Strip malformed tool call text that some LLMs output inline
+        # Pattern: "tool_call: function_name: xxx arguments: yyy response_id: zzz"
+        # This can appear when LLMs don't properly use tool calling API
+        text = re.sub(
+            r"tool_call:\s*function_name:\s*\S+\s*arguments:\s*[^T]*?response_id:\s*\S+",
+            "",
+            text,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+
+        # Also strip variations like "tool_call: {...}" JSON format
+        text = re.sub(
+            r"tool_call:\s*\{[^}]+\}",
+            "",
+            text,
+            flags=re.IGNORECASE
+        )
+
+        # Strip "function_call:" patterns as well
+        text = re.sub(
+            r"function_call:\s*\{[^}]+\}",
+            "",
+            text,
+            flags=re.IGNORECASE
+        )
 
         # Collapse Markdown emphasis markers while keeping the inner content
         # Note: Use r"\1" (single backslash) for proper backreference, not r"\\1"
@@ -723,13 +887,14 @@ class SidekickAgent(voice.Agent):
                        len(self._streaming_transcript_text))
             self._streaming_transcript_text = ""
 
-        # IMPORTANT: Reset the user turn_id when assistant starts a new response
-        # This ensures that any subsequent user interruption gets a NEW turn_id
-        # instead of being merged with the previous user utterance
+        # NOTE: We NO LONGER reset _current_turn_id here.
+        # The user turn_id should persist until the assistant COMPLETES their response.
+        # This allows user speech chunks to be merged even if the user pauses mid-sentence
+        # and the assistant starts responding before the user finishes.
+        # The _user_turn_id is reset in agent_speech_committed handler (when turn truly ends).
         if self._current_turn_id:
-            logger.info("📝 transcription_node: Resetting user turn_id (was %s) for new conversation turn",
+            logger.info("📝 transcription_node: Preserving user turn_id=%s (will reset after assistant completes)",
                        self._current_turn_id[:8] if self._current_turn_id else None)
-            self._current_turn_id = None
 
         accumulated_text = ""
 
@@ -756,9 +921,10 @@ class SidekickAgent(voice.Agent):
 
                     if not self._streaming_transcript_row_id:
                         # First chunk: INSERT a new row
-                        # Generate turn_id once and store it for deduplication
+                        # Use _user_turn_id to link assistant response to user utterance
+                        # This ensures the UI can group user + assistant in the same turn
                         if not self._current_turn_id:
-                            self._current_turn_id = str(uuid.uuid4())
+                            self._current_turn_id = self._user_turn_id or str(uuid.uuid4())
 
                         # Ensure conversation record exists before first INSERT (FK constraint)
                         try:
@@ -779,12 +945,29 @@ class SidekickAgent(voice.Agent):
                                     "created_at": timestamp,
                                     "updated_at": timestamp,
                                 }
-                                await asyncio.to_thread(
-                                    lambda: self._supabase_client
-                                        .table("conversations")
-                                        .insert(conv_payload)
-                                        .execute()
-                                )
+                                if self._client_id:
+                                    conv_payload["client_id"] = self._client_id
+                                # Try INSERT with fallback for dedicated tenant schemas (no client_id column)
+                                try:
+                                    await asyncio.to_thread(
+                                        lambda: self._supabase_client
+                                            .table("conversations")
+                                            .insert(conv_payload)
+                                            .execute()
+                                    )
+                                except Exception as conv_insert_exc:
+                                    # If insert failed due to client_id column, retry without it
+                                    if self._client_id and ("client_id" in str(conv_insert_exc).lower() or "column" in str(conv_insert_exc).lower()):
+                                        logger.info(f"📝 Retrying conversation insert without client_id (dedicated tenant schema)")
+                                        conv_payload.pop("client_id", None)
+                                        await asyncio.to_thread(
+                                            lambda: self._supabase_client
+                                                .table("conversations")
+                                                .insert(conv_payload)
+                                                .execute()
+                                        )
+                                    else:
+                                        raise
                                 logger.info(f"📝 Created conversation record: {self._conversation_id[:8]}")
                         except Exception as conv_err:
                             logger.warning(f"📝 Failed to ensure conversation exists: {conv_err}")
@@ -806,13 +989,32 @@ class SidekickAgent(voice.Agent):
                             "metadata": {}
                         }
 
+                        # Add client_id for multi-tenant schemas
+                        if self._client_id:
+                            row["client_id"] = self._client_id
+
                         # Add citations if available
                         if self._current_citations:
                             row["citations"] = self._current_citations
+                            logger.info(f"📚 [CITATION-INSERT] Adding {len(self._current_citations)} citations to streaming INSERT")
+                        else:
+                            logger.info(f"📚 [CITATION-INSERT] No citations available for streaming INSERT (citations_enabled={self._citations_enabled})")
 
-                        result = await asyncio.to_thread(
-                            lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
-                        )
+                        # Try INSERT with fallback for dedicated tenant schemas (no client_id column)
+                        try:
+                            result = await asyncio.to_thread(
+                                lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
+                            )
+                        except Exception as insert_exc:
+                            # If insert failed due to client_id column, retry without it (dedicated tenant schema)
+                            if self._client_id and ("client_id" in str(insert_exc).lower() or "column" in str(insert_exc).lower()):
+                                logger.info(f"📝 Retrying streaming transcript insert without client_id (dedicated tenant schema)")
+                                row.pop("client_id", None)
+                                result = await asyncio.to_thread(
+                                    lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
+                                )
+                            else:
+                                raise
 
                         if result.data and len(result.data) > 0:
                             self._streaming_transcript_row_id = result.data[0].get("id")
@@ -937,7 +1139,9 @@ class SidekickAgent(voice.Agent):
                     tool_results=tool_results,
                 )
                 logger.info(f"📝 Stored assistant transcript with {len(citations) if citations else 0} citations")
+                # Reset both turn IDs when assistant transcript is stored - marks turn boundary
                 self._current_turn_id = None
+                self._user_turn_id = None
         except Exception as e:
             logger.error(f"Failed to store assistant transcript: {e}")
     
@@ -1047,6 +1251,14 @@ class SidekickAgent(voice.Agent):
             if client_conversation_id:
                 row_metadata.setdefault("client_context", {})["conversation_id"] = client_conversation_id
 
+            # Strip SSML tags from assistant transcripts (emotion tags, laughter markers)
+            # These are meant for TTS only and should not appear in stored/displayed text
+            display_content = content
+            if role == "assistant" and content:
+                display_content = _strip_ssml_tags(content)
+                if display_content != content:
+                    logger.debug(f"Stripped SSML tags from transcript: {len(content)} -> {len(display_content)} chars")
+
             row = {
                 "conversation_id": self._conversation_id,
                 "agent_id": self._agent_id or self._agent_config.get('id'),
@@ -1054,8 +1266,8 @@ class SidekickAgent(voice.Agent):
                 # Generate a stable session_id per conversation to satisfy NOT NULL constraint
                 "session_id": str(self._conversation_id),
                 "role": role,
-                "content": content,
-                "transcript": content,
+                "content": display_content,
+                "transcript": display_content,
                 "created_at": ts,
                 "source": "voice",  # Mark as voice transcript for SSE filtering
             }
@@ -1070,6 +1282,9 @@ class SidekickAgent(voice.Agent):
             # Add citations if available (for assistant role)
             if role == "assistant" and citations:
                 row["citations"] = citations
+                logger.info(f"📚 [CITATION-STORE] Adding {len(citations)} citations to {role} transcript")
+            elif role == "assistant":
+                logger.info(f"📚 [CITATION-STORE] No citations provided for {role} transcript")
             
             # Optional sequencing and turn grouping
             if sequence is not None:
@@ -1135,7 +1350,16 @@ class SidekickAgent(voice.Agent):
                         .execute()
                     )
 
-                result = await asyncio.to_thread(_update)
+                try:
+                    result = await asyncio.to_thread(_update)
+                except Exception as update_exc:
+                    # If update failed due to client_id column, retry without it (dedicated tenant schema)
+                    if self._client_id and ("client_id" in str(update_exc).lower() or "column" in str(update_exc).lower()):
+                        logger.info(f"Retrying transcript update without client_id (dedicated tenant schema)")
+                        update_payload.pop("client_id", None)
+                        result = await asyncio.to_thread(_update)
+                    else:
+                        raise
                 logger.info(f"🔄 Updated existing {role} transcript for turn_id={turn_id}")
             else:
                 def _insert():
@@ -1194,9 +1418,22 @@ class SidekickAgent(voice.Agent):
             if role == "assistant":
                 tool_results = getattr(self, "_latest_tool_results", None) or None
                 self._latest_tool_results = []
-            if role == "user" and not self._current_turn_id:
-                self._current_turn_id = str(uuid.uuid4())
-            turn_id = self._current_turn_id or str(uuid.uuid4())
+
+            # Use persistent _user_turn_id for user messages to handle pause-mid-sentence
+            # This ensures user speech chunks are merged even if user pauses and assistant starts responding
+            if role == "user":
+                if not self._user_turn_id:
+                    self._user_turn_id = str(uuid.uuid4())
+                    # CRITICAL: Also set _current_turn_id so assistant response uses the same turn_id
+                    # This links the user question with the assistant's response in the UI
+                    self._current_turn_id = self._user_turn_id
+                    logger.info(f"📝 Generated new user_turn_id: {self._user_turn_id[:8]} (also set as current_turn_id)")
+                turn_id = self._user_turn_id
+            else:
+                # For assistant, use the current user's turn_id to link them together
+                if not self._current_turn_id:
+                    self._current_turn_id = self._user_turn_id or str(uuid.uuid4())
+                turn_id = self._current_turn_id
             await self._store_transcript(
                 role=role,
                 content=content,
@@ -1214,6 +1451,10 @@ class SidekickAgent(voice.Agent):
                 except Exception as collector_err:
                     logger.debug(f"Text response collector commit failed: {collector_err}")
             if role == "assistant":
+                # Reset both turn IDs when assistant completes - this marks the true turn boundary
+                # Any subsequent user speech will get a new turn_id
+                logger.info(f"📝 Resetting turn IDs after assistant completion (user_turn_id={self._user_turn_id[:8] if self._user_turn_id else None})")
                 self._current_turn_id = None
+                self._user_turn_id = None
         except Exception as e:
             logger.error(f"store_transcript failed: {e}")

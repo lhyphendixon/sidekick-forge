@@ -54,7 +54,7 @@
                                                 </div>
                                                 <div>
                                                     <span class="text-white font-semibold">Adventurer</span>
-                                                    <p class="text-gray-500 text-sm">1 Sidekick, Text & Voice</p>
+                                                    <p class="text-gray-500 text-sm">1 Sidekick, 400 min voice/mo, unlimited text</p>
                                                 </div>
                                             </div>
                                             <span class="text-white font-bold">$49/mo</span>
@@ -79,7 +79,7 @@
                                                 </div>
                                                 <div>
                                                     <span class="text-white font-semibold">Champion</span>
-                                                    <p class="text-gray-500 text-sm">Unlimited Sidekicks, Video Chat</p>
+                                                    <p class="text-gray-500 text-sm">5 Sidekicks, 2,000 min voice & video/mo, unlimited text</p>
                                                 </div>
                                             </div>
                                             <span class="text-white font-bold">$199/mo</span>
@@ -159,6 +159,21 @@
                             <p class="text-gray-500 text-sm mt-2">Password must be at least 8 characters long.</p>
                         </div>
 
+                        <!-- Coupon Code -->
+                        <div class="border-t border-white/10 pt-6">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Coupon Code</label>
+                            <div class="flex gap-2">
+                                <input type="text" name="coupon_code" id="coupon-code"
+                                       class="flex-1 bg-black/30 border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent uppercase"
+                                       placeholder="Enter coupon code">
+                                <button type="button" id="apply-coupon-btn"
+                                        class="px-4 py-3 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium transition">
+                                    Apply
+                                </button>
+                            </div>
+                            <div id="coupon-result" class="mt-2"></div>
+                        </div>
+
                         <!-- Secure Payment Notice -->
                         <div class="border-t border-white/10 pt-6">
                             <div class="flex items-center gap-3 mb-4">
@@ -216,6 +231,10 @@
                             <span class="text-gray-400">Subtotal</span>
                             <span class="text-white" x-text="tierPrice"></span>
                         </div>
+                        <div id="discount-row" class="hidden flex justify-between items-center mt-2">
+                            <span class="text-green-400">Discount</span>
+                            <span id="discount-amount" class="text-green-400">-$0</span>
+                        </div>
                         <div class="flex justify-between items-center mt-2">
                             <span class="text-gray-400">Tax</span>
                             <span class="text-gray-400">Calculated at billing</span>
@@ -225,9 +244,9 @@
                     <div class="border-t border-white/10 pt-4">
                         <div class="flex justify-between items-center">
                             <span class="text-white font-semibold">Due Today</span>
-                            <span class="text-2xl font-bold text-white" x-text="tierPrice"></span>
+                            <span id="due-today" class="text-2xl font-bold text-white" x-text="tierPrice"></span>
                         </div>
-                        <p class="text-gray-500 text-sm mt-2">
+                        <p id="recurring-text" class="text-gray-500 text-sm mt-2">
                             Then <span x-text="tierPrice"></span>/month
                         </p>
                     </div>
@@ -242,7 +261,11 @@
                             </li>
                             <li class="flex items-center gap-2 text-gray-400">
                                 <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
-                                Text & Voice Chat
+                                Unlimited Text Chat
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                400 min Voice Chat/month
                             </li>
                             <li class="flex items-center gap-2 text-gray-400">
                                 <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
@@ -250,17 +273,21 @@
                             </li>
                             <li class="flex items-center gap-2 text-gray-400">
                                 <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
-                                Embeddable Widget
+                                BYOK Option Available
                             </li>
                         </ul>
                         <ul class="space-y-2 text-sm" x-show="tier === 'champion'">
                             <li class="flex items-center gap-2 text-gray-400">
                                 <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
-                                Unlimited AI Sidekicks
+                                5 AI Sidekicks
                             </li>
                             <li class="flex items-center gap-2 text-gray-400">
                                 <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
-                                Text, Voice & Video Chat
+                                Unlimited Text Chat
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                2,000 min Voice & Video/month
                             </li>
                             <li class="flex items-center gap-2 text-gray-400">
                                 <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
@@ -268,11 +295,7 @@
                             </li>
                             <li class="flex items-center gap-2 text-gray-400">
                                 <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
-                                Dedicated Infrastructure
-                            </li>
-                            <li class="flex items-center gap-2 text-gray-400">
-                                <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
-                                Priority Support
+                                BYOK Option Available
                             </li>
                         </ul>
                         <ul class="space-y-2 text-sm" x-show="tier === 'paragon'">
@@ -314,6 +337,16 @@
 </section>
 
 <script>
+// Coupon state
+let appliedCoupon = null;
+let discountPercent = 0;
+
+const tierPricesNumeric = {
+    'adventurer': 49,
+    'champion': 199,
+    'paragon': 0
+};
+
 function orderSummary() {
     return {
         tier: '{{ selected_tier or "champion" }}',
@@ -338,11 +371,102 @@ function orderSummary() {
             document.querySelectorAll('input[name="tier"]').forEach(radio => {
                 radio.addEventListener('change', (e) => {
                     this.tier = e.target.value;
+                    updatePriceDisplay();
                 });
             });
         }
     };
 }
+
+function updatePriceDisplay() {
+    const tier = document.querySelector('input[name="tier"]:checked')?.value || 'champion';
+    const basePrice = tierPricesNumeric[tier] || 199;
+    const discount = Math.round(basePrice * discountPercent / 100);
+    const finalPrice = basePrice - discount;
+
+    const discountRow = document.getElementById('discount-row');
+    const discountAmount = document.getElementById('discount-amount');
+    const dueToday = document.getElementById('due-today');
+    const recurringText = document.getElementById('recurring-text');
+    const buttonText = document.getElementById('button-text');
+
+    if (discountPercent > 0 && tier !== 'paragon') {
+        discountRow.classList.remove('hidden');
+        discountRow.classList.add('flex');
+        discountAmount.textContent = `-$${discount}`;
+        dueToday.textContent = finalPrice === 0 ? 'FREE' : `$${finalPrice}`;
+
+        if (discountPercent === 100) {
+            recurringText.innerHTML = '<span class="text-green-400">First month free!</span>';
+            buttonText.textContent = 'Complete Free Checkout';
+        } else {
+            recurringText.innerHTML = `Then $${basePrice}/month`;
+            buttonText.textContent = 'Continue to Payment';
+        }
+    } else {
+        discountRow.classList.add('hidden');
+        discountRow.classList.remove('flex');
+        dueToday.textContent = tier === 'paragon' ? 'Custom' : `$${basePrice}`;
+        recurringText.innerHTML = `Then $${basePrice}/month`;
+        buttonText.textContent = 'Continue to Payment';
+    }
+}
+
+// Coupon validation
+document.getElementById('apply-coupon-btn').addEventListener('click', async function() {
+    const couponInput = document.getElementById('coupon-code');
+    const couponResult = document.getElementById('coupon-result');
+    const couponCode = couponInput.value.trim().toUpperCase();
+
+    if (!couponCode) {
+        couponResult.innerHTML = `
+            <p class="text-yellow-400 text-sm">Please enter a coupon code.</p>
+        `;
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/coupon/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coupon_code: couponCode })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.valid) {
+            appliedCoupon = couponCode;
+            discountPercent = data.discount_percent;
+            couponInput.value = couponCode;
+            couponInput.disabled = true;
+            document.getElementById('apply-coupon-btn').disabled = true;
+            document.getElementById('apply-coupon-btn').textContent = 'Applied';
+
+            couponResult.innerHTML = `
+                <div class="flex items-center gap-2 text-green-400 text-sm">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                    </svg>
+                    ${data.message || `${data.discount_percent}% discount applied!`}
+                </div>
+            `;
+
+            updatePriceDisplay();
+        } else {
+            appliedCoupon = null;
+            discountPercent = 0;
+            couponResult.innerHTML = `
+                <p class="text-red-400 text-sm">${data.error || 'Invalid coupon code.'}</p>
+            `;
+            updatePriceDisplay();
+        }
+    } catch (error) {
+        console.error('Coupon validation error:', error);
+        couponResult.innerHTML = `
+            <p class="text-red-400 text-sm">Failed to validate coupon. Please try again.</p>
+        `;
+    }
+});
 
 // Stripe Checkout Integration
 document.getElementById('checkout-form').addEventListener('submit', async function(e) {
@@ -357,6 +481,11 @@ document.getElementById('checkout-form').addEventListener('submit', async functi
     // Get form data
     const formData = new FormData(form);
     const tier = formData.get('tier');
+
+    // Add coupon if applied
+    if (appliedCoupon) {
+        formData.set('coupon_code', appliedCoupon);
+    }
 
     // Handle Paragon tier (contact sales)
     if (tier === 'paragon') {
@@ -391,32 +520,44 @@ document.getElementById('checkout-form').addEventListener('submit', async functi
     // Show loading state
     button.disabled = true;
     spinner.classList.remove('hidden');
-    buttonText.textContent = 'Redirecting to payment...';
+
+    // Check if this is a free checkout (100% discount)
+    const isFreeCheckout = discountPercent === 100;
+    buttonText.textContent = isFreeCheckout ? 'Creating your account...' : 'Redirecting to payment...';
     resultDiv.innerHTML = '';
 
     try {
-        // Create Stripe checkout session
-        const response = await fetch('/api/stripe/create-checkout-session', {
+        // Use different endpoint for free checkout
+        const endpoint = isFreeCheckout ? '/api/checkout/free' : '/api/stripe/create-checkout-session';
+
+        const response = await fetch(endpoint, {
             method: 'POST',
             body: formData
         });
 
         const data = await response.json();
 
-        if (response.ok && data.checkout_url) {
-            // Redirect to Stripe Checkout
-            window.location.href = data.checkout_url;
+        if (response.ok) {
+            if (isFreeCheckout && data.success) {
+                // Free checkout successful - redirect to success page
+                window.location.href = data.redirect_url || '/checkout/success?free=true';
+            } else if (data.checkout_url) {
+                // Redirect to Stripe Checkout
+                window.location.href = data.checkout_url;
+            } else {
+                throw new Error('Unexpected response');
+            }
         } else {
             // Show error
             resultDiv.innerHTML = `
                 <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
                     <p class="text-red-400 font-medium">Error</p>
-                    <p class="text-red-300 text-sm mt-2">${data.error || 'Failed to create checkout session. Please try again.'}</p>
+                    <p class="text-red-300 text-sm mt-2">${data.error || 'Failed to process checkout. Please try again.'}</p>
                 </div>
             `;
             button.disabled = false;
             spinner.classList.add('hidden');
-            buttonText.textContent = 'Continue to Payment';
+            buttonText.textContent = isFreeCheckout ? 'Complete Free Checkout' : 'Continue to Payment';
         }
     } catch (error) {
         console.error('Checkout error:', error);
@@ -428,7 +569,7 @@ document.getElementById('checkout-form').addEventListener('submit', async functi
         `;
         button.disabled = false;
         spinner.classList.add('hidden');
-        buttonText.textContent = 'Continue to Payment';
+        buttonText.textContent = isFreeCheckout ? 'Complete Free Checkout' : 'Continue to Payment';
     }
 });
 </script>

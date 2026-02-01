@@ -1,170 +1,534 @@
 {% extends "marketing/base.html" %}
 
-{% block title %}Sidekick Forge - AI-Powered Sidekicks for Your Business{% endblock %}
+{% block title %}Sidekick Forge - Craft Enchanting AI Companions{% endblock %}
 
-{% block meta_description %}Deploy intelligent AI sidekicks that engage your customers through voice, text, and video. From solo entrepreneurs to enterprise teams, forge your perfect AI companion.{% endblock %}
+{% block meta_description %}Craft AI companions with personality and purpose. Sidekick Forge helps entrepreneurs and creators build AI sidekicks that remember your context, share your values, and walk with you on your journey.{% endblock %}
 
 {% block content %}
 <!-- Hero Section -->
 <section class="relative py-24 md:py-36">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="text-center">
-            <!-- Badge -->
-            <div class="inline-flex items-center space-x-2 glass-surface rounded-full px-4 py-2 mb-8">
-                <span class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-                <span class="text-gray-300 text-sm font-medium">Now Accepting New Clients</span>
-            </div>
-
             <!-- Headline -->
             <h1 class="text-5xl md:text-7xl font-bold text-white mb-6 leading-tight">
-                Forge Your <br />
-                <span class="gradient-text">AI Sidekick</span>
+                Craft Enchanting <span class="gradient-text">AI Companions</span><br />
+                for the Journey Ahead
             </h1>
 
             <!-- Subheadline -->
-            <p class="text-xl md:text-2xl text-gray-400 mb-10 max-w-3xl mx-auto leading-relaxed">
-                Deploy intelligent AI companions that engage your audience through
-                <span class="text-white">voice</span>, <span class="text-white">text</span>, and
-                <span class="text-white">video</span>. Trained on your knowledge, speaking in your voice.
+            <p class="text-xl text-gray-400 mb-10 max-w-3xl mx-auto leading-relaxed">
+                Sidekick Forge helps you craft AI companions with personality and purpose—so your own journey becomes more engaging, more expressive, and more empowering than any story you consume.
             </p>
 
-            <!-- CTAs -->
-            <div class="flex flex-col sm:flex-row justify-center items-center space-y-4 sm:space-y-0 sm:space-x-4 mb-16">
-                <a href="/signup"
-                   class="w-full sm:w-auto bg-gradient-to-r from-blue-500 to-cyan-400 hover:from-blue-600 hover:to-cyan-500 text-white px-8 py-4 rounded-lg font-semibold text-lg transition shadow-lg shadow-blue-500/25">
-                    Start Building
+            <!-- CTA -->
+            <div class="flex justify-center mb-16">
+                <a href="/checkout"
+                   class="bg-gradient-to-r from-tier-champion to-[#ff9066] hover:from-[#e85a2f] hover:to-tier-champion text-white px-8 py-4 rounded-lg font-semibold text-lg transition shadow-lg shadow-tier-champion/25">
+                    Start Crafting Your Companion
                 </a>
-                <a href="/pricing"
-                   class="w-full sm:w-auto glass-surface text-white hover:bg-white/10 px-8 py-4 rounded-lg font-semibold text-lg transition">
-                    View Pricing
-                </a>
-            </div>
-
-            <!-- Social Proof -->
-            <div class="flex flex-wrap items-center justify-center gap-6 text-gray-500 text-sm">
-                <div class="flex items-center gap-2">
-                    <svg class="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                    </svg>
-                    <span>Voice & Video Chat</span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <svg class="w-5 h-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                    </svg>
-                    <span>Knowledge Base RAG</span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <svg class="w-5 h-5 text-purple-400" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                    </svg>
-                    <span>Embeddable Widget</span>
-                </div>
             </div>
         </div>
     </div>
 </section>
 
-<!-- Communication Modes -->
+<!-- Stop Using Boring Bots -->
 <section class="py-24">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="text-center mb-16">
-            <h2 class="text-4xl md:text-5xl font-bold text-white mb-4">
-                Every Way to <span class="gradient-text">Connect</span>
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-12">
+            <h2 class="text-3xl md:text-4xl font-bold text-white mb-2">
+                Stop using boring, corporate bots.
             </h2>
-            <p class="text-xl text-gray-400 max-w-2xl mx-auto">
-                Your sidekick meets your customers where they are, through the channel they prefer.
+            <h2 class="text-3xl md:text-4xl font-bold text-white">
+                Forge AI assistants with <span class="gradient-text">character</span>.
+            </h2>
+        </div>
+
+        <div class="glass-container rounded-2xl p-8 md:p-12">
+            <p class="text-xl text-gray-400 mb-8 text-center">
+                Most AI tools are generic, forgetful, and boring.
+            </p>
+            <p class="text-lg text-gray-300 mb-6 text-center">
+                Sidekick Forge lets you create AI companions that:
+            </p>
+            <ul class="space-y-4 max-w-xl mx-auto mb-8">
+                <li class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-champion flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                    </svg>
+                    Remember your context
+                </li>
+                <li class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-champion flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                    </svg>
+                    Share your values
+                </li>
+                <li class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-champion flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                    </svg>
+                    Speak in a consistent voice
+                </li>
+                <li class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-champion flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                    </svg>
+                    Think in ways that complement your own
+                </li>
+            </ul>
+            <p class="text-center text-gray-400">
+                Not just responses—<strong class="text-white">relationship</strong>.
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- Reconnect with Your Hero's Journey -->
+<section class="py-24">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-8">
+            Reconnect with your <span class="gradient-text">hero's journey</span>.
+        </h2>
+        <p class="text-xl text-gray-400 mb-6 leading-relaxed">
+            It's easy to lose the thread—buried under noise, distractions, and other people's stories.
+        </p>
+        <p class="text-lg text-gray-300 mb-8">
+            We believe something vital is waiting to be reclaimed.
+        </p>
+        <div class="glass-container rounded-2xl p-8 mb-8">
+            <p class="text-xl text-white leading-relaxed">
+                Your work, your growth, and your contribution to the world should feel <strong>meaningful</strong>, <strong>immersive</strong>, and <strong>alive</strong>.
+            </p>
+        </div>
+        <p class="text-lg text-gray-400">
+            Sidekick Forge exists to help you reconnect with that path—by turning the journey itself into something engaging, motivating, and deeply personal.
+        </p>
+    </div>
+</section>
+
+<!-- This Isn't Just AI. It's Character. -->
+<section class="py-24">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-12">
+            <h2 class="text-4xl md:text-5xl font-bold text-white mb-4">
+                This isn't just AI. It's <span class="gradient-text">character</span>.
+            </h2>
+            <p class="text-xl text-gray-400">
+                Most AI platforms give you tools.<br />
+                Sidekick Forge helps you <strong class="text-white">craft companions</strong>.
             </p>
         </div>
 
-        <div class="grid md:grid-cols-3 gap-8">
-            <!-- Text Chat -->
-            <div class="glass-card rounded-2xl p-8 hover-lift relative overflow-hidden">
-                <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-green-500 to-emerald-400"></div>
-                <div class="w-14 h-14 bg-gradient-to-br from-green-500/20 to-emerald-400/20 rounded-xl flex items-center justify-center mb-6">
-                    <svg class="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+        <div class="glass-container rounded-2xl p-8 md:p-12">
+            <p class="text-lg text-gray-300 mb-6 text-center">
+                Each companion is a character you design—with:
+            </p>
+            <div class="grid md:grid-cols-2 gap-6 max-w-2xl mx-auto mb-8">
+                <div class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-paragon flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
                     </svg>
+                    A distinct voice and personality
                 </div>
-                <h3 class="text-2xl font-bold text-white mb-4">Text Chat</h3>
-                <p class="text-gray-400 mb-4">
-                    Instant messaging with intelligent responses. Your sidekick handles customer inquiries 24/7 with context-aware conversations.
-                </p>
-                <ul class="space-y-2 text-sm text-gray-500">
-                    <li class="flex items-center gap-2">
-                        <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
-                        All tiers
-                    </li>
-                </ul>
+                <div class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-paragon flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                    </svg>
+                    A clear role and purpose
+                </div>
+                <div class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-paragon flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                    </svg>
+                    Memory that deepens over time
+                </div>
+                <div class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-paragon flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                    </svg>
+                    A way of thinking shaped to your needs
+                </div>
             </div>
-
-            <!-- Voice Chat -->
-            <div class="glass-card rounded-2xl p-8 hover-lift relative overflow-hidden">
-                <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 to-cyan-400"></div>
-                <div class="w-14 h-14 bg-gradient-to-br from-blue-500/20 to-cyan-400/20 rounded-xl flex items-center justify-center mb-6">
-                    <svg class="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
-                    </svg>
-                </div>
-                <h3 class="text-2xl font-bold text-white mb-4">Voice Chat</h3>
-                <p class="text-gray-400 mb-4">
-                    Natural voice conversations powered by advanced speech synthesis. Your sidekick sounds like a real team member.
-                </p>
-                <ul class="space-y-2 text-sm text-gray-500">
-                    <li class="flex items-center gap-2">
-                        <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
-                        All tiers
-                    </li>
-                </ul>
-            </div>
-
-            <!-- Video Avatar -->
-            <div class="glass-card rounded-2xl p-8 hover-lift relative overflow-hidden">
-                <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 to-pink-500"></div>
-                <div class="w-14 h-14 bg-gradient-to-br from-purple-500/20 to-pink-500/20 rounded-xl flex items-center justify-center mb-6">
-                    <svg class="w-8 h-8 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                    </svg>
-                </div>
-                <h3 class="text-2xl font-bold text-white mb-4">Video Avatar</h3>
-                <p class="text-gray-400 mb-4">
-                    AI-powered video avatars bring your sidekick to life. Face-to-face engagement that builds trust and connection.
-                </p>
-                <ul class="space-y-2 text-sm text-gray-500">
-                    <li class="flex items-center gap-2">
-                        <svg class="w-4 h-4 text-purple-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
-                        Champion & Paragon
-                    </li>
-                </ul>
+            <div class="text-center">
+                <p class="text-gray-400 mb-2">They don't just answer questions.</p>
+                <p class="text-xl text-white font-semibold">They walk with you.</p>
             </div>
         </div>
     </div>
 </section>
 
-<!-- How It Works -->
+<!-- A Sidekick for You — and for the People You Serve -->
+<section class="py-24">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-12">
+            <h2 class="text-4xl md:text-5xl font-bold text-white mb-4">
+                A Sidekick for <span class="gradient-text">You</span> — and for the People You Serve
+            </h2>
+            <p class="text-xl text-gray-400">
+                Most AI tools are private.
+            </p>
+        </div>
+
+        <div class="glass-container rounded-2xl p-8 md:p-12 mb-8">
+            <p class="text-lg text-gray-300 mb-8 text-center">
+                Sidekick Forge lets you craft a Sidekick that supports <strong class="text-white">your own work</strong> and can also be shared with <strong class="text-white">your audience</strong>—as a guide, assistant, or representative of your ideas.
+            </p>
+            <p class="text-center text-gray-400 mb-8">
+                The same character.<br />
+                Different relationships.
+            </p>
+            <div class="grid md:grid-cols-2 gap-8">
+                <div class="glass-card rounded-xl p-6">
+                    <h3 class="text-xl font-bold text-white mb-3">For You</h3>
+                    <p class="text-gray-400">
+                        Your Sidekick is a thinking partner—helping you reflect, plan, and stay aligned with your long-term vision.
+                    </p>
+                </div>
+                <div class="glass-card rounded-xl p-6">
+                    <h3 class="text-xl font-bold text-white mb-3">For Your Audience</h3>
+                    <p class="text-gray-400">
+                        That same Sidekick becomes a conversational entry point into your work—offering guidance, clarity, and presence beyond static content.
+                    </p>
+                </div>
+            </div>
+        </div>
+        <p class="text-lg text-gray-400 text-center">
+            It's a bridge between your inner journey and the people it's meant to reach.
+        </p>
+    </div>
+</section>
+
+<!-- Built for the Great Pursuits -->
 <section class="py-24">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="text-center mb-16">
             <h2 class="text-4xl md:text-5xl font-bold text-white mb-4">
-                The <span class="gradient-text">Forge</span> Process
+                Built for the <span class="gradient-text">great pursuits</span> of our time
             </h2>
-            <p class="text-xl text-gray-400 max-w-2xl mx-auto">
-                From concept to deployment in three steps. Your sidekick is ready to work in minutes.
+            <p class="text-xl text-gray-400">
+                Sidekick Forge companions support the work that matters most:
             </p>
         </div>
 
-        <div class="grid md:grid-cols-3 gap-8">
+        <div class="grid md:grid-cols-3 gap-8 mb-12">
+            <!-- Entrepreneurship -->
+            <div class="glass-card rounded-2xl p-8 hover-lift relative overflow-hidden">
+                <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-tier-adventurer to-[#00c8ca]"></div>
+                <div class="w-14 h-14 bg-gradient-to-br from-tier-adventurer/20 to-[#00c8ca]/20 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8 text-tier-adventurer" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold text-white mb-4">Entrepreneurship</h3>
+                <p class="text-gray-400">
+                    Think through decisions, explore ideas, and build momentum with a companion that understands your long-term goals.
+                </p>
+            </div>
+
+            <!-- Personal Development -->
+            <div class="glass-card rounded-2xl p-8 hover-lift relative overflow-hidden">
+                <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-tier-champion to-[#ff9066]"></div>
+                <div class="w-14 h-14 bg-gradient-to-br from-tier-champion/20 to-[#ff9066]/20 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8 text-tier-champion" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold text-white mb-4">Personal Development</h3>
+                <p class="text-gray-400">
+                    Reflect, recalibrate, and grow with a presence that keeps perspective when motivation dips or clarity fades.
+                </p>
+            </div>
+
+            <!-- Shaping the Future -->
+            <div class="glass-card rounded-2xl p-8 hover-lift relative overflow-hidden">
+                <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-tier-paragon to-[#f8847a]"></div>
+                <div class="w-14 h-14 bg-gradient-to-br from-tier-paragon/20 to-[#f8847a]/20 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8 text-tier-paragon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold text-white mb-4">Shaping the Future</h3>
+                <p class="text-gray-400">
+                    Explore ideas, narratives, and solutions that move the world forward—with companions designed for long-term thinking and worldbuilding.
+                </p>
+            </div>
+        </div>
+
+        <p class="text-center text-gray-400">
+            These aren't separate tools.<br />
+            They're different expressions of the same journey.
+        </p>
+    </div>
+</section>
+
+<!-- What Can You Create -->
+<section class="py-24">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-16">
+            <h2 class="text-4xl md:text-5xl font-bold text-white mb-4">
+                What Can You <span class="gradient-text">Create</span> with Sidekick Forge?
+            </h2>
+            <p class="text-xl text-gray-400 max-w-3xl mx-auto">
+                Sidekick Forge isn't limited to one type of AI.<br />
+                It's a system for crafting <strong class="text-white">characters with purpose</strong>.
+            </p>
+        </div>
+
+        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8 mb-12">
+            <!-- AI Brand Ambassador -->
+            <div class="glass-card rounded-2xl p-8 hover-lift">
+                <div class="w-12 h-12 bg-gradient-to-br from-tier-champion/20 to-[#ff9066]/20 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-6 h-6 text-tier-champion" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold text-white mb-3">AI Brand Ambassador</h3>
+                <p class="text-gray-400 mb-4">
+                    A Sidekick that represents your brand's voice, values, and worldview.
+                </p>
+                <ul class="space-y-2 text-sm text-gray-500">
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-champion mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Answers questions in your tone
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-champion mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Guides people through your ideas or offerings
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-champion mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Acts as a persistent presence when you're offline
+                    </li>
+                </ul>
+                <p class="text-xs text-gray-500 mt-4 italic">
+                    Perfect for creators, educators, and founders who want their brand to feel alive, not automated.
+                </p>
+            </div>
+
+            <!-- AI Employee -->
+            <div class="glass-card rounded-2xl p-8 hover-lift">
+                <div class="w-12 h-12 bg-gradient-to-br from-tier-adventurer/20 to-[#00c8ca]/20 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-6 h-6 text-tier-adventurer" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold text-white mb-3">AI Employee</h3>
+                <p class="text-gray-400 mb-4">
+                    A dependable Sidekick designed to support real work.
+                </p>
+                <ul class="space-y-2 text-sm text-gray-500">
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-adventurer mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Thinks through tasks and workflows
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-adventurer mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Helps with planning, research, and execution
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-adventurer mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Remembers context instead of starting fresh every session
+                    </li>
+                </ul>
+                <p class="text-xs text-gray-500 mt-4 italic">
+                    Not a disposable bot—a long-term collaborator.
+                </p>
+            </div>
+
+            <!-- AI Influencer -->
+            <div class="glass-card rounded-2xl p-8 hover-lift">
+                <div class="w-12 h-12 bg-gradient-to-br from-tier-paragon/20 to-[#f8847a]/20 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-6 h-6 text-tier-paragon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold text-white mb-3">AI Influencer</h3>
+                <p class="text-gray-400 mb-4">
+                    A character built to engage, converse, and grow an audience.
+                </p>
+                <ul class="space-y-2 text-sm text-gray-500">
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-paragon mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Interacts with people instead of broadcasting at them
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-paragon mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Embodies a clear personality and point of view
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-paragon mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Turns passive followers into active participants
+                    </li>
+                </ul>
+                <p class="text-xs text-gray-500 mt-4 italic">
+                    Less content. More connection.
+                </p>
+            </div>
+
+            <!-- Digital Twin -->
+            <div class="glass-card rounded-2xl p-8 hover-lift">
+                <div class="w-12 h-12 bg-gradient-to-br from-brand-teal/20 to-tier-adventurer/20 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-6 h-6 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold text-white mb-3">Your Digital Twin</h3>
+                <p class="text-gray-400 mb-4">
+                    A Sidekick shaped to think and speak like you.
+                </p>
+                <ul class="space-y-2 text-sm text-gray-500">
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-brand-teal mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Reflects your reasoning style
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-brand-teal mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Carries your ideas forward
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-brand-teal mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Acts as an extension of your presence
+                    </li>
+                </ul>
+                <p class="text-xs text-gray-500 mt-4 italic">
+                    Ideal for scaling guidance, mentorship, or thought leadership without losing authenticity.
+                </p>
+            </div>
+
+            <!-- AI Companion -->
+            <div class="glass-card rounded-2xl p-8 hover-lift">
+                <div class="w-12 h-12 bg-gradient-to-br from-tier-paragon/20 to-[#f8847a]/20 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-6 h-6 text-tier-paragon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold text-white mb-3">AI Companion</h3>
+                <p class="text-gray-400 mb-4">
+                    A personal Sidekick for the inner journey.
+                </p>
+                <ul class="space-y-2 text-sm text-gray-500">
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-paragon mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Helps you think, reflect, and recalibrate
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-paragon mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Keeps perspective when motivation dips
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-paragon mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Walks with you through long arcs, not short tasks
+                    </li>
+                </ul>
+                <p class="text-xs text-gray-500 mt-4 italic">
+                    Presence with purpose.
+                </p>
+            </div>
+
+            <!-- Game Character -->
+            <div class="glass-card rounded-2xl p-8 hover-lift">
+                <div class="w-12 h-12 bg-gradient-to-br from-tier-champion/20 to-[#ff9066]/20 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-6 h-6 text-tier-champion" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold text-white mb-3">Game Character or Fictional Persona</h3>
+                <p class="text-gray-400 mb-4">
+                    A character built for storytelling, play, or experimentation.
+                </p>
+                <ul class="space-y-2 text-sm text-gray-500">
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-champion mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Role-play ideas and worlds
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-champion mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Explore narratives interactively
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <svg class="w-4 h-4 text-tier-champion mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Turn imagination into something you can talk to
+                    </li>
+                </ul>
+                <p class="text-xs text-gray-500 mt-4 italic">
+                    Because creativity deserves tools that feel creative.
+                </p>
+            </div>
+        </div>
+
+        <div class="text-center glass-container rounded-2xl p-8 max-w-3xl mx-auto">
+            <p class="text-lg text-gray-300 mb-2">
+                These are starting points—not limits.
+            </p>
+            <p class="text-gray-400">
+                Every Sidekick can evolve, combine roles, or shift purpose over time.<br />
+                You're not choosing a template. You're <strong class="text-white">crafting a character</strong>.
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- No Prompt Gymnastics -->
+<section class="py-24">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <h2 class="text-3xl md:text-4xl font-bold text-white mb-2">
+            No prompt gymnastics. No fragile setups.
+        </h2>
+        <h3 class="text-2xl md:text-3xl font-bold text-gray-400 mb-8">
+            Craft the character once—and build from there.
+        </h3>
+
+        <div class="glass-container rounded-2xl p-8 md:p-12">
+            <p class="text-lg text-gray-300 mb-6">
+                You don't need to:
+            </p>
+            <ul class="space-y-3 max-w-md mx-auto text-left mb-8">
+                <li class="flex items-center gap-3 text-gray-400">
+                    <svg class="w-5 h-5 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                    Rewrite prompts every session
+                </li>
+                <li class="flex items-center gap-3 text-gray-400">
+                    <svg class="w-5 h-5 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                    Re-explain your context
+                </li>
+                <li class="flex items-center gap-3 text-gray-400">
+                    <svg class="w-5 h-5 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                    Babysit the AI to get useful output
+                </li>
+            </ul>
+            <p class="text-lg text-gray-300">
+                Sidekick Forge gives you a stable character with memory, intent, and direction—so you can focus on the work, not the interface.
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- Create Your Companion in Minutes -->
+<section class="py-24">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-16">
+            <h2 class="text-4xl md:text-5xl font-bold text-white mb-4">
+                Create your companion in <span class="gradient-text">minutes</span>
+            </h2>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-8 mb-12">
             <!-- Step 1 -->
             <div class="relative">
                 <div class="glass-container rounded-2xl p-8 h-full">
-                    <div class="absolute -top-4 -left-4 w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-400 rounded-xl flex items-center justify-center font-bold text-white text-xl shadow-lg">
+                    <div class="absolute -top-4 -left-4 w-12 h-12 bg-gradient-to-br from-tier-adventurer to-[#00c8ca] rounded-xl flex items-center justify-center font-bold text-white text-xl shadow-lg">
                         1
                     </div>
                     <div class="pt-4">
-                        <h3 class="text-2xl font-bold text-white mb-4">Define Your Sidekick</h3>
+                        <h3 class="text-2xl font-bold text-white mb-4">Design the Character</h3>
                         <p class="text-gray-400">
-                            Set your sidekick's personality, knowledge domain, and communication style.
-                            Upload documents to build their expertise.
+                            Define personality, tone, values, and role.
                         </p>
                     </div>
                 </div>
@@ -173,14 +537,13 @@
             <!-- Step 2 -->
             <div class="relative">
                 <div class="glass-container rounded-2xl p-8 h-full">
-                    <div class="absolute -top-4 -left-4 w-12 h-12 bg-gradient-to-br from-blue-500 to-cyan-400 rounded-xl flex items-center justify-center font-bold text-white text-xl shadow-lg">
+                    <div class="absolute -top-4 -left-4 w-12 h-12 bg-gradient-to-br from-tier-champion to-[#ff9066] rounded-xl flex items-center justify-center font-bold text-white text-xl shadow-lg">
                         2
                     </div>
                     <div class="pt-4">
-                        <h3 class="text-2xl font-bold text-white mb-4">Train & Configure</h3>
+                        <h3 class="text-2xl font-bold text-white mb-4">Shape How It Thinks</h3>
                         <p class="text-gray-400">
-                            Our AI processes your content and creates a knowledge base. Configure
-                            voice settings, avatar preferences, and response behavior.
+                            Customize how your companion reasons, supports, and responds.
                         </p>
                     </div>
                 </div>
@@ -189,23 +552,139 @@
             <!-- Step 3 -->
             <div class="relative">
                 <div class="glass-container rounded-2xl p-8 h-full">
-                    <div class="absolute -top-4 -left-4 w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center font-bold text-white text-xl shadow-lg">
+                    <div class="absolute -top-4 -left-4 w-12 h-12 bg-gradient-to-br from-tier-paragon to-[#f8847a] rounded-xl flex items-center justify-center font-bold text-white text-xl shadow-lg">
                         3
                     </div>
                     <div class="pt-4">
-                        <h3 class="text-2xl font-bold text-white mb-4">Deploy & Engage</h3>
+                        <h3 class="text-2xl font-bold text-white mb-4">Grow Together Over Time</h3>
                         <p class="text-gray-400">
-                            Embed your sidekick on your website with a single script tag.
-                            Start engaging visitors immediately across all channels.
+                            Your companion evolves with memory and context—becoming more aligned the longer you work together.
                         </p>
                     </div>
                 </div>
             </div>
         </div>
+
+        <p class="text-center text-gray-400">
+            No coding required.<br />
+            Just craft, connect, and continue.
+        </p>
     </div>
 </section>
 
-<!-- Tiers Preview -->
+<!-- More Engaging Than a Dashboard -->
+<section class="py-24">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <h2 class="text-4xl md:text-5xl font-bold text-white mb-4">
+            More engaging than a dashboard.<br />
+            More useful than fiction.
+        </h2>
+        <p class="text-xl text-gray-400 mb-8">
+            Efficiency alone doesn't change lives—<strong class="text-white">engagement does</strong>.
+        </p>
+
+        <div class="glass-container rounded-2xl p-8 md:p-12 mb-8">
+            <p class="text-lg text-gray-300 mb-6">
+                Sidekick Forge blends:
+            </p>
+            <div class="grid md:grid-cols-3 gap-6 mb-8">
+                <div class="text-center">
+                    <div class="w-12 h-12 bg-gradient-to-br from-tier-paragon/20 to-[#f8847a]/20 rounded-xl flex items-center justify-center mx-auto mb-3">
+                        <svg class="w-6 h-6 text-tier-paragon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path>
+                        </svg>
+                    </div>
+                    <p class="text-gray-300 text-sm">The emotional pull of stories and characters</p>
+                </div>
+                <div class="text-center">
+                    <div class="w-12 h-12 bg-gradient-to-br from-tier-champion/20 to-[#ff9066]/20 rounded-xl flex items-center justify-center mx-auto mb-3">
+                        <svg class="w-6 h-6 text-tier-champion" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                    </div>
+                    <p class="text-gray-300 text-sm">The practical power of AI</p>
+                </div>
+                <div class="text-center">
+                    <div class="w-12 h-12 bg-gradient-to-br from-tier-paragon/20 to-[#f8847a]/20 rounded-xl flex items-center justify-center mx-auto mb-3">
+                        <svg class="w-6 h-6 text-tier-paragon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"></path>
+                        </svg>
+                    </div>
+                    <p class="text-gray-300 text-sm">The agency of crafting something your own</p>
+                </div>
+            </div>
+        </div>
+
+        <p class="text-lg text-gray-300">
+            The result is work that feels less like a grind—and more like a <strong class="text-white">quest worth showing up for</strong>.
+        </p>
+    </div>
+</section>
+
+<!-- Privacy Section -->
+<section class="py-24">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-12">
+            <h2 class="text-4xl md:text-5xl font-bold text-white mb-4">
+                Privacy, sovereignty, and trust—<span class="gradient-text">by design</span>
+            </h2>
+            <p class="text-xl text-gray-400">
+                Your companions serve you—not a platform.
+            </p>
+        </div>
+
+        <div class="glass-container rounded-2xl p-8 md:p-12 mb-8">
+            <div class="grid md:grid-cols-3 gap-6 mb-8">
+                <div class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-adventurer flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                    </svg>
+                    Privacy-first architecture
+                </div>
+                <div class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-adventurer flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                    </svg>
+                    Open-source model foundations
+                </div>
+                <div class="flex items-center gap-3 text-gray-300">
+                    <svg class="w-5 h-5 text-tier-adventurer flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                    </svg>
+                    No ad-driven data extraction
+                </div>
+            </div>
+
+            <div class="border-t border-white/10 pt-8">
+                <div class="flex items-center gap-3 mb-4">
+                    <span class="bg-gradient-to-r from-tier-paragon to-[#f8847a] text-white text-xs font-bold px-3 py-1 rounded-full">
+                        COMING SOON
+                    </span>
+                    <h3 class="text-xl font-bold text-white">Local Mode</h3>
+                </div>
+                <p class="text-gray-400 mb-4">
+                    Engage with a version of your Sidekick that runs locally—without requiring an internet connection.
+                </p>
+                <ul class="space-y-2 text-gray-300 text-sm">
+                    <li class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-tier-paragon" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Greater control
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-tier-paragon" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        Reduced reliance on centralized infrastructure
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-tier-paragon" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                        A companion that's truly yours
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Choose Your Path (PRESERVED) -->
 <section class="py-24">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="text-center mb-16">
@@ -221,8 +700,8 @@
             <!-- Adventurer -->
             <div class="glass-card rounded-2xl p-6 hover-lift">
                 <div class="flex items-center gap-3 mb-4">
-                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500/20 to-emerald-400/20 flex items-center justify-center">
-                        <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-tier-adventurer/20 to-[#00c8ca]/20 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-tier-adventurer" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                         </svg>
                     </div>
@@ -230,19 +709,20 @@
                 </div>
                 <p class="text-gray-400 text-sm mb-4">Perfect for solopreneurs starting their AI journey</p>
                 <div class="text-3xl font-bold text-white mb-2">$49<span class="text-gray-500 text-lg">/mo</span></div>
-                <p class="text-gray-500 text-xs">1 Sidekick | Text & Voice</p>
+                <p class="text-gray-500 text-xs mb-1">1 Sidekick | 400 min voice/mo</p>
+                <p class="text-tier-adventurer text-xs">Unlimited text chat</p>
             </div>
 
             <!-- Champion -->
             <div class="relative">
-                <div class="absolute -inset-1 bg-gradient-to-r from-blue-500 to-cyan-400 rounded-2xl blur-lg opacity-30"></div>
-                <div class="glass-card rounded-2xl p-6 hover-lift relative border-blue-500/30">
-                    <div class="absolute top-2 right-2 bg-gradient-to-r from-blue-500 to-cyan-400 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                <div class="absolute -inset-1 bg-gradient-to-r from-tier-champion to-[#ff9066] rounded-2xl blur-lg opacity-30"></div>
+                <div class="glass-card rounded-2xl p-6 hover-lift relative border-tier-champion/30">
+                    <div class="absolute top-2 right-2 bg-gradient-to-r from-tier-champion to-[#ff9066] text-white text-xs font-bold px-2 py-0.5 rounded-full">
                         POPULAR
                     </div>
                     <div class="flex items-center gap-3 mb-4">
-                        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500/20 to-cyan-400/20 flex items-center justify-center">
-                            <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-tier-champion/20 to-[#ff9066]/20 flex items-center justify-center">
+                            <svg class="w-5 h-5 text-tier-champion" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"></path>
                             </svg>
                         </div>
@@ -250,15 +730,16 @@
                     </div>
                     <p class="text-gray-400 text-sm mb-4">For growing teams with dedicated infrastructure</p>
                     <div class="text-3xl font-bold text-white mb-2">$199<span class="text-gray-500 text-lg">/mo</span></div>
-                    <p class="text-blue-400 text-xs">Unlimited | Voice + Video</p>
+                    <p class="text-gray-500 text-xs mb-1">5 Sidekicks | 2,000 min voice & video/mo</p>
+                    <p class="text-tier-champion text-xs">Unlimited text chat</p>
                 </div>
             </div>
 
             <!-- Paragon -->
             <div class="glass-card rounded-2xl p-6 hover-lift">
                 <div class="flex items-center gap-3 mb-4">
-                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500/20 to-pink-500/20 flex items-center justify-center">
-                        <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-tier-paragon/20 to-[#f8847a]/20 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-tier-paragon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path>
                         </svg>
                     </div>
@@ -266,7 +747,8 @@
                 </div>
                 <p class="text-gray-400 text-sm mb-4">White-glove enterprise with sovereign stack</p>
                 <div class="text-3xl font-bold text-white mb-2">Custom</div>
-                <p class="text-purple-400 text-xs">Everything | Custom Training</p>
+                <p class="text-gray-500 text-xs mb-1">Unlimited Sidekicks | Custom minutes</p>
+                <p class="text-tier-paragon text-xs">Everything included</p>
             </div>
         </div>
 
@@ -281,32 +763,30 @@
     </div>
 </section>
 
-<!-- CTA Section -->
+<!-- Final CTA Section -->
 <section class="py-24">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="glass-container rounded-3xl p-12 text-center relative overflow-hidden">
             <!-- Gradient accents -->
-            <div class="absolute top-0 left-1/4 w-64 h-64 bg-blue-500/20 rounded-full blur-3xl"></div>
-            <div class="absolute bottom-0 right-1/4 w-64 h-64 bg-purple-500/20 rounded-full blur-3xl"></div>
+            <div class="absolute top-0 left-1/4 w-64 h-64 bg-tier-champion/20 rounded-full blur-3xl"></div>
+            <div class="absolute bottom-0 right-1/4 w-64 h-64 bg-tier-paragon/20 rounded-full blur-3xl"></div>
 
             <div class="relative">
                 <h2 class="text-4xl md:text-5xl font-bold text-white mb-6">
-                    Ready to <span class="gradient-text">Forge</span> Your Sidekick?
+                    Make your journey the story worth following.
                 </h2>
                 <p class="text-xl text-gray-400 mb-8 max-w-2xl mx-auto">
-                    Join forward-thinking businesses deploying AI sidekicks that engage customers
-                    24/7 through voice, text, and video.
+                    Craft an AI companion with personality, memory, and purpose—and bring enchantment and momentum back into the work that matters most.
                 </p>
-                <div class="flex flex-col sm:flex-row justify-center items-center space-y-4 sm:space-y-0 sm:space-x-4">
-                    <a href="/signup"
-                       class="w-full sm:w-auto bg-gradient-to-r from-blue-500 to-cyan-400 hover:from-blue-600 hover:to-cyan-500 text-white px-8 py-4 rounded-lg font-semibold text-lg transition shadow-lg shadow-blue-500/25">
-                        Get Started Free
-                    </a>
-                    <a href="/contact"
-                       class="w-full sm:w-auto glass-surface text-white hover:bg-white/10 px-8 py-4 rounded-lg font-semibold text-lg transition">
-                        Talk to Sales
+                <div class="flex justify-center mb-6">
+                    <a href="/checkout"
+                       class="bg-gradient-to-r from-tier-champion to-[#ff9066] hover:from-[#e85a2f] hover:to-tier-champion text-white px-8 py-4 rounded-lg font-semibold text-lg transition shadow-lg shadow-tier-champion/25">
+                        Start Crafting Your Companion
                     </a>
                 </div>
+                <p class="text-gray-500 italic">
+                    Enchant the journey. Empower the traveler.
+                </p>
             </div>
         </div>
     </div>

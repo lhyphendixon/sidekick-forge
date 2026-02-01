@@ -824,7 +824,7 @@ class PlatformKeyService:
     DEFAULT_CONFIG = {
         "llm": {
             "provider": "cerebras",
-            "model": "glm-4-9b-chat",  # GLM 4.6
+            "model": "zai-glm-4.7",  # Cerebras GLM 4.7 (reasoning toggle enabled)
         },
         "stt": {
             "provider": "cartesia",

@@ -1,0 +1,257 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Monitoring - Sidekick Forge Admin{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* Circular progress indicator */
+    .quota-ring {
+        transform: rotate(-90deg);
+    }
+    .quota-ring-bg {
+        stroke: rgba(255, 255, 255, 0.1);
+    }
+    .quota-ring-progress {
+        stroke-linecap: round;
+        transition: stroke-dashoffset 0.5s ease;
+    }
+    .quota-ring-progress.healthy {
+        stroke: #01a4a6;
+    }
+    .quota-ring-progress.warning {
+        stroke: #fc7244;
+    }
+    .quota-ring-progress.exceeded {
+        stroke: #f56453;
+    }
+
+    /* Status dot pulse animation */
+    @keyframes pulse-ring {
+        0% { transform: scale(0.8); opacity: 1; }
+        100% { transform: scale(2); opacity: 0; }
+    }
+    .status-pulse {
+        position: relative;
+    }
+    .status-pulse::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        animation: pulse-ring 2s ease-out infinite;
+    }
+    .status-pulse.online::before {
+        background: #01a4a6;
+    }
+
+    /* Activity timeline */
+    .activity-item {
+        position: relative;
+        padding-left: 24px;
+    }
+    .activity-item::before {
+        content: '';
+        position: absolute;
+        left: 5px;
+        top: 24px;
+        bottom: -16px;
+        width: 2px;
+        background: rgba(255, 255, 255, 0.1);
+    }
+    .activity-item:last-child::before {
+        display: none;
+    }
+    .activity-dot {
+        position: absolute;
+        left: 0;
+        top: 6px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: 2px solid #1a1a1a;
+    }
+
+    /* Sidekick card */
+    .sidekick-card {
+        transition: all 0.2s ease;
+    }
+    .sidekick-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(1, 164, 166, 0.15);
+        border-color: rgba(1, 164, 166, 0.5);
+    }
+
+    /* Mini usage bar */
+    .mini-bar {
+        height: 4px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.1);
+        overflow: hidden;
+    }
+    .mini-bar-fill {
+        height: 100%;
+        border-radius: 2px;
+        transition: width 0.3s ease;
+    }
+    .mini-bar-fill.healthy { background: #01a4a6; }
+    .mini-bar-fill.warning { background: #fc7244; }
+    .mini-bar-fill.exceeded { background: #f56453; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6 gap-4">
+    <div>
+        <h1 class="text-2xl font-bold text-dark-text">Monitoring Dashboard</h1>
+        <p class="text-dark-text-secondary text-sm mt-1">Usage statistics and conversation activity</p>
+    </div>
+    <div class="flex items-center gap-3">
+        <!-- Period Selector -->
+        <select id="period-selector"
+                class="bg-dark-elevated border border-dark-border rounded-lg px-3 py-2 text-sm text-dark-text"
+                onchange="updatePeriod(this.value)">
+            <option value="current" {% if period == 'current' %}selected{% endif %}>Current Period</option>
+            <option value="7d" {% if period == '7d' %}selected{% endif %}>Last 7 Days</option>
+            <option value="30d" {% if period == '30d' %}selected{% endif %}>Last 30 Days</option>
+        </select>
+
+        {% if user.role in ['superadmin', 'admin'] and clients|length > 1 %}
+        <!-- Client Filter (Admin Only) -->
+        <select id="client-filter"
+                class="bg-dark-elevated border border-dark-border rounded-lg px-3 py-2 text-sm text-dark-text"
+                onchange="updateClientFilter(this.value)">
+            <option value="all">All Clients</option>
+            {% for client in clients %}
+            <option value="{{ client.id }}" {% if selected_client_id == client.id %}selected{% endif %}>{{ client.name }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
+
+        <!-- Refresh Button -->
+        <button onclick="refreshDashboard()"
+                class="bg-dark-elevated hover:bg-dark-border border border-dark-border rounded-lg px-3 py-2 text-sm text-dark-text transition-colors flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <span class="hidden sm:inline">Refresh</span>
+        </button>
+    </div>
+</div>
+
+<!-- Usage Overview Cards -->
+<div id="usage-cards-container"
+     hx-get="/admin/partials/monitoring/usage-cards{% if selected_client_id %}?client_id={{ selected_client_id }}{% endif %}"
+     hx-trigger="load, every 60s"
+     hx-swap="innerHTML">
+    {% include "admin/partials/monitoring/usage_cards.html" %}
+</div>
+
+<!-- Main Grid -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+    <!-- Left Column: Sidekick Status (2/3 width) -->
+    <div class="lg:col-span-2">
+        <!-- Sidekick Status Grid -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border">
+            <div class="p-4 border-b border-dark-border flex items-center justify-between">
+                <h3 class="text-lg font-medium text-dark-text">Sidekick Status</h3>
+                <div class="htmx-indicator">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+            <div id="sidekick-grid-container"
+                 class="p-4"
+                 hx-get="/admin/partials/monitoring/sidekick-grid{% if selected_client_id %}?client_id={{ selected_client_id }}{% endif %}"
+                 hx-trigger="load, every 30s"
+                 hx-indicator="closest .bg-dark-surface .htmx-indicator"
+                 hx-swap="innerHTML">
+                {% include "admin/partials/monitoring/sidekick_grid.html" %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Column: Activity Timeline (1/3 width) -->
+    <div class="lg:col-span-1">
+        <div class="bg-dark-surface rounded-lg border border-dark-border h-full">
+            <div class="p-4 border-b border-dark-border flex items-center justify-between">
+                <h3 class="text-lg font-medium text-dark-text">Recent Activity</h3>
+                <div class="htmx-indicator">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+            <div id="activity-timeline-container"
+                 class="p-4 max-h-[600px] overflow-y-auto"
+                 hx-get="/admin/partials/monitoring/activity-timeline{% if selected_client_id %}?client_id={{ selected_client_id }}{% endif %}"
+                 hx-trigger="load, every 15s"
+                 hx-indicator="closest .bg-dark-surface .htmx-indicator"
+                 hx-swap="innerHTML">
+                {% include "admin/partials/monitoring/activity_timeline.html" %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Conversation Analytics (Full Width) -->
+<div class="mt-6 bg-dark-surface rounded-lg border border-dark-border">
+    <div class="p-4 border-b border-dark-border flex items-center justify-between">
+        <h3 class="text-lg font-medium text-dark-text">Conversation Analytics</h3>
+        <div class="htmx-indicator">
+            <div class="spinner"></div>
+        </div>
+    </div>
+    <div id="conversation-analytics-container"
+         class="p-4"
+         hx-get="/admin/partials/monitoring/conversation-analytics{% if selected_client_id %}?client_id={{ selected_client_id }}{% endif %}"
+         hx-trigger="load, every 60s"
+         hx-indicator="closest .bg-dark-surface .htmx-indicator"
+         hx-swap="innerHTML">
+        {% include "admin/partials/monitoring/conversation_analytics.html" %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Period selector change handler
+    function updatePeriod(period) {
+        const url = new URL(window.location);
+        url.searchParams.set('period', period);
+        window.location.href = url.toString();
+    }
+
+    // Client filter change handler
+    function updateClientFilter(clientId) {
+        const url = new URL(window.location);
+        if (clientId === 'all') {
+            url.searchParams.delete('client_id');
+        } else {
+            url.searchParams.set('client_id', clientId);
+        }
+        window.location.href = url.toString();
+    }
+
+    // Manual refresh
+    function refreshDashboard() {
+        htmx.trigger('#usage-cards-container', 'htmx:trigger');
+        htmx.trigger('#sidekick-grid-container', 'htmx:trigger');
+        htmx.trigger('#activity-timeline-container', 'htmx:trigger');
+        htmx.trigger('#conversation-analytics-container', 'htmx:trigger');
+    }
+
+    // Auto-refresh status indicator
+    document.addEventListener('DOMContentLoaded', function() {
+        // Show last refresh time
+        const refreshIndicator = document.createElement('div');
+        refreshIndicator.id = 'refresh-indicator';
+        refreshIndicator.className = 'fixed bottom-4 right-4 bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-dark-text-secondary shadow-lg';
+        refreshIndicator.innerHTML = 'Auto-refresh active';
+        document.body.appendChild(refreshIndicator);
+
+        // Update on HTMX requests
+        document.body.addEventListener('htmx:afterRequest', function(evt) {
+            const now = new Date();
+            refreshIndicator.innerHTML = `Last update: ${now.toLocaleTimeString()}`;
+        });
+    });
+</script>
+{% endblock %}

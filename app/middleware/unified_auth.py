@@ -16,7 +16,9 @@ class UnifiedAuthMiddleware:
     
     def __init__(self, app):
         self.app = app
-        self.admin_token = os.getenv("ADMIN_AUTH_TOKEN", "autonomite-admin-2024")
+        self.admin_token = os.getenv("ADMIN_AUTH_TOKEN")
+        if not self.admin_token:
+            raise ValueError("ADMIN_AUTH_TOKEN environment variable is required")
         
     async def __call__(self, request: Request, call_next):
         """Process request and handle authentication"""
@@ -96,16 +98,18 @@ def get_current_admin(authorization: Optional[str] = None) -> bool:
     """Dependency to validate admin authentication"""
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing authorization")
-        
+
     try:
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
             raise HTTPException(status_code=401, detail="Invalid authentication scheme")
-            
-        admin_token = os.getenv("ADMIN_AUTH_TOKEN", "autonomite-admin-2024")
+
+        admin_token = os.getenv("ADMIN_AUTH_TOKEN")
+        if not admin_token:
+            raise HTTPException(status_code=500, detail="Server misconfiguration: ADMIN_AUTH_TOKEN not set")
         if token != admin_token:
             raise HTTPException(status_code=401, detail="Invalid admin credentials")
-            
+
         return True
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid authorization header")
@@ -118,14 +122,16 @@ async def validate_admin_auth(authorization: Optional[str]) -> bool:
     """Validate admin authorization header"""
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing admin authorization")
-        
-    admin_token = os.getenv("ADMIN_AUTH_TOKEN", "autonomite-admin-2024")
-    
+
+    admin_token = os.getenv("ADMIN_AUTH_TOKEN")
+    if not admin_token:
+        raise HTTPException(status_code=500, detail="Server misconfiguration: ADMIN_AUTH_TOKEN not set")
+
     try:
         scheme, token = authorization.split()
         if scheme.lower() != "bearer" or token != admin_token:
             raise HTTPException(status_code=401, detail="Invalid admin credentials")
-    except:
+    except ValueError:
         raise HTTPException(status_code=401, detail="Invalid authorization format")
-        
+
     return True

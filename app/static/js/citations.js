@@ -122,23 +122,30 @@ class CitationsComponent {
 
         item.className = isDocumentSense ? 'citation-item citation-documentsense' : 'citation-item';
 
-        // Extract domain from URL for display
-        const domain = this.extractDomain(docGroup.source_url);
+        // Extract domain from URL for display (with null check)
+        const sourceUrl = docGroup.source_url || '';
+        const domain = this.extractDomain(sourceUrl);
 
-        // Truncate long titles
-        const displayTitle = this.truncateText(docGroup.title, 50);
+        // Truncate long titles (with null check)
+        const title = docGroup.title || 'Untitled Source';
+        const displayTitle = this.truncateText(title, 50);
+
+        // Build citation HTML with proper fallbacks
+        const linkHtml = sourceUrl
+            ? `<a href="${sourceUrl}"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   class="citation-link"
+                   title="${title}">
+                    ${displayTitle}
+                </a>`
+            : `<span class="citation-link" title="${title}">${displayTitle}</span>`;
 
         item.innerHTML = `
             <div class="citation-content">
                 <span class="citation-index">[${index}]</span>
-                <a href="${docGroup.source_url}"
-                   target="_blank"
-                   rel="noopener noreferrer"
-                   class="citation-link"
-                   title="${docGroup.title}">
-                    ${displayTitle}
-                </a>
-                <span class="citation-domain">${domain}</span>
+                ${linkHtml}
+                ${domain ? `<span class="citation-domain">${domain}</span>` : ''}
                 ${docGroup.chunks.length > 1 ?
                     `<span class="citation-chunk-count">(${docGroup.chunks.length} sections)</span>` :
                     ''}
@@ -358,6 +365,7 @@ class CitationsComponent {
      * @returns {string} Domain name
      */
     extractDomain(url) {
+        if (!url) return '';
         try {
             return new URL(url).hostname.replace('www.', '');
         } catch {
@@ -372,6 +380,7 @@ class CitationsComponent {
      * @returns {string} Truncated text
      */
     truncateText(text, maxLength) {
+        if (!text) return '';
         if (text.length <= maxLength) return text;
         return text.substring(0, maxLength - 3) + '...';
     }

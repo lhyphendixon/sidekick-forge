@@ -1557,7 +1557,7 @@ async def agent_job_handler(ctx: JobContext):
                         for tool_def in tool_defs:
                             tool_type = tool_def.get("type")
                             # Track runtime context for tools that need user/client context
-                            if tool_type not in {"n8n", "asana", "user_overview"}:
+                            if tool_type not in {"n8n", "asana", "user_overview", "helpscout", "content_catalyst", "lingua"}:
                                 continue
                             slug_candidate = (
                                 tool_def.get("slug")

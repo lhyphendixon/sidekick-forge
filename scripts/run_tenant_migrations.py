@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
-Run pending migrations for all active client Supabase projects.
+Run pending migrations for all tenant databases including the shared pool.
 
 Usage:
-  python scripts/run_tenant_migrations.py --platform-url <platform_supabase_url> --platform-key <service_role_key> [--dry-run] [--only <client_id>] [--concurrency 3]
+  python scripts/run_tenant_migrations.py --platform-url <platform_supabase_url> --platform-key <service_role_key> [--dry-run] [--only <client_id>] [--shared-pool-only]
 
 Notes:
-- Applies migrations in sidekick-forge/migrations ordered by filename.
+- Applies migrations in sidekick-forge/migrations ordered by filename to all tenant DBs.
+- For the shared pool (Adventurer tier), also applies migrations from migrations/shared_pool/.
 - Tracks applied migrations per tenant in public.migration_history (created if missing).
 - Uses client Supabase service_role_key to execute SQL.
+
+Database types:
+- Dedicated (Champion/Paragon): Each client has their own Supabase project
+- Shared pool (Adventurer): Multiple clients share a single database with client_id isolation
 """
 import argparse
 import asyncio
@@ -94,7 +99,8 @@ async def migrate_client(client: Dict[str, str], migrations: List[Dict[str, str]
 
 
 async def get_clients(platform_url: str, platform_key: str, only: Optional[str]) -> List[Dict[str, str]]:
-    sql = "select id, supabase_url, supabase_service_role_key as service_role_key from clients where active = true"
+    """Get dedicated client databases (Champion/Paragon tier)."""
+    sql = "select id, supabase_url, supabase_service_role_key as service_role_key from clients where active = true and hosting_type != 'shared'"
     if only:
         sql += f" and id = '{only}'"
     data = await execute_sql(platform_url, platform_key, sql)
@@ -109,22 +115,71 @@ async def get_clients(platform_url: str, platform_key: str, only: Optional[str])
     return clients
 
 
+async def get_shared_pool(platform_url: str, platform_key: str) -> Optional[Dict[str, str]]:
+    """Get the shared pool database config (Adventurer tier)."""
+    sql = "select pool_name, supabase_url, supabase_service_role_key as service_role_key from shared_pool_config where is_active = true and pool_name = 'adventurer_pool'"
+    try:
+        data = await execute_sql(platform_url, platform_key, sql)
+        if data and len(data) > 0:
+            row = data[0]
+            if row.get("supabase_url") and row.get("service_role_key"):
+                return {
+                    "id": f"shared_pool:{row['pool_name']}",
+                    "supabase_url": row["supabase_url"],
+                    "service_role_key": row["service_role_key"],
+                }
+    except Exception as e:
+        logger.warning(f"Could not fetch shared pool config: {e}")
+    return None
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Run tenant migrations across Supabase clients.")
     parser.add_argument("--platform-url", required=False, default=os.getenv("PLATFORM_SUPABASE_URL"))
     parser.add_argument("--platform-key", required=False, default=os.getenv("PLATFORM_SUPABASE_SERVICE_ROLE_KEY"))
     parser.add_argument("--only", help="Single client id to run", default=None)
     parser.add_argument("--dry-run", action="store_true", help="List without applying")
+    parser.add_argument("--shared-pool-only", action="store_true", help="Only run migrations on the shared pool (Adventurer tier)")
+    parser.add_argument("--skip-shared-pool", action="store_true", help="Skip the shared pool, only run on dedicated clients")
     args = parser.parse_args()
 
     if not args.platform_url or not args.platform_key:
         raise SystemExit("platform url/key required")
 
     migrations_dir = Path(__file__).resolve().parent.parent / "migrations"
+    shared_pool_migrations_dir = migrations_dir / "shared_pool"
+
+    # Load standard migrations (apply to all tenant DBs)
     migrations = load_migrations(migrations_dir)
+
+    # Load shared-pool-specific migrations
+    shared_pool_migrations = []
+    if shared_pool_migrations_dir.exists():
+        shared_pool_migrations = load_migrations(shared_pool_migrations_dir)
+
+    # Handle shared pool (Adventurer tier)
+    if not args.skip_shared_pool and not args.only:
+        shared_pool = await get_shared_pool(args.platform_url, args.platform_key)
+        if shared_pool:
+            logger.info(f"=== Processing Shared Pool (Adventurer tier) ===")
+            # Apply standard migrations to shared pool
+            await migrate_client(shared_pool, migrations, args.dry_run)
+            # Apply shared-pool-specific migrations
+            if shared_pool_migrations:
+                logger.info(f"[{shared_pool['id']}] applying shared-pool-specific migrations")
+                await migrate_client(shared_pool, shared_pool_migrations, args.dry_run)
+        else:
+            logger.info("No active shared pool configured (Adventurer tier unavailable)")
+
+    if args.shared_pool_only:
+        logger.info("--shared-pool-only specified, skipping dedicated clients")
+        return
+
+    # Handle dedicated clients (Champion/Paragon tier)
+    logger.info(f"=== Processing Dedicated Clients (Champion/Paragon tier) ===")
     platform_clients = await get_clients(args.platform_url, args.platform_key, args.only)
     if not platform_clients:
-        logger.info("No clients found to migrate")
+        logger.info("No dedicated clients found to migrate")
         return
 
     for client in platform_clients:

@@ -34,7 +34,24 @@ class ToolsService:
                     "oauth_provider": "asana",
                 },
                 "enabled": False,
-            }
+            },
+            {
+                "name": "HelpScout Connect",
+                "slug": "helpscout_tickets",
+                "description": "Query and manage HelpScout support conversations, reply to customers, add notes, and update ticket status.",
+                "type": "helpscout",
+                "scope": "global",
+                "client_id": None,
+                "icon_url": "/static/images/ability-default.png",
+                "config": {
+                    "mailboxes": [],
+                    "default_mailbox_id": None,
+                    "default_action": "list",
+                    "max_results": 10,
+                    "oauth_provider": "helpscout",
+                },
+                "enabled": False,
+            },
         ]
 
         try:
@@ -62,6 +79,7 @@ class ToolsService:
         "content_catalyst": "/static/images/abilities/content-catalyst.svg",
         "crypto_price_check": "/static/images/abilities/crypto-price.svg",
         "asana_tasks": "/static/images/abilities/asana.svg",
+        "helpscout_tickets": "/static/images/abilities/helpscout.svg",
         "lingua": "/static/images/abilities/lingua.svg",
     }
 

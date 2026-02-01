@@ -9,32 +9,37 @@ version: '3.8'
 services:
   fastapi:
     container_name: sidekick-forge-staging-fastapi
-    environment:
-      - APP_ENV=staging
-      - DEVELOPMENT_MODE=true
-      # Staging Supabase branch credentials (set in .env.staging)
-      - SUPABASE_URL=${STAGING_SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${STAGING_SUPABASE_SERVICE_ROLE_KEY}
-      - SUPABASE_ANON_KEY=${STAGING_SUPABASE_ANON_KEY}
-      # Staging-specific agent name
-      - AGENT_NAME=sidekick-agent-staging
-      - LIVEKIT_AGENT_NAME=sidekick-agent-staging
-      # Domain
-      - DOMAIN_NAME=staging.sidekickforge.com
     env_file:
       - .env.staging
+    environment:
+      # Staging Supabase branch - must override base docker-compose values
+      - SUPABASE_URL=https://senzircaknleviasihav.supabase.co
+      - SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNlbnppcmNha25sZXZpYXNpaGF2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTEwNjc3OSwiZXhwIjoyMDg0NjgyNzc5fQ.kIWw3LXbznZLk0dMUA4_i4s4R2y5GQbnqmpHIUDSMJk
+      - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNlbnppcmNha25sZXZpYXNpaGF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkxMDY3NzksImV4cCI6MjA4NDY4Mjc3OX0.vD-l1caDv5Gv6zCD1-sgGeR5HYPumFXz1RYUFb7QKUU
+      # Override other values
+      - APP_ENV=staging
+      - DEVELOPMENT_MODE=true
+      - AGENT_NAME=sidekick-agent-staging
+      - LIVEKIT_AGENT_NAME=sidekick-agent-staging
+      - DOMAIN_NAME=staging.sidekickforge.com
+    # Override .env mount to use staging config
+    volumes:
+      - ./.env.staging:/app/.env:ro
 
   agent-worker:
     container_name: sidekick-forge-staging-agent
-    environment:
-      - AGENT_NAME=sidekick-agent-staging
-      # Staging Supabase branch credentials
-      - SUPABASE_URL=${STAGING_SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${STAGING_SUPABASE_SERVICE_ROLE_KEY}
-      - SUPABASE_ANON_KEY=${STAGING_SUPABASE_ANON_KEY}
-      - DOMAIN_NAME=staging.sidekickforge.com
     env_file:
       - .env.staging
+    environment:
+      # Staging Supabase branch - must override base docker-compose values
+      - SUPABASE_URL=https://senzircaknleviasihav.supabase.co
+      - SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNlbnppcmNha25sZXZpYXNpaGF2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTEwNjc3OSwiZXhwIjoyMDg0NjgyNzc5fQ.kIWw3LXbznZLk0dMUA4_i4s4R2y5GQbnqmpHIUDSMJk
+      - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNlbnppcmNha25sZXZpYXNpaGF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkxMDY3NzksImV4cCI6MjA4NDY4Mjc3OX0.vD-l1caDv5Gv6zCD1-sgGeR5HYPumFXz1RYUFb7QKUU
+      # Platform Supabase (for platform_api_keys table)
+      - PLATFORM_SUPABASE_URL=https://eukudpgfpihxsypulopm.supabase.co
+      - PLATFORM_SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV1a3VkcGdmcGloeHN5cHVsb3BtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MzUxMjkyMiwiZXhwIjoyMDY5MDg4OTIyfQ.wOSF5bSdd763_PVyCmSEBGjtbhP67WMfms1aGydO_44
+      - AGENT_NAME=sidekick-agent-staging
+      - DOMAIN_NAME=staging.sidekickforge.com
 
   redis:
     container_name: sidekick-forge-staging-redis

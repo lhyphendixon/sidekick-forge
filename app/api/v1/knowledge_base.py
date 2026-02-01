@@ -412,7 +412,8 @@ async def reprocess_document(
                 document_processor._process_document_async(
                     document_id=document_id,
                     file_path=file_path,
-                    agent_ids=[]  # Keep existing agent assignments
+                    agent_ids=[],  # Keep existing agent assignments
+                    client_id=document.get('client_id') or None
                 )
             )
         else:

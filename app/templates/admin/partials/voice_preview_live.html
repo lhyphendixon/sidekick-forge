@@ -320,6 +320,9 @@ function addTranscript(data) {
 
     const messageDiv = document.createElement('div');
     messageDiv.dataset.transcriptEntry = 'true';
+    if (data.id) {
+        messageDiv.dataset.transcriptId = data.id;
+    }
     messageDiv.className = `flex gap-3 ${data.role === 'user' ? 'justify-start' : 'justify-end'}`;
 
     const contentDiv = document.createElement('div');
@@ -335,6 +338,7 @@ function addTranscript(data) {
             ? 'bg-dark-elevated text-dark-text'
             : 'bg-brand-teal/20 text-dark-text border border-brand-teal/30'
     }`;
+    bubbleDiv.dataset.transcriptText = 'true';
     bubbleDiv.textContent = text;
 
     if (data.role === 'assistant' && Array.isArray(data.citations) && data.citations.length > 0) {
@@ -379,6 +383,50 @@ function addTranscript(data) {
     }
     if (autoScroll) {
         container.scrollTop = container.scrollHeight;
+    }
+}
+
+// Function to update an existing transcript message
+function updateTranscript(data) {
+    if (!data || !data.id) {
+        return;
+    }
+    const text = data.content || data.transcript;
+    if (!text) {
+        return;
+    }
+    const container = transcriptContainer;
+    if (!container) {
+        return;
+    }
+
+    // Find the existing message by ID
+    const existing = container.querySelector(`[data-transcript-id="${data.id}"]`);
+    if (existing) {
+        const bubble = existing.querySelector('[data-transcript-text]');
+        if (bubble) {
+            const isUser = data.role === 'user';
+            const newText = text || '';
+
+            // For user messages: only update if new text is longer
+            // This prevents out-of-order STT updates from overwriting the full message
+            if (isUser) {
+                const currentText = bubble.textContent || '';
+                if (newText.length >= currentText.length) {
+                    bubble.textContent = newText;
+                }
+            } else {
+                // For assistant messages: always update
+                bubble.textContent = newText;
+            }
+
+            if (autoScroll) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+    } else {
+        // If we don't have the message yet, add it
+        addTranscript(data);
     }
 }
 
@@ -427,13 +475,29 @@ async function startTranscriptStream(conversationIdOverride) {
             },
             (payload) => {
                 if (payload && payload.new) {
+                    console.log('[transcript] INSERT:', payload.new.id?.slice(0, 8), payload.new.role);
                     addTranscript(payload.new);
+                }
+            }
+        )
+        .on(
+            'postgres_changes',
+            {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'conversation_transcripts',
+                filter: `conversation_id=eq.${conversationId}`
+            },
+            (payload) => {
+                if (payload && payload.new) {
+                    console.log('[transcript] UPDATE:', payload.new.id?.slice(0, 8), payload.new.role, 'len:', payload.new.content?.length);
+                    updateTranscript(payload.new);
                 }
             }
         )
         .subscribe((status) => {
             if (status === 'SUBSCRIBED') {
-                console.log('Subscribed to transcript updates');
+                console.log('Subscribed to transcript updates (INSERT + UPDATE)');
             } else if (status === 'CHANNEL_ERROR') {
                 console.error('Transcript channel error, will attempt restart');
                 setTimeout(() => startTranscriptStream(conversationId), 2000);

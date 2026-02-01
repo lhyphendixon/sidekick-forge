@@ -40,7 +40,7 @@ def main():
         {
             "key_name": "cerebras_api_key",
             "provider": "cerebras",
-            "description": "Cerebras API key for LLM (GLM 4.6)",
+            "description": "Cerebras API key for LLM (GLM 4.7)",
             "env_var": "CEREBRAS_API_KEY",
         },
         {

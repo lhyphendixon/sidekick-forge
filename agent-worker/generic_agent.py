@@ -2,17 +2,27 @@
 """
 Voice AI Agent for Sidekick Forge Platform
 Handles session-agent-rag jobs with full STT/LLM/TTS capabilities
+
+Supports special modes:
+- wizard_guide: Agent guides user through wizard with form-filling tools
 """
 
 import os
+import sys
 import asyncio
 import logging
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from livekit import agents, rtc
 from livekit.agents import JobContext, WorkerOptions, cli, AutoSubscribe
+from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import openai, groq, elevenlabs, deepgram, cartesia
+
+# Add app path for importing wizard tools
+APP_PATH = os.getenv("APP_PATH", "/app")
+if APP_PATH not in sys.path:
+    sys.path.insert(0, APP_PATH)
 
 # Configure logging
 logging.basicConfig(
@@ -168,28 +178,89 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"[{AGENT_NAME}] Connecting to room: {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     logger.info(f"[{AGENT_NAME}] Voice AI agent successfully joined room: {ctx.room.name}")
-    
+
+    # Check for special modes
+    room_type = combined_metadata.get("type", "")
+    is_wizard_mode = room_type == "wizard_guide"
+
+    if is_wizard_mode:
+        logger.info(f"[{AGENT_NAME}] 🧙 Wizard mode detected - loading wizard tools")
+
     try:
         # Create voice AI components
         stt = create_stt(agent_config)
-        tts = create_tts(agent_config) 
+        tts = create_tts(agent_config)
         llm = create_llm(agent_config)
-        
-        # Create voice assistant
+
+        # Create voice assistant with optional tools
         interrupt_duration = float(os.getenv("VOICE_INTERRUPT_DURATION", "0.9"))
         interrupt_min_words = int(os.getenv("VOICE_INTERRUPT_MIN_WORDS", "4"))
 
-        assistant = agents.VoiceAssistant(
-            stt=stt,
-            tts=tts,
-            llm=llm,
-            interrupt_speech_duration=interrupt_duration,
-            interrupt_min_words=interrupt_min_words,
-        )
-        
+        # Build assistant options
+        assistant_kwargs = {
+            "stt": stt,
+            "tts": tts,
+            "llm": llm,
+            "interrupt_speech_duration": interrupt_duration,
+            "interrupt_min_words": interrupt_min_words,
+        }
+
+        # For wizard mode, load wizard tools and set up chat context
+        if is_wizard_mode:
+            wizard_tools, wizard_system_prompt = await setup_wizard_mode(
+                ctx.room,
+                combined_metadata
+            )
+
+            if wizard_tools:
+                assistant_kwargs["fnc_ctx"] = wizard_tools
+                logger.info(f"[{AGENT_NAME}] Loaded {len(wizard_tools)} wizard tools")
+
+            # Build the initial greeting based on wizard state
+            wizard_config = _as_dict(combined_metadata.get("wizard_config", {}))
+            current_step = wizard_config.get("current_step", 1)
+            form_data = wizard_config.get("form_data", {})
+
+            if current_step == 1 and not form_data.get("name"):
+                initial_greeting = (
+                    "Hi! I'm Farah, and I'll help you create your AI sidekick today. "
+                    "Let's start with the basics. What would you like to name your sidekick?"
+                )
+            elif current_step > 1:
+                name = form_data.get("name", "your sidekick")
+                initial_greeting = (
+                    f"Welcome back! We were working on creating {name}. "
+                    f"Let me check where we left off and continue from there."
+                )
+            else:
+                initial_greeting = "Hi! I'm here to help you create your sidekick. What would you like to name them?"
+
+            # Set up initial chat context with wizard system prompt AND the greeting
+            # Adding the greeting as an assistant message prevents the LLM from generating
+            # an unwanted initial response (which would read the system prompt)
+            chat_ctx = ChatContext()
+            chat_ctx.append(
+                role="system",
+                text=wizard_system_prompt
+            )
+            # Add greeting as assistant message so LLM knows it already spoke
+            chat_ctx.append(
+                role="assistant",
+                text=initial_greeting
+            )
+            assistant_kwargs["chat_ctx"] = chat_ctx
+            logger.info(f"[{AGENT_NAME}] Set wizard system prompt ({len(wizard_system_prompt)} chars) with initial greeting")
+
+        assistant = agents.VoiceAssistant(**assistant_kwargs)
+
         # Start the assistant
         assistant.start(ctx.room)
         logger.info(f"[{AGENT_NAME}] Voice assistant started successfully")
+
+        # For wizard mode, speak the greeting immediately (already in chat context)
+        if is_wizard_mode:
+            # Use the same greeting we added to chat context
+            asyncio.create_task(_speak_wizard_greeting(assistant, initial_greeting))
         
         # Set up event handlers
         @ctx.room.on("participant_connected")
@@ -215,6 +286,67 @@ async def entrypoint(ctx: JobContext):
         await asyncio.sleep(5)
     
     logger.info(f"[{AGENT_NAME}] Job completed for room: {ctx.room.name}")
+
+async def setup_wizard_mode(
+    room: rtc.Room,
+    metadata: Dict[str, Any]
+) -> tuple[Optional[List], str]:
+    """
+    Set up wizard mode with form-filling tools.
+
+    Args:
+        room: LiveKit room for data messages
+        metadata: Room metadata containing wizard configuration
+
+    Returns:
+        Tuple of (list of tools, system prompt)
+    """
+    try:
+        # Try to import wizard tools from the app
+        from app.agent_modules.wizard_tools import build_wizard_tools, WIZARD_GUIDE_SYSTEM_PROMPT
+
+        wizard_config = _as_dict(metadata.get("wizard_config", {}))
+        session_id = wizard_config.get("session_id") or metadata.get("session_id")
+
+        # Build tools with room context for data messages
+        tools, system_prompt = build_wizard_tools(
+            room=room,
+            wizard_config=wizard_config,
+            session_id=session_id
+        )
+
+        # Use custom system prompt if provided, otherwise use default
+        custom_prompt = metadata.get("system_prompt") or wizard_config.get("guide_system_prompt")
+        if custom_prompt:
+            system_prompt = custom_prompt
+
+        logger.info(f"[{AGENT_NAME}] Wizard tools built: {len(tools)} tools, session={session_id}")
+        return tools, system_prompt
+
+    except ImportError as e:
+        logger.warning(f"[{AGENT_NAME}] Could not import wizard tools: {e}")
+        # Return a basic system prompt without tools
+        default_prompt = metadata.get("system_prompt", "You are a helpful assistant guiding the user through a wizard.")
+        return None, default_prompt
+    except Exception as e:
+        logger.error(f"[{AGENT_NAME}] Error setting up wizard mode: {e}", exc_info=True)
+        default_prompt = metadata.get("system_prompt", "You are a helpful assistant guiding the user through a wizard.")
+        return None, default_prompt
+
+
+async def _speak_wizard_greeting(assistant, greeting: str):
+    """
+    Speak the wizard greeting after a brief delay for audio setup.
+    The greeting text is passed in (already determined during setup).
+    """
+    try:
+        # Brief delay for audio to be ready (reduced from 2s since user is already connected)
+        await asyncio.sleep(0.5)
+        logger.info(f"[{AGENT_NAME}] Speaking wizard greeting: {greeting[:50]}...")
+        await assistant.say(greeting)
+    except Exception as e:
+        logger.warning(f"[{AGENT_NAME}] Could not speak wizard greeting: {e}")
+
 
 def create_stt(config: Dict[str, Any]):
     """Create STT provider based on configuration"""

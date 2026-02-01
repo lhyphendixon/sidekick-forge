@@ -99,7 +99,8 @@ def get_tool_friendly_name(tool_def: dict) -> str:
     # Map common tool slugs to better names
     name_map = {
         "Asana Tasks": "checking your Asana tasks",
-        "Perplexity Search N8N": "searching for information",
+        "Perplexity Search": "searching for information",
+        "Perplexity Search N8N": "searching for information",  # Legacy name fallback
         "Search Knowledge Base": "searching the knowledge base",
         "Knowledge Base": "searching the knowledge base",
         "Rag Search": "searching for relevant information",

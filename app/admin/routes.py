@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile, Query, status
+from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile, Query, Body, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from typing import Dict, Any, List, Optional, Set
@@ -29,6 +29,7 @@ from app.integrations.supabase_client import supabase_manager
 from app.models.tools import ToolCreate, ToolUpdate, ToolAssignmentRequest
 from app.services.tools_service_supabase import ToolsService
 from app.services.asana_oauth_service import AsanaOAuthService, AsanaOAuthError
+from app.services.helpscout_oauth_service import HelpScoutOAuthService, HelpScoutOAuthError
 from app.utils.supabase_credentials import SupabaseCredentialManager
 from app.constants import DOCUMENT_MAX_UPLOAD_BYTES, DOCUMENT_MAX_UPLOAD_MB
 from app.services.client_supabase_auth import generate_client_session_tokens
@@ -98,6 +99,12 @@ def get_asana_oauth_service() -> AsanaOAuthService:
     from app.core.dependencies import get_client_service
 
     return AsanaOAuthService(get_client_service())
+
+
+def get_helpscout_oauth_service() -> HelpScoutOAuthService:
+    from app.core.dependencies import get_client_service
+
+    return HelpScoutOAuthService(get_client_service())
 
 
 def admin_is_super(admin_user: Dict[str, Any]) -> bool:
@@ -186,6 +193,84 @@ def ensure_client_or_global_access(client_id: str, admin_user: Dict[str, Any]) -
             )
         return
     ensure_client_access(client_id, admin_user)
+
+
+def _get_client_supabase_credentials(client: Any) -> tuple[Optional[str], Optional[str]]:
+    """Resolve Supabase URL/key for a tenant client."""
+    if client and getattr(client, "settings", None) and getattr(client.settings, "supabase", None):
+        supabase_cfg = client.settings.supabase
+        if supabase_cfg.url and supabase_cfg.service_role_key:
+            return str(supabase_cfg.url), str(supabase_cfg.service_role_key)
+    if getattr(client, "supabase_project_url", None) and getattr(client, "supabase_service_role_key", None):
+        return client.supabase_project_url, client.supabase_service_role_key
+    if getattr(client, "supabase_url", None) and getattr(client, "supabase_service_role_key", None):
+        return client.supabase_url, client.supabase_service_role_key
+    return None, None
+
+
+def _default_personality_payload() -> Dict[str, int]:
+    return {
+        "openness": 50,
+        "conscientiousness": 50,
+        "extraversion": 50,
+        "agreeableness": 50,
+        "neuroticism": 50,
+    }
+
+
+def _fetch_agent_personality(agent_id: Optional[str], client: Any) -> Dict[str, int]:
+    """Fetch personality values for an agent from tenant Supabase."""
+    payload = _default_personality_payload()
+    if not agent_id or not client:
+        return payload
+    supabase_url, supabase_key = _get_client_supabase_credentials(client)
+    if not supabase_url or not supabase_key:
+        return payload
+    try:
+        from supabase import create_client as create_supabase_client
+        client_sb = create_supabase_client(supabase_url, supabase_key)
+        response = (
+            client_sb
+            .table("agent_personality")
+            .select("openness, conscientiousness, extraversion, agreeableness, neuroticism")
+            .eq("agent_id", agent_id)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(response, "data", None) or []
+        if not rows:
+            return payload
+        row = rows[0] or {}
+        for key in payload:
+            try:
+                payload[key] = int(row.get(key, payload[key]))
+            except (TypeError, ValueError):
+                payload[key] = payload[key]
+    except Exception as exc:
+        logger.warning("Failed to fetch agent personality: %s", exc)
+    return payload
+
+
+def _upsert_agent_personality(agent_id: Optional[str], client: Any, personality: Dict[str, Any]) -> None:
+    """Upsert personality values for an agent in tenant Supabase."""
+    if not agent_id or not client:
+        return
+    supabase_url, supabase_key = _get_client_supabase_credentials(client)
+    if not supabase_url or not supabase_key:
+        return
+    payload = _default_personality_payload()
+    for key in payload:
+        try:
+            payload[key] = max(0, min(100, int(personality.get(key, payload[key]))))
+        except (TypeError, ValueError):
+            payload[key] = payload[key]
+    payload["agent_id"] = agent_id
+    try:
+        from supabase import create_client as create_supabase_client
+        client_sb = create_supabase_client(supabase_url, supabase_key)
+        client_sb.table("agent_personality").upsert(payload, on_conflict="agent_id").execute()
+    except Exception as exc:
+        logger.warning("Failed to upsert agent personality: %s", exc)
 
 
 async def _get_transcript_supabase_context(client_id: str) -> Dict[str, str]:
@@ -313,7 +398,7 @@ async def get_redis():
     return redis_client
 
 # Import proper admin authentication
-from app.admin.auth import get_admin_user
+from app.admin.auth import get_admin_user, require_admin_role
 
 # Login/Logout Routes
 @router.get("/login", response_class=HTMLResponse)
@@ -334,7 +419,12 @@ async def login_page(request: Request):
 @router.get("/reset-password", response_class=HTMLResponse)
 async def reset_password_page(request: Request):
     """Password reset page"""
-    return templates.TemplateResponse("admin/reset-password.html", {"request": request})
+    from app.config import settings
+    return templates.TemplateResponse("admin/reset-password.html", {
+        "request": request,
+        "supabase_url": settings.supabase_url,
+        "supabase_anon_key": settings.supabase_anon_key,
+    })
 
 @router.post("/login")
 async def login(request: Request):
@@ -384,7 +474,8 @@ async def login(request: Request):
                         value=access_token,
                         max_age=28800,  # 8 hours
                         path="/",
-                        httponly=False,  # Allow JS access for API calls
+                        httponly=True,  # Prevent XSS token theft
+                        secure=True,  # HTTPS only
                         samesite="lax",
                     )
                     return response
@@ -411,7 +502,14 @@ async def login(request: Request):
 async def logout(request: Request):
     """Admin logout"""
     response = RedirectResponse(url="/admin/login", status_code=303)
-    response.delete_cookie("admin_token")
+    # Delete cookie with same flags used when setting it to ensure proper removal
+    response.delete_cookie(
+        key="admin_token",
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax"
+    )
     return response
 
 @router.get("/auth/check")
@@ -423,15 +521,76 @@ async def check_auth(request: Request):
     except HTTPException:
         return {"authenticated": False}
 
-# Users management page
+
+# Subscriber landing page - shows assigned sidekicks for chat
+@router.get("/my-sidekicks", response_class=HTMLResponse)
+async def subscriber_sidekicks_page(
+    request: Request,
+    user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """
+    Subscriber landing page showing their assigned sidekicks.
+    Subscribers can only chat with sidekicks they're assigned to.
+
+    Uses ClientConnectionManager to properly query from:
+    - Shared pool (Adventurer tier)
+    - Dedicated databases (Champion/Paragon tier)
+    """
+    from uuid import UUID
+
+    # Get the subscriber's assigned client IDs
+    subscriber_client_ids = user.get("visible_client_ids", [])
+    tenant_assignments = user.get("tenant_assignments", {})
+    if not subscriber_client_ids:
+        subscriber_client_ids = tenant_assignments.get("subscriber_client_ids", [])
+
+    logger.info(f"[MY-SIDEKICKS] Fetching sidekicks for subscriber {user.get('email')}, client_ids={subscriber_client_ids}")
+
+    # Fetch sidekicks (agents) for the subscriber's assigned clients
+    # Use connection manager to get proper database for each client
+    sidekicks = []
+    if subscriber_client_ids:
+        connection_manager = get_connection_manager()
+        for client_id in subscriber_client_ids:
+            try:
+                client_uuid = UUID(client_id) if isinstance(client_id, str) else client_id
+                # Get the proper database client (shared pool or dedicated)
+                client_db = connection_manager.get_client_db_client(client_uuid)
+
+                # Query agents - filter by client_id (required for shared pool multi-tenancy)
+                result = client_db.table('agents').select(
+                    'id, name, agent_image, description, slug'
+                ).eq('client_id', str(client_uuid)).execute()
+
+                if result.data:
+                    # Add client_id to each sidekick for the template
+                    for sidekick in result.data:
+                        sidekick['client_id'] = str(client_uuid)
+                    sidekicks.extend(result.data)
+                    logger.info(f"[MY-SIDEKICKS] Found {len(result.data)} sidekicks for client {client_id}")
+                else:
+                    logger.info(f"[MY-SIDEKICKS] No sidekicks found for client {client_id}")
+
+            except Exception as e:
+                logger.error(f"[MY-SIDEKICKS] Failed to fetch sidekicks for client {client_id}: {e}")
+                continue
+
+    return templates.TemplateResponse("admin/subscriber_sidekicks.html", {
+        "request": request,
+        "user": user,
+        "sidekicks": sidekicks,
+    })
+
+
+# Users management page (admin-only)
 @router.get("/users", response_class=HTMLResponse)
 async def users_page(
     request: Request,
-    user: Dict[str, Any] = Depends(get_admin_user),
+    user: Dict[str, Any] = Depends(require_admin_role),
     page: int = 1,
     search: str = ""
 ):
-    """Users page with pagination and search."""
+    """Users page with pagination and search. Requires admin role."""
     await supabase_manager.initialize()
     import httpx
     headers = {
@@ -609,8 +768,8 @@ async def users_page(
     })
 
 @router.post("/users/create")
-async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
-    """Create a new user via Supabase Admin API, then assign platform role membership."""
+async def users_create(request: Request, admin: Dict[str, Any] = Depends(require_admin_role)):
+    """Create a new user via Supabase Admin API, then assign platform role membership. Requires admin role."""
     try:
         data = await request.json()
         full_name = (data.get('full_name') or '').strip()
@@ -624,6 +783,9 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
             raise HTTPException(status_code=400, detail="Email is required")
 
         scoped_ids = get_scoped_client_ids(admin)
+        # Adventurer accounts have no client picker — auto-assign their own client(s)
+        if not client_ids and scoped_ids and role_key in ('admin', 'subscriber'):
+            client_ids = [str(cid) for cid in scoped_ids]
         if scoped_ids is not None:
             allowed_ids = {str(cid) for cid in scoped_ids}
             if role_key == 'super_admin':
@@ -656,13 +818,26 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
                     'subscriber_client_ids': client_ids if role_key == 'subscriber' else [],
                 }
             })
-        payload = {"email": email, "email_confirm": True, "user_metadata": initial_user_metadata}
+        # Create user with a temporary password, then send password reset so they set their own
+        import secrets
+        temp_password = secrets.token_urlsafe(24)
+        create_payload = {
+            "email": email,
+            "password": temp_password,
+            "email_confirm": True,
+            "user_metadata": initial_user_metadata,
+        }
+        is_new_user = False
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(f"{supabase_url}/auth/v1/admin/users", headers=headers, json=payload)
-        if r.status_code not in (200, 201):
-            # Handle "already exists" by looking up existing user and continuing
+            r = await client.post(f"{supabase_url}/auth/v1/admin/users", headers=headers, json=create_payload)
+        if r.status_code in (200, 201):
+            user = r.json()
+            user_id = user.get('id')
+            is_new_user = True
+        else:
+            # User may already exist — look them up
             try:
-                if r.status_code in (400, 409):
+                if r.status_code in (400, 409, 422):
                     async with httpx.AsyncClient(timeout=10) as client:
                         r_lookup = await client.get(
                             f"{supabase_url}/auth/v1/admin/users",
@@ -682,9 +857,27 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
                     return HTMLResponse(status_code=500, content=f"Failed to create user: {r.text}")
             except Exception:
                 return HTMLResponse(status_code=500, content="Error creating user")
-        else:
-            user = r.json()
-            user_id = user.get('id')
+
+        # Send password recovery email so the user can set their own password
+        if is_new_user:
+            try:
+                domain = os.getenv("DOMAIN_NAME", "staging.sidekickforge.com")
+                recovery_payload = {
+                    "email": email,
+                    "redirect_to": f"https://{domain}/admin/reset-password",
+                }
+                async with httpx.AsyncClient(timeout=10) as client:
+                    recover_r = await client.post(
+                        f"{supabase_url}/auth/v1/recover",
+                        headers=headers,
+                        json=recovery_payload,
+                    )
+                if recover_r.status_code in (200, 201):
+                    logger.info(f"Password recovery email sent to {email}")
+                else:
+                    logger.warning(f"Recovery email failed ({recover_r.status_code}): {recover_r.text}")
+            except Exception as e:
+                logger.warning(f"Failed to send recovery email to {email}: {e}")
 
         # Helper to ensure basic roles exist
         def _seed_core_roles(client):
@@ -778,120 +971,49 @@ async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_adm
 async def get_user_assignments(user_id: str, admin: Dict[str, Any] = Depends(get_admin_user)):
     """Return current role assignment for a user to prefill the edit modal."""
     try:
-        await supabase_manager.initialize()
-        admin_client = supabase_manager.admin_client
-
         scoped_ids = get_scoped_client_ids(admin)
         allowed_ids: Optional[Set[str]] = None if scoped_ids is None else {str(cid) for cid in scoped_ids}
 
-        # Resolve role ids
-        def get_role_id(role_key: str) -> Optional[str]:
-            try:
-                row = (
-                    admin_client.table("roles")
-                    .select("id,key")
-                    .eq("key", role_key)
-                    .single()
-                    .execute()
-                    .data
-                )
-                return row.get("id") if row else None
-            except Exception:
-                return None
-
-        super_admin_role_id = get_role_id("super_admin")
-        admin_role_id = get_role_id("admin")
-        subscriber_role_id = get_role_id("subscriber")
-
-        # Check platform super_admin
-        if super_admin_role_id:
-            try:
-                pr = (
-                    admin_client.table("platform_role_memberships")
-                    .select("role_id")
-                    .eq("user_id", user_id)
-                    .eq("role_id", super_admin_role_id)
-                    .execute()
-                    .data
-                )
-                if pr:
-                    return {"role_key": "super_admin", "client_ids": []}
-            except Exception:
-                pass
-
-        # Check tenant memberships for admin/subscriber
-        def get_client_ids_for_role(role_id: Optional[str]) -> List[str]:
-            if not role_id:
-                return []
-            try:
-                rows = (
-                    admin_client.table("tenant_memberships")
-                    .select("client_id")
-                    .eq("user_id", user_id)
-                    .eq("role_id", role_id)
-                    .execute()
-                    .data
-                )
-                return [r.get("client_id") for r in rows if r.get("client_id")]
-            except Exception:
-                return []
-
-        admin_clients = get_client_ids_for_role(admin_role_id)
-        if admin_clients:
-            if allowed_ids is not None:
-                admin_clients = [cid for cid in admin_clients if str(cid) in allowed_ids]
-            if admin_clients:
-                return {"role_key": "admin", "client_ids": admin_clients}
-
-        subscriber_clients = get_client_ids_for_role(subscriber_role_id)
-        if subscriber_clients:
-            if allowed_ids is not None:
-                subscriber_clients = [cid for cid in subscriber_clients if str(cid) in allowed_ids]
-            if subscriber_clients:
-                return {"role_key": "subscriber", "client_ids": subscriber_clients}
-
-        # Fallback: read from Supabase Auth user_metadata if RBAC tables not configured
-        try:
-            from app.config import settings
-            import httpx
-            headers = {
-                'apikey': settings.supabase_service_role_key,
-                'Authorization': f'Bearer {settings.supabase_service_role_key}',
-            }
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(f"{settings.supabase_url}/auth/v1/admin/users/{user_id}", headers=headers)
-            if r.status_code == 200:
-                user = r.json()
-                meta = user.get('user_metadata', {}) or {}
-                platform_role = meta.get('platform_role')
-                if platform_role == 'super_admin':
-                    return {"role_key": "super_admin", "client_ids": []}
-                ta = meta.get('tenant_assignments', {}) or {}
-                admin_ids = ta.get('admin_client_ids') or []
-                subscriber_ids = ta.get('subscriber_client_ids') or []
+        # Read from Supabase Auth user_metadata
+        from app.config import settings
+        import httpx
+        headers = {
+            'apikey': settings.supabase_service_role_key,
+            'Authorization': f'Bearer {settings.supabase_service_role_key}',
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{settings.supabase_url}/auth/v1/admin/users/{user_id}", headers=headers)
+        if r.status_code == 200:
+            user = r.json()
+            meta = user.get('user_metadata', {}) or {}
+            platform_role = meta.get('platform_role')
+            if platform_role == 'super_admin':
+                return {"role_key": "super_admin", "client_ids": []}
+            ta = meta.get('tenant_assignments', {}) or {}
+            admin_ids = ta.get('admin_client_ids') or []
+            subscriber_ids = ta.get('subscriber_client_ids') or []
+            if admin_ids:
+                if allowed_ids is not None:
+                    admin_ids = [cid for cid in admin_ids if str(cid) in allowed_ids]
                 if admin_ids:
-                    if allowed_ids is not None:
-                        admin_ids = [cid for cid in admin_ids if str(cid) in allowed_ids]
-                    if admin_ids:
-                        return {"role_key": "admin", "client_ids": admin_ids}
+                    return {"role_key": "admin", "client_ids": admin_ids}
+            if subscriber_ids:
+                if allowed_ids is not None:
+                    subscriber_ids = [cid for cid in subscriber_ids if str(cid) in allowed_ids]
                 if subscriber_ids:
-                    if allowed_ids is not None:
-                        subscriber_ids = [cid for cid in subscriber_ids if str(cid) in allowed_ids]
-                    if subscriber_ids:
-                        return {"role_key": "subscriber", "client_ids": subscriber_ids}
-        except Exception:
-            pass
+                    return {"role_key": "subscriber", "client_ids": subscriber_ids}
 
-        # Default if no assignments found anywhere
+        # Default if no assignments found
         return {"role_key": "subscriber", "client_ids": []}
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to fetch user assignments for {user_id}: {e}")
         return HTMLResponse(status_code=500, content="Failed to fetch user assignments")
 
 @router.post("/users/update")
-async def update_user_roles(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
-    """Update a user's role assignments (platform super_admin or tenant roles)."""
+async def update_user_roles(request: Request, admin: Dict[str, Any] = Depends(require_admin_role)):
+    """Update a user's role assignments via Supabase Auth user_metadata. Requires admin role."""
     try:
         data = await request.json()
         user_id = (data.get("user_id") or "").strip()
@@ -901,139 +1023,90 @@ async def update_user_roles(request: Request, admin: Dict[str, Any] = Depends(ge
             client_ids_raw = [client_ids_raw]
         client_ids = [str(cid) for cid in client_ids_raw if cid]
 
-        if not user_id or role_key not in ("super_admin", "admin", "subscriber"):
+        if not user_id or role_key not in ("admin", "subscriber"):
             raise HTTPException(status_code=400, detail="Invalid payload")
-        if role_key in ("admin","subscriber") and not client_ids:
-            raise HTTPException(status_code=400, detail="At least one client_id is required for this role")
 
         scoped_ids = get_scoped_client_ids(admin)
+        # Adventurer accounts: auto-assign own client(s)
+        if not client_ids and scoped_ids and role_key in ('admin', 'subscriber'):
+            client_ids = [str(cid) for cid in scoped_ids]
+        if not client_ids:
+            raise HTTPException(status_code=400, detail="At least one client_id is required for this role")
         if scoped_ids is not None:
             allowed_ids = {str(cid) for cid in scoped_ids}
-            if role_key == "super_admin":
-                raise HTTPException(status_code=403, detail="Insufficient permissions to assign super admin role")
             invalid_ids = [cid for cid in client_ids if cid not in allowed_ids]
             if invalid_ids:
                 raise HTTPException(status_code=403, detail="One or more client IDs are not accessible to this admin")
 
-        await supabase_manager.initialize()
-        admin_client = supabase_manager.admin_client
-
-        # Helpers
-        def seed_core_roles(client):
-            try:
-                core = [
-                    {"key": "super_admin", "scope": "platform", "description": "Platform-wide administrator"},
-                    {"key": "admin", "scope": "tenant", "description": "Tenant administrator"},
-                    {"key": "subscriber", "scope": "tenant", "description": "Use-only role"},
-                ]
-                for r in core:
-                    client.table("roles").upsert(r, on_conflict="key").execute()
-            except Exception:
-                pass
-
-        def get_role_id(role_key_local: str) -> Optional[str]:
-            try:
-                row = (
-                    admin_client.table("roles").select("id,key").eq("key", role_key_local).single().execute().data
-                )
-                if not row:
-                    seed_core_roles(admin_client)
-                    row = (
-                        admin_client.table("roles").select("id,key").eq("key", role_key_local).single().execute().data
-                    )
-                return row.get("id") if row else None
-            except Exception:
-                return None
-
-        # Update assignments using RBAC tables if available; otherwise fallback to Auth user_metadata
-        try:
-            if role_key == "super_admin":
-                sa_id = get_role_id("super_admin")
-                if sa_id:
-                    admin_client.table("platform_role_memberships").upsert({
-                        "user_id": user_id,
-                        "role_id": sa_id,
-                    }).execute()
-                    return HTMLResponse(status_code=200, content="Updated")
-                # Fallback to metadata
-                raise RuntimeError("RBAC roles not present")
-            else:
-                # For tenant roles, reset existing admin/subscriber memberships and apply new ones
-                admin_id = get_role_id("admin")
-                sub_id = get_role_id("subscriber")
-                target_role_id = admin_id if role_key == "admin" else sub_id
-                if target_role_id:
-                    try:
-                        if admin_id:
-                            admin_client.table("tenant_memberships").delete().eq("user_id", user_id).eq("role_id", admin_id).execute()
-                    except Exception:
-                        pass
-                    try:
-                        if sub_id:
-                            admin_client.table("tenant_memberships").delete().eq("user_id", user_id).eq("role_id", sub_id).execute()
-                    except Exception:
-                        pass
-                    for cid in client_ids:
-                        admin_client.table("tenant_memberships").upsert({
-                            "user_id": user_id,
-                            "client_id": cid,
-                            "role_id": target_role_id,
-                            "status": "active",
-                        }).execute()
-                    return HTMLResponse(status_code=200, content="Updated")
-                # Fallback to metadata
-                raise RuntimeError("RBAC roles not present")
-        except Exception:
-            # Fallback: store assignments in Supabase Auth user_metadata
-            from app.config import settings
-            import httpx
-            headers = {
-                'apikey': settings.supabase_service_role_key,
-                'Authorization': f'Bearer {settings.supabase_service_role_key}',
-                'Content-Type': 'application/json',
+        from app.config import settings
+        import httpx
+        headers = {
+            'apikey': settings.supabase_service_role_key,
+            'Authorization': f'Bearer {settings.supabase_service_role_key}',
+            'Content-Type': 'application/json',
+        }
+        meta_update = {
+            'user_metadata': {
+                'platform_role': None,
+                'tenant_assignments': {
+                    'admin_client_ids': client_ids if role_key == 'admin' else [],
+                    'subscriber_client_ids': client_ids if role_key == 'subscriber' else [],
+                }
             }
-            if role_key == 'super_admin':
-                meta_update = {
-                    'user_metadata': {
-                        'platform_role': 'super_admin',
-                        'tenant_assignments': None
-                    }
-                }
-            else:
-                meta_update = {
-                    'user_metadata': {
-                        'platform_role': None,
-                        'tenant_assignments': {
-                            'admin_client_ids': client_ids if role_key == 'admin' else [],
-                            'subscriber_client_ids': client_ids if role_key == 'subscriber' else [],
-                        }
-                    }
-                }
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.patch(
-                    f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
-                    headers=headers,
-                    json=meta_update
-                )
-                if r.status_code not in (200, 201):
-                    # Try PUT as a fallback
-                    r = await client.put(
-                        f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
-                        headers=headers,
-                        json=meta_update
-                    )
-            if r.status_code in (200, 201):
-                return HTMLResponse(status_code=200, content="Updated")
-            else:
-                return HTMLResponse(status_code=500, content="Failed to update user")
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.put(
+                f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                headers=headers,
+                json=meta_update
+            )
+        if r.status_code in (200, 201):
+            return HTMLResponse(status_code=200, content="Updated")
+        else:
+            logger.error(f"Failed to update user {user_id}: {r.status_code} {r.text}")
+            return HTMLResponse(status_code=500, content="Failed to update user")
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to update user: {e}")
         return HTMLResponse(status_code=500, content="Failed to update user")
 
+@router.post("/users/delete")
+async def delete_user(request: Request, admin: Dict[str, Any] = Depends(require_admin_role)):
+    """Delete a user from Supabase Auth. Requires admin role."""
+    try:
+        data = await request.json()
+        user_id = (data.get("user_id") or "").strip()
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id is required")
+        if user_id == admin.get("user_id"):
+            raise HTTPException(status_code=403, detail="You cannot delete your own account")
+
+        from app.config import settings
+        import httpx
+        headers = {
+            'apikey': settings.supabase_service_role_key,
+            'Authorization': f'Bearer {settings.supabase_service_role_key}',
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.delete(
+                f"{settings.supabase_url}/auth/v1/admin/users/{user_id}",
+                headers=headers,
+            )
+        if r.status_code in (200, 204):
+            return HTMLResponse(status_code=200, content="Deleted")
+        else:
+            logger.error(f"Failed to delete user {user_id}: {r.status_code} {r.text}")
+            return HTMLResponse(status_code=500, content="Failed to delete user")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete user: {e}")
+        return HTMLResponse(status_code=500, content="Failed to delete user")
+
 @router.post("/users/set-password")
-async def set_user_password(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
-    """Set a Supabase Auth password for a user (admin operation)."""
+async def set_user_password(request: Request, admin: Dict[str, Any] = Depends(require_admin_role)):
+    """Set a Supabase Auth password for a user (admin operation). Requires admin role."""
     try:
         payload = await request.json()
         user_id = (payload.get("user_id") or "").strip()
@@ -1323,6 +1396,15 @@ async def get_all_agents() -> List[Dict[str, Any]]:
                 client_uuid = UUID(client.id)
                 client_agents = await agent_service.get_agents(client_uuid)
                 for agent in client_agents:
+                    # Convert sound_settings to dict if it's a Pydantic model
+                    sound_settings_raw = getattr(agent, 'sound_settings', {})
+                    if hasattr(sound_settings_raw, 'model_dump'):
+                        sound_settings_dict = sound_settings_raw.model_dump()
+                    elif hasattr(sound_settings_raw, 'dict'):
+                        sound_settings_dict = sound_settings_raw.dict()
+                    else:
+                        sound_settings_dict = sound_settings_raw or {}
+
                     agent_dict = {
                         "id": agent.id,
                         "slug": agent.slug,
@@ -1338,6 +1420,7 @@ async def get_all_agents() -> List[Dict[str, Any]]:
                         "updated_at": getattr(agent, 'updated_at', ''),
                         "system_prompt": agent.system_prompt[:100] + "..." if agent.system_prompt and len(agent.system_prompt) > 100 else agent.system_prompt,
                         "voice_settings": getattr(agent, 'voice_settings', {}),
+                        "sound_settings": sound_settings_dict,
                         "webhooks": getattr(agent, 'webhooks', {}),
                         "show_citations": getattr(agent, 'show_citations', True)
                     }
@@ -1369,6 +1452,38 @@ async def dashboard(
         "request": request,
         "summary": summary,
         "user": admin_user
+    })
+
+
+@router.get("/wizard", response_class=HTMLResponse)
+async def wizard_page(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(require_admin_role)
+):
+    """Sidekick creation wizard page (full page - redirects to modal). Requires admin role."""
+    # Check if user can create more sidekicks
+    if not admin_user.get("can_create_sidekick", True):
+        return RedirectResponse(url="/admin/agents?upgrade=1", status_code=302)
+    # Redirect to agents page which will show the modal
+    return RedirectResponse(url="/admin/agents?wizard=1", status_code=302)
+
+
+@router.get("/wizard/modal", response_class=HTMLResponse)
+async def wizard_modal(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(require_admin_role)
+):
+    """Sidekick creation wizard modal (HTMX partial). Requires admin role."""
+    # Check if user can create more sidekicks
+    if not admin_user.get("can_create_sidekick", True):
+        # Return upgrade prompt instead of wizard
+        return templates.TemplateResponse("admin/wizard/upgrade_prompt.html", {
+            "request": request,
+            "user": admin_user,
+        })
+    return templates.TemplateResponse("admin/wizard/wizard_modal.html", {
+        "request": request,
+        "user": admin_user,
     })
 
 
@@ -1542,6 +1657,10 @@ async def agents_page(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Agent management page"""
+    # Redirect subscribers to their limited view
+    if admin_user.get("role") == "subscriber":
+        return RedirectResponse(url="/admin/my-sidekicks", status_code=302)
+
     scoped_ids = get_scoped_client_ids(admin_user)
     visible_client_ids: List[str] = [] if scoped_ids is None else list(scoped_ids)
 
@@ -1594,14 +1713,42 @@ async def agents_page(
         # Return minimal client data if database is inaccessible
         clients = []
     
+    # Get tier limits for sidekick creation
+    from app.services.tier_features import get_tier_features
+    user_tier = admin_user.get("user_tier", "champion")
+    tier_features = get_tier_features(user_tier) if user_tier else {}
+    max_sidekicks = tier_features.get("max_sidekicks")  # None = unlimited
+    current_sidekick_count = len(agents)
+    can_create_sidekick = max_sidekicks is None or current_sidekick_count < max_sidekicks
+
     return templates.TemplateResponse("admin/agents.html", {
         "request": request,
         "agents": agents,
         "clients": clients,
         "user": admin_user,
-        "disable_stats_poll": True
+        "disable_stats_poll": True,
+        "max_sidekicks": max_sidekicks,
+        "current_sidekick_count": current_sidekick_count,
+        "can_create_sidekick": can_create_sidekick,
     })
 
+
+@router.get("/debug/auth")
+async def debug_auth(admin_user: Dict[str, Any] = Depends(get_admin_user)):
+    """Debug endpoint to check auth info including can_create_sidekick"""
+    return {
+        "user_id": admin_user.get("user_id"),
+        "email": admin_user.get("email"),
+        "role": admin_user.get("role"),
+        "user_tier": admin_user.get("user_tier"),
+        "primary_client_id": admin_user.get("primary_client_id"),
+        "visible_client_ids": admin_user.get("visible_client_ids"),
+        "tenant_assignments": admin_user.get("tenant_assignments"),
+        "can_create_sidekick": admin_user.get("can_create_sidekick"),
+        "sidekick_limit": admin_user.get("sidekick_limit"),
+        "current_sidekick_count": admin_user.get("current_sidekick_count"),
+        "is_adventurer_only": admin_user.get("is_adventurer_only"),
+    }
 
 @router.get("/debug/agents")
 async def debug_agents():
@@ -1676,6 +1823,7 @@ async def debug_agent_data(
                 "created_at": agent.get("created_at", ""),
                 "updated_at": agent.get("updated_at", ""),
                 "voice_settings": agent.get("voice_settings", {}),
+                "sound_settings": agent.get("sound_settings", {}),
                 "webhooks": agent.get("webhooks", {}),
                 "tools_config": agent.get("tools_config", {}),
                 "show_citations": agent.get("show_citations", True),
@@ -1696,6 +1844,7 @@ async def debug_agent_data(
                 "created_at": agent.created_at.isoformat() if hasattr(agent.created_at, 'isoformat') else str(agent.created_at),
                 "updated_at": agent.updated_at.isoformat() if hasattr(agent.updated_at, 'isoformat') else str(agent.updated_at),
                 "voice_settings": agent.voice_settings,
+                "sound_settings": getattr(agent, 'sound_settings', {}),
                 "webhooks": agent.webhooks,
                 "tools_config": agent.tools_config or {},
                 "show_citations": getattr(agent, 'show_citations', True),
@@ -1782,9 +1931,9 @@ async def debug_single_agent(
 @router.get("/knowledge-base", response_class=HTMLResponse)
 async def knowledge_base_page(
     request: Request,
-    admin_user: Dict[str, Any] = Depends(get_admin_user)
+    admin_user: Dict[str, Any] = Depends(require_admin_role)
 ):
-    """Knowledge Base management page"""
+    """Knowledge Base management page. Requires admin role."""
     import time
     response = templates.TemplateResponse("admin/knowledge_base.html", {
         "request": request,
@@ -1801,9 +1950,9 @@ async def knowledge_base_page(
 @router.get("/tools", response_class=HTMLResponse)
 async def tools_page(
     request: Request,
-    admin_user: Dict[str, Any] = Depends(get_admin_user)
+    admin_user: Dict[str, Any] = Depends(require_admin_role)
 ):
-    """Abilities (Tools) management page"""
+    """Abilities (Tools) management page. Requires admin role."""
     scoped_ids = get_scoped_client_ids(admin_user)
     visible_client_ids: List[str] = [] if scoped_ids is None else list(scoped_ids)
 
@@ -1864,6 +2013,7 @@ async def admin_list_tools(
     try:
         if scoped_ids is None:
             tools = await tools_service.list_tools(client_id=client_id, scope=scope, type=type, search=search)
+            allowed_ids = None
         else:
             allowed_ids = list(scoped_ids)
             tools_map: Dict[str, Any] = {}
@@ -1882,7 +2032,19 @@ async def admin_list_tools(
                         for tool in await tools_service.list_tools(client_id=cid, scope="client", type=type, search=search):
                             tools_map[tool.id] = tool
             tools = list(tools_map.values())
-        return JSONResponse([tool.dict() for tool in tools])
+
+        # Get which agents have each tool enabled
+        tool_ids = [t.id for t in tools]
+        agents_by_tool = await tools_service.get_agents_for_tools(tool_ids, allowed_ids)
+
+        # Build response with agent info
+        result = []
+        for tool in tools:
+            tool_dict = tool.dict()
+            tool_dict["enabled_agents"] = agents_by_tool.get(tool.id, [])
+            result.append(tool_dict)
+
+        return JSONResponse(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1890,15 +2052,36 @@ async def admin_list_tools(
 @router.get("/api/asana/status")
 async def admin_asana_status(
     client_id: str = Query(...),
+    validate: bool = Query(default=True, description="Validate and refresh token if needed"),
     admin_user: Dict[str, Any] = Depends(get_admin_user),
 ):
     ensure_client_access(client_id, admin_user)
     service = get_asana_oauth_service()
+
+    # First check if we have a connection at all
     record = service.get_connection(client_id)
     if not record:
         return {"connected": False}
 
+    # Optionally validate and refresh the token
+    # This ensures the connection is actually working and keeps tokens fresh
+    if validate:
+        try:
+            from app.services.asana_oauth_service import AsanaOAuthError
+            bundle = await service.ensure_valid_token(client_id)
+            if not bundle:
+                return {"connected": False, "error": "Token validation failed"}
+            # Re-fetch the record after potential refresh
+            record = service.get_connection(client_id)
+            if not record:
+                return {"connected": False}
+        except AsanaOAuthError as exc:
+            logger.warning(f"Asana token validation failed for client {client_id}: {exc}")
+            # Connection was invalidated (e.g., refresh token expired)
+            return {"connected": False, "error": str(exc)}
+
     extra = record.get("extra") or {}
+    has_refresh_token = bool(record.get("refresh_token"))
     return {
         "connected": True,
         "updated_at": record.get("updated_at"),
@@ -1906,6 +2089,8 @@ async def admin_asana_status(
         "user_gid": extra.get("gid"),
         "user_name": extra.get("name") or extra.get("email"),
         "workspaces": extra.get("workspaces"),
+        "token_valid": True if validate else None,
+        "has_refresh_token": has_refresh_token,
     }
 
 
@@ -1980,6 +2165,160 @@ async def admin_asana_oauth_callback(
         "window.close();"
         "</script>"
         "<p>Asana connected successfully. You can close this window.</p>"
+    )
+    return HTMLResponse(success_markup)
+
+
+# ---------------------------------------------------------------------------
+# HelpScout OAuth Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/api/helpscout/connection")
+async def admin_helpscout_connection_status(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+    validate: bool = Query(False, description="Validate and refresh the token if needed"),
+):
+    """Check the HelpScout connection status for a client."""
+    ensure_client_access(client_id, admin_user)
+    service = get_helpscout_oauth_service()
+
+    # Check if credentials are configured (per-client or global)
+    has_credentials = service.has_credentials(client_id)
+
+    # Check if we have a connection at all
+    record = service.get_connection(client_id)
+    if not record or not record.get("access_token"):
+        return {"connected": False, "has_credentials": has_credentials}
+
+    # Optionally validate and refresh the token
+    if validate:
+        try:
+            bundle = await service.ensure_valid_token(client_id)
+            if not bundle:
+                return {"connected": False, "has_credentials": has_credentials, "error": "Token validation failed"}
+            # Re-fetch the record after potential refresh
+            record = service.get_connection(client_id)
+            if not record:
+                return {"connected": False, "has_credentials": has_credentials}
+        except HelpScoutOAuthError as exc:
+            logger.warning(f"HelpScout token validation failed for client {client_id}: {exc}")
+            return {"connected": False, "has_credentials": has_credentials, "error": str(exc)}
+
+    extra = record.get("extra") or {}
+    has_refresh_token = bool(record.get("refresh_token"))
+    return {
+        "connected": True,
+        "has_credentials": has_credentials,
+        "updated_at": record.get("updated_at"),
+        "expires_at": record.get("expires_at"),
+        "token_valid": True if validate else None,
+        "has_refresh_token": has_refresh_token,
+    }
+
+
+@router.delete("/api/helpscout/connection")
+async def admin_disconnect_helpscout(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Disconnect HelpScout for a client."""
+    ensure_client_access(client_id, admin_user)
+    service = get_helpscout_oauth_service()
+    service.disconnect(client_id)
+    return {"success": True}
+
+
+@router.post("/api/helpscout/credentials")
+async def admin_save_helpscout_credentials(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+    body: Dict[str, Any] = Body(...),
+):
+    """Save HelpScout OAuth App credentials for a client."""
+    ensure_client_access(client_id, admin_user)
+
+    oauth_client_id = body.get("oauth_client_id", "").strip()
+    oauth_client_secret = body.get("oauth_client_secret", "").strip()
+
+    if not oauth_client_id or not oauth_client_secret:
+        raise HTTPException(status_code=400, detail="Both App ID and App Secret are required.")
+
+    service = get_helpscout_oauth_service()
+    try:
+        service.save_client_oauth_credentials(client_id, oauth_client_id, oauth_client_secret)
+    except HelpScoutOAuthError as exc:
+        logger.error(f"HelpScout credential save failed for client {client_id}: {exc}")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(f"Unexpected error saving HelpScout credentials for client {client_id}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc
+
+    return {"success": True, "message": "Credentials saved successfully."}
+
+
+@router.get("/api/helpscout/oauth/start")
+async def admin_helpscout_oauth_start(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Initiate HelpScout OAuth flow."""
+    ensure_client_access(client_id, admin_user)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Unable to determine admin user ID for OAuth state.")
+
+    service = get_helpscout_oauth_service()
+    try:
+        authorization_url = service.build_authorization_url(client_id, user_id)
+    except HelpScoutOAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"authorization_url": authorization_url}
+
+
+@router.get("/oauth/helpscout/callback")
+async def admin_helpscout_oauth_callback(
+    request: Request,
+    code: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+):
+    """Handle HelpScout OAuth callback."""
+    service = get_helpscout_oauth_service()
+
+    if error:
+        return HTMLResponse(
+            f"<p>HelpScout returned an error: {error}</p>",
+            status_code=400,
+        )
+
+    if not state:
+        return HTMLResponse("<p>Missing state parameter.</p>", status_code=400)
+
+    try:
+        state_data = service.parse_state(state)
+    except HelpScoutOAuthError as exc:
+        return HTMLResponse(f"<p>{exc}</p>", status_code=400)
+
+    client_id = state_data.get("client_id")
+    if not client_id:
+        return HTMLResponse("<p>Invalid state payload: missing client reference.</p>", status_code=400)
+
+    if not code:
+        return HTMLResponse("<p>Missing authorization code.</p>", status_code=400)
+
+    try:
+        await service.exchange_code(client_id, code)
+    except HelpScoutOAuthError as exc:
+        return HTMLResponse(f"<p>Failed to complete HelpScout OAuth: {exc}</p>", status_code=400)
+
+    success_markup = (
+        "<script>"
+        "if(window.opener){window.opener.postMessage('helpscout-connected','*');}"
+        "window.close();"
+        "</script>"
+        "<p>HelpScout connected successfully. You can close this window.</p>"
     )
     return HTMLResponse(success_markup)
 
@@ -2348,6 +2687,7 @@ async def agent_detail(
                 "created_at": agent.get("created_at", ""),
                 "updated_at": agent.get("updated_at", ""),
                 "voice_settings": agent.get("voice_settings", {}),
+                "sound_settings": agent.get("sound_settings", {}),
                 "webhooks": agent.get("webhooks", {}),
                 "tools_config": agent.get("tools_config", {}),
                 "show_citations": agent.get("show_citations", True),
@@ -2390,6 +2730,22 @@ async def agent_detail(
                 except Exception:
                     webhooks_for_template = {}
 
+            # Convert sound_settings to dict for template
+            sound_settings_for_template = getattr(agent, 'sound_settings', None)
+            if sound_settings_for_template:
+                if hasattr(sound_settings_for_template, 'model_dump'):
+                    try:
+                        sound_settings_for_template = sound_settings_for_template.model_dump()
+                    except Exception:
+                        sound_settings_for_template = {}
+                elif hasattr(sound_settings_for_template, 'dict'):
+                    try:
+                        sound_settings_for_template = sound_settings_for_template.dict()
+                    except Exception:
+                        sound_settings_for_template = {}
+            else:
+                sound_settings_for_template = {}
+
             agent_data = {
                 "id": agent.id,
                 "slug": agent.slug,
@@ -2402,6 +2758,7 @@ async def agent_detail(
                 "created_at": agent.created_at.isoformat() if hasattr(agent.created_at, 'isoformat') else str(agent.created_at),
                 "updated_at": agent.updated_at.isoformat() if hasattr(agent.updated_at, 'isoformat') else str(agent.updated_at),
                 "voice_settings": voice_settings_for_template,
+                "sound_settings": sound_settings_for_template,
                 "webhooks": webhooks_for_template,
                 "tools_config": agent.tools_config or {},
                 "show_citations": getattr(agent, 'show_citations', True),
@@ -2557,6 +2914,8 @@ async def agent_detail(
             except Exception:
                 logger.info(f"[admin] Rendering agent_detail for {client_id}/{agent_slug}")
 
+            agent_personality = _fetch_agent_personality(cleaned_agent_data.get("id"), client)
+
             template_data = {
                 "request": request,
                 "agent": cleaned_agent_data,  # Use cleaned data
@@ -2565,7 +2924,8 @@ async def agent_detail(
                 "disable_stats_poll": True,
                 "latest_config": latest_config,
                 "latest_config_json": latest_config_json,
-                "has_config_updates": bool(agent_config) if agent_config else False
+                "has_config_updates": bool(agent_config) if agent_config else False,
+                "agent_personality": agent_personality,
             }
             return templates.TemplateResponse("admin/agent_detail.html", template_data)
         except Exception as template_error:
@@ -2857,6 +3217,7 @@ async def agent_detail(
                                             <option value="llama3-8b-8192">Llama 3 8B (Groq)</option>
                                             <option value="mixtral-8x7b-32768">Mixtral 8x7B (Groq)</option>
                                             <!-- Cerebras documented chat models -->
+                                            <option value="zai-glm-4.7">GLM 4.7 (Cerebras, Recommended)</option>
                                             <option value="llama3.1-8b">Llama 3.1 8B (Cerebras)</option>
                                             <option value="llama-3.3-70b">Llama 3.3 70B (Cerebras)</option>
                                             <option value="llama-4-scout-17b-16e-instruct">Llama 4 Scout 17B Instruct (Cerebras)</option>
@@ -3219,9 +3580,9 @@ async def agent_detail(
                             {{ value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B (Groq)' }}
                         ],
                         cerebras: [
+                            {{ value: 'zai-glm-4.7', label: 'GLM 4.7 (Recommended)' }},
                             {{ value: 'llama-3.3-70b', label: 'Llama 3.3 70B' }},
                             {{ value: 'llama3.1-8b', label: 'Llama 3.1 8B (Fast)' }},
-                            {{ value: 'zai-glm-4.6', label: 'Z.ai GLM 4.6 (Preview)' }},
                             {{ value: 'qwen-3-32b', label: 'Qwen 3 32B' }},
                             {{ value: 'qwen-3-235b-a22b-instruct-2507', label: 'Qwen 3 235B Instruct (Preview)' }},
                             {{ value: 'gpt-oss-120b', label: 'GPT-OSS 120B (Preview)' }}
@@ -3263,6 +3624,8 @@ async def agent_detail(
             </body>
             </html>
             '''
+            agent_personality = _fetch_agent_personality(cleaned_agent_data.get("id"), client)
+
             template_data = {
                 "request": request,
                 "agent": cleaned_agent_data,
@@ -3270,7 +3633,8 @@ async def agent_detail(
                 "user": admin_user,
                 "latest_config": latest_config,
                 "latest_config_json": latest_config_json,
-                "has_config_updates": bool(agent_config) if agent_config else False
+                "has_config_updates": bool(agent_config) if agent_config else False,
+                "agent_personality": agent_personality,
             }
             return templates.TemplateResponse("admin/agent_detail.html", template_data)
     
@@ -4658,16 +5022,167 @@ referrerpolicy=\"strict-origin-when-cross-origin\"></iframe>"""
 @router.get("/monitoring", response_class=HTMLResponse)
 async def monitoring_dashboard(
     request: Request,
+    client_id: Optional[str] = None,
+    period: str = "current",
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """System monitoring dashboard"""
-    # Adventurer users don't have access to monitoring
-    if admin_user.get("is_adventurer_only"):
-        return RedirectResponse(url="/admin/agents", status_code=302)
+    from app.core.dependencies import get_client_service
+    from app.services.usage_tracking import UsageTrackingService
+
+    client_service = get_client_service()
+    usage_service = UsageTrackingService()
+    await usage_service.initialize()
+
+    # Get clients the user has access to
+    scoped_ids = get_scoped_client_ids(admin_user)
+    clients = []
+    try:
+        all_clients = await client_service.get_all_clients()
+        if scoped_ids is not None:
+            allowed = {str(cid) for cid in scoped_ids}
+            clients = [c for c in all_clients if str(getattr(c, 'id', '')) in allowed]
+        else:
+            clients = all_clients
+    except Exception as e:
+        logger.warning(f"Failed to fetch clients for monitoring: {e}")
+
+    # Convert clients to dicts for template
+    clients_data = []
+    for c in clients:
+        clients_data.append({
+            "id": str(c.id) if hasattr(c, 'id') else str(c.get('id', '')),
+            "name": c.name if hasattr(c, 'name') else c.get('name', 'Unknown'),
+        })
+
+    # Validate selected client_id
+    selected_client_id = None
+    if client_id:
+        if scoped_ids is None or client_id in scoped_ids:
+            selected_client_id = client_id
+
+    # Get sidekicks using the same approach as agents_page
+    sidekicks = []
+    try:
+        if admin_is_super(admin_user):
+            all_agents = await get_all_agents()
+            if selected_client_id:
+                all_agents = [a for a in all_agents if str(a.get('client_id', '')) == selected_client_id]
+        else:
+            from app.core.dependencies import get_agent_service
+            agent_service = get_agent_service()
+            visible_client_ids = list(scoped_ids) if scoped_ids else []
+            all_agents = []
+            client_name_cache = {}
+
+            for cid in visible_client_ids:
+                if selected_client_id and str(cid) != selected_client_id:
+                    continue
+                try:
+                    client_agents = await agent_service.get_client_agents(str(cid))
+                    if str(cid) not in client_name_cache:
+                        try:
+                            client = await client_service.get_client(str(cid))
+                            client_name_cache[str(cid)] = client.name if hasattr(client, 'name') else client.get('name', 'Unknown')
+                        except:
+                            client_name_cache[str(cid)] = 'Unknown'
+
+                    for a in client_agents:
+                        a_dict = a.dict() if hasattr(a, 'dict') else (a if isinstance(a, dict) else {})
+                        a_dict['client_name'] = client_name_cache[str(cid)]
+                        a_dict['client_id'] = str(cid)
+                        all_agents.append(a_dict)
+                except Exception as e:
+                    logger.warning(f"Failed to get agents for client {cid}: {e}")
+
+        # Convert to sidekicks format
+        for agent in all_agents[:20]:
+            sidekicks.append({
+                "id": str(agent.get('id', '')),
+                "name": agent.get('name', 'Unknown'),
+                "slug": agent.get('slug', ''),
+                "client_id": str(agent.get('client_id', '')),
+                "client_name": agent.get('client_name', 'Unknown'),
+                "enabled": agent.get('enabled', False),
+                "voice_chat_enabled": agent.get('voice_chat_enabled', True),
+                "text_chat_enabled": agent.get('text_chat_enabled', True),
+                "status": "idle" if agent.get('enabled', False) else "inactive",
+                "status_label": "Idle" if agent.get('enabled', False) else "Inactive",
+                "status_color": "brand-teal" if agent.get('enabled', False) else "dark-text-secondary",
+            })
+    except Exception as e:
+        logger.error(f"Failed to load sidekicks for monitoring: {e}")
+
+    # Get aggregated usage data
+    usage_data = {}
+    try:
+        target_clients = [selected_client_id] if selected_client_id else [c['id'] for c in clients_data]
+
+        total_voice_used = 0
+        total_voice_limit = 0
+        total_text_used = 0
+        total_text_limit = 0
+        total_embed_used = 0
+        total_embed_limit = 0
+
+        for cid in target_clients[:10]:  # Limit to 10 clients for performance
+            try:
+                agg = await usage_service.get_client_aggregated_usage(cid)
+                total_voice_used += agg.voice.used
+                total_voice_limit += agg.voice.limit
+                total_text_used += agg.text.used
+                total_text_limit += agg.text.limit
+                total_embed_used += agg.embedding.used
+                total_embed_limit += agg.embedding.limit
+            except Exception as e:
+                logger.warning(f"Failed to get usage for client {cid}: {e}")
+
+        # Calculate percentages
+        voice_percent = (total_voice_used / total_voice_limit * 100) if total_voice_limit > 0 else 0
+        text_percent = (total_text_used / total_text_limit * 100) if total_text_limit > 0 else 0
+        embed_percent = (total_embed_used / total_embed_limit * 100) if total_embed_limit > 0 else 0
+
+        usage_data = {
+            "voice": {
+                "used": total_voice_used,
+                "limit": total_voice_limit,
+                "minutes_used": round(total_voice_used / 60, 1),
+                "minutes_limit": round(total_voice_limit / 60, 1),
+                "percent": round(voice_percent, 1),
+                "is_warning": voice_percent >= 80,
+                "is_exceeded": voice_percent >= 100,
+            },
+            "text": {
+                "used": total_text_used,
+                "limit": total_text_limit,
+                "percent": round(text_percent, 1),
+                "is_warning": text_percent >= 80,
+                "is_exceeded": text_percent >= 100,
+            },
+            "embedding": {
+                "used": total_embed_used,
+                "limit": total_embed_limit,
+                "percent": round(embed_percent, 1),
+                "is_warning": embed_percent >= 80,
+                "is_exceeded": embed_percent >= 100,
+            },
+        }
+    except Exception as e:
+        logger.warning(f"Failed to get usage data: {e}")
+        usage_data = {
+            "voice": {"used": 0, "limit": 6000, "minutes_used": 0, "minutes_limit": 100, "percent": 0, "is_warning": False, "is_exceeded": False},
+            "text": {"used": 0, "limit": 1000, "percent": 0, "is_warning": False, "is_exceeded": False},
+            "embedding": {"used": 0, "limit": 10000, "percent": 0, "is_warning": False, "is_exceeded": False},
+        }
 
     return templates.TemplateResponse("admin/monitoring.html", {
         "request": request,
-        "user": admin_user
+        "user": admin_user,
+        "clients": clients_data,
+        "selected_client_id": selected_client_id,
+        "period": period,
+        "usage_data": usage_data,
+        "sidekicks": sidekicks,
     })
 
 @router.get("/monitoring/metrics", response_class=HTMLResponse)
@@ -4722,6 +5237,510 @@ async def metrics_dashboard(
 # Export router and utilities
 __all__ = ["router", "get_redis"]
 
+
+# ============================================================================
+# Monitoring Dashboard Partials (HTMX)
+# ============================================================================
+
+@router.get("/partials/monitoring/usage-cards", response_class=HTMLResponse)
+async def monitoring_usage_cards_partial(
+    request: Request,
+    client_id: Optional[str] = None,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Usage cards partial for HTMX auto-refresh"""
+    from app.core.dependencies import get_client_service
+    from app.services.usage_tracking import UsageTrackingService
+
+    client_service = get_client_service()
+    usage_service = UsageTrackingService()
+    await usage_service.initialize()
+
+    scoped_ids = get_scoped_client_ids(admin_user)
+    clients_data = []
+    try:
+        all_clients = await client_service.get_all_clients()
+        if scoped_ids is not None:
+            allowed = {str(cid) for cid in scoped_ids}
+            clients = [c for c in all_clients if str(getattr(c, 'id', '')) in allowed]
+        else:
+            clients = all_clients
+        for c in clients:
+            clients_data.append({
+                "id": str(c.id) if hasattr(c, 'id') else str(c.get('id', '')),
+            })
+    except Exception as e:
+        logger.warning(f"Failed to fetch clients: {e}")
+
+    # Validate client_id
+    selected_client_id = None
+    if client_id and (scoped_ids is None or client_id in scoped_ids):
+        selected_client_id = client_id
+
+    # Get usage data
+    target_clients = [selected_client_id] if selected_client_id else [c['id'] for c in clients_data]
+    total_voice_used = 0
+    total_voice_limit = 0
+    total_text_used = 0
+    total_text_limit = 0
+    total_embed_used = 0
+    total_embed_limit = 0
+
+    for cid in target_clients[:10]:
+        try:
+            agg = await usage_service.get_client_aggregated_usage(cid)
+            total_voice_used += agg.voice.used
+            total_voice_limit += agg.voice.limit
+            total_text_used += agg.text.used
+            total_text_limit += agg.text.limit
+            total_embed_used += agg.embedding.used
+            total_embed_limit += agg.embedding.limit
+        except Exception as e:
+            logger.warning(f"Failed to get usage for client {cid}: {e}")
+
+    voice_percent = (total_voice_used / total_voice_limit * 100) if total_voice_limit > 0 else 0
+    text_percent = (total_text_used / total_text_limit * 100) if total_text_limit > 0 else 0
+    embed_percent = (total_embed_used / total_embed_limit * 100) if total_embed_limit > 0 else 0
+
+    usage_data = {
+        "voice": {
+            "used": total_voice_used,
+            "limit": total_voice_limit,
+            "minutes_used": round(total_voice_used / 60, 1),
+            "minutes_limit": round(total_voice_limit / 60, 1),
+            "percent": round(voice_percent, 1),
+            "is_warning": voice_percent >= 80,
+            "is_exceeded": voice_percent >= 100,
+        },
+        "text": {
+            "used": total_text_used,
+            "limit": total_text_limit,
+            "percent": round(text_percent, 1),
+            "is_warning": text_percent >= 80,
+            "is_exceeded": text_percent >= 100,
+        },
+        "embedding": {
+            "used": total_embed_used,
+            "limit": total_embed_limit,
+            "percent": round(embed_percent, 1),
+            "is_warning": embed_percent >= 80,
+            "is_exceeded": embed_percent >= 100,
+        },
+    }
+
+    return templates.TemplateResponse("admin/partials/monitoring/usage_cards.html", {
+        "request": request,
+        "usage_data": usage_data,
+    })
+
+
+@router.get("/partials/monitoring/sidekick-grid", response_class=HTMLResponse)
+async def monitoring_sidekick_grid_partial(
+    request: Request,
+    client_id: Optional[str] = None,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Sidekick grid partial for HTMX auto-refresh - with real-time status"""
+    from app.integrations.supabase_client import supabase_manager
+    from datetime import datetime, timezone, timedelta
+
+    scoped_ids = get_scoped_client_ids(admin_user)
+    sidekicks = []
+
+    # Fetch active room data and processing jobs for status indicators
+    active_agents = set()  # Agents currently in voice calls
+    processing_agents = set()  # Agents processing documents
+    recent_active_agents = set()  # Agents with activity in last 5 minutes
+
+    try:
+        # Get recent room events (last 5 minutes) to determine active/recent status
+        five_mins_ago = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        room_events = await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("livekit_events")
+            .select("event_type, room_name, metadata, created_at")
+            .gte("created_at", five_mins_ago)
+            .order("created_at", desc=True)
+        )
+
+        if room_events and room_events.data:
+            started_rooms = {}
+            finished_rooms = set()
+
+            for event in room_events.data:
+                metadata = event.get("metadata", {})
+                if isinstance(metadata, str):
+                    try:
+                        import json
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+
+                agent_id = metadata.get("agent_id")
+                room_name = event.get("room_name", "")
+                event_type = event.get("event_type")
+
+                if agent_id:
+                    recent_active_agents.add(str(agent_id))
+                    if event_type == "room_started" and room_name:
+                        started_rooms[room_name] = str(agent_id)
+                    elif event_type == "room_finished" and room_name:
+                        finished_rooms.add(room_name)
+
+            for room_name, agent_id in started_rooms.items():
+                if room_name not in finished_rooms:
+                    active_agents.add(agent_id)
+
+        # Check for agents with processing documents
+        try:
+            doc_jobs = await supabase_manager.execute_query(
+                supabase_manager.admin_client.table("documentsense_learning_jobs")
+                .select("agent_id, status")
+                .in_("status", ["pending", "processing"])
+            )
+            if doc_jobs and doc_jobs.data:
+                for job in doc_jobs.data:
+                    if job.get("agent_id"):
+                        processing_agents.add(str(job.get("agent_id")))
+        except Exception:
+            pass  # Table may not exist
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch status data: {e}")
+
+    # Use the same approach as agents_page - call get_all_agents() for superadmins
+    try:
+        if admin_is_super(admin_user):
+            # Superadmin - get all agents
+            all_agents = await get_all_agents()
+            # Filter by client_id if specified
+            if client_id:
+                all_agents = [a for a in all_agents if str(a.get('client_id', '')) == client_id]
+        else:
+            # Non-superadmin - get agents from visible clients only
+            from app.core.dependencies import get_agent_service, get_client_service
+            agent_service = get_agent_service()
+            client_service = get_client_service()
+
+            visible_client_ids = list(scoped_ids) if scoped_ids else []
+            all_agents = []
+            client_name_cache = {}
+
+            for cid in visible_client_ids:
+                if client_id and str(cid) != client_id:
+                    continue
+                try:
+                    client_agents = await agent_service.get_client_agents(str(cid))
+                    if str(cid) not in client_name_cache:
+                        try:
+                            client = await client_service.get_client(str(cid))
+                            client_name_cache[str(cid)] = client.name if hasattr(client, 'name') else client.get('name', 'Unknown')
+                        except:
+                            client_name_cache[str(cid)] = 'Unknown'
+
+                    for a in client_agents:
+                        a_dict = a.dict() if hasattr(a, 'dict') else (a if isinstance(a, dict) else {})
+                        a_dict['client_name'] = client_name_cache[str(cid)]
+                        a_dict['client_id'] = str(cid)
+                        all_agents.append(a_dict)
+                except Exception as e:
+                    logger.warning(f"Failed to get agents for client {cid}: {e}")
+
+        # Build sidekicks list with status
+        for agent in all_agents[:20]:  # Limit to 20 for monitoring view
+            agent_id = str(agent.get('id', ''))
+
+            # Determine status
+            if agent_id in active_agents:
+                status = "in_conversation"
+                status_label = "In Conversation"
+                status_color = "brand-teal"
+            elif agent_id in processing_agents:
+                status = "processing"
+                status_label = "Processing Docs"
+                status_color = "brand-orange"
+            elif agent_id in recent_active_agents:
+                status = "recent"
+                status_label = "Recently Active"
+                status_color = "purple-400"
+            elif agent.get('enabled', False):
+                status = "idle"
+                status_label = "Idle"
+                status_color = "brand-teal"
+            else:
+                status = "inactive"
+                status_label = "Inactive"
+                status_color = "dark-text-secondary"
+
+            sidekicks.append({
+                "id": agent_id,
+                "name": agent.get('name', 'Unknown'),
+                "slug": agent.get('slug', ''),
+                "client_id": str(agent.get('client_id', '')),
+                "client_name": agent.get('client_name', 'Unknown'),
+                "enabled": agent.get('enabled', False),
+                "voice_chat_enabled": agent.get('voice_chat_enabled', True),
+                "text_chat_enabled": agent.get('text_chat_enabled', True),
+                "status": status,
+                "status_label": status_label,
+                "status_color": status_color,
+            })
+
+    except Exception as e:
+        logger.error(f"Failed to load agents for monitoring: {e}")
+
+    return templates.TemplateResponse("admin/partials/monitoring/sidekick_grid.html", {
+        "request": request,
+        "sidekicks": sidekicks,
+    })
+
+
+@router.get("/partials/monitoring/health-panel", response_class=HTMLResponse)
+async def monitoring_health_panel_partial(
+    request: Request,
+    client_id: Optional[str] = None,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """System health panel partial for HTMX auto-refresh"""
+    return templates.TemplateResponse("admin/partials/monitoring/health_panel.html", {
+        "request": request,
+        "now": datetime.now().isoformat(),
+    })
+
+
+def format_time_ago(timestamp_str: str) -> str:
+    """Format a timestamp as a relative time string (e.g., '2m ago', '1h ago')"""
+    from datetime import datetime, timezone
+    try:
+        # Parse ISO format timestamp
+        if timestamp_str.endswith('Z'):
+            timestamp_str = timestamp_str[:-1] + '+00:00'
+        dt = datetime.fromisoformat(timestamp_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        diff = now - dt
+
+        seconds = int(diff.total_seconds())
+        if seconds < 60:
+            return "Just now"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            return f"{minutes}m ago"
+        elif seconds < 86400:
+            hours = seconds // 3600
+            return f"{hours}h ago"
+        elif seconds < 604800:
+            days = seconds // 86400
+            return f"{days}d ago"
+        else:
+            return dt.strftime("%b %d")
+    except Exception:
+        return "Unknown"
+
+
+@router.get("/partials/monitoring/activity-timeline", response_class=HTMLResponse)
+async def monitoring_activity_timeline_partial(
+    request: Request,
+    client_id: Optional[str] = None,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Activity timeline partial for HTMX auto-refresh - shows real events from livekit_events"""
+    from app.integrations.supabase_client import supabase_manager
+
+    scoped_ids = get_scoped_client_ids(admin_user)
+    recent_events = []
+
+    try:
+        # Fetch recent events from livekit_events table (last 20)
+        result = await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("livekit_events")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(20)
+        )
+
+        if result and result.data:
+            for event in result.data:
+                metadata = event.get("metadata", {})
+                if isinstance(metadata, str):
+                    try:
+                        import json
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+
+                # Filter by client access if scoped
+                event_client_id = metadata.get("client_id")
+                if scoped_ids is not None and event_client_id and str(event_client_id) not in scoped_ids:
+                    continue
+                if client_id and event_client_id and str(event_client_id) != client_id:
+                    continue
+
+                event_type = event.get("event_type", "unknown")
+                room_name = event.get("room_name", "")
+                duration = event.get("duration")
+                created_at = event.get("created_at", "")
+                agent_name = metadata.get("agent_name", "")
+
+                # Format the event for display
+                if event_type == "room_finished":
+                    if duration and duration > 0:
+                        minutes = round(duration / 60, 1)
+                        title = f"Voice conversation ended"
+                        subtitle = f"{agent_name or 'Sidekick'} • {minutes} min"
+                        color = "brand-teal"
+                    else:
+                        title = f"Room closed"
+                        subtitle = agent_name or room_name or "Unknown"
+                        color = "dark-text-secondary"
+                elif event_type == "room_started":
+                    title = f"Voice conversation started"
+                    subtitle = agent_name or room_name or "New session"
+                    color = "brand-teal"
+                elif event_type == "participant_joined":
+                    identity = event.get("participant_identity", "")
+                    title = f"User joined"
+                    subtitle = identity.replace("user_", "") if identity else "Anonymous"
+                    color = "brand-orange"
+                elif event_type == "participant_left":
+                    identity = event.get("participant_identity", "")
+                    title = f"User left"
+                    subtitle = identity.replace("user_", "") if identity else "Anonymous"
+                    color = "dark-text-secondary"
+                else:
+                    title = event_type.replace("_", " ").title()
+                    subtitle = agent_name or room_name or ""
+                    color = "dark-text-secondary"
+
+                recent_events.append({
+                    "title": title,
+                    "subtitle": subtitle,
+                    "color": color,
+                    "created_at": created_at,
+                    "time_ago": format_time_ago(created_at) if created_at else "Just now",
+                    "event_type": event_type,
+                })
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch livekit_events: {e}")
+
+    return templates.TemplateResponse("admin/partials/monitoring/activity_timeline.html", {
+        "request": request,
+        "recent_events": recent_events,
+    })
+
+
+@router.get("/partials/monitoring/conversation-analytics", response_class=HTMLResponse)
+async def monitoring_conversation_analytics_partial(
+    request: Request,
+    client_id: Optional[str] = None,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Conversation analytics partial for HTMX auto-refresh"""
+    from app.integrations.supabase_client import supabase_manager
+    from datetime import datetime, timezone, timedelta
+
+    scoped_ids = get_scoped_client_ids(admin_user)
+
+    # Default stats
+    conversation_stats = {
+        "total": 0,
+        "active": 0,
+        "avg_duration": "--",
+        "avg_messages": "--",
+    }
+    channel_stats = {
+        "voice_count": 0,
+        "voice_percent": 0,
+        "text_count": 0,
+        "text_percent": 0,
+    }
+
+    try:
+        # Get completed voice calls (room_finished events) from last 30 days
+        thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+        result = await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("livekit_events")
+            .select("*")
+            .eq("event_type", "room_finished")
+            .gte("created_at", thirty_days_ago)
+            .order("created_at", desc=True)
+        )
+
+        if result and result.data:
+            voice_calls = []
+            for event in result.data:
+                metadata = event.get("metadata", {})
+                if isinstance(metadata, str):
+                    try:
+                        import json
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+
+                # Filter by client access if scoped
+                event_client_id = metadata.get("client_id")
+                if scoped_ids is not None and event_client_id and str(event_client_id) not in scoped_ids:
+                    continue
+                if client_id and event_client_id and str(event_client_id) != client_id:
+                    continue
+
+                room_name = event.get("room_name", "")
+                # Only count voice calls (non-text rooms)
+                if not room_name.startswith("text-"):
+                    duration = event.get("duration", 0) or 0
+                    voice_calls.append(duration)
+
+            # Calculate stats
+            total_calls = len(voice_calls)
+            conversation_stats["total"] = total_calls
+
+            if total_calls > 0:
+                total_duration = sum(voice_calls)
+                avg_seconds = total_duration / total_calls
+                if avg_seconds >= 60:
+                    conversation_stats["avg_duration"] = f"{round(avg_seconds / 60, 1)}m"
+                else:
+                    conversation_stats["avg_duration"] = f"{int(avg_seconds)}s"
+
+            # Channel stats (voice vs text - from room names)
+            channel_stats["voice_count"] = total_calls
+
+        # Count text conversations from agent_usage
+        period_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d")
+        usage_result = await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("agent_usage")
+            .select("text_messages_used, client_id")
+            .eq("period_start", period_start)
+        )
+
+        if usage_result and usage_result.data:
+            text_total = 0
+            for usage in usage_result.data:
+                usage_client_id = usage.get("client_id")
+                if scoped_ids is not None and usage_client_id and str(usage_client_id) not in scoped_ids:
+                    continue
+                if client_id and usage_client_id and str(usage_client_id) != client_id:
+                    continue
+                text_total += usage.get("text_messages_used", 0) or 0
+
+            channel_stats["text_count"] = text_total
+
+        # Calculate percentages
+        total_interactions = channel_stats["voice_count"] + channel_stats["text_count"]
+        if total_interactions > 0:
+            channel_stats["voice_percent"] = round((channel_stats["voice_count"] / total_interactions) * 100)
+            channel_stats["text_percent"] = round((channel_stats["text_count"] / total_interactions) * 100)
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch conversation analytics: {e}")
+
+    return templates.TemplateResponse("admin/partials/monitoring/conversation_analytics.html", {
+        "request": request,
+        "conversation_stats": conversation_stats,
+        "channel_stats": channel_stats,
+    })
 
 
 @router.post("/agents/{client_id}/{agent_slug}/upload-image")
@@ -5002,7 +6021,7 @@ async def admin_update_agent(
                 )
         
         # Prepare update data
-        from app.models.agent import AgentUpdate, VoiceSettings, WebhookSettings
+        from app.models.agent import AgentUpdate, VoiceSettings, WebhookSettings, SoundSettings
         from app.models.client import ChannelSettings, TelegramChannelSettings
         
         # Build update object
@@ -5027,6 +6046,11 @@ async def admin_update_agent(
             logger.info(f"AVATAR DEBUG - voice_settings from form: avatar_image_url={data['voice_settings'].get('avatar_image_url')}, avatar_model_type={data['voice_settings'].get('avatar_model_type')}")
             update_data.voice_settings = VoiceSettings(**data["voice_settings"])
             logger.info(f"AVATAR DEBUG - VoiceSettings object: avatar_image_url={update_data.voice_settings.avatar_image_url}, avatar_model_type={update_data.voice_settings.avatar_model_type}")
+
+        # Handle sound settings if provided
+        if "sound_settings" in data:
+            logger.info(f"SOUND DEBUG - sound_settings from form: {data['sound_settings']}")
+            update_data.sound_settings = SoundSettings(**data["sound_settings"])
 
         # Handle webhooks if provided
         if "webhooks" in data:
@@ -5076,6 +6100,10 @@ async def admin_update_agent(
             update_data.tools_config = tools_config
         elif tools_config:
             update_data.tools_config = tools_config
+
+        personality_payload = data.get("personality_engine") or data.get("personality") or {}
+        if isinstance(personality_payload, dict) and personality_payload:
+            _upsert_agent_personality(agent.id, client, personality_payload)
         
         # Update agent
         updated_agent = await agent_service.update_agent(client_id, agent_slug, update_data)
@@ -5135,6 +6163,16 @@ async def user_settings(
                 ).eq("owner_user_id", user_id).limit(1).execute()
                 if client_result.data:
                     client = client_result.data[0]
+                    db_status = client.get("subscription_status")
+                    has_subscription_id = bool(client.get("stripe_subscription_id"))
+
+                    # If there's a subscription ID but no status recorded, treat as active
+                    # This handles 100% coupon/free subscriptions that may not have status set
+                    if has_subscription_id and not db_status:
+                        effective_status = "active"
+                    else:
+                        effective_status = db_status or "none"
+
                     billing_info = {
                         "client_id": client.get("id"),
                         "client_name": client.get("name"),
@@ -5150,7 +6188,8 @@ async def user_settings(
                             "paragon": 0
                         }.get(client.get("tier"), 0),
                         "stripe_customer_id": client.get("stripe_customer_id"),
-                        "subscription_status": client.get("subscription_status") or "none",
+                        "stripe_subscription_id": client.get("stripe_subscription_id"),
+                        "subscription_status": effective_status,
                         "subscription_end": client.get("subscription_current_period_end"),
                         "cancel_at_period_end": client.get("subscription_cancel_at_period_end", False),
                     }
@@ -5346,6 +6385,459 @@ async def billing_portal_redirect(
         logger.error(f"Failed to create billing portal session: {e}")
         return RedirectResponse(
             url="/admin/user-settings?billing_error=portal_failed",
+            status_code=303
+        )
+
+
+@router.get("/api/upgrade-preview/{target_tier}")
+async def get_upgrade_preview(
+    target_tier: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Get prorated upgrade pricing preview."""
+    import stripe
+    from datetime import datetime
+    from app.services.stripe_service import stripe_service, TIER_CONFIG
+
+    if target_tier not in ("champion", "paragon"):
+        raise HTTPException(status_code=400, detail="Invalid tier")
+
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+
+    try:
+        from app.services.client_connection_manager import get_connection_manager
+        conn_mgr = get_connection_manager()
+        supabase = conn_mgr.platform_client
+
+        # Get client and subscription info
+        client_result = supabase.table("clients").select(
+            "id, name, tier, stripe_customer_id, stripe_subscription_id, "
+            "subscription_current_period_end"
+        ).eq("owner_user_id", user_id).limit(1).execute()
+
+        if not client_result.data:
+            raise HTTPException(status_code=404, detail="No client found")
+
+        client = client_result.data[0]
+        current_tier = client.get("tier", "adventurer")
+        subscription_id = client.get("stripe_subscription_id")
+        period_end = client.get("subscription_current_period_end")
+
+        if not subscription_id:
+            # No subscription - show full price
+            target_config = TIER_CONFIG.get(target_tier, {})
+            return {
+                "current_tier": current_tier,
+                "target_tier": target_tier,
+                "target_tier_name": target_config.get("name", target_tier.title()),
+                "has_subscription": False,
+                "amount_due_now": target_config.get("price_cents", 0) / 100,
+                "new_monthly_price": target_config.get("price_cents", 0) / 100,
+                "proration_date": None,
+                "period_end": None,
+            }
+
+        # Get proration preview from Stripe
+        stripe_service._ensure_initialized()
+        new_price_id = stripe_service._get_or_create_price(target_tier)
+
+        subscription = stripe.Subscription.retrieve(subscription_id)
+        subscription_item_id = subscription["items"]["data"][0]["id"]
+
+        # Create an invoice preview to see proration
+        upcoming_invoice = stripe.Invoice.upcoming(
+            customer=client.get("stripe_customer_id"),
+            subscription=subscription_id,
+            subscription_items=[{
+                "id": subscription_item_id,
+                "price": new_price_id,
+            }],
+            subscription_proration_behavior="create_prorations",
+        )
+
+        # Calculate amounts
+        proration_amount = 0
+        for line in upcoming_invoice.lines.data:
+            if line.proration:
+                proration_amount += line.amount
+
+        target_config = TIER_CONFIG.get(target_tier, {})
+
+        return {
+            "current_tier": current_tier,
+            "target_tier": target_tier,
+            "target_tier_name": target_config.get("name", target_tier.title()),
+            "has_subscription": True,
+            "amount_due_now": max(0, proration_amount) / 100,  # In dollars
+            "new_monthly_price": target_config.get("price_cents", 0) / 100,
+            "proration_date": datetime.now().strftime("%B %d, %Y"),
+            "period_end": period_end[:10] if period_end else None,
+        }
+
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error getting upgrade preview: {e}")
+        raise HTTPException(status_code=500, detail="Failed to calculate pricing")
+    except Exception as e:
+        logger.error(f"Error getting upgrade preview: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get pricing info")
+
+
+@router.post("/api/upgrade")
+async def api_upgrade_subscription(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Handle subscription upgrade via API (returns JSON)."""
+    import stripe
+    from app.services.stripe_service import stripe_service
+
+    data = await request.json()
+    target_tier = data.get("target_tier", "").strip()
+
+    if target_tier not in ("champion", "paragon"):
+        raise HTTPException(status_code=400, detail="Invalid tier")
+
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+
+    try:
+        from app.services.client_connection_manager import get_connection_manager
+        conn_mgr = get_connection_manager()
+        supabase = conn_mgr.platform_client
+
+        # Get client and subscription info
+        client_result = supabase.table("clients").select(
+            "id, name, tier, stripe_customer_id, stripe_subscription_id"
+        ).eq("owner_user_id", user_id).limit(1).execute()
+
+        if not client_result.data:
+            raise HTTPException(status_code=404, detail="No client found")
+
+        client = client_result.data[0]
+        subscription_id = client.get("stripe_subscription_id")
+        customer_id = client.get("stripe_customer_id")
+
+        if not subscription_id or not customer_id:
+            raise HTTPException(status_code=400, detail="No active subscription")
+
+        # Get the new price ID for the target tier
+        stripe_service._ensure_initialized()
+        new_price_id = stripe_service._get_or_create_price(target_tier)
+
+        # Retrieve current subscription to get item ID
+        subscription = stripe.Subscription.retrieve(subscription_id)
+        subscription_item_id = subscription["items"]["data"][0]["id"]
+
+        # Update subscription with prorated billing
+        updated_subscription = stripe.Subscription.modify(
+            subscription_id,
+            items=[{
+                "id": subscription_item_id,
+                "price": new_price_id,
+            }],
+            proration_behavior="create_prorations",
+        )
+
+        # Update client tier in database
+        supabase.table("clients").update({
+            "tier": target_tier,
+        }).eq("id", client["id"]).execute()
+
+        logger.info(f"Upgraded client {client['id']} from {client.get('tier')} to {target_tier}")
+
+        return {
+            "success": True,
+            "new_tier": target_tier,
+            "message": f"Successfully upgraded to {target_tier.title()}!"
+        }
+
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error during upgrade: {e}")
+        raise HTTPException(status_code=500, detail=f"Payment error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Failed to upgrade subscription: {e}")
+        raise HTTPException(status_code=500, detail="Upgrade failed")
+
+
+@router.post("/user-settings/upgrade")
+async def upgrade_subscription(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Handle subscription upgrade with prorated billing (form POST)."""
+    import stripe
+    from app.services.stripe_service import stripe_service, TIER_CONFIG
+
+    form = await request.form()
+    target_tier = form.get("target_tier", "").strip()
+
+    if target_tier not in ("champion", "paragon"):
+        return RedirectResponse(
+            url="/admin/user-settings?billing_error=invalid_tier",
+            status_code=303
+        )
+
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+
+    try:
+        from app.services.client_connection_manager import get_connection_manager
+        conn_mgr = get_connection_manager()
+        supabase = conn_mgr.platform_client
+
+        # Get client and subscription info
+        client_result = supabase.table("clients").select(
+            "id, name, tier, stripe_customer_id, stripe_subscription_id"
+        ).eq("owner_user_id", user_id).limit(1).execute()
+
+        if not client_result.data:
+            return RedirectResponse(
+                url="/admin/user-settings?billing_error=no_client",
+                status_code=303
+            )
+
+        client = client_result.data[0]
+        subscription_id = client.get("stripe_subscription_id")
+        customer_id = client.get("stripe_customer_id")
+
+        if not subscription_id or not customer_id:
+            return RedirectResponse(
+                url="/admin/user-settings?billing_error=no_subscription",
+                status_code=303
+            )
+
+        # Get the new price ID for the target tier
+        stripe_service._ensure_initialized()
+        new_price_id = stripe_service._get_or_create_price(target_tier)
+
+        # Retrieve current subscription to get item ID
+        subscription = stripe.Subscription.retrieve(subscription_id)
+        subscription_item_id = subscription["items"]["data"][0]["id"]
+
+        # Update subscription with prorated billing
+        updated_subscription = stripe.Subscription.modify(
+            subscription_id,
+            items=[{
+                "id": subscription_item_id,
+                "price": new_price_id,
+            }],
+            proration_behavior="create_prorations",  # Prorated billing
+        )
+
+        # Update client tier in database
+        supabase.table("clients").update({
+            "tier": target_tier,
+        }).eq("id", client["id"]).execute()
+
+        logger.info(f"Upgraded client {client['id']} from {client.get('tier')} to {target_tier}")
+
+        return RedirectResponse(
+            url="/admin/user-settings?upgrade_success=true",
+            status_code=303
+        )
+
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error during upgrade: {e}")
+        return RedirectResponse(
+            url="/admin/user-settings?billing_error=stripe_error",
+            status_code=303
+        )
+    except Exception as e:
+        logger.error(f"Failed to upgrade subscription: {e}")
+        return RedirectResponse(
+            url="/admin/user-settings?billing_error=upgrade_failed",
+            status_code=303
+        )
+
+
+@router.post("/user-settings/downgrade")
+async def downgrade_subscription(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Handle subscription downgrade (effective at end of billing period)."""
+    import stripe
+    from app.services.stripe_service import stripe_service
+
+    form = await request.form()
+    target_tier = form.get("target_tier", "").strip()
+
+    if target_tier not in ("adventurer",):
+        return RedirectResponse(
+            url="/admin/user-settings?billing_error=invalid_tier",
+            status_code=303
+        )
+
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+
+    try:
+        from app.services.client_connection_manager import get_connection_manager
+        conn_mgr = get_connection_manager()
+        supabase = conn_mgr.platform_client
+
+        # Get client and subscription info
+        client_result = supabase.table("clients").select(
+            "id, name, tier, stripe_customer_id, stripe_subscription_id"
+        ).eq("owner_user_id", user_id).limit(1).execute()
+
+        if not client_result.data:
+            return RedirectResponse(
+                url="/admin/user-settings?billing_error=no_client",
+                status_code=303
+            )
+
+        client = client_result.data[0]
+        subscription_id = client.get("stripe_subscription_id")
+
+        if not subscription_id:
+            return RedirectResponse(
+                url="/admin/user-settings?billing_error=no_subscription",
+                status_code=303
+            )
+
+        # Get the new price ID for the target tier
+        stripe_service._ensure_initialized()
+        new_price_id = stripe_service._get_or_create_price(target_tier)
+
+        # Retrieve current subscription to get item ID
+        subscription = stripe.Subscription.retrieve(subscription_id)
+        subscription_item_id = subscription["items"]["data"][0]["id"]
+
+        # Schedule downgrade at end of billing period (no proration)
+        stripe.Subscription.modify(
+            subscription_id,
+            items=[{
+                "id": subscription_item_id,
+                "price": new_price_id,
+            }],
+            proration_behavior="none",  # No proration - takes effect at renewal
+        )
+
+        # Mark the pending downgrade in database
+        supabase.table("clients").update({
+            "pending_tier_change": target_tier,
+        }).eq("id", client["id"]).execute()
+
+        logger.info(f"Scheduled downgrade for client {client['id']} to {target_tier}")
+
+        return RedirectResponse(
+            url="/admin/user-settings?downgrade_scheduled=true",
+            status_code=303
+        )
+
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error during downgrade: {e}")
+        return RedirectResponse(
+            url="/admin/user-settings?billing_error=stripe_error",
+            status_code=303
+        )
+    except Exception as e:
+        logger.error(f"Failed to downgrade subscription: {e}")
+        return RedirectResponse(
+            url="/admin/user-settings?billing_error=downgrade_failed",
+            status_code=303
+        )
+
+
+@router.post("/user-settings/cancel-subscription")
+async def cancel_subscription(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Cancel subscription at end of billing period."""
+    from app.services.stripe_service import stripe_service
+
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+
+    try:
+        from app.services.client_connection_manager import get_connection_manager
+        conn_mgr = get_connection_manager()
+        supabase = conn_mgr.platform_client
+
+        # Get client subscription ID
+        client_result = supabase.table("clients").select(
+            "id, stripe_subscription_id"
+        ).eq("owner_user_id", user_id).limit(1).execute()
+
+        if not client_result.data or not client_result.data[0].get("stripe_subscription_id"):
+            return RedirectResponse(
+                url="/admin/user-settings?billing_error=no_subscription",
+                status_code=303
+            )
+
+        subscription_id = client_result.data[0]["stripe_subscription_id"]
+
+        # Cancel at period end
+        result = await stripe_service.cancel_subscription(
+            subscription_id=subscription_id,
+            cancel_immediately=False  # Cancel at end of billing period
+        )
+
+        # Update client record
+        supabase.table("clients").update({
+            "subscription_cancel_at_period_end": True,
+        }).eq("id", client_result.data[0]["id"]).execute()
+
+        logger.info(f"Subscription {subscription_id} set to cancel at period end")
+
+        return RedirectResponse(
+            url="/admin/user-settings?cancel_scheduled=true",
+            status_code=303
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to cancel subscription: {e}")
+        return RedirectResponse(
+            url="/admin/user-settings?billing_error=cancel_failed",
+            status_code=303
+        )
+
+
+@router.post("/user-settings/reactivate-subscription")
+async def reactivate_subscription(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Reactivate a subscription that was set to cancel."""
+    from app.services.stripe_service import stripe_service
+
+    user_id = admin_user.get("id") or admin_user.get("user_id")
+
+    try:
+        from app.services.client_connection_manager import get_connection_manager
+        conn_mgr = get_connection_manager()
+        supabase = conn_mgr.platform_client
+
+        # Get client subscription ID
+        client_result = supabase.table("clients").select(
+            "id, stripe_subscription_id"
+        ).eq("owner_user_id", user_id).limit(1).execute()
+
+        if not client_result.data or not client_result.data[0].get("stripe_subscription_id"):
+            return RedirectResponse(
+                url="/admin/user-settings?billing_error=no_subscription",
+                status_code=303
+            )
+
+        subscription_id = client_result.data[0]["stripe_subscription_id"]
+
+        # Reactivate subscription
+        result = await stripe_service.reactivate_subscription(subscription_id)
+
+        # Update client record
+        supabase.table("clients").update({
+            "subscription_cancel_at_period_end": False,
+        }).eq("id", client_result.data[0]["id"]).execute()
+
+        logger.info(f"Subscription {subscription_id} reactivated")
+
+        return RedirectResponse(
+            url="/admin/user-settings?reactivated=true",
+            status_code=303
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to reactivate subscription: {e}")
+        return RedirectResponse(
+            url="/admin/user-settings?billing_error=reactivate_failed",
             status_code=303
         )
 
@@ -5586,7 +7078,8 @@ async def admin_update_client(
                 jina_api_key=form.get("jina_api_key") or (current_api_keys.jina_api_key if hasattr(current_api_keys, 'jina_api_key') else current_api_keys.get('jina_api_key') if isinstance(current_api_keys, dict) else None),
                 bithuman_api_secret=form.get("bithuman_api_secret") or (current_api_keys.bithuman_api_secret if hasattr(current_api_keys, 'bithuman_api_secret') else current_api_keys.get('bithuman_api_secret') if isinstance(current_api_keys, dict) else None),
                 bey_api_key=form.get("bey_api_key") or (current_api_keys.bey_api_key if hasattr(current_api_keys, 'bey_api_key') else current_api_keys.get('bey_api_key') if isinstance(current_api_keys, dict) else None),
-                liveavatar_api_key=form.get("liveavatar_api_key") or (current_api_keys.liveavatar_api_key if hasattr(current_api_keys, 'liveavatar_api_key') else current_api_keys.get('liveavatar_api_key') if isinstance(current_api_keys, dict) else None)
+                liveavatar_api_key=form.get("liveavatar_api_key") or (current_api_keys.liveavatar_api_key if hasattr(current_api_keys, 'liveavatar_api_key') else current_api_keys.get('liveavatar_api_key') if isinstance(current_api_keys, dict) else None),
+                assemblyai_api_key=form.get("assemblyai_api_key") or (current_api_keys.assemblyai_api_key if hasattr(current_api_keys, 'assemblyai_api_key') else current_api_keys.get('assemblyai_api_key') if isinstance(current_api_keys, dict) else None)
             ),
             embedding=EmbeddingSettings(
                 provider=form.get("embedding_provider", current_embedding.provider if hasattr(current_embedding, 'provider') else current_embedding.get('provider', 'openai') if current_embedding else 'openai'),
@@ -5638,6 +7131,13 @@ async def admin_update_client(
         # Handle Firecrawl API key (empty string becomes None)
         firecrawl_api_key = form.get("firecrawl_api_key", "").strip() or None
 
+        # Handle uses_platform_keys checkbox (BYOK setting)
+        # The checkbox is "Bring Your Own Keys" - when checked, uses_platform_keys should be False
+        # Hidden input sends "true", checkbox sends "false" when checked
+        uses_platform_keys_values = form.getlist("uses_platform_keys") if hasattr(form, 'getlist') else ([form.get("uses_platform_keys")] if form.get("uses_platform_keys") else [])
+        uses_platform_keys_value = uses_platform_keys_values[-1] if uses_platform_keys_values else "true"
+        uses_platform_keys = str(uses_platform_keys_value).lower() == "true"
+
         update_data = ClientUpdate(
             name=form.get("name", client.name if hasattr(client, 'name') else client.get('name', '')),
             domain=form.get("domain", client.domain if hasattr(client, 'domain') else client.get('domain', '')),
@@ -5645,6 +7145,7 @@ async def admin_update_client(
             settings=settings_update,
             active=str(active_value).lower() == "true",
             usersense_enabled=usersense_enabled,
+            uses_platform_keys=uses_platform_keys,
             supertab_client_id=supertab_client_id,
             firecrawl_api_key=firecrawl_api_key
         )
@@ -6629,6 +8130,13 @@ async def upload_knowledge_base_url(
         if client:
             embedding_settings = None
             api_keys = None
+            uses_platform_keys = False
+
+            # Check if client uses platform keys (Adventurer tier pattern)
+            if hasattr(client, 'uses_platform_keys'):
+                uses_platform_keys = client.uses_platform_keys
+            elif hasattr(client, 'additional_settings') and client.additional_settings:
+                uses_platform_keys = client.additional_settings.get('uses_platform_keys', False)
 
             # Handle both object and dict formats
             if hasattr(client, 'settings') and client.settings:
@@ -6650,29 +8158,37 @@ async def upload_knowledge_base_url(
                 elif isinstance(embedding_settings, dict):
                     provider = embedding_settings.get('provider')
 
-            provider = provider or 'openai'  # Default to openai
+            # For platform-key clients (Adventurer tier), default to siliconflow
+            # which uses platform-level API keys managed by the system
+            if not provider:
+                if uses_platform_keys:
+                    provider = 'siliconflow'
+                    logger.info(f"Using platform siliconflow embeddings for client {client_id}")
+                else:
+                    provider = 'openai'
 
-            # Check if the corresponding API key is set
-            provider_key_map = {
-                'openai': 'openai_api_key',
-                'novita': 'novita_api_key',
-                'deepinfra': 'deepinfra_api_key',
-                'siliconflow': 'siliconflow_api_key',
-            }
+            # Check if the corresponding API key is set (skip for platform-key clients)
+            if not uses_platform_keys:
+                provider_key_map = {
+                    'openai': 'openai_api_key',
+                    'novita': 'novita_api_key',
+                    'deepinfra': 'deepinfra_api_key',
+                    'siliconflow': 'siliconflow_api_key',
+                }
 
-            required_key = provider_key_map.get(provider)
-            if required_key and api_keys:
-                key_value = None
-                if hasattr(api_keys, required_key):
-                    key_value = getattr(api_keys, required_key)
-                elif isinstance(api_keys, dict):
-                    key_value = api_keys.get(required_key)
+                required_key = provider_key_map.get(provider)
+                if required_key and api_keys:
+                    key_value = None
+                    if hasattr(api_keys, required_key):
+                        key_value = getattr(api_keys, required_key)
+                    elif isinstance(api_keys, dict):
+                        key_value = api_keys.get(required_key)
 
-                if not key_value:
-                    return {
-                        "success": False,
-                        "message": f"Embedding provider '{provider}' is configured but its API key ({required_key}) is not set. Please add the API key in client settings before scraping."
-                    }
+                    if not key_value:
+                        return {
+                            "success": False,
+                            "message": f"Embedding provider '{provider}' is configured but its API key ({required_key}) is not set. Please add the API key in client settings before scraping."
+                        }
 
         # Validate URL
         try:
@@ -7096,3 +8612,371 @@ async def get_client_usage(
     except Exception as e:
         logger.error(f"Failed to get client usage: {e}")
         return {"success": False, "message": str(e)}
+
+
+@router.get("/api/usage/debug/{client_id}")
+async def debug_usage_data(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """
+    Debug endpoint to view raw usage data in the database.
+    Shows both agent_usage and client_usage table contents.
+    """
+    if not admin_is_super(admin_user):
+        raise HTTPException(status_code=403, detail="Superadmin access required")
+
+    try:
+        from app.integrations.supabase_client import supabase_manager
+        from datetime import date
+
+        # Get current period start (first of the month)
+        today = date.today()
+        period_start = date(today.year, today.month, 1).isoformat()
+
+        # Query agent_usage table
+        agent_usage_result = supabase_manager.admin_client.table("agent_usage")\
+            .select("*")\
+            .eq("client_id", client_id)\
+            .execute()
+
+        # Query client_usage table
+        client_usage_result = supabase_manager.admin_client.table("client_usage")\
+            .select("*")\
+            .eq("client_id", client_id)\
+            .execute()
+
+        # Check if the RPC function exists by trying to call it
+        rpc_result = None
+        rpc_error = None
+        try:
+            rpc_response = supabase_manager.admin_client.rpc(
+                'get_client_aggregated_usage',
+                {'p_client_id': client_id, 'p_period_start': period_start}
+            ).execute()
+            rpc_result = rpc_response.data
+        except Exception as e:
+            rpc_error = str(e)
+
+        return {
+            "success": True,
+            "client_id": client_id,
+            "current_period_start": period_start,
+            "agent_usage_records": agent_usage_result.data or [],
+            "agent_usage_count": len(agent_usage_result.data or []),
+            "client_usage_records": client_usage_result.data or [],
+            "client_usage_count": len(client_usage_result.data or []),
+            "rpc_function_result": rpc_result,
+            "rpc_function_error": rpc_error,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get debug usage data: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.get("/api/debug/transcripts/{client_id}")
+async def debug_transcripts(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """
+    Debug endpoint to diagnose transcript storage issues.
+    Checks platform client credentials and recent transcripts in client database.
+    """
+    if not admin_is_super(admin_user):
+        raise HTTPException(status_code=403, detail="Superadmin access required")
+
+    try:
+        from app.core.dependencies import get_platform_client_service
+        from app.integrations.supabase_client import supabase_manager
+
+        platform_service = get_platform_client_service()
+        platform_client = await platform_service.get_client(client_id)
+
+        result = {
+            "success": True,
+            "client_id": client_id,
+            "platform_client_found": platform_client is not None,
+        }
+
+        if not platform_client:
+            result["error"] = "Client not found in platform database"
+            return result
+
+        # Check Supabase credentials
+        supabase_url = getattr(platform_client, "supabase_project_url", None) or getattr(platform_client, "supabase_url", None)
+        supabase_service_key = getattr(platform_client, "supabase_service_role_key", None)
+
+        result["credentials"] = {
+            "supabase_url_present": bool(supabase_url),
+            "supabase_url_value": supabase_url[:50] + "..." if supabase_url and len(supabase_url) > 50 else supabase_url,
+            "supabase_service_role_key_present": bool(supabase_service_key),
+            "supabase_service_role_key_length": len(supabase_service_key) if supabase_service_key else 0,
+        }
+
+        # If credentials are present, try to connect and check transcripts
+        if supabase_url and supabase_service_key:
+            try:
+                from supabase import create_client
+                client_supabase = create_client(supabase_url, supabase_service_key)
+
+                # Check recent transcripts
+                transcripts_result = client_supabase.table("conversation_transcripts")\
+                    .select("id, conversation_id, role, content, created_at, source")\
+                    .order("created_at", desc=True)\
+                    .limit(10)\
+                    .execute()
+
+                result["client_database"] = {
+                    "connection_successful": True,
+                    "recent_transcripts_count": len(transcripts_result.data or []),
+                    "recent_transcripts": [
+                        {
+                            "id": t.get("id"),
+                            "conversation_id": t.get("conversation_id"),
+                            "role": t.get("role"),
+                            "content_preview": (t.get("content") or "")[:100] + "..." if len(t.get("content") or "") > 100 else t.get("content"),
+                            "source": t.get("source"),
+                            "created_at": t.get("created_at"),
+                        }
+                        for t in (transcripts_result.data or [])
+                    ],
+                }
+
+                # Check recent conversations
+                conversations_result = client_supabase.table("conversations")\
+                    .select("id, agent_id, user_id, channel, created_at")\
+                    .order("created_at", desc=True)\
+                    .limit(5)\
+                    .execute()
+
+                result["client_database"]["recent_conversations"] = [
+                    {
+                        "id": c.get("id"),
+                        "agent_id": c.get("agent_id"),
+                        "channel": c.get("channel"),
+                        "created_at": c.get("created_at"),
+                    }
+                    for c in (conversations_result.data or [])
+                ]
+
+            except Exception as db_err:
+                result["client_database"] = {
+                    "connection_successful": False,
+                    "error": str(db_err),
+                }
+        else:
+            result["client_database"] = {
+                "connection_successful": False,
+                "error": "Missing Supabase credentials - transcripts cannot be stored",
+            }
+
+        # Check recent livekit_events for this client to see voice activity
+        try:
+            livekit_events = supabase_manager.admin_client.table("livekit_events")\
+                .select("id, event_type, room_name, metadata, created_at")\
+                .order("created_at", desc=True)\
+                .limit(10)\
+                .execute()
+
+            # Filter for this client's events
+            client_events = []
+            for event in (livekit_events.data or []):
+                metadata = event.get("metadata") or {}
+                if isinstance(metadata, str):
+                    try:
+                        import json
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+                if metadata.get("client_id") == client_id:
+                    client_events.append({
+                        "event_type": event.get("event_type"),
+                        "room_name": event.get("room_name"),
+                        "created_at": event.get("created_at"),
+                        "has_conversation_id": bool(metadata.get("conversation_id")),
+                    })
+
+            result["recent_livekit_events"] = client_events[:5]
+
+        except Exception as events_err:
+            result["recent_livekit_events_error"] = str(events_err)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to debug transcripts: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.get("/debug/usage-tracking/{client_id}")
+async def debug_usage_tracking(
+    request: Request,
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """
+    Debug endpoint to diagnose usage tracking issues.
+    Shows recent livekit_events, agent_usage records, and RPC function status.
+    """
+    from app.integrations.supabase_client import supabase_manager
+    from app.services.usage_tracking import usage_tracking_service
+    from datetime import date
+    import json
+
+    result = {
+        "client_id": client_id,
+        "timestamp": datetime.now().isoformat(),
+        "period_start": date(date.today().year, date.today().month, 1).isoformat(),
+        "checks": {},
+        "issues_found": [],
+        "recommendations": [],
+    }
+
+    # 1. Check recent room_finished events from livekit_events
+    try:
+        livekit_events = await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("livekit_events")
+            .select("id, event_type, room_name, duration, metadata, created_at")
+            .eq("event_type", "room_finished")
+            .order("created_at", desc=True)
+            .limit(20)
+        )
+
+        room_finished_events = []
+        client_events = []
+
+        for event in (livekit_events.data or []):
+            metadata = event.get("metadata") or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except:
+                    metadata = {}
+
+            event_data = {
+                "room_name": event.get("room_name"),
+                "duration": event.get("duration"),
+                "duration_type": type(event.get("duration")).__name__,
+                "has_client_id": bool(metadata.get("client_id")),
+                "has_agent_id": bool(metadata.get("agent_id")),
+                "client_id": metadata.get("client_id"),
+                "agent_id": metadata.get("agent_id"),
+                "created_at": event.get("created_at"),
+                "is_text_room": event.get("room_name", "").startswith("text-"),
+            }
+            room_finished_events.append(event_data)
+
+            if str(metadata.get("client_id")) == str(client_id):
+                client_events.append(event_data)
+
+        result["checks"]["livekit_events"] = {
+            "total_room_finished_events": len(room_finished_events),
+            "client_specific_events": len(client_events),
+            "recent_events": client_events[:10] if client_events else room_finished_events[:5],
+        }
+
+        # Analyze events for issues
+        zero_duration_count = sum(1 for e in client_events if (e.get("duration") or 0) == 0 and not e.get("is_text_room"))
+        missing_metadata_count = sum(1 for e in client_events if not e.get("has_client_id") or not e.get("has_agent_id"))
+
+        if len(room_finished_events) == 0:
+            result["issues_found"].append("No room_finished events found - LiveKit webhook may not be configured")
+            result["recommendations"].append("Verify LiveKit webhook URL is set to: {your-server}/webhooks/livekit/events")
+        elif len(client_events) == 0:
+            result["issues_found"].append(f"No room_finished events found for client {client_id}")
+            result["recommendations"].append("Ensure room metadata includes client_id when creating rooms")
+        else:
+            if zero_duration_count > 0:
+                result["issues_found"].append(f"{zero_duration_count} voice room(s) have duration=0 - usage NOT tracked")
+                result["recommendations"].append("Check if calls are ending properly before room timeout")
+            if missing_metadata_count > 0:
+                result["issues_found"].append(f"{missing_metadata_count} event(s) missing client_id or agent_id in metadata")
+                result["recommendations"].append("Ensure room metadata includes both client_id and agent_id")
+
+    except Exception as e:
+        result["checks"]["livekit_events"] = {"error": str(e)}
+        result["issues_found"].append(f"Failed to query livekit_events: {e}")
+
+    # 2. Check agent_usage table directly
+    try:
+        period_start = date(date.today().year, date.today().month, 1)
+        agent_usage = await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("agent_usage")
+            .select("*")
+            .eq("client_id", client_id)
+            .eq("period_start", period_start.isoformat())
+        )
+
+        usage_records = []
+        total_voice_seconds = 0
+        total_text_messages = 0
+
+        for record in (agent_usage.data or []):
+            voice_secs = record.get("voice_seconds_used", 0) or 0
+            text_msgs = record.get("text_messages_used", 0) or 0
+            total_voice_seconds += voice_secs
+            total_text_messages += text_msgs
+            usage_records.append({
+                "agent_id": record.get("agent_id"),
+                "voice_seconds_used": voice_secs,
+                "voice_minutes_used": round(voice_secs / 60, 2),
+                "text_messages_used": text_msgs,
+                "updated_at": record.get("updated_at"),
+            })
+
+        result["checks"]["agent_usage_table"] = {
+            "records_found": len(usage_records),
+            "total_voice_seconds": total_voice_seconds,
+            "total_voice_minutes": round(total_voice_seconds / 60, 2),
+            "total_text_messages": total_text_messages,
+            "records": usage_records,
+        }
+
+        if len(usage_records) == 0:
+            result["issues_found"].append("No agent_usage records found for this client/period")
+            result["recommendations"].append("Usage records are created when increment functions are called successfully")
+
+    except Exception as e:
+        result["checks"]["agent_usage_table"] = {"error": str(e)}
+        result["issues_found"].append(f"Failed to query agent_usage: {e}")
+
+    # 3. Check RPC function
+    try:
+        await usage_tracking_service.initialize()
+        period_start = date(date.today().year, date.today().month, 1)
+
+        rpc_result = supabase_manager.admin_client.rpc(
+            'get_client_aggregated_usage',
+            {'p_client_id': client_id, 'p_period_start': period_start.isoformat()}
+        ).execute()
+
+        if rpc_result.data and len(rpc_result.data) > 0:
+            rpc_data = rpc_result.data[0]
+            result["checks"]["rpc_function"] = {
+                "status": "working",
+                "total_voice_seconds": rpc_data.get("total_voice_seconds", 0),
+                "total_voice_minutes": round((rpc_data.get("total_voice_seconds", 0) or 0) / 60, 2),
+                "total_text_messages": rpc_data.get("total_text_messages", 0),
+                "agent_count": rpc_data.get("agent_count", 0),
+            }
+        else:
+            result["checks"]["rpc_function"] = {
+                "status": "no_data",
+                "message": "RPC returned empty result"
+            }
+
+    except Exception as e:
+        result["checks"]["rpc_function"] = {"status": "error", "error": str(e)}
+        result["issues_found"].append(f"RPC function error: {e}")
+        result["recommendations"].append("Ensure migration 20250129_add_client_aggregated_usage_rpc.sql has been applied")
+
+    # 4. Summary
+    result["summary"] = {
+        "issues_count": len(result["issues_found"]),
+        "has_webhook_events": result["checks"].get("livekit_events", {}).get("total_room_finished_events", 0) > 0,
+        "has_usage_records": result["checks"].get("agent_usage_table", {}).get("records_found", 0) > 0,
+        "rpc_working": result["checks"].get("rpc_function", {}).get("status") == "working",
+    }
+
+    return result

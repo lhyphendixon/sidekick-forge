@@ -55,7 +55,7 @@
                         <span>{{ container.cpu_percent|default(0) }}%</span>
                     </div>
                     <div class="w-full bg-gray-200 rounded-full h-2">
-                        <div class="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                        <div class="bg-brand-teal h-2 rounded-full transition-all duration-300"
                              style="width: {{ container.cpu_percent|default(0) }}%"></div>
                     </div>
                 </div>
@@ -186,7 +186,7 @@
         </button>
         {% endif %}
         
-        <button class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium"
+        <button class="bg-brand-teal hover:bg-brand-teal/80 text-white px-4 py-2 rounded text-sm font-medium"
                 hx-get="/admin/containers/{{ container.client_id }}"
                 hx-target="#modal-content"
                 hx-swap="outerHTML">

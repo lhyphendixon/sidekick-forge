@@ -15,8 +15,15 @@ from urllib.parse import urlencode
 import httpx
 from supabase import Client
 
-from app.config import settings
+# NOTE: settings import is deferred to avoid validation errors in agent container
+# from app.config import settings
 from app.services.client_service_supabase import ClientService
+
+
+def _get_settings():
+    """Lazy import of settings to avoid validation at module load time."""
+    from app.config import settings
+    return settings
 
 
 HELPSCOUT_AUTH_URL = "https://secure.helpscout.net/authentication/authorizeClientApplication"
@@ -70,8 +77,10 @@ class HelpScoutOAuthService:
         platform_supabase: Optional[Client] = None,
     ) -> None:
         self.client_service = client_service
-        self._client_id = settings.helpscout_oauth_client_id
-        self._client_secret = settings.helpscout_oauth_client_secret
+        # Lazy load settings to avoid validation errors in container environments
+        settings = _get_settings()
+        self._global_client_id = settings.helpscout_oauth_client_id
+        self._global_client_secret = settings.helpscout_oauth_client_secret
         self._redirect_uri = settings.helpscout_oauth_redirect_uri
         self._preferred_store = settings.helpscout_token_preferred_store
         self._mirror_tokens = settings.helpscout_token_mirror_stores
@@ -84,22 +93,98 @@ class HelpScoutOAuthService:
         self._last_store_cache: Dict[str, _TokenStore] = {}
 
     # ------------------------------------------------------------------
+    # Per-client OAuth credentials
+    # ------------------------------------------------------------------
+    def get_client_oauth_credentials(self, client_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """Get per-client OAuth credentials if stored."""
+        record, _ = self._fetch_record(client_id)
+        if record:
+            oauth_client_id = record.get("oauth_client_id")
+            oauth_client_secret = record.get("oauth_client_secret")
+            if oauth_client_id and oauth_client_secret:
+                return oauth_client_id, oauth_client_secret
+        return None, None
+
+    def save_client_oauth_credentials(self, client_id: str, oauth_client_id: str, oauth_client_secret: str) -> None:
+        """Save per-client HelpScout OAuth App credentials."""
+        if not oauth_client_id or not oauth_client_secret:
+            raise HelpScoutOAuthError("Both App ID and App Secret are required.")
+
+        existing, store = self._fetch_record(client_id)
+        target_store = store or (self._stores[0] if self._stores else None)
+
+        if not target_store:
+            raise HelpScoutOAuthError("No storage available for HelpScout credentials.")
+
+        try:
+            if existing:
+                target_store.client.table(self.TABLE_NAME).update({
+                    "oauth_client_id": oauth_client_id,
+                    "oauth_client_secret": oauth_client_secret,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("client_id", client_id).execute()
+            else:
+                target_store.client.table(self.TABLE_NAME).insert({
+                    "client_id": client_id,
+                    "oauth_client_id": oauth_client_id,
+                    "oauth_client_secret": oauth_client_secret,
+                    "access_token": "",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).execute()
+        except Exception as exc:
+            logger.error("Failed to save HelpScout OAuth credentials for client %s: %s", client_id, exc)
+            raise HelpScoutOAuthError(f"Failed to save credentials: {exc}") from exc
+
+        self._last_store_cache[client_id] = target_store
+
+    def _get_oauth_credentials(self, client_id: str) -> Tuple[str, str]:
+        """Get OAuth credentials (per-client first, then global fallback)."""
+        per_client_id, per_client_secret = self.get_client_oauth_credentials(client_id)
+        if per_client_id and per_client_secret:
+            return per_client_id, per_client_secret
+        if self._global_client_id and self._global_client_secret:
+            return self._global_client_id, self._global_client_secret
+        raise HelpScoutOAuthError(
+            "HelpScout OAuth credentials not configured. "
+            "Please enter your HelpScout App ID and App Secret."
+        )
+
+    def has_credentials(self, client_id: str) -> bool:
+        """Check if OAuth credentials are available for this client."""
+        per_client_id, per_client_secret = self.get_client_oauth_credentials(client_id)
+        if per_client_id and per_client_secret:
+            return True
+        return bool(self._global_client_id and self._global_client_secret)
+
+    # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
-    def ensure_configured(self) -> None:
+    def ensure_configured(self, client_id: Optional[str] = None) -> None:
         """Raise if HelpScout OAuth is not fully configured."""
-        if not self._client_id or not self._client_secret or not self._redirect_uri:
+        if not self._redirect_uri:
             raise HelpScoutOAuthError(
-                "HelpScout OAuth is not fully configured. "
-                "Set HELPSCOUT_OAUTH_CLIENT_ID, HELPSCOUT_OAUTH_CLIENT_SECRET, and HELPSCOUT_OAUTH_REDIRECT_URI."
+                "HelpScout OAuth redirect URI not configured. "
+                "Set HELPSCOUT_OAUTH_REDIRECT_URI environment variable."
             )
+        if client_id:
+            try:
+                self._get_oauth_credentials(client_id)
+                return
+            except HelpScoutOAuthError:
+                raise HelpScoutOAuthError(
+                    "HelpScout OAuth credentials not configured. "
+                    "Please enter your HelpScout App ID and App Secret."
+                )
 
     def build_authorization_url(self, client_id: str, admin_user_id: str) -> str:
         """Generate the HelpScout authorization URL with encoded state."""
-        self.ensure_configured()
+        if not self._redirect_uri:
+            raise HelpScoutOAuthError("HelpScout OAuth redirect URI not configured.")
+
+        oauth_client_id, _ = self._get_oauth_credentials(client_id)
         state = self._encode_state(client_id, admin_user_id)
         params = {
-            "client_id": self._client_id,
+            "client_id": oauth_client_id,
             "state": state,
         }
         return f"{HELPSCOUT_AUTH_URL}?{urlencode(params)}"
@@ -145,11 +230,12 @@ class HelpScoutOAuthService:
 
     async def exchange_code(self, client_id: str, code: str) -> None:
         """Exchange an authorization code for tokens and store them."""
-        self.ensure_configured()
+        self.ensure_configured(client_id)
+        oauth_client_id, oauth_client_secret = self._get_oauth_credentials(client_id)
         payload = {
             "grant_type": "authorization_code",
-            "client_id": self._client_id,
-            "client_secret": self._client_secret,
+            "client_id": oauth_client_id,
+            "client_secret": oauth_client_secret,
             "code": code,
         }
         tokens = await self._request_token(payload)
@@ -189,6 +275,7 @@ class HelpScoutOAuthService:
         return base64.urlsafe_b64encode(payload.encode()).decode()
 
     def _sign_state(self, value: str) -> str:
+        settings = _get_settings()
         return hmac.new(settings.secret_key.encode(), value.encode(), hashlib.sha256).hexdigest()
 
     def _build_store_order(
@@ -334,11 +421,12 @@ class HelpScoutOAuthService:
         return bundle.expires_at - now <= self._refresh_margin
 
     async def _refresh_bundle(self, client_id: str, refresh_token: str) -> HelpScoutTokenBundle:
-        self.ensure_configured()
+        self.ensure_configured(client_id)
+        oauth_client_id, oauth_client_secret = self._get_oauth_credentials(client_id)
         payload = {
             "grant_type": "refresh_token",
-            "client_id": self._client_id,
-            "client_secret": self._client_secret,
+            "client_id": oauth_client_id,
+            "client_secret": oauth_client_secret,
             "refresh_token": refresh_token,
         }
         tokens = await self._request_token(payload)

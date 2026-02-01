@@ -16,6 +16,8 @@ from app.config import settings
 from app.api.v1 import api_router
 from app.middleware.auth import AuthenticationMiddleware
 from app.middleware.logging import LoggingMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.rate_limiting_memory import RateLimitMiddleware
 from app.utils.exceptions import APIException
 from app.integrations.supabase_client import supabase_manager
 from app.integrations.livekit_client import livekit_manager
@@ -196,9 +198,12 @@ app.add_middleware(
     expose_headers=["X-Total-Count", "X-Page", "X-Per-Page"]
 )
 
-# Add custom middleware (Redis rate limiting removed per policy)
+# Add custom middleware
+# Note: Rate limiting is disabled by default. Enable with RATE_LIMIT_ENABLED=true
 app.add_middleware(LoggingMiddleware)
 app.add_middleware(AuthenticationMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware)
 
 # Force no-cache on admin pages to avoid CDN/browser serving stale admin HTML
 @app.middleware("http")

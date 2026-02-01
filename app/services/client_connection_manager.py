@@ -253,7 +253,7 @@ class ClientConnectionManager:
         client_config = self._client_cache[client_id_str]
         
         # Check additional_settings.api_keys for any stored keys
-        additional_api_keys = client_config.get('additional_settings', {}).get('api_keys', {}) or {}
+        additional_api_keys = (client_config.get('additional_settings') or {}).get('api_keys', {}) or {}
 
         # Extract all API keys (check top-level columns first, then additional_settings.api_keys)
         api_keys = {

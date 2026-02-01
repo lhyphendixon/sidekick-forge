@@ -15,8 +15,15 @@ from urllib.parse import urlencode
 import httpx
 from supabase import Client
 
-from app.config import settings
+# NOTE: settings import is deferred to avoid validation errors in agent container
+# from app.config import settings
 from app.services.client_service_supabase import ClientService
+
+
+def _get_settings():
+    """Lazy import of settings to avoid validation at module load time."""
+    from app.config import settings
+    return settings
 
 
 ASANA_AUTH_URL = "https://app.asana.com/-/oauth_authorize"
@@ -66,6 +73,8 @@ class AsanaOAuthService:
         platform_supabase: Optional[Client] = None,
     ) -> None:
         self.client_service = client_service
+        # Lazy load settings to avoid validation errors in container environments
+        settings = _get_settings()
         self._client_id = settings.asana_oauth_client_id
         self._client_secret = settings.asana_oauth_client_secret
         self._redirect_uri = settings.asana_oauth_redirect_uri
@@ -159,22 +168,50 @@ class AsanaOAuthService:
         """Retrieve a valid token bundle, refreshing if needed."""
         record = self.get_connection(client_id)
         if not record:
+            logger.debug("No Asana connection found for client %s", client_id)
             return None
 
         bundle = self._record_to_bundle(record)
-        if not self._should_refresh(bundle, force_refresh=force_refresh):
+        needs_refresh = self._should_refresh(bundle, force_refresh=force_refresh)
+
+        logger.info(
+            "Asana token check for %s: expires_at=%s, is_expired=%s, needs_refresh=%s, has_refresh_token=%s",
+            client_id,
+            bundle.expires_at.isoformat() if bundle.expires_at else "None",
+            bundle.is_expired,
+            needs_refresh,
+            bool(bundle.refresh_token),
+        )
+
+        if not needs_refresh:
             return bundle
 
         if not bundle.refresh_token:
+            logger.error(
+                "Asana token for client %s has expired but NO refresh token is stored. "
+                "This means Asana did not return a refresh_token during OAuth. "
+                "User must reconnect Asana.",
+                client_id,
+            )
             raise AsanaOAuthError(
                 "Stored Asana token has expired and no refresh token is available. Please reconnect Asana."
             )
+
+        logger.info("Attempting to refresh Asana token for client %s", client_id)
         try:
-            return await self._refresh_bundle(client_id, bundle.refresh_token)
+            refreshed = await self._refresh_bundle(client_id, bundle.refresh_token)
+            logger.info("Successfully refreshed Asana token for client %s", client_id)
+            return refreshed
         except AsanaOAuthError as exc:
             if exc.error_code == "invalid_grant" or "invalid_grant" in str(exc).lower():
-                logger.warning("Asana refresh token was rejected; removing stored connection for %s", client_id)
+                logger.warning(
+                    "Asana refresh token was rejected (invalid_grant) for client %s; removing connection. Error: %s",
+                    client_id,
+                    exc,
+                )
                 self.disconnect(client_id)
+            else:
+                logger.error("Asana token refresh failed for client %s: %s", client_id, exc)
             raise
 
     # ------------------------------------------------------------------
@@ -189,6 +226,7 @@ class AsanaOAuthService:
         return base64.urlsafe_b64encode(payload.encode()).decode()
 
     def _sign_state(self, value: str) -> str:
+        settings = _get_settings()
         return hmac.new(settings.secret_key.encode(), value.encode(), hashlib.sha256).hexdigest()
 
     def _build_store_order(

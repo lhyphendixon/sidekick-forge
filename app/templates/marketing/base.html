@@ -25,9 +25,9 @@
                         'brand-salmon': '#f56453',
                         'brand-dark': '#000000',
                         'brand-dark-elevated': 'rgba(15, 15, 15, 0.85)',
-                        'tier-adventurer': '#22c55e',
-                        'tier-champion': '#3b82f6',
-                        'tier-paragon': '#a855f7',
+                        'tier-adventurer': '#01a4a6',
+                        'tier-champion': '#fc7245',
+                        'tier-paragon': '#E65F4C',
                     },
                     fontFamily: {
                         'sans': ['Inter', 'system-ui', 'sans-serif'],
@@ -42,11 +42,63 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 
+    <!-- Futura PT Font from Adobe Fonts -->
+    <link rel="stylesheet" href="https://use.typekit.net/oqv5jkr.css">
+
     <!-- Custom styles -->
     <style>
         body {
-            font-family: 'Inter', system-ui, sans-serif;
+            font-family: "futura-pt", system-ui, sans-serif;
             background: #000000;
+        }
+
+        /* Animated logo - rotating gem */
+        @keyframes gem-rotate {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .logo-container {
+            position: relative;
+            width: 48px;
+            height: 48px;
+            flex-shrink: 0;
+        }
+        .logo-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+        .logo-gem {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            animation: gem-rotate 8s linear infinite;
+        }
+        /* Logo text - Futura PT Light, all caps */
+        .logo-text {
+            font-family: "futura-pt", sans-serif;
+            font-weight: 300;
+            font-style: normal;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            font-size: 28px;
+            white-space: nowrap;
+            color: #1f2937;
+        }
+        /* Navigation links */
+        .nav-link {
+            font-family: "futura-pt", sans-serif;
+            font-weight: 400;
+            font-size: 16px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
         }
 
         /* Video background container */
@@ -73,7 +125,7 @@
         .video-bg-overlay {
             position: absolute;
             inset: 0;
-            background: rgba(0, 0, 0, 0.75);
+            background: rgba(0, 0, 0, 0.8);
         }
 
         /* Glass morphism styles - matching platform */
@@ -138,19 +190,19 @@
 
         /* Tier gradient text */
         .tier-adventurer-text {
-            background: linear-gradient(135deg, #22c55e 0%, #10b981 100%);
+            background: linear-gradient(135deg, #01a4a6 0%, #017f81 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
         .tier-champion-text {
-            background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%);
+            background: linear-gradient(135deg, #fc7245 0%, #e85a2f 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
         .tier-paragon-text {
-            background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+            background: linear-gradient(135deg, #E65F4C 0%, #d14a38 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -178,25 +230,25 @@
 
         /* Tier card borders */
         .tier-card-adventurer {
-            border-color: rgba(34, 197, 94, 0.3);
+            border-color: rgba(1, 164, 166, 0.3);
         }
         .tier-card-adventurer:hover {
-            border-color: rgba(34, 197, 94, 0.6);
-            box-shadow: 0 20px 40px rgba(34, 197, 94, 0.15);
+            border-color: rgba(1, 164, 166, 0.6);
+            box-shadow: 0 20px 40px rgba(1, 164, 166, 0.15);
         }
         .tier-card-champion {
-            border-color: rgba(59, 130, 246, 0.3);
+            border-color: rgba(252, 114, 69, 0.3);
         }
         .tier-card-champion:hover {
-            border-color: rgba(59, 130, 246, 0.6);
-            box-shadow: 0 20px 40px rgba(59, 130, 246, 0.15);
+            border-color: rgba(252, 114, 69, 0.6);
+            box-shadow: 0 20px 40px rgba(252, 114, 69, 0.15);
         }
         .tier-card-paragon {
-            border-color: rgba(168, 85, 247, 0.3);
+            border-color: rgba(230, 95, 76, 0.3);
         }
         .tier-card-paragon:hover {
-            border-color: rgba(168, 85, 247, 0.6);
-            box-shadow: 0 20px 40px rgba(168, 85, 247, 0.15);
+            border-color: rgba(230, 95, 76, 0.6);
+            box-shadow: 0 20px 40px rgba(230, 95, 76, 0.15);
         }
 
         /* Subtle section divider */
@@ -224,19 +276,23 @@
             <div class="flex justify-between items-center h-16">
                 <!-- Logo -->
                 <div class="flex items-center">
-                    <a href="/" class="flex items-center">
-                        <img src="/static/images/sidekick-forge-logo.png" alt="Sidekick Forge" class="h-10 w-auto">
+                    <a href="/" class="flex items-center gap-2">
+                        <div class="logo-container">
+                            <img src="/static/images/Logos/SF-Symbol-Medium-bg.jpg" alt="" class="logo-bg" />
+                            <img src="/static/images/Logos/SF-Symbol-Medium-Gem.png" alt="Sidekick Forge" class="logo-gem" />
+                        </div>
+                        <span class="logo-text hidden sm:block">Sidekick Forge</span>
                     </a>
                 </div>
 
                 <!-- Desktop Navigation -->
                 <div class="hidden md:flex items-center space-x-8">
-                    <a href="/features" class="text-gray-700 hover:text-brand-teal transition font-medium">Features</a>
-                    <a href="/pricing" class="text-gray-700 hover:text-brand-teal transition font-medium">Pricing</a>
-                    <a href="/about" class="text-gray-700 hover:text-brand-teal transition font-medium">About</a>
-                    <a href="/contact" class="text-gray-700 hover:text-brand-teal transition font-medium">Contact</a>
-                    <a href="/admin/login" class="text-gray-700 hover:text-brand-teal transition font-medium">Sign In</a>
-                    <a href="/checkout" class="bg-brand-teal hover:bg-brand-teal/90 text-white px-6 py-2 rounded-lg font-medium transition shadow-lg shadow-brand-teal/25">
+                    <a href="/features" class="nav-link text-gray-700 hover:text-brand-teal transition">Features</a>
+                    <a href="/pricing" class="nav-link text-gray-700 hover:text-brand-teal transition">Pricing</a>
+                    <a href="/about" class="nav-link text-gray-700 hover:text-brand-teal transition">About</a>
+                    <a href="/contact" class="nav-link text-gray-700 hover:text-brand-teal transition">Contact</a>
+                    <a href="/admin/login" class="nav-link text-gray-700 hover:text-brand-teal transition">Sign In</a>
+                    <a href="/checkout" class="nav-link bg-brand-teal hover:bg-brand-teal/90 text-white px-6 py-2 rounded-lg transition shadow-lg shadow-brand-teal/25">
                         Get Started
                     </a>
                 </div>
@@ -264,12 +320,12 @@
              x-transition:leave-end="opacity-0 transform -translate-y-4"
              class="md:hidden bg-white border-t border-gray-100">
             <div class="px-2 pt-2 pb-3 space-y-1">
-                <a href="/features" class="block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition font-medium">Features</a>
-                <a href="/pricing" class="block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition font-medium">Pricing</a>
-                <a href="/about" class="block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition font-medium">About</a>
-                <a href="/contact" class="block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition font-medium">Contact</a>
-                <a href="/admin/login" class="block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition font-medium">Sign In</a>
-                <a href="/checkout" class="block px-3 py-2 bg-brand-teal text-white rounded-md font-medium text-center">Get Started</a>
+                <a href="/features" class="nav-link block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition">Features</a>
+                <a href="/pricing" class="nav-link block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition">Pricing</a>
+                <a href="/about" class="nav-link block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition">About</a>
+                <a href="/contact" class="nav-link block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition">Contact</a>
+                <a href="/admin/login" class="nav-link block px-3 py-2 text-gray-700 hover:text-brand-teal hover:bg-gray-50 rounded-md transition">Sign In</a>
+                <a href="/checkout" class="nav-link block px-3 py-2 bg-brand-teal text-white rounded-md text-center">Get Started</a>
             </div>
         </div>
     </nav>
@@ -285,8 +341,12 @@
             <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
                 <!-- Brand -->
                 <div class="col-span-1 md:col-span-2">
-                    <div class="flex items-center mb-4">
-                        <img src="/static/images/sidekick-forge-logo.png" alt="Sidekick Forge" class="h-10 w-auto">
+                    <div class="flex items-center gap-2 mb-4">
+                        <div class="logo-container">
+                            <img src="/static/images/Logos/SF-Symbol-Medium-bg.jpg" alt="" class="logo-bg" />
+                            <img src="/static/images/Logos/SF-Symbol-Medium-Gem.png" alt="Sidekick Forge" class="logo-gem" />
+                        </div>
+                        <span class="logo-text">Sidekick Forge</span>
                     </div>
                     <p class="text-gray-600 mb-4 max-w-md">
                         Your AI-powered sidekick for the hero's journey. Empowering mission-driven entrepreneurs to build, grow, and succeed.

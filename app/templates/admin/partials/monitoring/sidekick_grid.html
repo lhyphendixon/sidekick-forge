@@ -1,0 +1,134 @@
+<!-- Sidekick Status Grid - Real-time status indicators -->
+{% if sidekicks %}
+<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+    {% for sidekick in sidekicks %}
+    <div class="sidekick-card bg-dark-elevated border border-dark-border rounded-lg p-4 hover:border-brand-teal/50 transition-all">
+        <div class="flex items-start gap-3">
+            <!-- Avatar with Status Indicator -->
+            <div class="relative">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-teal/20 to-brand-orange/20 flex items-center justify-center">
+                    <svg class="w-5 h-5 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                    </svg>
+                </div>
+                <!-- Status dot -->
+                <div class="absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-dark-elevated
+                    {% if sidekick.status == 'in_conversation' %}bg-brand-teal status-pulse online
+                    {% elif sidekick.status == 'processing' %}bg-brand-orange
+                    {% elif sidekick.status == 'recent' %}bg-purple-400
+                    {% elif sidekick.status == 'idle' %}bg-brand-teal
+                    {% else %}bg-dark-text-secondary{% endif %}">
+                </div>
+            </div>
+
+            <!-- Sidekick Info -->
+            <div class="flex-1 min-w-0">
+                <h4 class="text-sm font-medium text-dark-text truncate">{{ sidekick.name }}</h4>
+                <p class="text-xs text-dark-text-secondary truncate">{{ sidekick.client_name }}</p>
+
+                <!-- Capabilities badges -->
+                <div class="flex items-center gap-1 mt-2">
+                    {% if sidekick.voice_chat_enabled %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-teal/10 text-brand-teal text-[10px] font-medium">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+                        </svg>
+                        Voice
+                    </span>
+                    {% endif %}
+                    {% if sidekick.text_chat_enabled %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-orange/10 text-brand-orange text-[10px] font-medium">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                        </svg>
+                        Text
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Status Badge -->
+            <div class="flex-shrink-0">
+                {% if sidekick.status == 'in_conversation' %}
+                <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-brand-teal/10 text-brand-teal text-xs font-medium">
+                    <span class="w-1.5 h-1.5 rounded-full bg-brand-teal animate-pulse"></span>
+                    In Call
+                </span>
+                {% elif sidekick.status == 'processing' %}
+                <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-brand-orange/10 text-brand-orange text-xs font-medium">
+                    <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    Processing
+                </span>
+                {% elif sidekick.status == 'recent' %}
+                <span class="inline-flex items-center px-2 py-1 rounded-full bg-purple-500/10 text-purple-400 text-xs font-medium">
+                    Recent
+                </span>
+                {% elif sidekick.status == 'idle' %}
+                <span class="inline-flex items-center px-2 py-1 rounded-full bg-brand-teal/10 text-brand-teal text-xs font-medium">
+                    Idle
+                </span>
+                {% else %}
+                <span class="inline-flex items-center px-2 py-1 rounded-full bg-dark-border text-dark-text-secondary text-xs font-medium">
+                    Inactive
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Summary footer -->
+<div class="mt-4 pt-4 border-t border-dark-border flex flex-wrap items-center justify-between gap-2 text-sm">
+    <div class="flex flex-wrap items-center gap-3">
+        {% set in_call = sidekicks|selectattr('status', 'equalto', 'in_conversation')|list|length %}
+        {% set processing = sidekicks|selectattr('status', 'equalto', 'processing')|list|length %}
+        {% set idle = sidekicks|selectattr('status', 'equalto', 'idle')|list|length %}
+        {% set inactive = sidekicks|selectattr('status', 'equalto', 'inactive')|list|length %}
+
+        {% if in_call > 0 %}
+        <div class="flex items-center gap-1.5">
+            <div class="w-2 h-2 rounded-full bg-brand-teal animate-pulse"></div>
+            <span class="text-dark-text-secondary">{{ in_call }} In Call</span>
+        </div>
+        {% endif %}
+        {% if processing > 0 %}
+        <div class="flex items-center gap-1.5">
+            <div class="w-2 h-2 rounded-full bg-brand-orange"></div>
+            <span class="text-dark-text-secondary">{{ processing }} Processing</span>
+        </div>
+        {% endif %}
+        <div class="flex items-center gap-1.5">
+            <div class="w-2 h-2 rounded-full bg-brand-teal"></div>
+            <span class="text-dark-text-secondary">{{ idle }} Idle</span>
+        </div>
+        {% if inactive > 0 %}
+        <div class="flex items-center gap-1.5">
+            <div class="w-2 h-2 rounded-full bg-dark-text-secondary"></div>
+            <span class="text-dark-text-secondary">{{ inactive }} Inactive</span>
+        </div>
+        {% endif %}
+    </div>
+    <a href="/admin/agents" class="text-brand-teal hover:text-brand-teal/80 font-medium transition-colors">
+        View All Sidekicks
+    </a>
+</div>
+{% else %}
+<!-- Empty State -->
+<div class="text-center py-12">
+    <svg class="w-12 h-12 text-dark-text-secondary mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+    </svg>
+    <h4 class="text-dark-text font-medium mb-1">No Sidekicks Found</h4>
+    <p class="text-dark-text-secondary text-sm mb-4">Create your first sidekick to start monitoring.</p>
+    <a href="/admin/agents" class="inline-flex items-center gap-2 bg-brand-teal hover:bg-brand-teal/80 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+        </svg>
+        Create Sidekick
+    </a>
+</div>
+{% endif %}

@@ -40,6 +40,7 @@
 
     {% set channels = agent.get('tools_config', {}).get('channels', {}) if agent.get('tools_config') else {} %}
     {% set telegram = channels.get('telegram', {}) %}
+    {% set personality_engine = agent_personality if agent_personality else {} %}
     {% set is_global_agent = agent.client_id == 'global' %}
 
     <form id="agentForm">
@@ -174,8 +175,12 @@
             </div>
         </div>
 
-        <!-- Channels -->
-        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+        <!-- Channels (Coming Soon) -->
+        <div class="relative mb-6">
+            <div class="absolute inset-0 z-10 flex items-center justify-center">
+                <span class="bg-dark-bg/80 text-brand-teal border border-brand-teal/40 px-4 py-2 rounded-full text-sm font-semibold tracking-wide">Coming Soon</span>
+            </div>
+        <div class="bg-dark-surface rounded-lg border border-dark-border opacity-40 pointer-events-none">
             <div class="border-b border-dark-border px-6 py-4 flex items-center justify-between">
                 <h5 class="text-lg font-semibold text-dark-text">Channels</h5>
                 <span class="text-xs text-dark-text-secondary">Telegram</span>
@@ -247,6 +252,7 @@
                 </p>
             </div>
         </div>
+        </div><!-- end Coming Soon wrapper -->
 
         <!-- System Prompt -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
@@ -259,6 +265,78 @@
                 <p class="text-sm text-dark-text-secondary mt-2">
                     This prompt defines the agent's personality, capabilities, and behavior.
                 </p>
+            </div>
+        </div>
+
+        <!-- Personality Engine -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text">Personality Engine</h5>
+                <p class="text-sm text-dark-text-secondary mt-1">
+                    Tune the Big Five personality traits used at runtime.
+                </p>
+            </div>
+            <div class="p-6 space-y-5">
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-2">Openness</label>
+                    <input type="range" id="personalityOpenness" min="0" max="100" step="1"
+                           value="{{ personality_engine.get('openness', 50) | int }}"
+                           class="w-full h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer"
+                           oninput="updatePersonalityValue('personalityOpenness', this.value)">
+                    <div class="flex justify-between text-xs text-dark-text-secondary mt-1">
+                        <span>0%</span>
+                        <span id="personalityOpennessValue">{{ personality_engine.get('openness', 50) | int }}%</span>
+                        <span>100%</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-2">Conscientiousness</label>
+                    <input type="range" id="personalityConscientiousness" min="0" max="100" step="1"
+                           value="{{ personality_engine.get('conscientiousness', 50) | int }}"
+                           class="w-full h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer"
+                           oninput="updatePersonalityValue('personalityConscientiousness', this.value)">
+                    <div class="flex justify-between text-xs text-dark-text-secondary mt-1">
+                        <span>0%</span>
+                        <span id="personalityConscientiousnessValue">{{ personality_engine.get('conscientiousness', 50) | int }}%</span>
+                        <span>100%</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-2">Extraversion</label>
+                    <input type="range" id="personalityExtraversion" min="0" max="100" step="1"
+                           value="{{ personality_engine.get('extraversion', 50) | int }}"
+                           class="w-full h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer"
+                           oninput="updatePersonalityValue('personalityExtraversion', this.value)">
+                    <div class="flex justify-between text-xs text-dark-text-secondary mt-1">
+                        <span>0%</span>
+                        <span id="personalityExtraversionValue">{{ personality_engine.get('extraversion', 50) | int }}%</span>
+                        <span>100%</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-2">Agreeableness</label>
+                    <input type="range" id="personalityAgreeableness" min="0" max="100" step="1"
+                           value="{{ personality_engine.get('agreeableness', 50) | int }}"
+                           class="w-full h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer"
+                           oninput="updatePersonalityValue('personalityAgreeableness', this.value)">
+                    <div class="flex justify-between text-xs text-dark-text-secondary mt-1">
+                        <span>0%</span>
+                        <span id="personalityAgreeablenessValue">{{ personality_engine.get('agreeableness', 50) | int }}%</span>
+                        <span>100%</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-2">Neuroticism</label>
+                    <input type="range" id="personalityNeuroticism" min="0" max="100" step="1"
+                           value="{{ personality_engine.get('neuroticism', 50) | int }}"
+                           class="w-full h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer"
+                           oninput="updatePersonalityValue('personalityNeuroticism', this.value)">
+                    <div class="flex justify-between text-xs text-dark-text-secondary mt-1">
+                        <span>0%</span>
+                        <span id="personalityNeuroticismValue">{{ personality_engine.get('neuroticism', 50) | int }}%</span>
+                        <span>100%</span>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -378,58 +456,31 @@
                         <p class="text-xs text-dark-text-secondary mt-2">Cartesia requires an explicit model. Choose one to enable voice.</p>
                     </div>
 
+                    <!-- Cartesia TTS Speed -->
+                    <div id="config_cartesia_speed_settings" class="mt-4" {% if latest_config.tts_provider != 'cartesia' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Speech Speed</label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" id="config_tts_speed" min="0.6" max="1.5" step="0.05"
+                                   value="{{ agent.voice_settings.tts_speed or 1.0 }}"
+                                   class="flex-1 h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer accent-brand-teal"
+                                   oninput="document.getElementById('config_tts_speed_value').textContent = this.value + 'x'">
+                            <span id="config_tts_speed_value" class="text-sm font-medium text-dark-text w-12">{{ agent.voice_settings.tts_speed or 1.0 }}x</span>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-2">
+                            Speed multiplier: 0.6x (slower) to 1.5x (faster). Default is 1.0x (normal).
+                        </p>
+                    </div>
+
                     <div id="config_cartesia_emotion_settings" class="mt-4 border border-dark-border rounded-md p-4 bg-dark-elevated {% if latest_config.tts_provider != 'cartesia' or (agent.voice_settings.model or latest_config.tts_model) != 'sonic-3' %}hidden{% endif %}">
                         <label class="flex items-center text-sm font-medium text-dark-text">
                             <input type="checkbox" id="config_cartesia_emotions_enabled"
                                    class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal bg-dark-surface"
                                    {% if agent.voice_settings.cartesia_emotions_enabled %}checked{% endif %}>
-                            <span class="ml-2">Enable Sonic-3 emotion controls</span>
+                            <span class="ml-2">Enable dynamic emotion expression</span>
                         </label>
                         <p class="text-xs text-dark-text-secondary mt-1">
-                            When enabled, the assistant may add Cartesia <emotion> tags to control volume, speed, and tone. 
+                            When enabled, the agent will dynamically express emotions (excited, sympathetic, curious, etc.) based on conversation context using Cartesia SSML tags.
                         </p>
-                        <div id="config_cartesia_emotion_fields" class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4 {% if not agent.voice_settings.cartesia_emotions_enabled %}hidden{% endif %}">
-                            <div>
-                                <label class="block text-xs font-medium text-dark-text">Default Emotion Style</label>
-                                {% set cartesia_style = agent.voice_settings.cartesia_emotion_style or 'neutral' %}
-                                <select id="config_cartesia_emotion_style"
-                                        class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
-                                    {% for style in ['neutral','joy','sad','angry','compassionate','excited','empathetic'] %}
-                                    <option value="{{ style }}" {% if cartesia_style == style %}selected{% endif %}>{{ style|capitalize }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-dark-text">Emotion Intensity</label>
-                                {% set cartesia_intensity = agent.voice_settings.cartesia_emotion_intensity or 3 %}
-                                <select id="config_cartesia_emotion_intensity"
-                                        class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
-                                    {% for level in [1,2,3,4,5] %}
-                                    <option value="{{ level }}" {% if cartesia_intensity == level %}selected{% endif %}>Level {{ level }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-dark-text">Volume Hint</label>
-                                {% set cartesia_volume = agent.voice_settings.cartesia_emotion_volume or 'medium' %}
-                                <select id="config_cartesia_emotion_volume"
-                                        class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
-                                    {% for option in ['x-soft','soft','medium','loud','x-loud'] %}
-                                    <option value="{{ option }}" {% if cartesia_volume == option %}selected{% endif %}>{{ option }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-dark-text">Speed Hint</label>
-                                {% set cartesia_speed = agent.voice_settings.cartesia_emotion_speed or 'medium' %}
-                                <select id="config_cartesia_emotion_speed"
-                                        class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
-                                    {% for option in ['x-slow','slow','medium','fast','x-fast'] %}
-                                    <option value="{{ option }}" {% if cartesia_speed == option %}selected{% endif %}>{{ option }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -460,60 +511,17 @@
                         </p>
                     </div>
 
-                    <!-- Bithuman Settings -->
+                    <!-- Bithuman Settings (Local mode only - requires .imx model) -->
                     <div id="bithumanSettings" {% if agent.voice_settings.avatar_provider and agent.voice_settings.avatar_provider != 'bithuman' %}style="display: none;"{% endif %}>
-                        <!-- Bithuman Mode Selection -->
+                        <!-- IMX Model Path (required) -->
                         <div class="mb-6">
-                            <label class="block text-sm font-medium text-dark-text mb-2">Bithuman Mode</label>
-                            <select id="bithumanMode" onchange="toggleBithumanMode()" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
-                                <option value="local" {% if agent.voice_settings.avatar_model_path %}selected{% endif %}>Local/Self-Hosted (IMX model)</option>
-                                <option value="cloud" {% if not agent.voice_settings.avatar_model_path %}selected{% endif %}>Cloud (Image URL)</option>
-                            </select>
-                            <p class="text-xs text-dark-text-secondary mt-2">
-                                <strong>Local:</strong> Uses a downloaded .imx model file. Faster, runs on CPU, no cloud latency.<br>
-                                <strong>Cloud:</strong> Uses Bithuman's cloud API with an uploaded image.
-                            </p>
-                        </div>
-
-                        <!-- Local Mode: IMX Model Path -->
-                        <div id="bithumanLocalSettings" class="mb-6" {% if not agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
-                            <label class="block text-sm font-medium text-dark-text mb-2">IMX Model Path</label>
+                            <label class="block text-sm font-medium text-dark-text mb-2">IMX Model Path <span class="text-red-500">*</span></label>
                             <input type="text" id="avatarModelPath" value="{{ agent.voice_settings.avatar_model_path or '/app/models/farah_qubit.imx' }}"
                                    class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
                                    placeholder="/app/models/your_avatar.imx">
                             <p class="text-xs text-dark-text-secondary mt-2">
                                 Path to the .imx model file inside the agent container. Models are stored in /app/models/
                             </p>
-                        </div>
-
-                        <!-- Cloud Mode: Avatar Image Upload -->
-                        <div id="bithumanCloudSettings" class="mb-6" {% if agent.voice_settings.avatar_model_path %}style="display: none;"{% endif %}>
-                            <label class="block text-sm font-medium text-dark-text mb-2">Avatar Image</label>
-                            <p class="text-xs text-dark-text-secondary mb-3">
-                                Upload a clear, front-facing portrait photo. This image will be animated during video chat.
-                            </p>
-                            <div class="flex items-start gap-4">
-                                <div id="avatarPreview" class="w-32 h-32 bg-dark-elevated border border-dark-border rounded-lg flex items-center justify-center overflow-hidden">
-                                    {% if agent.voice_settings.avatar_image_url %}
-                                    <img src="{{ agent.voice_settings.avatar_image_url }}" alt="Avatar" class="w-full h-full object-cover">
-                                    {% else %}
-                                    <svg class="w-12 h-12 text-dark-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                                    </svg>
-                                    {% endif %}
-                                </div>
-                                <div class="flex-1">
-                                    <input type="file" id="avatarImageInput" accept="image/jpeg,image/png,image/webp" class="hidden" onchange="handleAvatarUpload(this)">
-                                    <input type="hidden" id="avatarImageUrl" value="{{ agent.voice_settings.avatar_image_url or '' }}">
-                                    <button type="button" onclick="document.getElementById('avatarImageInput').click()"
-                                            class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md text-sm transition-colors">
-                                        <i class="bi bi-upload mr-2"></i>Upload Image
-                                    </button>
-                                    <p class="text-xs text-dark-text-secondary mt-2">
-                                        Recommended: Square image, at least 512x512px. JPG, PNG, or WebP.
-                                    </p>
-                                </div>
-                            </div>
                         </div>
 
                         <!-- Avatar Model Type -->
@@ -533,7 +541,8 @@
                         <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
                             <p class="text-xs text-dark-text-secondary">
                                 <i class="bi bi-info-circle mr-1"></i>
-                                Video chat is powered by <a href="https://www.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Bithuman</a>.
+                                Video chat is powered by <a href="https://www.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Bithuman</a> (local mode).
+                                Create IMX models at <a href="https://imaginex.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">ImagineX Console</a>.
                                 Ensure the Bithuman API Secret is configured in the client settings.
                             </p>
                         </div>
@@ -580,6 +589,75 @@
                                 Video chat is powered by <a href="https://www.heygen.com" target="_blank" class="text-purple-400 hover:text-purple-300">HeyGen LiveAvatar</a>.
                                 Ensure the LiveAvatar API Key is configured in the client settings.
                             </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sound Settings -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text flex items-center">
+                    <i class="bi bi-soundwave mr-2 text-brand-teal"></i>
+                    Sound Settings
+                </h5>
+            </div>
+            <div class="p-6">
+                <p class="text-sm text-dark-text-secondary mb-6">Configure ambient and thinking sounds for voice/video chat to enhance immersion and reduce silence during processing.</p>
+
+                {% set sound_settings = agent.sound_settings or {} %}
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Thinking Sound -->
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Thinking Sound</label>
+                        <select id="thinkingSound" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                            <option value="none" {% if sound_settings.thinking_sound == 'none' or not sound_settings.thinking_sound %}selected{% endif %}>None (silent, default)</option>
+                            <option value="keyboard" {% if sound_settings.thinking_sound == 'keyboard' %}selected{% endif %}>Keyboard Typing</option>
+                            <option value="beta1" {% if sound_settings.thinking_sound == 'beta1' %}selected{% endif %}>Thinking Sound Beta 1</option>
+                        </select>
+                        <p class="mt-1 text-xs text-dark-text-secondary">Plays during RAG searches and tool calls to fill silence while the agent is "thinking"</p>
+                    </div>
+
+                    <!-- Thinking Sound Volume -->
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Thinking Sound Volume</label>
+                        <input type="range" id="thinkingSoundVolume" min="0" max="100" step="5"
+                               value="{{ ((sound_settings.thinking_volume or 0.3) * 100) | int }}"
+                               class="w-full h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer accent-brand-teal"
+                               oninput="document.getElementById('thinkingVolumeDisplay').textContent = this.value + '%'">
+                        <div class="flex justify-between text-xs text-dark-text-secondary mt-1">
+                            <span>Quiet</span>
+                            <span id="thinkingVolumeDisplay">{{ ((sound_settings.thinking_volume or 0.3) * 100) | int }}%</span>
+                            <span>Loud</span>
+                        </div>
+                    </div>
+
+                    <!-- Ambient Sound -->
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Ambient Sound</label>
+                        <select id="ambientSound" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                            <option value="none" {% if sound_settings.ambient_sound == 'none' or not sound_settings.ambient_sound %}selected{% endif %}>None (default)</option>
+                            <option value="office" {% if sound_settings.ambient_sound == 'office' %}selected{% endif %}>Office Ambience</option>
+                            <option value="forest" {% if sound_settings.ambient_sound == 'forest' %}selected{% endif %}>Forest / Nature</option>
+                            <option value="city" {% if sound_settings.ambient_sound == 'city' %}selected{% endif %}>City Ambience</option>
+                            <option value="crowded_room" {% if sound_settings.ambient_sound == 'crowded_room' %}selected{% endif %}>Crowded Room</option>
+                        </select>
+                        <p class="mt-1 text-xs text-dark-text-secondary">Background ambience that plays continuously during voice/video chat</p>
+                    </div>
+
+                    <!-- Ambient Sound Volume -->
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Ambient Sound Volume</label>
+                        <input type="range" id="ambientSoundVolume" min="0" max="100" step="5"
+                               value="{{ ((sound_settings.ambient_volume or 0.15) * 100) | int }}"
+                               class="w-full h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer accent-brand-teal"
+                               oninput="document.getElementById('ambientVolumeDisplay').textContent = this.value + '%'">
+                        <div class="flex justify-between text-xs text-dark-text-secondary mt-1">
+                            <span>Quiet</span>
+                            <span id="ambientVolumeDisplay">{{ ((sound_settings.ambient_volume or 0.15) * 100) | int }}%</span>
+                            <span>Loud</span>
                         </div>
                     </div>
                 </div>
@@ -837,26 +915,26 @@
 
             <!-- Content -->
             <div class="p-6 overflow-y-auto max-h-[calc(90vh-140px)] space-y-6">
-                <!-- Default Style Prompt -->
+                <!-- Writing Instructions -->
                 <div>
                     <label class="block text-sm font-medium text-dark-text mb-2">
-                        Default Style Prompt
-                        <span class="text-dark-text-secondary font-normal ml-2">Applied to every article</span>
+                        Writing Instructions
+                        <span class="text-dark-text-secondary font-normal ml-2">(optional)</span>
                     </label>
                     <textarea id="ccDefaultStylePrompt" rows="4"
-                        placeholder="e.g., Write in a conversational, skeptical tone. Question mainstream narratives. Use concrete examples from finance and technology. Avoid corporate buzzwords."
+                        placeholder="e.g., Write in a conversational tone. Use concrete examples. Avoid jargon."
                         class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text placeholder-dark-text-secondary/50"></textarea>
-                    <p class="text-xs text-dark-text-secondary mt-1">Describe the voice, tone, and stylistic preferences for generated articles.</p>
+                    <p class="text-xs text-dark-text-secondary mt-1">Describe the voice, tone, and style you want for generated articles.</p>
                 </div>
 
-                <!-- Example Writing -->
+                <!-- Example Article -->
                 <div>
                     <label class="block text-sm font-medium text-dark-text mb-2">
-                        Example Writing
-                        <span class="text-dark-text-secondary font-normal ml-2">Sample text to emulate</span>
+                        Example Article
+                        <span class="text-dark-text-secondary font-normal ml-2">(optional)</span>
                     </label>
                     <textarea id="ccExampleWriting" rows="12"
-                        placeholder="Paste a sample of writing (2000-3000 words) that represents the style you want the AI to match. This could be a previous article, blog post, or any text that captures the desired voice and tone."
+                        placeholder="Paste a sample article (2000-3000 words) that represents the writing style you want. The AI will match its voice and tone."
                         class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text placeholder-dark-text-secondary/50 font-mono text-sm"></textarea>
                     <p class="text-xs text-dark-text-secondary mt-1">The AI will analyze this sample and match its sentence structure, vocabulary, and overall voice.</p>
                 </div>
@@ -868,6 +946,74 @@
                     Cancel
                 </button>
                 <button onclick="saveContentCatalystConfig()" class="btn-primary px-4 py-2 rounded-lg flex items-center">
+                    <i class="bi bi-check-lg mr-2"></i>
+                    Save Settings
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- HelpScout Configuration Modal -->
+<div id="helpScoutModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+    <!-- Backdrop -->
+    <div class="fixed inset-0 bg-black/60 backdrop-blur-sm modal-backdrop cursor-pointer" onclick="closeHelpScoutModal()"></div>
+
+    <!-- Modal Content -->
+    <div class="relative min-h-screen flex items-center justify-center p-4 pointer-events-none">
+        <div class="relative bg-dark-surface border border-dark-border rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden pointer-events-auto" onclick="event.stopPropagation()">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+                        <i class="bi bi-headset text-white"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-dark-text">HelpScout Settings</h2>
+                        <p class="text-xs text-dark-text-secondary">Configure how this sidekick handles HelpScout tickets</p>
+                    </div>
+                </div>
+                <button onclick="closeHelpScoutModal()" class="text-dark-text-secondary hover:text-dark-text p-2 rounded-lg hover:bg-dark-elevated transition-colors">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <!-- Content -->
+            <div class="p-6 overflow-y-auto max-h-[calc(90vh-140px)] space-y-6">
+                <!-- System Prompt Instructions -->
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-2">
+                        Agent Instructions
+                        <span class="text-dark-text-secondary font-normal ml-2">(optional)</span>
+                    </label>
+                    <textarea id="hsSystemPromptInstructions" rows="10"
+                        placeholder="e.g., When replying to tickets, always be empathetic and professional. For billing issues, offer to escalate to the billing team. Never promise specific timelines without checking first."
+                        class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text placeholder-dark-text-secondary/50"></textarea>
+                    <p class="text-xs text-dark-text-secondary mt-1">Provide specific instructions for how the agent should handle HelpScout tickets, including tone, escalation rules, and response guidelines.</p>
+                </div>
+
+                <!-- Tips Section -->
+                <div class="bg-dark-elevated/50 border border-dark-border rounded-lg p-4">
+                    <h4 class="text-sm font-medium text-dark-text mb-2 flex items-center">
+                        <i class="bi bi-lightbulb text-yellow-400 mr-2"></i>
+                        Tips for Effective Instructions
+                    </h4>
+                    <ul class="text-xs text-dark-text-secondary space-y-1">
+                        <li>• Specify the tone you want (professional, friendly, formal, casual)</li>
+                        <li>• Define escalation triggers (e.g., "escalate refund requests over $100")</li>
+                        <li>• Set boundaries (e.g., "never share internal pricing")</li>
+                        <li>• Include common response templates or phrases to use</li>
+                        <li>• Describe how to handle different ticket types (billing, technical, general)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border bg-dark-elevated/50">
+                <button onclick="closeHelpScoutModal()" class="px-4 py-2 text-dark-text-secondary hover:text-dark-text transition-colors">
+                    Cancel
+                </button>
+                <button onclick="saveHelpScoutConfig()" class="btn-primary px-4 py-2 rounded-lg flex items-center">
                     <i class="bi bi-check-lg mr-2"></i>
                     Save Settings
                 </button>
@@ -929,7 +1075,7 @@
             <!-- Header -->
             <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
                 <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-teal to-brand-orange flex items-center justify-center">
                         <i class="bi bi-file-earmark-text text-white"></i>
                     </div>
                     <div>
@@ -946,7 +1092,7 @@
             <div class="p-6 overflow-y-auto max-h-[calc(80vh-80px)]">
                 <!-- Loading State -->
                 <div id="documentIntelligenceLoading" class="hidden text-center py-12">
-                    <svg class="animate-spin h-8 w-8 mx-auto text-blue-400 mb-4" fill="none" viewBox="0 0 24 24">
+                    <svg class="animate-spin h-8 w-8 mx-auto text-brand-teal mb-4" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
@@ -955,6 +1101,76 @@
 
                 <!-- Content Container -->
                 <div id="documentIntelligenceContent" class="space-y-4"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- HelpScout Credentials Modal -->
+<div id="helpscoutCredentialsModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+    <!-- Backdrop -->
+    <div class="fixed inset-0 bg-black/60 backdrop-blur-sm modal-backdrop cursor-pointer" onclick="closeHelpScoutCredentialsModal()"></div>
+
+    <!-- Modal Content - positioned above backdrop -->
+    <div class="relative min-h-screen flex items-center justify-center p-4 pointer-events-none">
+        <div class="relative bg-dark-surface border border-dark-border rounded-xl shadow-2xl w-full max-w-md overflow-hidden pointer-events-auto" onclick="event.stopPropagation()">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+                        <i class="bi bi-chat-dots text-white"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-dark-text">Connect HelpScout</h2>
+                        <p class="text-xs text-dark-text-secondary">Enter your HelpScout OAuth App credentials</p>
+                    </div>
+                </div>
+                <button onclick="closeHelpScoutCredentialsModal()" class="text-dark-text-secondary hover:text-dark-text p-2 rounded-lg hover:bg-dark-elevated transition-colors">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <!-- Content -->
+            <div class="p-6 space-y-4">
+                <p class="text-sm text-dark-text-secondary">
+                    Create a HelpScout OAuth App at
+                    <a href="https://secure.helpscout.net/authentication/apps" target="_blank" class="text-brand-teal hover:underline">My Apps</a>
+                    and enter the credentials below.
+                </p>
+
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-1">App ID</label>
+                    <input type="text" id="helpscoutAppId"
+                           placeholder="Your HelpScout App ID"
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md text-dark-text placeholder-dark-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-1">App Secret</label>
+                    <input type="password" id="helpscoutAppSecret"
+                           placeholder="Your HelpScout App Secret"
+                           class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md text-dark-text placeholder-dark-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                </div>
+
+                <p class="text-xs text-dark-text-secondary">
+                    Set the Redirection URL in HelpScout to: <code class="bg-dark-elevated px-1 py-0.5 rounded">{{ request.url.scheme }}://{{ request.url.netloc }}/admin/oauth/helpscout/callback</code>
+                </p>
+            </div>
+
+            <!-- Footer -->
+            <div class="flex items-center justify-between px-6 py-4 border-t border-dark-border bg-dark-elevated/50">
+                <button id="helpscoutClearCredsBtn" onclick="clearHelpScoutCredentials()" class="hidden px-4 py-2 text-red-400 hover:text-red-300 transition-colors text-sm">
+                    <i class="bi bi-trash mr-1"></i> Clear Credentials
+                </button>
+                <div class="flex items-center gap-3 ml-auto">
+                    <button onclick="closeHelpScoutCredentialsModal()" class="px-4 py-2 text-dark-text-secondary hover:text-dark-text transition-colors">
+                        Cancel
+                    </button>
+                    <button onclick="saveHelpScoutCredentialsAndConnect()" class="btn-primary px-4 py-2 rounded-lg flex items-center">
+                        <i class="bi bi-check-lg mr-2"></i>
+                        <span id="helpscoutSaveBtnText">Save & Connect</span>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -1013,6 +1229,35 @@ function getCookie(name) {
     return null;
 }
 
+function clampPercent(value, fallback = 50) {
+    const parsed = parseInt(value, 10);
+    if (Number.isNaN(parsed)) return fallback;
+    return Math.min(100, Math.max(0, parsed));
+}
+
+function updatePersonalityValue(id, value) {
+    const label = document.getElementById(`${id}Value`);
+    if (label) {
+        label.textContent = `${clampPercent(value)}%`;
+    }
+}
+
+function initPersonalityEngine() {
+    const sliders = [
+        'personalityOpenness',
+        'personalityConscientiousness',
+        'personalityExtraversion',
+        'personalityAgreeableness',
+        'personalityNeuroticism'
+    ];
+    sliders.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        updatePersonalityValue(id, el.value);
+        el.addEventListener('input', () => updatePersonalityValue(id, el.value));
+    });
+}
+
 async function saveAgent() {
     console.log('saveAgent() function called');
     
@@ -1027,7 +1272,7 @@ async function saveAgent() {
     
     console.log('Form validation passed');
     
-    const agentClientId = "{{ agent.client_id }}";
+    const agentClientId = {{ agent.client_id|tojson }};
     const agentImageInput = document.getElementById('agentImage');
     const agentImageValue = agentImageInput?.value?.trim() || '';
     if (agentImageValue && !isValidAgentImageUrl(agentImageValue)) {
@@ -1059,6 +1304,14 @@ async function saveAgent() {
         }
     }
     
+    const personalityEngine = {
+        openness: clampPercent(document.getElementById('personalityOpenness')?.value),
+        conscientiousness: clampPercent(document.getElementById('personalityConscientiousness')?.value),
+        extraversion: clampPercent(document.getElementById('personalityExtraversion')?.value),
+        agreeableness: clampPercent(document.getElementById('personalityAgreeableness')?.value),
+        neuroticism: clampPercent(document.getElementById('personalityNeuroticism')?.value)
+    };
+
     // Extract provider information from current settings
     const voiceSettings = {
         provider: document.getElementById('config_tts_provider')?.value || 'livekit',
@@ -1112,27 +1365,17 @@ async function saveAgent() {
             if (modelEl) {
                 voiceSettings.model = modelEl.value || null;
             }
-            const emotionToggle = document.getElementById('config_cartesia_emotions_enabled');
-            if (modelEl?.value === 'sonic-3' && emotionToggle?.checked) {
-                voiceSettings.cartesia_emotions_enabled = true;
-                voiceSettings.cartesia_emotion_style = document.getElementById('config_cartesia_emotion_style')?.value || 'neutral';
-                voiceSettings.cartesia_emotion_intensity = parseInt(document.getElementById('config_cartesia_emotion_intensity')?.value || '3', 10);
-                voiceSettings.cartesia_emotion_volume = document.getElementById('config_cartesia_emotion_volume')?.value || 'medium';
-                voiceSettings.cartesia_emotion_speed = document.getElementById('config_cartesia_emotion_speed')?.value || 'medium';
-            } else {
-                voiceSettings.cartesia_emotions_enabled = false;
-                voiceSettings.cartesia_emotion_style = null;
-                voiceSettings.cartesia_emotion_intensity = null;
-                voiceSettings.cartesia_emotion_volume = null;
-                voiceSettings.cartesia_emotion_speed = null;
+            // Get TTS speed setting
+            const speedEl = document.getElementById('config_tts_speed');
+            if (speedEl) {
+                voiceSettings.tts_speed = parseFloat(speedEl.value);
             }
+            // Dynamic emotion expression - agent chooses emotions based on context
+            const emotionToggle = document.getElementById('config_cartesia_emotions_enabled');
+            voiceSettings.cartesia_emotions_enabled = emotionToggle?.checked || false;
         } else {
             voiceSettings.model = null;
             voiceSettings.cartesia_emotions_enabled = false;
-            voiceSettings.cartesia_emotion_style = null;
-            voiceSettings.cartesia_emotion_intensity = null;
-            voiceSettings.cartesia_emotion_volume = null;
-            voiceSettings.cartesia_emotion_speed = null;
         }
     } else if (providerConfig && providerConfig.tts) {
         voiceSettings.tts_provider = providerConfig.tts.provider;
@@ -1190,15 +1433,9 @@ async function saveAgent() {
         voiceSettings.avatar_provider = avatarProvider;
 
         if (avatarProvider === 'bithuman') {
-            const bithumanMode = document.getElementById('bithumanMode')?.value || 'cloud';
-            // Set either model_path (local) OR image_url (cloud), not both
-            if (bithumanMode === 'local') {
-                voiceSettings.avatar_model_path = document.getElementById('avatarModelPath')?.value || null;
-                voiceSettings.avatar_image_url = null;  // Clear cloud setting
-            } else {
-                voiceSettings.avatar_image_url = document.getElementById('avatarImageUrl')?.value || null;
-                voiceSettings.avatar_model_path = null;  // Clear local setting
-            }
+            // Bithuman only supports local .imx models (cloud mode removed)
+            voiceSettings.avatar_model_path = document.getElementById('avatarModelPath')?.value || null;
+            voiceSettings.avatar_image_url = null;  // Cloud mode removed
             voiceSettings.avatar_model_type = document.getElementById('avatarModelType')?.value || 'expression';
             // Clear other provider settings
             voiceSettings.avatar_id = null;
@@ -1222,6 +1459,14 @@ async function saveAgent() {
         }
     }
 
+    // Collect sound settings
+    const soundSettings = {
+        thinking_sound: document.getElementById('thinkingSound')?.value || 'none',
+        thinking_volume: (parseInt(document.getElementById('thinkingSoundVolume')?.value || '30', 10)) / 100,
+        ambient_sound: document.getElementById('ambientSound')?.value || 'none',
+        ambient_volume: (parseInt(document.getElementById('ambientSoundVolume')?.value || '15', 10)) / 100
+    };
+
     const updateData = {
         name: document.getElementById('agentName').value,
         description: document.getElementById('agentDescription').value || null,
@@ -1231,7 +1476,9 @@ async function saveAgent() {
         show_citations: document.getElementById('showCitations').checked,
         rag_results_limit: ragResultsLimit,
         voice_settings: voiceSettings,
+        sound_settings: soundSettings,
         tools_config: toolsConfig,
+        personality_engine: personalityEngine,
         supertab_enabled: supertabEnabled,
         supertab_experience_id: supertabExperienceId,
         supertab_price: supertabPrice,
@@ -1394,8 +1641,8 @@ async function loadAssignedTools(){
         if (!grid) return;
         grid.innerHTML = '<div class="col-span-full text-center text-dark-text-secondary py-4">Loading assigned abilities...</div>';
 
-        const agentId = '{{ agent.id }}';
-        const clientId = '{{ agent.client_id }}';
+        const agentId = {{ agent.id|tojson }};
+        const clientId = {{ agent.client_id|tojson }};
         if (!agentId || !clientId) {
             grid.innerHTML = '<div class="col-span-full text-center text-dark-text-secondary py-4">No agent selected</div>';
             return;
@@ -1416,9 +1663,11 @@ async function loadAssignedTools(){
             const isUserSense = tool.name.toLowerCase().includes('usersense');
             const isDocumentSense = tool.name.toLowerCase().includes('documentsense') || tool.slug === 'documentsense' || tool.tool_type === 'documentsense';
             const isContentCatalyst = tool.name.toLowerCase().includes('content catalyst') || tool.tool_type === 'content_catalyst';
+            const isHelpScout = tool.name.toLowerCase().includes('helpscout') || tool.slug === 'helpscout_tickets' || tool.tool_type === 'helpscout';
             const userSenseAttr = isUserSense ? 'data-usersense="true"' : '';
             const documentSenseAttr = isDocumentSense ? 'data-documentsense="true"' : '';
             const contentCatalystAttr = isContentCatalyst ? 'data-content-catalyst="true"' : '';
+            const helpScoutAttr = isHelpScout ? 'data-helpscout="true"' : '';
 
             // Build action buttons
             let actionButtons = '';
@@ -1430,6 +1679,22 @@ async function loadAssignedTools(){
                         </button>
                         <button type="button" onclick="unassignTool('${tool.id}', this)" class="text-red-400 hover:text-red-300 text-sm">
                             <i class="bi bi-x-circle"></i> Remove
+                        </button>
+                    </div>`;
+            } else if (isHelpScout) {
+                actionButtons = `
+                    <div class="flex flex-col gap-1 ml-2">
+                        <button type="button" onclick="unassignTool('${tool.id}', this)" class="text-red-400 hover:text-red-300 text-sm">
+                            <i class="bi bi-x-circle"></i> Remove
+                        </button>
+                        <button type="button" id="helpscoutConnectBtn" onclick="connectHelpScout()" class="text-brand-teal hover:text-brand-teal/80 text-sm">
+                            <i class="bi bi-link-45deg"></i> Connect
+                        </button>
+                        <button type="button" id="helpscoutDisconnectBtn" onclick="disconnectHelpScout()" class="hidden text-orange-400 hover:text-orange-300 text-sm">
+                            <i class="bi bi-x-lg"></i> Disconnect
+                        </button>
+                        <button type="button" onclick="openHelpScoutModal()" class="text-brand-teal hover:text-brand-teal/80 text-sm">
+                            <i class="bi bi-gear"></i> Edit
                         </button>
                     </div>`;
             } else {
@@ -1445,10 +1710,12 @@ async function loadAssignedTools(){
                 statusBanner = '<div class="usersense-status-banner"></div>';
             } else if (isDocumentSense) {
                 statusBanner = '<div class="documentsense-status-banner"></div>';
+            } else if (isHelpScout) {
+                statusBanner = '<div class="helpscout-status-banner px-4 py-2 text-xs text-dark-text-secondary border-t border-dark-border">Checking connection...</div>';
             }
 
             return `
-            <div class="tool-card assigned bg-dark-elevated border border-dark-border rounded-lg overflow-hidden flex flex-col" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr} ${contentCatalystAttr}>
+            <div class="tool-card assigned bg-dark-elevated border border-dark-border rounded-lg overflow-hidden flex flex-col" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr} ${contentCatalystAttr} ${helpScoutAttr}>
                 <div class="p-4 flex-1">
                     <div class="flex items-start justify-between">
                         <div class="flex-1">
@@ -1465,6 +1732,9 @@ async function loadAssignedTools(){
                 ${statusBanner}
             </div>
         `;}).join('');
+
+        // Check HelpScout status after rendering
+        checkHelpScoutStatus();
     } catch (err) {
         console.warn('loadAssignedTools failed', err);
         const grid = document.getElementById('assignedToolsGrid');
@@ -1484,7 +1754,7 @@ async function loadAvailableTools(){
         activeGrid.innerHTML = '<div class="col-span-full text-center text-dark-text-secondary py-4">Loading...</div>';
         ambientGrid.innerHTML = '<div class="col-span-full text-center text-dark-text-secondary py-4">Loading...</div>';
 
-        const clientId = '{{ agent.client_id }}';
+        const clientId = {{ agent.client_id|tojson }};
 
         // Get all available tools (global + client-scoped)
         let url = `${ADMIN_TOOLS_API}?client_id=${clientId}`;
@@ -1555,8 +1825,10 @@ function renderToolCard(tool, phase) {
     const phaseLabel = phase === 'ambient' ? 'Ambient' : 'Active';
     const isUserSense = tool.name.toLowerCase().includes('usersense');
     const isDocumentSense = tool.name.toLowerCase().includes('documentsense') || tool.slug === 'documentsense' || tool.tool_type === 'documentsense';
+    const isHelpScout = tool.name.toLowerCase().includes('helpscout') || tool.slug === 'helpscout_tickets' || tool.tool_type === 'helpscout';
     const userSenseAttr = isUserSense ? 'data-usersense="true"' : '';
     const documentSenseAttr = isDocumentSense ? 'data-documentsense="true"' : '';
+    const helpScoutAttr = isHelpScout ? 'data-helpscout="true"' : '';
 
     // Build status banner
     let statusBanner = '';
@@ -1564,10 +1836,12 @@ function renderToolCard(tool, phase) {
         statusBanner = '<div class="usersense-status-banner hidden"></div>';
     } else if (isDocumentSense) {
         statusBanner = '<div class="documentsense-status-banner hidden"></div>';
+    } else if (isHelpScout) {
+        statusBanner = '<div class="helpscout-status-banner hidden"></div>';
     }
 
     return `
-        <div class="tool-card bg-dark-elevated border border-dark-border rounded-lg overflow-hidden" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr}>
+        <div class="tool-card bg-dark-elevated border border-dark-border rounded-lg overflow-hidden" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr} ${helpScoutAttr}>
             <div class="p-4">
                 <div class="flex items-start justify-between">
                     <div class="flex-1">
@@ -1592,9 +1866,42 @@ function assignTool(id, btn){
     const card = btn.closest('.tool-card');
     card.classList.add('assigned');
 
-    // Update the button to be a remove button
-    const actionBtn = card.querySelector('button');
-    if (actionBtn) {
+    const isHelpScout = card.dataset.helpscout === 'true';
+
+    // Find the action container (could be a single button or a div with multiple buttons)
+    const existingContainer = card.querySelector('.flex.flex-col.gap-1');
+    const actionBtn = card.querySelector('button:not(.flex button)'); // Get top-level button only
+
+    if (isHelpScout) {
+        // For HelpScout, replace the entire action area
+        if (existingContainer) {
+            // Already has HelpScout buttons, just update the remove handler
+            const removeBtn = existingContainer.querySelector('button[onclick*="unassignTool"]');
+            if (removeBtn) {
+                removeBtn.setAttribute('onclick', `unassignTool('${id}', this)`);
+            }
+        } else if (actionBtn) {
+            actionBtn.outerHTML = `
+                <div class="flex flex-col gap-1 ml-2">
+                    <button type="button" id="helpscoutConnectBtn" onclick="connectHelpScout()" class="text-brand-teal hover:text-brand-teal/80 text-sm">
+                        <i class="bi bi-link-45deg"></i> Connect
+                    </button>
+                    <button type="button" id="helpscoutDisconnectBtn" onclick="disconnectHelpScout()" class="hidden text-orange-400 hover:text-orange-300 text-sm">
+                        <i class="bi bi-x-lg"></i> Disconnect
+                    </button>
+                    <button type="button" onclick="unassignTool('${id}', this)" class="text-red-400 hover:text-red-300 text-sm">
+                        <i class="bi bi-x-circle"></i> Remove
+                    </button>
+                </div>`;
+        }
+        // Show and update the status banner
+        const statusBanner = card.querySelector('.helpscout-status-banner');
+        if (statusBanner) {
+            statusBanner.classList.remove('hidden');
+            statusBanner.classList.add('px-4', 'py-2', 'text-xs', 'text-dark-text-secondary', 'border-t', 'border-dark-border');
+            statusBanner.textContent = 'Checking connection...';
+        }
+    } else if (actionBtn) {
         actionBtn.outerHTML = `<button type="button" onclick="unassignTool('${id}', this)" class="ml-2 text-red-400 hover:text-red-300 text-sm">
             <i class="bi bi-x-circle"></i> Remove
         </button>`;
@@ -1617,6 +1924,11 @@ function assignTool(id, btn){
     // Check if UserSense or DocumentSense was just assigned
     checkUserSenseStatus();
     checkDocumentSenseStatus();
+
+    // Check HelpScout status if it was just assigned
+    if (isHelpScout) {
+        checkHelpScoutStatus();
+    }
 }
 
 function unassignTool(id, btn){
@@ -1692,20 +2004,6 @@ function toggleAvatarSettings() {
     }
 }
 
-function toggleBithumanMode() {
-    const mode = document.getElementById('bithumanMode')?.value || 'cloud';
-    const localSettings = document.getElementById('bithumanLocalSettings');
-    const cloudSettings = document.getElementById('bithumanCloudSettings');
-
-    if (mode === 'local') {
-        if (localSettings) localSettings.style.display = 'block';
-        if (cloudSettings) cloudSettings.style.display = 'none';
-    } else {
-        if (localSettings) localSettings.style.display = 'none';
-        if (cloudSettings) cloudSettings.style.display = 'block';
-    }
-}
-
 function toggleAvatarProviderSettings() {
     const provider = document.getElementById('avatarProvider')?.value || 'bithuman';
     const bithumanSettings = document.getElementById('bithumanSettings');
@@ -1720,7 +2018,6 @@ function toggleAvatarProviderSettings() {
     // Show the selected provider's settings
     if (provider === 'bithuman') {
         if (bithumanSettings) bithumanSettings.style.display = 'block';
-        toggleBithumanMode();
     } else if (provider === 'beyondpresence') {
         if (beyondPresenceSettings) beyondPresenceSettings.style.display = 'block';
     } else if (provider === 'liveavatar') {
@@ -1790,6 +2087,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try { await checkUserSenseStatus(); } catch (err) { console.warn('init checkUserSenseStatus', err); }
     try { await checkDocumentSenseStatus(); } catch (err) { console.warn('init checkDocumentSenseStatus', err); }
     try { toggleAvatarProviderSettings(); } catch (err) { console.warn('init toggleAvatarProviderSettings', err); }
+    try { initPersonalityEngine(); } catch (err) { console.warn('init initPersonalityEngine', err); }
     document.getElementById('config_cartesia_model')?.addEventListener('change', updateCartesiaEmotionSettings);
     document.getElementById('config_cartesia_emotions_enabled')?.addEventListener('change', updateCartesiaEmotionSettings);
 
@@ -1808,7 +2106,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ========================================
 // UserSense Learning Status (Card Banner)
 // ========================================
-const clientId = '{{ agent.client_id }}';
+const clientId = {{ agent.client_id|tojson }};
 let learningPollHandle = null;
 const learningPollIntervalMs = 3000;
 
@@ -1991,18 +2289,18 @@ function updateDocumentSenseUI(status) {
         const job = inProgressJobs[0];
         const percent = job.progress_percent || 0;
         banner.innerHTML = `
-            <div class="bg-blue-500/20 border-t border-blue-500/30">
+            <div class="bg-brand-teal/20 border-t border-brand-teal/30">
                 <div class="px-3 py-2 flex items-center justify-between">
                     <div class="flex items-center gap-2">
-                        <svg class="animate-spin h-3 w-3 text-blue-400" fill="none" viewBox="0 0 24 24">
+                        <svg class="animate-spin h-3 w-3 text-brand-teal" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <span class="text-xs text-blue-300">Extracting... ${percent}%</span>
+                        <span class="text-xs text-brand-teal">Extracting... ${percent}%</span>
                     </div>
                 </div>
-                <div class="h-1 bg-blue-500/30">
-                    <div class="h-1 bg-blue-500 transition-all duration-500" style="width: ${percent}%"></div>
+                <div class="h-1 bg-brand-teal/30">
+                    <div class="h-1 bg-brand-teal transition-all duration-500" style="width: ${percent}%"></div>
                 </div>
             </div>
         `;
@@ -2164,7 +2462,7 @@ function renderDocumentIntelligenceCard(doc, index) {
 
     // Build entity badges
     const entityBadges = [];
-    if (entities.people?.length) entityBadges.push(`<span class="px-2 py-0.5 rounded text-xs bg-blue-500/20 text-blue-400">${entities.people.length} people</span>`);
+    if (entities.people?.length) entityBadges.push(`<span class="px-2 py-0.5 rounded text-xs bg-brand-teal/20 text-brand-teal">${entities.people.length} people</span>`);
     if (entities.organizations?.length) entityBadges.push(`<span class="px-2 py-0.5 rounded text-xs bg-purple-500/20 text-purple-400">${entities.organizations.length} orgs</span>`);
     if (entities.concepts?.length) entityBadges.push(`<span class="px-2 py-0.5 rounded text-xs bg-cyan-500/20 text-cyan-400">${entities.concepts.length} concepts</span>`);
 
@@ -2175,14 +2473,14 @@ function renderDocumentIntelligenceCard(doc, index) {
 
     // Build key quotes (show first 2)
     const quotesHtml = keyQuotes.slice(0, 2).map(q =>
-        `<div class="text-sm text-dark-text-secondary italic border-l-2 border-blue-500/50 pl-3 py-1">"${q}"</div>`
+        `<div class="text-sm text-dark-text-secondary italic border-l-2 border-brand-teal/50 pl-3 py-1">"${q}"</div>`
     ).join('');
 
     return `
         <div class="bg-dark-elevated border border-dark-border rounded-lg p-4 animate-fade-in" style="animation-delay: ${index * 50}ms">
             <div class="flex items-start justify-between gap-4 mb-3">
                 <div class="flex items-center gap-3 min-w-0">
-                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center flex-shrink-0">
+                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-teal to-brand-orange flex items-center justify-center flex-shrink-0">
                         <i class="bi bi-file-earmark-text text-white"></i>
                     </div>
                     <div class="min-w-0">
@@ -2224,7 +2522,7 @@ function renderDocumentIntelligenceCard(doc, index) {
                     <div>
                         <h5 class="text-xs font-medium text-dark-text-secondary uppercase mb-2">Questions This Document Can Answer</h5>
                         <ul class="text-sm text-dark-text-secondary space-y-1">
-                            ${questionsAnswered.slice(0, 3).map(q => `<li class="flex items-start gap-2"><i class="bi bi-question-circle text-blue-400 mt-0.5"></i>${q}</li>`).join('')}
+                            ${questionsAnswered.slice(0, 3).map(q => `<li class="flex items-start gap-2"><i class="bi bi-question-circle text-brand-teal mt-0.5"></i>${q}</li>`).join('')}
                         </ul>
                     </div>
                 ` : ''}
@@ -2515,9 +2813,9 @@ const llmModelOptions = {
         { value: 'gemma2-9b-it', label: 'Gemma 2 9B (Efficient)' },
     ],
     cerebras: [
+        { value: 'zai-glm-4.7', label: 'GLM 4.7 (Recommended)' },
         { value: 'llama-3.3-70b', label: 'Llama 3.3 70B' },
         { value: 'llama3.1-8b', label: 'Llama 3.1 8B (Fast)' },
-        { value: 'zai-glm-4.6', label: 'Z.ai GLM 4.6 (Preview)' },
         { value: 'qwen-3-32b', label: 'Qwen 3 32B' },
         { value: 'qwen-3-235b-a22b-instruct-2507', label: 'Qwen 3 235B Instruct (Preview)' },
         { value: 'gpt-oss-120b', label: 'GPT-OSS 120B (Preview)' },
@@ -2583,16 +2881,18 @@ function updateSTTModels() {
 
 function updateTTSSettings() {
     const provider = document.getElementById('config_tts_provider').value;
-    
+
     // Hide all voice settings
     document.getElementById('config_openai_voice_settings').style.display = 'none';
     document.getElementById('config_elevenlabs_voice_settings').style.display = 'none';
     document.getElementById('config_cartesia_voice_settings').style.display = 'none';
     const cartesiaModel = document.getElementById('config_cartesia_model_settings');
+    const cartesiaSpeed = document.getElementById('config_cartesia_speed_settings');
     const cartesiaEmotion = document.getElementById('config_cartesia_emotion_settings');
     if (cartesiaModel) cartesiaModel.style.display = 'none';
+    if (cartesiaSpeed) cartesiaSpeed.style.display = 'none';
     if (cartesiaEmotion) cartesiaEmotion.classList.add('hidden');
-    
+
     // Show the selected provider's settings
     if (provider === 'openai') {
         document.getElementById('config_openai_voice_settings').style.display = '';
@@ -2601,6 +2901,7 @@ function updateTTSSettings() {
     } else if (provider === 'cartesia') {
         document.getElementById('config_cartesia_voice_settings').style.display = '';
         if (cartesiaModel) cartesiaModel.style.display = '';
+        if (cartesiaSpeed) cartesiaSpeed.style.display = '';
         updateCartesiaEmotionSettings();
     }
 }
@@ -2608,14 +2909,11 @@ function updateTTSSettings() {
 function updateCartesiaEmotionSettings() {
     const provider = document.getElementById('config_tts_provider')?.value;
     const model = document.getElementById('config_cartesia_model')?.value;
-    const toggle = document.getElementById('config_cartesia_emotions_enabled');
     const wrapper = document.getElementById('config_cartesia_emotion_settings');
-    const fields = document.getElementById('config_cartesia_emotion_fields');
-    if (!wrapper || !fields) return;
-    const showWrapper = provider === 'cartesia' && model === 'sonic-3';
+    if (!wrapper) return;
+    // Show emotion toggle for Cartesia sonic models
+    const showWrapper = provider === 'cartesia' && (model === 'sonic-3' || model?.startsWith('sonic'));
     wrapper.classList.toggle('hidden', !showWrapper);
-    const showFields = showWrapper && toggle?.checked;
-    fields.classList.toggle('hidden', !showFields);
 }
 
 function applyConfiguration() {
@@ -2941,6 +3239,58 @@ async function saveContentCatalystConfig() {
     }
 }
 
+// ============================================
+// HelpScout Configuration
+// ============================================
+
+function openHelpScoutModal() {
+    // Load current config from stored tools_config
+    const hsConfig = currentToolsConfig.helpscout || {};
+    document.getElementById('hsSystemPromptInstructions').value = hsConfig.system_prompt_instructions || '';
+    document.getElementById('helpScoutModal').classList.remove('hidden');
+}
+
+function closeHelpScoutModal() {
+    document.getElementById('helpScoutModal').classList.add('hidden');
+}
+
+async function saveHelpScoutConfig() {
+    const systemPromptInstructions = document.getElementById('hsSystemPromptInstructions').value.trim();
+
+    try {
+        // Preserve existing helpscout config (like OAuth tokens) and update instructions
+        const existingHsConfig = currentToolsConfig.helpscout || {};
+        currentToolsConfig.helpscout = {
+            ...existingHsConfig,
+            system_prompt_instructions: systemPromptInstructions
+        };
+
+        // Save updated tools_config using the same endpoint as the main save
+        const saveResponse = await fetch(`/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/update`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                tools_config: currentToolsConfig
+            })
+        });
+
+        const result = await saveResponse.json();
+
+        if (!saveResponse.ok || result.error) {
+            throw new Error(result.error || result.detail || 'Failed to save config');
+        }
+
+        showNotification('success', 'HelpScout settings saved successfully!');
+        closeHelpScoutModal();
+    } catch (err) {
+        console.error('Failed to save HelpScout config:', err);
+        showNotification('error', 'Failed to save settings: ' + err.message);
+    }
+}
+
 // Usage statistics
 async function refreshUsage() {
     try {
@@ -3019,6 +3369,229 @@ function updateStatusBadge(statusId, progressId, percent, isExceeded, isWarning)
 // Fetch usage on page load
 document.addEventListener('DOMContentLoaded', function() {
     refreshUsage();
+});
+
+// ---------------------------------------------------------------------------
+// HelpScout OAuth Functions
+// ---------------------------------------------------------------------------
+
+const helpscoutClientId = {{ agent.client_id|tojson }};
+let helpscoutHasCredentials = false;
+
+async function checkHelpScoutStatus() {
+    const card = document.querySelector('#assignedToolsGrid .tool-card[data-helpscout="true"].assigned');
+    if (!card) return;
+
+    const statusBanner = card.querySelector('.helpscout-status-banner');
+    const connectBtn = card.querySelector('#helpscoutConnectBtn');
+    const disconnectBtn = card.querySelector('#helpscoutDisconnectBtn');
+
+    if (!statusBanner) return;
+
+    try {
+        const resp = await fetch(`/admin/api/helpscout/connection?client_id=${encodeURIComponent(helpscoutClientId)}`, {
+            credentials: 'include'
+        });
+
+        if (!resp.ok) {
+            statusBanner.innerHTML = '<span class="text-red-400">Unable to check connection status</span>';
+            return;
+        }
+
+        const data = await resp.json();
+        helpscoutHasCredentials = data.has_credentials || false;
+
+        if (data.connected) {
+            statusBanner.innerHTML = `
+                <span class="inline-flex items-center gap-1.5 flex-wrap">
+                    <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                    <span class="text-green-400">Connected</span>
+                    ${data.expires_at ? `<span class="text-dark-text-secondary ml-2">Expires: ${new Date(data.expires_at).toLocaleDateString()}</span>` : ''}
+                    <button type="button" onclick="openHelpScoutCredentialsModal()" class="ml-2 text-brand-teal hover:underline text-xs">Edit Credentials</button>
+                </span>
+            `;
+            if (connectBtn) connectBtn.classList.add('hidden');
+            if (disconnectBtn) disconnectBtn.classList.remove('hidden');
+        } else {
+            const credentialsNote = helpscoutHasCredentials
+                ? `<button type="button" onclick="openHelpScoutCredentialsModal()" class="ml-2 text-brand-teal hover:underline text-xs">Edit Credentials</button>`
+                : '';
+            statusBanner.innerHTML = `
+                <span class="inline-flex items-center gap-1.5 flex-wrap">
+                    <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
+                    <span class="text-dark-text-secondary">Not connected</span>
+                    ${credentialsNote}
+                </span>
+            `;
+            if (connectBtn) connectBtn.classList.remove('hidden');
+            if (disconnectBtn) disconnectBtn.classList.add('hidden');
+        }
+    } catch (err) {
+        statusBanner.innerHTML = `<span class="text-red-400">Error: ${err.message}</span>`;
+    }
+}
+
+function openHelpScoutCredentialsModal() {
+    const modal = document.getElementById('helpscoutCredentialsModal');
+    const clearBtn = document.getElementById('helpscoutClearCredsBtn');
+    const saveBtnText = document.getElementById('helpscoutSaveBtnText');
+
+    // Show/hide clear button and update save text based on existing credentials
+    if (helpscoutHasCredentials) {
+        if (clearBtn) clearBtn.classList.remove('hidden');
+        if (saveBtnText) saveBtnText.textContent = 'Save Changes';
+    } else {
+        if (clearBtn) clearBtn.classList.add('hidden');
+        if (saveBtnText) saveBtnText.textContent = 'Save & Connect';
+    }
+
+    // Clear the input fields (user must re-enter credentials for security)
+    document.getElementById('helpscoutAppId').value = '';
+    document.getElementById('helpscoutAppSecret').value = '';
+
+    modal.classList.remove('hidden');
+    modal.style.display = 'block';
+}
+
+function closeHelpScoutCredentialsModal() {
+    const modal = document.getElementById('helpscoutCredentialsModal');
+    modal.classList.add('hidden');
+    modal.style.display = '';
+}
+
+async function clearHelpScoutCredentials() {
+    if (!confirm('Clear HelpScout credentials? You will need to re-enter them to reconnect.')) {
+        return;
+    }
+
+    try {
+        // Disconnect first (removes tokens)
+        const resp = await fetch(`/admin/api/helpscout/connection?client_id=${encodeURIComponent(helpscoutClientId)}`, {
+            method: 'DELETE',
+            credentials: 'include'
+        });
+
+        if (!resp.ok) {
+            const text = await resp.text();
+            alert(text || 'Failed to clear credentials.');
+            return;
+        }
+
+        helpscoutHasCredentials = false;
+        closeHelpScoutCredentialsModal();
+        checkHelpScoutStatus();
+
+    } catch (err) {
+        alert('Failed to clear credentials: ' + err.message);
+    }
+}
+
+async function saveHelpScoutCredentialsAndConnect() {
+    const appId = document.getElementById('helpscoutAppId').value.trim();
+    const appSecret = document.getElementById('helpscoutAppSecret').value.trim();
+
+    if (!appId || !appSecret) {
+        alert('Please enter both App ID and App Secret.');
+        return;
+    }
+
+    try {
+        // Save credentials
+        const saveResp = await fetch(`/admin/api/helpscout/credentials?client_id=${encodeURIComponent(helpscoutClientId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ oauth_client_id: appId, oauth_client_secret: appSecret })
+        });
+
+        if (!saveResp.ok) {
+            const error = await saveResp.json().catch(() => ({}));
+            console.error('HelpScout credential save failed:', saveResp.status, error);
+            alert(error.detail || `Failed to save credentials (HTTP ${saveResp.status}).`);
+            return;
+        }
+
+        closeHelpScoutCredentialsModal();
+        helpscoutHasCredentials = true;
+
+        // Now start the OAuth flow
+        await startHelpScoutOAuth();
+
+    } catch (err) {
+        alert('Error saving credentials: ' + err.message);
+    }
+}
+
+async function startHelpScoutOAuth() {
+    try {
+        const resp = await fetch(`/admin/api/helpscout/oauth/start?client_id=${encodeURIComponent(helpscoutClientId)}`, {
+            credentials: 'include'
+        });
+
+        if (!resp.ok) {
+            const error = await resp.json().catch(() => ({}));
+            alert(error.detail || 'Failed to initiate HelpScout OAuth.');
+            return;
+        }
+
+        const data = await resp.json();
+
+        if (data.authorization_url) {
+            const width = 600;
+            const height = 780;
+            const left = window.screenX + Math.max(0, (window.outerWidth - width) / 2);
+            const top = window.screenY + Math.max(0, (window.outerHeight - height) / 2);
+            window.open(
+                data.authorization_url,
+                'helpscout-oauth',
+                `width=${width},height=${height},left=${left},top=${top}`
+            );
+        } else {
+            alert('Missing authorization URL from server response.');
+        }
+    } catch (err) {
+        alert('Failed to start HelpScout OAuth: ' + err.message);
+    }
+}
+
+async function connectHelpScout() {
+    // Check if credentials are configured
+    if (!helpscoutHasCredentials) {
+        // Show modal to enter credentials
+        openHelpScoutCredentialsModal();
+    } else {
+        // Credentials exist, start OAuth directly
+        await startHelpScoutOAuth();
+    }
+}
+
+async function disconnectHelpScout() {
+    if (!confirm('Disconnect HelpScout? This will affect all sidekicks for this client using HelpScout.')) {
+        return;
+    }
+
+    try {
+        const resp = await fetch(`/admin/api/helpscout/connection?client_id=${encodeURIComponent(helpscoutClientId)}`, {
+            method: 'DELETE',
+            credentials: 'include'
+        });
+
+        if (!resp.ok) {
+            const text = await resp.text();
+            alert(text || 'Failed to disconnect HelpScout.');
+        }
+    } catch (err) {
+        alert('Failed to disconnect HelpScout: ' + err.message);
+    }
+
+    checkHelpScoutStatus();
+}
+
+// Listen for OAuth completion from popup window
+window.addEventListener('message', (event) => {
+    if (event.data === 'helpscout-connected') {
+        checkHelpScoutStatus();
+    }
 });
 </script>
 {% endblock %}

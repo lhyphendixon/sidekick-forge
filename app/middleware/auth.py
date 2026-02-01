@@ -35,7 +35,9 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         "/api/v1/auth/signup",
         "/api/v1/auth/login",
         "/api/v1/wordpress/register",
-        "/webhooks/"
+        "/webhooks/",
+        # Wizard API uses admin auth (get_admin_user) directly, not middleware
+        "/api/v1/wizard",
     ]
     
     async def dispatch(self, request: Request, call_next):
@@ -176,14 +178,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     permissions=["all"]  # Authenticated users have full access
                 )
             
-            # Development "dev-token" support for admin UI when explicitly enabled
-            if os.getenv("DEVELOPMENT_MODE", "false").lower() == "true" and token == "dev-token":
-                return AuthContext(
-                    type="dev",
-                    user_id="dev-admin",
-                    permissions=["all"],
-                )
-
             # If Supabase Auth fails, try custom JWT
             try:
                 payload = jwt.decode(

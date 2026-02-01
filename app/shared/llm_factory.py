@@ -28,7 +28,7 @@ def get_llm(provider: str, model: Optional[str], api_keys: Dict[str, Optional[st
             raise ValueError('Missing API key for Cerebras')
         # Use LiveKit OpenAI shim for Cerebras
         # Default to a valid documented model
-        return lk_openai.LLM.with_cerebras(model=model or 'llama3.1-8b', api_key=key)
+        return lk_openai.LLM.with_cerebras(model=model or 'zai-glm-4.7', api_key=key)
 
     if provider == 'deepinfra':
         key = api_keys.get('deepinfra_api_key')

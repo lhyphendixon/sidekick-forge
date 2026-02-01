@@ -253,13 +253,18 @@ async def handle_voice_trigger(
         "agent_name": agent.name,
         "system_prompt": agent.system_prompt,
         "voice_settings": (agent.voice_settings.dict() if agent.voice_settings else {}),
+        "sound_settings": (agent.sound_settings.dict() if hasattr(agent, 'sound_settings') and agent.sound_settings else {}),
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": request.user_id,
         "session_id": request.session_id,
         "conversation_id": conversation_id,
         "client_conversation_id": client_conversation_id,
         "context": request.context or {},
-        "api_keys": {k: v for k, v in api_keys.items() if v}  # Include all available API keys
+        "api_keys": {k: v for k, v in api_keys.items() if v},  # Include all available API keys
+        "hosting_type": (
+            (getattr(getattr(platform_client, "settings", None), "additional_settings", None) or {}).get("hosting_type")
+            or "dedicated"
+        ),
     }
 
     # Attach embedding settings (client-level) - required for RAG context
@@ -285,16 +290,26 @@ async def handle_voice_trigger(
     if not embedding_cfg and isinstance(getattr(platform_client, "additional_settings", None), dict):
         embedding_cfg = platform_client.additional_settings.get("embedding", {}) or {}
 
-    # NO FALLBACK: Require explicit embedding configuration
+    # Fallback for platform-key clients (Adventurer tier) that have no explicit embedding config
     if not embedding_cfg or not embedding_cfg.get("provider"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Client '{client_id}' has no embedding configuration. Embedding provider and model must be explicitly configured in client settings."
-        )
+        additional = getattr(platform_client.settings, "additional_settings", None) or {}
+        if isinstance(additional, dict) and additional.get("uses_platform_keys"):
+            embedding_cfg = {
+                "provider": "siliconflow",
+                "document_model": "Qwen/Qwen3-Embedding-4B",
+                "conversation_model": "Qwen/Qwen3-Embedding-4B",
+                "dimension": 1024,
+            }
+            logger.info(f"Voice trigger: using platform fallback embedding config for client {client_info['id']}")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Client '{client_info['id']}' has no embedding configuration."
+            )
     if not embedding_cfg.get("document_model"):
         raise HTTPException(
             status_code=400,
-            detail=f"Client '{client_id}' embedding configuration missing document_model. Must be explicitly configured."
+            detail=f"Client '{client_info['id']}' embedding configuration missing document_model."
         )
 
     agent_context["embedding"] = embedding_cfg
@@ -392,9 +407,13 @@ async def handle_voice_trigger(
 
     if tools_payload:
         try:
+            # Extract tools_config from agent and merge into payload for instructions
+            tools_config = shared_trigger._extract_agent_tools_config(agent)
+            merged_payload = shared_trigger._merge_tools_config_into_payload(tools_payload, tools_config)
+
             updated_prompt, appended_sections = apply_tool_prompt_instructions(
                 agent_context.get("system_prompt"),
-                tools_payload,
+                merged_payload,
             )
             agent_context["system_prompt"] = updated_prompt
             if appended_sections:

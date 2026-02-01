@@ -673,13 +673,18 @@ class AgentContextManager:
             query_embedding = await self.embedder.create_embedding(user_message)
 
             # Use RPC signature supported by the client DB: embedding + agent slug
-            result = self.supabase.rpc("match_documents", {
+            rpc_params = {
                 "p_query_embedding": query_embedding,
                 "p_agent_slug": agent_slug,
                 "p_match_threshold": 0.4,
                 "p_match_count": MAX_KNOWLEDGE_RESULTS
-            }).execute()
-            
+            }
+            # Shared pool match_documents requires p_client_id for tenant isolation
+            hosting_type = self.agent_config.get("hosting_type", "dedicated")
+            if hosting_type == "shared" and self.client_id:
+                rpc_params["p_client_id"] = str(self.client_id)
+            result = self.supabase.rpc("match_documents", rpc_params).execute()
+
             if result.data:
                 logger.info(f"✅ match_documents returned {len(result.data)} results.")
                 formatted_results = self._format_match_documents_results(result.data)
@@ -743,12 +748,25 @@ class AgentContextManager:
 
             # NO FALLBACKS: Only use the correct RPC function - TIMED
             rpc_start = time.perf_counter()
-            result = self.supabase.rpc("match_conversation_transcripts_secure", {
-                "query_embeddings": query_embedding,
-                "agent_slug_param": agent_slug,
-                "user_id_param": user_id,  # Use the passed user_id, not self.user_id
-                "match_count": MAX_CONVERSATION_RESULTS
-            }).execute()
+            hosting_type = self.agent_config.get("hosting_type", "dedicated")
+            if hosting_type == "shared" and self.client_id:
+                # Shared pool uses p_ prefixed params and requires p_client_id
+                conv_rpc_params = {
+                    "p_client_id": str(self.client_id),
+                    "p_query_embedding": query_embedding,
+                    "p_agent_slug": agent_slug,
+                    "p_user_id": user_id,
+                    "p_match_count": MAX_CONVERSATION_RESULTS
+                }
+            else:
+                # Dedicated projects use legacy param names
+                conv_rpc_params = {
+                    "query_embeddings": query_embedding,
+                    "agent_slug_param": agent_slug,
+                    "user_id_param": user_id,
+                    "match_count": MAX_CONVERSATION_RESULTS
+                }
+            result = self.supabase.rpc("match_conversation_transcripts_secure", conv_rpc_params).execute()
             rpc_duration = (time.perf_counter() - rpc_start) * 1000
             logger.info(f"[PERF] Conversation RAG RPC took {rpc_duration:.0f}ms (returned {len(result.data) if result.data else 0} results)")
 

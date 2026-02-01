@@ -1,0 +1,40 @@
+<!-- Step 1: Name Your Sidekick -->
+<div class="text-center space-y-8">
+    <div class="space-y-3">
+        <h1 class="text-4xl md:text-5xl font-light text-white">
+            What would you like to name your sidekick?
+        </h1>
+        <p class="text-dark-text-secondary text-lg">
+            Give your AI assistant a memorable name
+        </p>
+    </div>
+
+    <div class="max-w-md mx-auto space-y-6">
+        <div class="relative">
+            <input
+                type="text"
+                x-model="stepData.name"
+                @input="generateSlug()"
+                placeholder="e.g., Aria, Max, Luna..."
+                class="wizard-input text-center text-3xl"
+                autofocus
+            />
+        </div>
+
+        <!-- Slug Preview -->
+        <p class="text-sm text-dark-text-secondary" x-show="stepData.slug">
+            Your sidekick's URL will be:
+            <span class="text-brand-teal font-mono" x-text="`/${stepData.slug}`"></span>
+        </p>
+
+        <!-- Randomize Button -->
+        <button
+            @click="randomizeName()"
+            class="inline-flex items-center gap-2 text-dark-text-secondary hover:text-brand-teal transition">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Can't decide? Randomize
+        </button>
+    </div>
+</div>

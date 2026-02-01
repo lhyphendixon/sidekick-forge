@@ -168,6 +168,8 @@ class ClientService:
                 client_dict["cerebras_api_key"] = api_keys.cerebras_api_key
             if api_keys.perplexity_api_key:
                 client_dict["perplexity_api_key"] = api_keys.perplexity_api_key
+            if api_keys.assemblyai_api_key:
+                client_dict["assemblyai_api_key"] = api_keys.assemblyai_api_key
             # Note: anthropic_api_key removed - not in APIKeys model
 
         if client_data.perplexity_api_key and "perplexity_api_key" not in client_dict:
@@ -223,6 +225,10 @@ class ClientService:
         # Firecrawl API key (direct column)
         if update_data.firecrawl_api_key is not None:
             update_dict["firecrawl_api_key"] = update_data.firecrawl_api_key
+
+        # Uses platform keys (BYOK setting - direct column)
+        if update_data.uses_platform_keys is not None:
+            update_dict["uses_platform_keys"] = update_data.uses_platform_keys
 
         # Fields that go in additional_settings JSONB (we merge once at the end to avoid losing changes)
         additional_settings = {}
@@ -290,6 +296,8 @@ class ClientService:
                     update_dict["cerebras_api_key"] = api_keys.cerebras_api_key
                 if api_keys.perplexity_api_key is not None:
                     update_dict["perplexity_api_key"] = api_keys.perplexity_api_key
+                if api_keys.assemblyai_api_key is not None:
+                    update_dict["assemblyai_api_key"] = api_keys.assemblyai_api_key
                 # Note: anthropic_api_key is not in the APIKeys model
 
                 # bithuman_api_secret doesn't have a dedicated column, store in additional_settings.api_keys
@@ -383,15 +391,26 @@ class ClientService:
         return client.settings.license_key == api_key if client.settings else False
     
     async def get_client_supabase_config(self, client_id: str, auto_sync: bool = False) -> Optional[Dict[str, str]]:
-        """Get Supabase configuration for a specific client"""
+        """Get Supabase configuration for a specific client.
+
+        All clients — including shared-pool Adventurer clients — should have
+        supabase_url and supabase_service_role_key populated.  Adventurer
+        clients point at the shared pool project (not the platform DB).
+        """
         client = await self.get_client(client_id, auto_sync=auto_sync)
         if not client or not client.settings or not client.settings.supabase:
             return None
 
+        url = str(client.settings.supabase.url or "")
+        service_key = client.settings.supabase.service_role_key or ""
+
+        if not url or not service_key:
+            return None
+
         config = {
-            "url": str(client.settings.supabase.url),
+            "url": url,
             "anon_key": client.settings.supabase.anon_key,
-            "service_role_key": client.settings.supabase.service_role_key,
+            "service_role_key": service_key,
         }
 
         return self._normalize_supabase_config(client_id, config)
@@ -721,7 +740,7 @@ class ClientService:
             "openai_api_key", "groq_api_key", "deepgram_api_key", "elevenlabs_api_key",
             "cartesia_api_key", "replicate_api_key", "deepinfra_api_key", "cerebras_api_key",
             "novita_api_key", "cohere_api_key", "siliconflow_api_key", "jina_api_key", "speechify_api_key",
-            "perplexity_api_key", "anthropic_api_key"
+            "perplexity_api_key", "anthropic_api_key", "assemblyai_api_key"
         ]
         for key_field in api_key_fields:
             if key_field in db_row and db_row[key_field]:
@@ -745,6 +764,13 @@ class ClientService:
             additional["provisioning_status"] = db_row.get("provisioning_status")
         if db_row.get("provisioning_error") and "provisioning_error" not in additional:
             additional["provisioning_error"] = db_row.get("provisioning_error")
+        # Propagate tier/hosting columns so downstream code can detect shared/adventurer clients
+        if db_row.get("uses_platform_keys") is not None:
+            additional["uses_platform_keys"] = db_row["uses_platform_keys"]
+        if db_row.get("hosting_type"):
+            additional["hosting_type"] = db_row["hosting_type"]
+        if db_row.get("tier"):
+            additional["tier"] = db_row["tier"]
         if db_row.get("schema_version") and "schema_version" not in additional:
             additional["schema_version"] = db_row.get("schema_version")
 

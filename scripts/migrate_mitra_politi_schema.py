@@ -68,7 +68,7 @@ REQUIRED_SCHEMA = {
         ("assistant_message", "text", None)
     ],
     "documents": [
-        ("id", "bigserial", "PRIMARY KEY"),
+        ("id", "uuid", "PRIMARY KEY DEFAULT gen_random_uuid()"),
         ("content", "text", None),
         ("embedding", "vector(4096)", None),
         ("summary", "text", None),
@@ -95,7 +95,7 @@ REQUIRED_SCHEMA = {
     ],
     "document_chunks": [
         ("id", "uuid", "PRIMARY KEY"),
-        ("document_id", "bigint", None),
+        ("document_id", "uuid", None),
         ("chunk_index", "integer", None),
         ("content", "text", None),
         ("embeddings", "vector(1024)", None),
@@ -116,7 +116,7 @@ REQUIRED_SCHEMA = {
     "agent_documents": [
         ("id", "uuid", "PRIMARY KEY"),
         ("agent_id", "uuid", None),
-        ("document_id", "bigint", None),
+        ("document_id", "uuid", None),
         ("enabled", "boolean", "DEFAULT true"),
         ("created_at", "timestamp with time zone", "DEFAULT NOW()"),
         ("updated_at", "timestamp with time zone", "DEFAULT NOW()")
@@ -196,7 +196,7 @@ REQUIRED_FUNCTIONS = [
         p_match_count integer
     )
     RETURNS TABLE(
-        id bigint,
+        id uuid,
         title text,
         content text,
         similarity float8

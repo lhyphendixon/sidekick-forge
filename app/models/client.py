@@ -62,6 +62,9 @@ class APIKeys(BaseModel):
     bey_api_key: Optional[str] = None
     liveavatar_api_key: Optional[str] = None
 
+    # Transcription Providers
+    assemblyai_api_key: Optional[str] = None
+
 
 class EmbeddingSettings(BaseModel):
     """Embedding configuration - NO DEFAULTS to enforce explicit configuration"""
@@ -156,6 +159,7 @@ class ClientUpdate(BaseModel):
     active: Optional[bool] = None
     perplexity_api_key: Optional[str] = None
     usersense_enabled: Optional[bool] = None
+    uses_platform_keys: Optional[bool] = Field(None, description="Use platform-managed API keys (BYOK disabled)")
     supertab_client_id: Optional[str] = Field(None, description="Supertab client ID for voice chat paywall")
     firecrawl_api_key: Optional[str] = Field(None, description="Firecrawl API key for web scraping")
 

@@ -221,7 +221,7 @@ async def entrypoint(ctx: JobContext):
         tts=tts,
         min_endpointing_delay=0.5,  # How long to wait before processing speech
         preemptive_synthesis=True,  # Start generating response while user speaks
-        debug=True  # Enable debug logging
+        debug=os.getenv("AGENT_DEBUG", "false").lower() == "true"
     )
     
     assistant.start(ctx.room)

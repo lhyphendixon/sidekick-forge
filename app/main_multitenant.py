@@ -202,6 +202,8 @@ from app.api.v1 import (
     wordpress,
     content_catalyst,
     documentsense,
+    wizard,
+    lingua,
 )
 from app.api import embed as embed_router
 from app.api import admin_preview_standalone
@@ -232,6 +234,8 @@ app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-bas
 app.include_router(wordpress.router, prefix="/api/v1", tags=["wordpress"])
 app.include_router(content_catalyst.router, prefix="/api/v1", tags=["content-catalyst"])
 app.include_router(documentsense.router, prefix="/api/v1", tags=["documentsense"])
+app.include_router(wizard.router, prefix="/api/v1", tags=["wizard"])
+app.include_router(lingua.router, prefix="/api/v1", tags=["lingua"])
 app.include_router(embed_router.router)
 # Expose admin preview helper endpoints (used by preview modal)
 app.include_router(admin_preview_standalone.router)

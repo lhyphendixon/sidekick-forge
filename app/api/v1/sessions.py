@@ -87,7 +87,16 @@ async def create_call_session(
         
         # Generate room name
         room_name = f"room_{request.session_id}"
-        
+
+        # Determine client_id from site config, request metadata, or agent config
+        client_id = None
+        if site_config and site_config.get("client_id"):
+            client_id = site_config.get("client_id")
+        elif request.metadata and request.metadata.get("client_id"):
+            client_id = request.metadata.get("client_id")
+        elif agent_config and agent_config.get("client_id"):
+            client_id = agent_config.get("client_id")
+
         # Create LiveKit room with agent dispatch
         room = await livekit_manager.create_room(
             name=room_name,
@@ -97,7 +106,8 @@ async def create_call_session(
                 "agent_slug": request.agent_slug,
                 "conversation_id": request.conversation_id,
                 "user_id": request.user_id,
-                "site_id": site_id
+                "site_id": site_id,
+                "client_id": client_id,
             },
             enable_agent_dispatch=True,
             agent_name=request.agent_slug  # Use the agent slug for dispatch

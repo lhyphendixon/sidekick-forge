@@ -61,14 +61,7 @@ async def get_agent_settings(
                 "voice": config["tts_voice"]
             },
             "livekit": {
-                "url": config["livekit_url"] or settings.livekit_url,
-                "api_key": config["livekit_api_key"] or settings.livekit_api_key,
-                "api_secret": config["livekit_api_secret"] or settings.livekit_api_secret
-            },
-            "api_keys": {
-                "openai": config["openai_api_key"],
-                "anthropic": config["anthropic_api_key"],
-                "groq": config["groq_api_key"]
+                "url": config["livekit_url"] or settings.livekit_url
             },
             "webhooks": {
                 "voice_context": config["voice_context_webhook_url"],
@@ -422,14 +415,10 @@ async def _ensure_supabase_user(payload: Dict[str, Any]) -> str:
     return user_id
 
 
+@router.post("/wordpress/session/exchange")
 @router.post("/wordpress/session")
 async def issue_wordpress_session(request: Request):
     """Exchange a signed WordPress session payload for Supabase Auth tokens."""
-    print("=" * 50)
-    print("WORDPRESS SESSION ENDPOINT CALLED")
-    print(f"settings.supabase_url = {settings.supabase_url}")
-    print("=" * 50)
-
     try:
         body = await request.json()
     except Exception:

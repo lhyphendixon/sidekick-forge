@@ -162,33 +162,45 @@ def _voice_settings_dict(agent: Any) -> Dict[str, Any]:
 
 def _apply_cartesia_emotion_prompt(prompt: str, agent: Any) -> str:
     """
-    Append Cartesia Sonic-3 emotion instructions when enabled so the LLM knows
-    how to wrap responses with appropriate SSML tags.
+    Append Cartesia Sonic emotion instructions when enabled so the LLM knows
+    how to wrap responses with appropriate SSML emotion tags for dynamic expression.
     """
     voice_settings = _voice_settings_dict(agent)
     if not voice_settings:
         return prompt
 
     provider = voice_settings.get("tts_provider") or voice_settings.get("provider")
-    model = voice_settings.get("model") or voice_settings.get("tts_model")
+    model = voice_settings.get("model") or voice_settings.get("tts_model") or ""
     emotions_enabled = voice_settings.get("cartesia_emotions_enabled") or voice_settings.get("provider_config", {}).get("cartesia_emotions_enabled")
 
-    if provider != "cartesia" or model != "sonic-3" or not emotions_enabled:
+    # Support sonic-3 and sonic-2024-10-19 models
+    if provider != "cartesia" or not model.startswith("sonic") or not emotions_enabled:
         return prompt
 
-    style = voice_settings.get("cartesia_emotion_style") or "neutral"
-    intensity = voice_settings.get("cartesia_emotion_intensity") or 3
-    volume = voice_settings.get("cartesia_emotion_volume") or "medium"
-    speed = voice_settings.get("cartesia_emotion_speed") or "medium"
+    instructions = """
 
-    instructions = (
-        "\n\nCartesia Sonic-3 emotion controls are enabled for this sidekick. When it improves clarity "
-        "or empathy, you may wrap short segments of your response in Cartesia's SSML <emotion> tags. "
-        "Use tags such as "
-        f"<emotion style=\"{style}\" intensity=\"{intensity}\" volume=\"{volume}\" speed=\"{speed}\">Your text</emotion>. "
-        "Only apply tags to the specific words or sentences that should carry the emotion, and choose emotion styles "
-        "that match the user's tone. Reference: https://docs.cartesia.ai/build-with-cartesia/sonic-3/volume-speed-emotion"
-    )
+## Emotional Expression (Cartesia)
+
+You can express emotions using SSML tags. Place the self-closing emotion tag BEFORE the text you want to affect:
+
+**Syntax**: `<emotion value="EMOTION" /> text to speak emotionally`
+
+**Available emotions**: neutral, angry, excited, content, sad, scared, curious, proud, worried, hopeful, surprised, amused, disappointed, grateful, confused, determined, sympathetic, playful, serious, enthusiastic
+
+**Laughter**: Insert `[laughter]` to laugh naturally.
+
+**Guidelines**:
+- Place the emotion tag before the sentence or phrase it should affect
+- Match the emotion to the content (empathy for problems, excitement for good news)
+- Use sparingly for impact - not every sentence needs an emotion tag
+- Use `[laughter]` when something is genuinely funny
+
+**Examples**:
+- `<emotion value="excited" /> I have great news! Your application was approved.`
+- `I understand. <emotion value="sympathetic" /> That sounds really frustrating.`
+- `<emotion value="curious" /> Tell me more about that.`
+- `[laughter] That's hilarious! <emotion value="amused" /> I love that joke.`
+"""
 
     return prompt + instructions
 
@@ -237,6 +249,7 @@ async def _iter_llm_deltas(stream: Any) -> AsyncIterator[str]:
 
 def _extract_api_keys(client: Any) -> Dict[str, Any]:
     """Collect API keys from client settings with graceful fallbacks."""
+    import os
     api_keys: Dict[str, Any] = {}
     settings_obj = getattr(client, "settings", None)
     if settings_obj and getattr(settings_obj, "api_keys", None):
@@ -260,6 +273,43 @@ def _extract_api_keys(client: Any) -> Dict[str, Any]:
     # Fallback to legacy locations on the client object itself
     if getattr(client, "perplexity_api_key", None):
         api_keys.setdefault("perplexity_api_key", client.perplexity_api_key)
+
+    # For clients using platform-managed keys, fill in missing keys from environment
+    uses_platform_keys = False
+    additional = getattr(client, "additional_settings", None)
+    if not additional and settings_obj:
+        additional = getattr(settings_obj, "additional_settings", None)
+    if isinstance(additional, dict):
+        uses_platform_keys = additional.get("uses_platform_keys", False)
+    elif isinstance(additional, str):
+        try:
+            uses_platform_keys = json.loads(additional).get("uses_platform_keys", False)
+        except Exception:
+            pass
+    if not uses_platform_keys:
+        uses_platform_keys = getattr(client, "uses_platform_keys", False)
+
+    if uses_platform_keys:
+        env_key_map = {
+            "openai_api_key": "OPENAI_API_KEY",
+            "groq_api_key": "GROQ_API_KEY",
+            "cerebras_api_key": "CEREBRAS_API_KEY",
+            "deepgram_api_key": "DEEPGRAM_API_KEY",
+            "elevenlabs_api_key": "ELEVENLABS_API_KEY",
+            "cartesia_api_key": "CARTESIA_API_KEY",
+            "anthropic_api_key": "ANTHROPIC_API_KEY",
+            "novita_api_key": "NOVITA_API_KEY",
+            "cohere_api_key": "COHERE_API_KEY",
+            "siliconflow_api_key": "SILICONFLOW_API_KEY",
+            "jina_api_key": "JINA_API_KEY",
+            "perplexity_api_key": "PERPLEXITY_API_KEY",
+        }
+        for key_name, env_var in env_key_map.items():
+            if not api_keys.get(key_name):
+                env_val = os.getenv(env_var)
+                if env_val:
+                    api_keys[key_name] = env_val
+        logger.info("Injected platform API keys for client %s", getattr(client, "id", "?"))
 
     return api_keys
 
@@ -289,13 +339,63 @@ async def _get_agent_tools(
     return tools_payload
 
 
-def _apply_tool_prompt_sections(agent_context: Dict[str, Any], tools_payload: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _merge_tools_config_into_payload(
+    tools_payload: List[Dict[str, Any]],
+    tools_config: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Merge per-tool config from tools_config into tools_payload.
+
+    This ensures that system_prompt_instructions and other settings from
+    agent.tools_config are available for apply_tool_prompt_instructions.
+    """
+    if not tools_config:
+        return tools_payload
+
+    merged_payload = []
+    for tool in tools_payload:
+        tool_copy = dict(tool)
+        slug = tool.get("slug") or tool.get("name") or tool.get("id")
+
+        # Look up per-tool config by slug, id, or tool_type
+        per_tool_cfg = None
+        lookup_keys = [slug, tool.get("id"), tool.get("tool_type")]
+        for key in lookup_keys:
+            if key and isinstance(tools_config.get(str(key)), dict):
+                per_tool_cfg = tools_config.get(str(key))
+                break
+
+        if per_tool_cfg:
+            # Merge into tool's config
+            existing_cfg = dict(tool_copy.get("config") or {})
+            for key, value in per_tool_cfg.items():
+                if value is not None and key not in existing_cfg:
+                    existing_cfg[key] = value
+            tool_copy["config"] = existing_cfg
+
+            # Also set at top level for direct lookup by apply_tool_prompt_instructions
+            for key in ("system_prompt_instructions", "hidden_instructions", "llm_instructions"):
+                if key in per_tool_cfg and per_tool_cfg[key]:
+                    tool_copy[key] = per_tool_cfg[key]
+
+        merged_payload.append(tool_copy)
+
+    return merged_payload
+
+
+def _apply_tool_prompt_sections(
+    agent_context: Dict[str, Any],
+    tools_payload: List[Dict[str, Any]],
+    tools_config: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """Append hidden tool instructions to the system prompt."""
     if not tools_payload:
         return []
     try:
+        # Merge tools_config into tools_payload so system_prompt_instructions are available
+        merged_payload = _merge_tools_config_into_payload(tools_payload, tools_config)
+
         updated_prompt, appended_sections = apply_tool_prompt_instructions(
-            agent_context.get("system_prompt"), tools_payload
+            agent_context.get("system_prompt"), merged_payload
         )
         agent_context["system_prompt"] = updated_prompt
         if appended_sections:
@@ -312,6 +412,107 @@ def _apply_tool_prompt_sections(agent_context: Dict[str, Any], tools_payload: Li
     except Exception:
         logger.warning("Failed to apply hidden tool instructions to system prompt", exc_info=True)
         return []
+
+
+def _normalize_personality_value(raw_value: Any, default: int = 50) -> int:
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    if value < 0:
+        return 0
+    if value > 100:
+        return 100
+    return value
+
+
+def _append_personality_engine_prompt(system_prompt: str, personality: Optional[Dict[str, Any]]) -> str:
+    if not personality or not isinstance(personality, dict):
+        return system_prompt
+    openness = _normalize_personality_value(personality.get("openness"))
+    conscientiousness = _normalize_personality_value(personality.get("conscientiousness"))
+    extraversion = _normalize_personality_value(personality.get("extraversion"))
+    agreeableness = _normalize_personality_value(personality.get("agreeableness"))
+    neuroticism = _normalize_personality_value(personality.get("neuroticism"))
+
+    personality_block = (
+        "Personality Engine: "
+        f"Openness {openness}%, "
+        f"Conscientiousness {conscientiousness}%, "
+        f"Extraversion {extraversion}%, "
+        f"Agreeableness {agreeableness}%, "
+        f"Neuroticism {neuroticism}%"
+    )
+
+    if system_prompt:
+        return f"{system_prompt}\n\n{personality_block}"
+    return personality_block
+
+
+def _get_client_supabase_credentials(client: Any) -> Tuple[Optional[str], Optional[str]]:
+    # Diagnostic logging to trace credential extraction
+    client_id = getattr(client, "id", "unknown") if client else "no-client"
+
+    if client and getattr(client, "settings", None) and getattr(client.settings, "supabase", None):
+        supabase_cfg = client.settings.supabase
+        url_val = getattr(supabase_cfg, "url", None)
+        key_val = getattr(supabase_cfg, "service_role_key", None)
+        logger.info(f"🔍 [CRED-CHECK] client={client_id} settings.supabase.url exists={bool(url_val)} len={len(url_val) if url_val else 0}")
+        logger.info(f"🔍 [CRED-CHECK] client={client_id} settings.supabase.service_role_key exists={bool(key_val)} len={len(key_val) if key_val else 0}")
+        if supabase_cfg.url and supabase_cfg.service_role_key:
+            logger.info(f"✅ [CRED-CHECK] client={client_id} returning credentials from settings.supabase")
+            return str(supabase_cfg.url), str(supabase_cfg.service_role_key)
+        else:
+            logger.warning(f"⚠️ [CRED-CHECK] client={client_id} settings.supabase exists but URL or key is falsy")
+    else:
+        has_settings = bool(getattr(client, "settings", None)) if client else False
+        has_supabase = bool(getattr(client.settings, "supabase", None)) if client and getattr(client, "settings", None) else False
+        logger.warning(f"⚠️ [CRED-CHECK] client={client_id} has_settings={has_settings} has_supabase_config={has_supabase}")
+
+    # Fallback: check direct attributes
+    if getattr(client, "supabase_project_url", None) and getattr(client, "supabase_service_role_key", None):
+        logger.info(f"✅ [CRED-CHECK] client={client_id} returning credentials from direct attributes (supabase_project_url)")
+        return client.supabase_project_url, client.supabase_service_role_key
+    if getattr(client, "supabase_url", None) and getattr(client, "supabase_service_role_key", None):
+        logger.info(f"✅ [CRED-CHECK] client={client_id} returning credentials from direct attributes (supabase_url)")
+        return client.supabase_url, client.supabase_service_role_key
+
+    logger.error(f"❌ [CRED-CHECK] client={client_id} NO CREDENTIALS FOUND - all extraction paths failed")
+    return None, None
+
+
+async def _fetch_agent_personality(client: Any, agent_id: Optional[str]) -> Dict[str, Any]:
+    payload = {
+        "openness": 50,
+        "conscientiousness": 50,
+        "extraversion": 50,
+        "agreeableness": 50,
+        "neuroticism": 50,
+    }
+    if not agent_id or not client:
+        return payload
+    supabase_url, supabase_key = _get_client_supabase_credentials(client)
+    if not supabase_url or not supabase_key:
+        return payload
+    try:
+        client_sb = create_client(supabase_url, supabase_key)
+        response = (
+            client_sb
+            .table("agent_personality")
+            .select("openness, conscientiousness, extraversion, agreeableness, neuroticism")
+            .eq("agent_id", agent_id)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(response, "data", None) or []
+        if not rows:
+            return payload
+        row = rows[0] or {}
+        for key in payload:
+            payload[key] = _normalize_personality_value(row.get(key, payload[key]))
+    except Exception as exc:
+        logger.warning("Failed to fetch agent personality: %s", exc)
+    return payload
 
 
 async def _build_agent_context_for_dispatch(
@@ -386,6 +587,9 @@ async def _build_agent_context_for_dispatch(
     tools_config = _extract_agent_tools_config(agent)
     api_keys_map = _extract_api_keys(client)
 
+    agent_personality = await _fetch_agent_personality(client, getattr(agent, "id", None))
+    system_prompt = _append_personality_engine_prompt(agent.system_prompt, agent_personality)
+
     # Rerank settings for downstream agent/worker
     rerank_cfg: Dict[str, Any] = {}
     additional_settings = getattr(client, "additional_settings", None) or getattr(getattr(client, "settings", None), "additional_settings", None)
@@ -413,7 +617,7 @@ async def _build_agent_context_for_dispatch(
         "agent_slug": agent.slug,
         "agent_id": agent.id,
         "agent_name": agent.name,
-        "system_prompt": agent.system_prompt,
+        "system_prompt": system_prompt,
         "voice_settings": voice_settings,
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": user_id,
@@ -425,19 +629,29 @@ async def _build_agent_context_for_dispatch(
         "rerank": rerank_cfg,
         "mode": mode,
         "api_keys": api_keys_map,
+        "hosting_type": (
+            getattr(client, "hosting_type", None)
+            or (getattr(getattr(client, "settings", None), "additional_settings", None) or {}).get("hosting_type")
+            or "dedicated"
+        ),
     }
     if client_conversation_id:
         agent_context["client_conversation_id"] = client_conversation_id
 
     # Include Supabase credentials when available for worker-side context
+    # Use the helper function that checks both settings.supabase and direct attributes
+    ctx_supabase_url, ctx_supabase_key = _get_client_supabase_credentials(client)
+    ctx_supabase_anon_key = None
     if client.settings and getattr(client.settings, "supabase", None):
-        agent_context["supabase_url"] = client.settings.supabase.url
-        agent_context["supabase_anon_key"] = client.settings.supabase.anon_key
-        agent_context["supabase_service_role_key"] = client.settings.supabase.service_role_key
-    else:
-        agent_context["supabase_url"] = getattr(client, "supabase_url", None)
-        agent_context["supabase_anon_key"] = getattr(client, "supabase_anon_key", None)
-        agent_context["supabase_service_role_key"] = getattr(client, "supabase_service_role_key", None)
+        ctx_supabase_anon_key = client.settings.supabase.anon_key
+    elif hasattr(client, "supabase_anon_key"):
+        ctx_supabase_anon_key = client.supabase_anon_key
+    agent_context["supabase_url"] = ctx_supabase_url
+    agent_context["supabase_anon_key"] = ctx_supabase_anon_key
+    agent_context["supabase_service_role_key"] = ctx_supabase_key
+
+    # Diagnostic: Log what we're passing to the agent
+    logger.info(f"📤 [CRED-PASS] Passing to agent_context: supabase_url={bool(ctx_supabase_url)} supabase_key={bool(ctx_supabase_key)}")
 
     agent_dataset_ids = await _resolve_agent_dataset_ids(client.id, agent)
     if agent_dataset_ids:
@@ -982,10 +1196,19 @@ async def handle_voice_trigger(
         await backend_livekit.initialize()
     
     logger.info(f"🏢 Using backend LiveKit infrastructure for thin client architecture")
-    
+
     raw_conversation_id = request.conversation_id or str(uuid.uuid4())
     conversation_id, original_client_id = _normalize_conversation_id_value(raw_conversation_id)
     client_conversation_id = original_client_id or raw_conversation_id
+
+    # Diagnostic: Trace conversation_id flow for debugging mismatch issues
+    logger.info(f"🔍 [CONV-ID-TRACE] request.conversation_id={request.conversation_id or 'NONE (generated)'}")
+    logger.info(f"🔍 [CONV-ID-TRACE] raw_conversation_id={raw_conversation_id}")
+    logger.info(f"🔍 [CONV-ID-TRACE] normalized conversation_id={conversation_id}")
+    logger.info(f"🔍 [CONV-ID-TRACE] client_conversation_id (returned to frontend)={client_conversation_id}")
+    if request.conversation_id != conversation_id:
+        logger.warning(f"⚠️ [CONV-ID-MISMATCH] Frontend may have different conversation_id! request={request.conversation_id} vs normalized={conversation_id}")
+
     agent_context, normalized_llm, normalized_stt, normalized_tts = await _build_agent_context_for_dispatch(
         agent=agent,
         client=client,
@@ -1000,8 +1223,9 @@ async def handle_voice_trigger(
     tools_payload = await _get_agent_tools(tools_service, client.id, agent.id)
     if tools_payload:
         agent_context["tools"] = tools_payload
-    appended_sections = _apply_tool_prompt_sections(agent_context, tools_payload)
-    
+    tools_config = _extract_agent_tools_config(agent)
+    appended_sections = _apply_tool_prompt_sections(agent_context, tools_payload, tools_config)
+
     # Ensure the room exists (create if it doesn't)
     room_start = time.time()
     room_info = await ensure_livekit_room_exists(
@@ -1142,7 +1366,10 @@ async def handle_voice_trigger(
         "mode": "voice",
         "room_name": request.room_name,
         "platform": request.platform,
-        "conversation_id": client_conversation_id,
+        # CRITICAL: Return the SAME conversation_id that the agent uses for transcript storage
+        # Previously returned client_conversation_id which could differ from what the agent uses
+        # This caused Supabase Realtime subscription mismatch - frontend subscribed to different ID
+        "conversation_id": conversation_id,
         "agent_context": agent_context,
         "livekit_config": {
             "server_url": _normalize_ws_url(backend_livekit.url),
@@ -1273,7 +1500,8 @@ async def handle_text_trigger_via_livekit(
     tools_payload = await _get_agent_tools(tools_service, client.id, agent.id)
     if tools_payload:
         agent_context["tools"] = tools_payload
-    appended_sections = _apply_tool_prompt_sections(agent_context, tools_payload)
+    tools_config = _extract_agent_tools_config(agent)
+    appended_sections = _apply_tool_prompt_sections(agent_context, tools_payload, tools_config)
 
     agent_context["user_message"] = request.message
 
@@ -1396,7 +1624,8 @@ async def handle_text_trigger_via_livekit(
         "mode": "text_via_livekit",
         "message_received": request.message,
         "user_id": request.user_id,
-        "conversation_id": client_conversation_id,
+        # Use normalized conversation_id to match what agent uses for transcript storage
+        "conversation_id": conversation_id,
         "response": response_text,
         "agent_response": response_text,
         "ai_response": response_text,
@@ -1489,6 +1718,7 @@ async def handle_text_trigger(
         "client_conversation_id": client_conversation_id,
         "client_id": client.id,
         "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
+        "sound_settings": agent.sound_settings.dict() if hasattr(agent, 'sound_settings') and agent.sound_settings else {},
         "embedding": embedding_cfg,
         "rerank": rerank_cfg,
         "rag_results_limit": getattr(agent, "rag_results_limit", None),
@@ -1649,9 +1879,13 @@ async def handle_text_trigger(
 
         if tools_payload:
             try:
+                # Merge tools_config from agent so system_prompt_instructions are available
+                tools_config = _extract_agent_tools_config(agent)
+                merged_payload = _merge_tools_config_into_payload(tools_payload, tools_config)
+
                 enhanced_prompt, tool_prompt_sections = apply_tool_prompt_instructions(
                     enhanced_prompt,
-                    tools_payload,
+                    merged_payload,
                 )
                 if tool_prompt_sections:
                     try:
@@ -1771,7 +2005,8 @@ async def handle_text_trigger(
         "mode": "text",
         "message_received": request.message,
         "user_id": user_id,
-        "conversation_id": client_conversation_id,
+        # Use normalized conversation_id to match what agent uses for transcript storage
+        "conversation_id": conversation_id,
         "llm_provider": llm_provider,
         "llm_model": llm_model,
         "rag_enabled": bool(context_manager),
@@ -1910,6 +2145,20 @@ async def dispatch_agent_job(
                 )
                 context_dataset_ids = fallback_ids
 
+        # Get Supabase credentials using the helper function (checks settings.supabase and direct attributes)
+        client_supabase_url, client_supabase_key = _get_client_supabase_credentials(client)
+        # Also get anon key for completeness
+        client_supabase_anon_key = None
+        if client.settings and client.settings.supabase:
+            client_supabase_anon_key = client.settings.supabase.anon_key
+        elif hasattr(client, 'supabase_anon_key'):
+            client_supabase_anon_key = client.supabase_anon_key
+
+        # Diagnostic: Log credentials being passed to dispatch metadata
+        logger.info(f"📤 [DISPATCH-CRED] client_id={client.id} supabase_url={bool(client_supabase_url)} supabase_key={bool(client_supabase_key)}")
+        if not client_supabase_url or not client_supabase_key:
+            logger.warning(f"⚠️ [DISPATCH-CRED] Missing credentials for client {client.id} - transcripts will NOT be stored!")
+
         job_metadata = {
             "client_id": client.id,
             "agent_slug": agent.slug,
@@ -1920,10 +2169,10 @@ async def dispatch_agent_job(
             "webhooks": agent.webhooks.dict() if agent.webhooks else {},
             # Ensure worker stores transcripts under the same conversation
             "conversation_id": conversation_id,
-            # Include client's Supabase credentials for context system
-            "supabase_url": client.settings.supabase.url if client.settings and client.settings.supabase else None,
-            "supabase_anon_key": client.settings.supabase.anon_key if client.settings and client.settings.supabase else None,
-            "supabase_service_role_key": client.settings.supabase.service_role_key if client.settings and client.settings.supabase else None,
+            # Include client's Supabase credentials for context system (supports both settings.supabase and direct attributes)
+            "supabase_url": client_supabase_url,
+            "supabase_anon_key": client_supabase_anon_key,
+            "supabase_service_role_key": client_supabase_key,
             # Include user_id if provided
             "user_id": user_id,
             # Include embedding configuration from client's additional_settings
@@ -1939,6 +2188,7 @@ async def dispatch_agent_job(
             ),
             "rerank": context_snapshot.get("rerank"),
             "user_message": context_snapshot.get("user_message"),
+            "hosting_type": context_snapshot.get("hosting_type", "dedicated"),
         }
 
         tools_payload = tools if tools is not None else context_snapshot.get("tools") or []

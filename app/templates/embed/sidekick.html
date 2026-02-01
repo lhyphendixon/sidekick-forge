@@ -1806,7 +1806,14 @@ function clearVoiceTranscriptError(){
         showVoiceTranscriptError('Client Supabase credentials are missing. Please contact support.');
         return null;
       }
-      transcriptSupabase = supabase.createClient(CLIENT_SUPABASE_URL, CLIENT_SUPABASE_ANON);
+      transcriptSupabase = supabase.createClient(CLIENT_SUPABASE_URL, CLIENT_SUPABASE_ANON, {
+        realtime: {
+          params: {
+            eventsPerSecond: 10
+          }
+        }
+      });
+      try { console.log('[voice] Created transcript Supabase client with realtime config'); } catch {}
       if (CLIENT_SUPABASE_BOOTSTRAP.access_token) {
         transcriptSupabase.auth.setSession({
           access_token: CLIENT_SUPABASE_BOOTSTRAP.access_token,
@@ -2336,6 +2343,77 @@ function clearVoiceTranscriptError(){
       } catch {}
     }
 
+    // Add citations to an existing transcript bubble (when Supabase sends them after LiveKit displayed the text)
+    // Note: LiveKit uses different IDs than Supabase, so we find the most recent assistant message without citations
+    function addCitationsToTranscript(transcriptId, citations, content) {
+      try {
+        if (!citations || !citations.length) return;
+        const container = document.getElementById('voiceTranscriptList');
+        if (!container) return;
+
+        // Strategy 1: Try to find by exact ID (works if Supabase arrived first)
+        let transcriptWrap = transcriptId ? container.querySelector(`[data-transcript-id="${transcriptId}"]`) : null;
+
+        // Strategy 2: Find the most recent assistant bubble without citations
+        // This handles the common case where LiveKit arrived first with a different ID
+        if (!transcriptWrap) {
+          const allBubbles = Array.from(container.children);
+          for (let i = allBubbles.length - 1; i >= 0; i--) {
+            const bubble = allBubbles[i];
+            // Assistant messages use justify-start class
+            if (!bubble.classList?.contains('justify-start')) continue;
+            const hasTextBubble = bubble.querySelector('[data-transcript-text]');
+            if (!hasTextBubble) continue;
+
+            // Check if next sibling already has citations
+            const nextSib = bubble.nextElementSibling;
+            const hasCitations = nextSib?.querySelector?.('.citations-container');
+            if (hasCitations) continue;
+
+            // If content provided, do fuzzy match
+            if (content) {
+              const bubbleText = (hasTextBubble.textContent || '').trim().slice(0, 100);
+              const targetText = content.trim().slice(0, 100);
+              // Match if first 50 chars overlap significantly
+              if (bubbleText.slice(0, 50) === targetText.slice(0, 50) ||
+                  bubbleText.includes(targetText.slice(0, 30)) ||
+                  targetText.includes(bubbleText.slice(0, 30))) {
+                transcriptWrap = bubble;
+                break;
+              }
+            } else {
+              // No content to match - use the most recent assistant without citations
+              transcriptWrap = bubble;
+              break;
+            }
+          }
+        }
+
+        if (!transcriptWrap) {
+          try { console.log('[voice] addCitationsToTranscript: no matching transcript found for', citations.length, 'citations'); } catch {}
+          return;
+        }
+
+        // Double-check citations don't already exist
+        if (transcriptWrap.nextElementSibling?.querySelector?.('.citations-container')) {
+          return;
+        }
+
+        // Render citations
+        const citationsElement = citationsComponent.render(citations, `voice-${transcriptId || Date.now()}`);
+        if (citationsElement) {
+          citationsElement.classList.add('compact');
+          const citeWrap = document.createElement('div');
+          citeWrap.className = 'flex justify-start';
+          citeWrap.appendChild(citationsElement);
+          transcriptWrap.insertAdjacentElement('afterend', citeWrap);
+          try { console.log('[voice] addCitationsToTranscript: added', citations.length, 'citations'); } catch {}
+        }
+      } catch (err) {
+        try { console.warn('[voice] addCitationsToTranscript error:', err); } catch {}
+      }
+    }
+
     let _transcriptStreamStarting = false; // Guard against concurrent calls
     async function startVoiceTranscriptStream(conversationId, clientId, agentId){
       try {
@@ -2368,8 +2446,48 @@ function clearVoiceTranscriptError(){
         }
         transcriptConversationId = conversationId;
         stopVoiceTranscriptStream();
+        // Use a unique channel name that includes timestamp to avoid conflicts
+        const channelName = `transcripts-${conversationId}-${Date.now()}`;
+        try { console.log('[voice] Creating realtime channel:', channelName); } catch {}
         transcriptRealtimeChannel = supabaseClient
-          .channel(`voice-transcripts:${conversationId}`)
+          .channel(channelName)
+          .on(
+            'postgres_changes',
+            {
+              event: '*',  // Listen to ALL events (INSERT, UPDATE, DELETE) for debugging
+              schema: 'public',
+              table: 'conversation_transcripts',
+              filter: `conversation_id=eq.${conversationId}`
+            },
+            (payload) => {
+              // This wildcard handler receives all event types
+              try { console.log('[voice] WILDCARD postgres_changes event:', payload?.eventType, JSON.stringify(payload).slice(0, 300)); } catch {}
+              // Handle based on event type
+              const eventType = payload?.eventType;
+              const row = payload?.new;
+              if (!row) { return; }
+              const txt = row.content || row.transcript || '';
+              if (!txt) { return; }
+
+              if (eventType === 'INSERT') {
+                const alreadySeen = __seenTranscriptIds?.has(row.id) || window.__lk_transcript_seen?.[row.id];
+                console.log('[voice] INSERT event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'seen:', alreadySeen, 'citations:', row.citations?.length || 0);
+                if (!alreadySeen) {
+                  appendVoiceTranscript(row.role, txt, row.created_at, row.citations, row.id);
+                } else if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
+                  console.log('[voice] Adding citations to existing transcript:', row.id?.slice(0,8), row.citations.length);
+                  addCitationsToTranscript(row.id, row.citations, txt);
+                }
+              } else if (eventType === 'UPDATE') {
+                console.log('[voice] UPDATE event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'citations:', row.citations?.length || 0);
+                updateVoiceTranscript(row.id, txt, row.role);
+                if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
+                  console.log('[voice] UPDATE adding citations:', row.id?.slice(0,8), row.citations.length);
+                  addCitationsToTranscript(row.id, row.citations, txt);
+                }
+              }
+            }
+          )
           .on(
             'postgres_changes',
             {
@@ -2379,16 +2497,27 @@ function clearVoiceTranscriptError(){
               filter: `conversation_id=eq.${conversationId}`
             },
             (payload) => {
-              const row = payload?.new;
-              if (!row) { return; }
-              const txt = row.content || row.transcript || '';
-              if (!txt) { return; }
-              const alreadySeen = __seenTranscriptIds?.has(row.id) || window.__lk_transcript_seen?.[row.id];
-              try { console.log('[voice] INSERT event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'seen:', alreadySeen); } catch {}
-              if (!alreadySeen) {
-                appendVoiceTranscript(row.role, txt, row.created_at, row.citations, row.id);
-              } else {
-                try { console.log('[voice] INSERT SKIPPED (pre-check seen):', row.id?.slice(0,8)); } catch {}
+              try { console.log('[voice] INSERT-specific callback triggered! payload:', JSON.stringify(payload).slice(0, 200)); } catch {}
+              try {
+                const row = payload?.new;
+                if (!row) { console.log('[voice] INSERT: no row in payload'); return; }
+                const txt = row.content || row.transcript || '';
+                if (!txt) { console.log('[voice] INSERT: no content in row'); return; }
+                const alreadySeen = __seenTranscriptIds?.has(row.id) || window.__lk_transcript_seen?.[row.id];
+                console.log('[voice] INSERT event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'seen:', alreadySeen, 'citations:', row.citations?.length || 0);
+                if (!alreadySeen) {
+                  appendVoiceTranscript(row.role, txt, row.created_at, row.citations, row.id);
+                } else {
+                  // Already displayed via LiveKit, but check if we now have citations to add
+                  if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
+                    console.log('[voice] Adding citations to existing transcript:', row.id?.slice(0,8), row.citations.length);
+                    addCitationsToTranscript(row.id, row.citations, txt);
+                  } else {
+                    console.log('[voice] INSERT SKIPPED (pre-check seen, no new citations):', row.id?.slice(0,8));
+                  }
+                }
+              } catch (cbErr) {
+                console.error('[voice] INSERT callback error:', cbErr);
               }
             }
           )
@@ -2401,24 +2530,70 @@ function clearVoiceTranscriptError(){
               filter: `conversation_id=eq.${conversationId}`
             },
             (payload) => {
-              const row = payload?.new;
-              if (!row) { return; }
-              const txt = row.content || row.transcript || '';
-              if (!txt) { return; }
-              try { console.log('[voice] UPDATE event:', row.id?.slice(0,8), row.role, 'len:', txt?.length); } catch {}
-              updateVoiceTranscript(row.id, txt, row.role);
+              try { console.log('[voice] UPDATE callback triggered! payload:', JSON.stringify(payload).slice(0, 200)); } catch {}
+              try {
+                const row = payload?.new;
+                if (!row) { console.log('[voice] UPDATE: no row in payload'); return; }
+                const txt = row.content || row.transcript || '';
+                if (!txt) { console.log('[voice] UPDATE: no content in row'); return; }
+                console.log('[voice] UPDATE event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'citations:', row.citations?.length || 0);
+                updateVoiceTranscript(row.id, txt, row.role);
+                // Handle citations in UPDATE events (citations are often added via UPDATE after initial INSERT)
+                if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
+                  console.log('[voice] UPDATE adding citations:', row.id?.slice(0,8), row.citations.length);
+                  addCitationsToTranscript(row.id, row.citations, txt);
+                }
+              } catch (cbErr) {
+                console.error('[voice] UPDATE callback error:', cbErr);
+              }
             }
           )
-          .subscribe((status) => {
+          .subscribe((status, err) => {
+            try { console.log('[voice] realtime status:', status, err ? 'Error: ' + JSON.stringify(err) : ''); } catch {}
             if (status === 'SUBSCRIBED') {
-              try { console.log('[voice] realtime subscribed for transcripts (INSERT + UPDATE)'); } catch {}
+              try {
+                console.log('[voice] realtime subscribed for transcripts (INSERT + UPDATE)');
+                // Log WebSocket state and connection details for debugging
+                const wsState = transcriptSupabase?.realtime?.socket?.readyState;
+                const wsUrl = transcriptSupabase?.realtime?.socket?.url || 'unknown';
+                console.log('[voice] WebSocket state:', wsState, '(1=OPEN)');
+                console.log('[voice] WebSocket URL:', wsUrl);
+                console.log('[voice] Channel topic:', transcriptRealtimeChannel?.topic);
+                console.log('[voice] Channel bindings:', transcriptRealtimeChannel?.bindings?.length || 0);
+                // Store reference for debugging
+                window.__debugRealtimeChannel = transcriptRealtimeChannel;
+                window.__debugRealtimeClient = transcriptSupabase;
+
+                // Add raw WebSocket message listener for debugging
+                const rawSocket = transcriptSupabase?.realtime?.socket;
+                if (rawSocket && !rawSocket.__debugListenerAdded) {
+                  rawSocket.__debugListenerAdded = true;
+                  const originalOnMessage = rawSocket.onmessage;
+                  rawSocket.onmessage = function(event) {
+                    try {
+                      const data = JSON.parse(event.data);
+                      if (data.event === 'postgres_changes') {
+                        console.log('[voice] RAW WebSocket postgres_changes:', JSON.stringify(data).slice(0, 300));
+                      } else if (data.event !== 'phx_reply' && data.event !== 'heartbeat') {
+                        console.log('[voice] RAW WebSocket event:', data.event, data.topic?.slice(0, 50));
+                      }
+                    } catch (e) {}
+                    if (originalOnMessage) originalOnMessage.call(this, event);
+                  };
+                  console.log('[voice] Added raw WebSocket message listener');
+                }
+              } catch (debugErr) { console.warn('[voice] debug logging error:', debugErr); }
             } else if (status === 'CHANNEL_ERROR') {
-              try { console.warn('[voice] transcript channel error; retrying'); } catch {}
+              try { console.warn('[voice] transcript channel error; retrying', err); } catch {}
               setTimeout(() => {
                 if (transcriptConversationId === conversationId) {
                   startVoiceTranscriptStream(conversationId, clientId, agentId);
                 }
               }, 2000);
+            } else if (status === 'TIMED_OUT') {
+              try { console.warn('[voice] realtime subscription timed out'); } catch {}
+            } else if (status === 'CLOSED') {
+              try { console.warn('[voice] realtime channel closed'); } catch {}
             }
           });
         await loadVoiceTranscriptHistory(conversationId);
@@ -2429,6 +2604,173 @@ function clearVoiceTranscriptError(){
         showVoiceTranscriptError('Unable to start transcript stream. Please refresh and try again.');
       } finally {
         _transcriptStreamStarting = false;
+      }
+    }
+
+    // Debug function to test Realtime - call from console: window.testRealtimeDebug()
+    window.testRealtimeDebug = async function() {
+      console.log('=== REALTIME DEBUG TEST ===');
+      const client = window.__debugRealtimeClient || transcriptSupabase;
+      const channel = window.__debugRealtimeChannel || transcriptRealtimeChannel;
+
+      if (!client) {
+        console.error('No Supabase client available. Start a voice session first.');
+        return;
+      }
+
+      console.log('Client URL:', client.supabaseUrl);
+      console.log('Realtime socket state:', client.realtime?.socket?.readyState, '(1=OPEN)');
+      console.log('Realtime socket URL:', client.realtime?.socket?.url);
+
+      if (channel) {
+        console.log('Channel topic:', channel.topic);
+        console.log('Channel state:', channel.state);
+        console.log('Channel bindings:', channel.bindings);
+      } else {
+        console.log('No active channel');
+      }
+
+      // List all channels
+      console.log('All channels:', client.realtime?.channels?.map(c => c.topic));
+
+      // Try to manually subscribe to a test channel
+      console.log('\n--- Creating test subscription ---');
+      const testChannel = client
+        .channel('debug-test-' + Date.now())
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'conversation_transcripts'
+        }, (payload) => {
+          console.log('🔔 TEST CHANNEL received event:', payload.eventType, payload);
+        })
+        .subscribe((status) => {
+          console.log('TEST CHANNEL status:', status);
+        });
+
+      window.__testChannel = testChannel;
+      console.log('Test channel created. If you insert a record, you should see an event.');
+      console.log('To cleanup: window.__testChannel?.unsubscribe()');
+    };
+
+    // Citation polling fallback - polls for citations when Realtime doesn't deliver them
+    let citationPollingInterval = null;
+    let citationPollingConversationId = null;
+    const CITATION_POLL_INTERVAL = 2000;  // Poll every 2 seconds
+    const CITATION_POLL_MAX_DURATION = 30000;  // Stop after 30 seconds
+
+    async function startCitationPolling(conversationId) {
+      if (citationPollingInterval) {
+        clearInterval(citationPollingInterval);
+      }
+      citationPollingConversationId = conversationId;
+      const startTime = Date.now();
+      let lastCheckedId = null;
+      let citationsFound = false;
+
+      console.log('[voice] Starting citation polling fallback for', conversationId?.slice(0,8));
+
+      // Define the poll function so we can call it immediately AND on interval
+      async function doPoll() {
+        // Stop if conversation changed or timeout exceeded or already found
+        if (citationsFound || citationPollingConversationId !== conversationId ||
+            Date.now() - startTime > CITATION_POLL_MAX_DURATION) {
+          console.log('[voice] Stopping citation polling (timeout/changed/found)');
+          if (citationPollingInterval) {
+            clearInterval(citationPollingInterval);
+            citationPollingInterval = null;
+          }
+          return;
+        }
+
+        try {
+          const supabaseClient = getTranscriptSupabase();
+          if (!supabaseClient) {
+            console.log('[voice] Citation poll: no supabase client');
+            return;
+          }
+
+          // Ensure we're authenticated (like loadVoiceTranscriptHistory does)
+          const authorized = await ensureTranscriptSupabaseAuth();
+          if (!authorized) {
+            console.log('[voice] Citation poll: not authorized');
+            return;
+          }
+
+          console.log('[voice] Citation poll running for', conversationId?.slice(0,8));
+
+          // Use raw fetch with anon key - the Supabase client uses authenticated session
+          // which has different RLS permissions than anon role
+          let data = null;
+          try {
+            const rawUrl = `${CLIENT_SUPABASE_URL}/rest/v1/conversation_transcripts?select=id,role,content,citations,created_at&conversation_id=eq.${conversationId}&role=eq.assistant&order=created_at.desc&limit=10`;
+            console.log('[voice] Citation poll fetching with anon key...');
+            const rawResp = await fetch(rawUrl, {
+              headers: {
+                'apikey': CLIENT_SUPABASE_ANON,
+                'Authorization': `Bearer ${CLIENT_SUPABASE_ANON}`
+              }
+            });
+            if (!rawResp.ok) {
+              console.warn('[voice] Citation poll fetch error:', rawResp.status, rawResp.statusText);
+              return;
+            }
+            data = await rawResp.json();
+          } catch (fetchErr) {
+            console.warn('[voice] Citation poll fetch exception:', fetchErr);
+            return;
+          }
+
+          console.log('[voice] Citation poll got', data?.length || 0, 'assistant transcripts');
+          if (data && data.length > 0) {
+            console.log('[voice] Citation poll first result:', data[0].id?.slice(0,8), 'citations:', data[0].citations?.length || 0);
+          } else {
+            console.log('[voice] Citation poll returned empty array or null');
+          }
+
+          if (data && data.length > 0) {
+            for (const transcript of data) {
+              // Skip if we already processed this one
+              if (transcript.id === lastCheckedId) continue;
+
+              const citations = transcript.citations;
+              // Filter for transcripts WITH citations (check in JavaScript)
+              if (citations && Array.isArray(citations) && citations.length > 0) {
+                console.log('[voice] Citation poll found citations:', transcript.id?.slice(0,8), citations.length);
+                lastCheckedId = transcript.id;
+                citationsFound = true;
+
+                // Try to add citations to the displayed transcript
+                addCitationsToTranscript(transcript.id, citations, transcript.content);
+
+                // Stop polling after finding citations
+                console.log('[voice] Citation polling complete - found citations');
+                if (citationPollingInterval) {
+                  clearInterval(citationPollingInterval);
+                  citationPollingInterval = null;
+                }
+                return;
+              }
+            }
+          }
+        } catch (pollErr) {
+          console.warn('[voice] Citation poll exception:', pollErr);
+        }
+      }
+
+      // Run immediately (don't wait for first interval)
+      console.log('[voice] Running immediate citation poll...');
+      doPoll();
+
+      // Then set up interval for subsequent polls
+      citationPollingInterval = setInterval(doPoll, CITATION_POLL_INTERVAL);
+    }
+
+    function stopCitationPolling() {
+      if (citationPollingInterval) {
+        clearInterval(citationPollingInterval);
+        citationPollingInterval = null;
+        citationPollingConversationId = null;
       }
     }
 
@@ -2522,6 +2864,8 @@ function clearVoiceTranscriptError(){
         try { console.warn('[voice] error while stopping transcript stream', err); } catch {}
       }
       transcriptRealtimeChannel = null;
+      // Also stop citation polling
+      stopCitationPolling();
     }
 
     function clearVoiceConnectionMonitor() {
@@ -3048,6 +3392,10 @@ function clearVoiceTranscriptError(){
           }
         });
       } catch {}
+      // Track conversation turns to prevent response from overwriting greeting
+      let _voiceTurnCounter = 0;
+      let _lastInterimRole = null;
+
       try {
         const transcriptionEvent = RoomEvent.TranscriptionReceived;
         if (transcriptionEvent) {
@@ -3071,6 +3419,13 @@ function clearVoiceTranscriptError(){
                   );
                   const role = isAgent ? 'assistant' : 'user';
 
+                  // Increment turn counter when switching between user and assistant
+                  // This ensures each assistant response gets a new bubble below user's message
+                  if (_lastInterimRole && _lastInterimRole !== role) {
+                    _voiceTurnCounter++;
+                  }
+                  _lastInterimRole = role;
+
                   if (isFinal) {
                     // Final transcript - display it
                     ingestLivekitTranscript({
@@ -3079,9 +3434,16 @@ function clearVoiceTranscriptError(){
                       id: segmentId,
                       createdAt: new Date().toISOString()
                     }, role);
+
+                    // Start citation polling for assistant messages
+                    // Since Realtime isn't reliably delivering events, we poll for citations
+                    if (role === 'assistant' && transcriptConversationId) {
+                      console.log('[voice] Final assistant transcript - starting citation poll');
+                      startCitationPolling(transcriptConversationId);
+                    }
                   } else {
-                    // Interim transcript - update existing bubble or create temp one
-                    const tempId = `interim-${participant?.identity || 'unknown'}`;
+                    // Interim transcript - use turn-specific ID so responses don't overwrite greetings
+                    const tempId = `interim-${role}-${_voiceTurnCounter}`;
                     if (!updateVoiceTranscript(tempId, text, role)) {
                       appendVoiceTranscript(role, text, new Date().toISOString(), [], tempId);
                     }

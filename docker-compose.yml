@@ -39,6 +39,8 @@ services:
       - AGENT_NAME=sidekick-agent-staging-local
       - LIVEKIT_AGENT_NAME=sidekick-agent-staging-local
       - DOCKER_HOST=unix:///var/run/docker.sock
+      # Perplexity platform key
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
       - DOCUMENT_PROCESSOR_MAX_CONCURRENCY=2
       - DOCUMENT_PROCESSOR_MAX_CHUNKS=250
       - DOCUMENT_PROCESSOR_MAX_FILE_MB=${DOCUMENT_PROCESSOR_MAX_FILE_MB:-100}
@@ -47,7 +49,10 @@ services:
       - ENABLE_LIVEKIT_TEXT_DISPATCH=true
       # Firecrawl self-hosted URL for web scraping
       - FIRECRAWL_URL=${FIRECRAWL_URL:-http://firecrawl:3002}
-      # Remove duplicate DEVELOPMENT_MODE to avoid conflicting overrides
+      # Platform Cartesia API key for voice samples
+      - CARTESIA_API_KEY=sk_car_NFNsJHGzFXxB7SCngUHn4W
+      # Platform Silicon Flow API key for avatar generation
+      - SILICONFLOW_API_KEY=sk-ngwoarcooydaeipeqbgvrxwnahbinyjutmfvbigmdirhmioa
     volumes:
       - ./app:/app/app
       - ./logs:/app/logs
@@ -105,6 +110,7 @@ services:
       - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
       - ./docker/agent/citations_service.py:/app/citations_service.py:ro
       - ./docker/agent/tool_registry.py:/app/tool_registry.py:ro
+      - ./docker/agent/wizard_tasks.py:/app/wizard_tasks.py:ro
       - ./docker/agent/models:/app/models:ro
       - ./app:/app/app:ro
     environment:
@@ -115,6 +121,8 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - DOMAIN_NAME=${DOMAIN_NAME}
+      # Platform API URL for avatar image resolution
+      - PLATFORM_API_URL=https://${DOMAIN_NAME}
       # Agent configuration
       - AGENT_NAME=sidekick-agent-staging-local
       - ENABLE_PROACTIVE_GREETING=true
@@ -135,14 +143,24 @@ services:
       - NOVITA_API_KEY=${NOVITA_API_KEY:-}
       - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-}
       - JINA_API_KEY=${JINA_API_KEY:-}
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY:-}
       - SPEECHIFY_API_KEY=${SPEECHIFY_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - COHERE_API_KEY=${COHERE_API_KEY:-}
+      # Security keys (needed for Settings validation and OAuth state signing)
+      - SECRET_KEY=${SECRET_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       # Asana OAuth (needed for token refresh inside abilities)
       - ASANA_OAUTH_CLIENT_ID=${ASANA_OAUTH_CLIENT_ID}
       - ASANA_OAUTH_CLIENT_SECRET=${ASANA_OAUTH_CLIENT_SECRET}
       - ASANA_OAUTH_REDIRECT_URI=${ASANA_OAUTH_REDIRECT_URI}
       - ASANA_OAUTH_SCOPES=${ASANA_OAUTH_SCOPES}
+      # HelpScout OAuth (needed for token refresh inside abilities)
+      - HELPSCOUT_OAUTH_CLIENT_ID=${HELPSCOUT_OAUTH_CLIENT_ID}
+      - HELPSCOUT_OAUTH_CLIENT_SECRET=${HELPSCOUT_OAUTH_CLIENT_SECRET}
+      - HELPSCOUT_OAUTH_REDIRECT_URI=${HELPSCOUT_OAUTH_REDIRECT_URI}
+      - HELPSCOUT_TOKEN_PREFERRED_STORE=${HELPSCOUT_TOKEN_PREFERRED_STORE:-platform}
+      - HELPSCOUT_TOKEN_REFRESH_MARGIN_SECONDS=${HELPSCOUT_TOKEN_REFRESH_MARGIN_SECONDS:-300}
       - VOICE_ITEM_COMMIT_FALLBACK=false
       # RAG context settings - increase results and lower threshold for better retrieval
       - CONTEXT_MAX_KNOWLEDGE_RESULTS=${CONTEXT_MAX_KNOWLEDGE_RESULTS:-10}

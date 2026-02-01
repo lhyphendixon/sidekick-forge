@@ -1,0 +1,145 @@
+<!-- Step 2: Personality -->
+<div class="space-y-8">
+    <div class="text-center space-y-3">
+        <h1 class="text-4xl md:text-5xl font-light text-white">
+            Describe <span class="text-brand-teal" x-text="stepData.name || 'your sidekick'"></span>'s personality
+        </h1>
+        <p class="text-dark-text-secondary text-lg">
+            How should your sidekick communicate and behave?
+        </p>
+    </div>
+
+    <div class="max-w-lg mx-auto space-y-6">
+        <textarea
+            x-model="stepData.personality_description"
+            placeholder="e.g., Friendly and professional, with a warm tone. Loves to explain things clearly and asks clarifying questions when needed..."
+            rows="4"
+            class="wizard-textarea text-lg"
+        ></textarea>
+
+        <!-- Big Five Traits (Optional) -->
+        <details class="glass-container rounded-xl p-6">
+            <summary class="text-white cursor-pointer flex items-center gap-2">
+                <svg class="w-5 h-5 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/>
+                </svg>
+                Fine-tune personality traits (optional)
+            </summary>
+
+            <div class="mt-6 space-y-5">
+                <!-- Openness -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-dark-text-secondary">Openness</span>
+                        <span class="text-white" x-text="stepData.personality_traits.openness + '%'"></span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs text-dark-text-secondary w-20">Practical</span>
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            x-model="stepData.personality_traits.openness"
+                            class="flex-1"
+                        />
+                        <span class="text-xs text-dark-text-secondary w-20 text-right">Creative</span>
+                    </div>
+                </div>
+
+                <!-- Conscientiousness -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-dark-text-secondary">Conscientiousness</span>
+                        <span class="text-white" x-text="stepData.personality_traits.conscientiousness + '%'"></span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs text-dark-text-secondary w-20">Flexible</span>
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            x-model="stepData.personality_traits.conscientiousness"
+                            class="flex-1"
+                        />
+                        <span class="text-xs text-dark-text-secondary w-20 text-right">Organized</span>
+                    </div>
+                </div>
+
+                <!-- Extraversion -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-dark-text-secondary">Extraversion</span>
+                        <span class="text-white" x-text="stepData.personality_traits.extraversion + '%'"></span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs text-dark-text-secondary w-20">Reserved</span>
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            x-model="stepData.personality_traits.extraversion"
+                            class="flex-1"
+                        />
+                        <span class="text-xs text-dark-text-secondary w-20 text-right">Outgoing</span>
+                    </div>
+                </div>
+
+                <!-- Agreeableness -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-dark-text-secondary">Agreeableness</span>
+                        <span class="text-white" x-text="stepData.personality_traits.agreeableness + '%'"></span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs text-dark-text-secondary w-20">Direct</span>
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            x-model="stepData.personality_traits.agreeableness"
+                            class="flex-1"
+                        />
+                        <span class="text-xs text-dark-text-secondary w-20 text-right">Warm</span>
+                    </div>
+                </div>
+
+                <!-- Neuroticism (inverted for UX) -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-dark-text-secondary">Emotional Stability</span>
+                        <span class="text-white" x-text="(100 - stepData.personality_traits.neuroticism) + '%'"></span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs text-dark-text-secondary w-20">Sensitive</span>
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            :value="100 - stepData.personality_traits.neuroticism"
+                            @input="stepData.personality_traits.neuroticism = 100 - $event.target.value"
+                            class="flex-1"
+                        />
+                        <span class="text-xs text-dark-text-secondary w-20 text-right">Calm</span>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <!-- Randomize Button -->
+        <div class="text-center">
+            <button
+                @click="randomizePersonality()"
+                class="inline-flex items-center gap-2 text-dark-text-secondary hover:text-brand-teal transition">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                Randomize personality
+            </button>
+        </div>
+    </div>
+</div>

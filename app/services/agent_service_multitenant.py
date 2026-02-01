@@ -74,7 +74,27 @@ class AgentService:
                 tools_config = {}
         else:
             tools_config = tools_config_raw or {}
-        
+
+        # Parse sound_settings
+        sound_settings_raw = agent_data.get("sound_settings", {})
+        if isinstance(sound_settings_raw, str):
+            try:
+                sound_settings_dict = json.loads(sound_settings_raw)
+            except (json.JSONDecodeError, TypeError):
+                sound_settings_dict = {}
+        elif isinstance(sound_settings_raw, dict):
+            sound_settings_dict = sound_settings_raw
+        else:
+            sound_settings_dict = {}
+
+        # Create SoundSettings object with defaults
+        try:
+            from app.models.agent import SoundSettings
+            sound_settings = SoundSettings(**sound_settings_dict)
+        except Exception:
+            from app.models.agent import SoundSettings
+            sound_settings = SoundSettings()
+
         # Parse datetime fields
         created_at = agent_data.get("created_at")
         if isinstance(created_at, str):
@@ -108,6 +128,7 @@ class AgentService:
             client_id=client_id,
             tools_config=tools_config,
             voice_settings=voice_settings,
+            sound_settings=sound_settings,
             webhooks=webhooks,
             context_retention_minutes=agent_data.get("context_retention_minutes", 30),
             max_context_messages=agent_data.get("max_context_messages", 50),
@@ -169,9 +190,9 @@ class AgentService:
     async def create_agent(self, client_id: UUID, agent_data: AgentCreate) -> Optional[Agent]:
         """Create a new agent for a client"""
         try:
-            # Get client-specific database connection
-            client_db = self.connection_manager.get_client_db_client(client_id)
-            
+            # Get client-specific database connection with hosting info
+            client_db, hosting_type, _ = self.connection_manager.get_client_db_client_with_info(client_id)
+
             # Prepare data for insertion
             data = {
                 "slug": agent_data.slug,
@@ -180,6 +201,7 @@ class AgentService:
                 "system_prompt": agent_data.system_prompt,
                 "enabled": agent_data.enabled,
                 "voice_settings": agent_data.voice_settings.dict() if agent_data.voice_settings else {},
+                "sound_settings": {"thinking_sound": "none", "thinking_volume": 0.3, "ambient_sound": "none", "ambient_volume": 0.15},
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
             }
@@ -189,7 +211,11 @@ class AgentService:
                 data["show_citations"] = agent_data.show_citations
             if agent_data.rag_results_limit is not None:
                 data["rag_results_limit"] = agent_data.rag_results_limit
-            
+
+            # Shared pool requires client_id for tenant isolation
+            if hosting_type == 'shared':
+                data["client_id"] = str(client_id)
+
             # Insert into client's database
             result = client_db.table("agents").insert(data).execute()
             
@@ -226,11 +252,14 @@ class AgentService:
                 update_data["enabled"] = agent_update.enabled
             if agent_update.voice_settings is not None:
                 update_data["voice_settings"] = agent_update.voice_settings.dict()
+            if agent_update.sound_settings is not None:
+                update_data["sound_settings"] = agent_update.sound_settings.dict()
+                logger.info(f"[update_agent] Including sound_settings: {update_data['sound_settings']}")
             if agent_update.show_citations is not None:
                 update_data["show_citations"] = agent_update.show_citations
             if agent_update.rag_results_limit is not None:
                 update_data["rag_results_limit"] = agent_update.rag_results_limit
-            
+
             update_data["updated_at"] = datetime.utcnow().isoformat()
             
             # Update in client's database
@@ -254,16 +283,39 @@ class AgentService:
         try:
             # Get client-specific database connection
             client_db = self.connection_manager.get_client_db_client(client_id)
-            
-            # Delete from client's database
-            result = client_db.table("agents").delete().eq("slug", agent_slug).execute()
-            
-            if result.data:
-                logger.info(f"Deleted agent {agent_slug} for client {client_id}")
-                return True
-            
-            return False
-            
+
+            # Verify agent exists and get its ID
+            check = client_db.table("agents").select("id").eq("slug", agent_slug).execute()
+            if not check.data:
+                logger.warning(f"Agent {agent_slug} not found for client {client_id}")
+                return False
+
+            agent_id = check.data[0]["id"]
+
+            # Delete related records that have foreign key references
+            for table in [
+                "conversation_transcripts",
+                "conversations",
+                "agent_tools",
+                "agent_documents",
+            ]:
+                try:
+                    client_db.table(table).delete().eq("agent_id", agent_id).execute()
+                except Exception as e:
+                    logger.debug(f"Cleanup {table} for agent {agent_id}: {e}")
+
+            # Delete the agent
+            client_db.table("agents").delete().eq("slug", agent_slug).execute()
+
+            # Verify deletion succeeded
+            verify = client_db.table("agents").select("id").eq("slug", agent_slug).execute()
+            if verify.data:
+                logger.error(f"Delete failed for agent {agent_slug} - still exists")
+                return False
+
+            logger.info(f"Deleted agent {agent_slug} for client {client_id}")
+            return True
+
         except ClientConfigurationError as e:
             logger.error(f"Client configuration error: {e}")
             raise

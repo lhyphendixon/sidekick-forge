@@ -276,6 +276,7 @@ async def handle_voice_trigger_multitenant(
         "agent_name": agent.name,
         "system_prompt": agent.system_prompt,
         "voice_settings": agent.voice_settings.dict() if agent.voice_settings else {},
+        "sound_settings": agent.sound_settings.dict() if hasattr(agent, 'sound_settings') and agent.sound_settings else {},
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": request.user_id,
         "session_id": request.session_id,

@@ -1,0 +1,3065 @@
+<!-- Wizard Modal (HTMX Partial) -->
+<div class="fixed z-50 inset-0 overflow-y-auto" id="wizardModal"
+     x-data="wizardController()"
+     x-init="init()">
+
+    <!-- Backdrop -->
+    <div class="fixed inset-0 bg-black/90 transition-opacity"
+         onclick="closeWizardModal()"></div>
+
+    <!-- Modal Container -->
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="relative bg-dark-surface rounded-2xl shadow-2xl w-full max-w-[1023px] max-h-[90vh] overflow-hidden border border-dark-border">
+
+            <!-- Progress Bar -->
+            <div class="absolute top-0 left-0 right-0 h-1 bg-dark-border z-10">
+                <div class="h-full bg-gradient-to-r from-brand-teal to-brand-orange transition-all duration-500"
+                     :style="`width: ${(currentStep / totalSteps) * 100}%`"></div>
+            </div>
+
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-5 border-b border-dark-border">
+                <div class="flex items-center gap-3">
+                    <img src="/static/images/Logos/SF-Symbol-Medium-Gem.png" alt="Sidekick Forge" class="w-8 h-8">
+                    <div>
+                        <h2 class="text-lg font-semibold text-dark-text">Create Your Sidekick</h2>
+                        <p class="text-sm text-dark-text-secondary mt-1" x-text="`Step ${currentStep} of ${totalSteps}`"></p>
+                    </div>
+                </div>
+                <button onclick="closeWizardModal()"
+                        class="text-dark-text-secondary hover:text-dark-text transition-colors p-2 rounded-lg hover:bg-dark-elevated">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Voice Enable Overlay (shown until user enables voice) -->
+            <div x-show="!voiceEnabled"
+                 x-transition:enter="transition ease-out duration-300"
+                 x-transition:enter-start="opacity-0"
+                 x-transition:enter-end="opacity-100"
+                 x-transition:leave="transition ease-in duration-200"
+                 x-transition:leave-start="opacity-100"
+                 x-transition:leave-end="opacity-0"
+                 class="absolute inset-0 z-20 flex items-center justify-center bg-dark-surface/95 backdrop-blur-sm"
+                 style="top: 85px;">
+                <div class="text-center px-8 max-w-md">
+                    <!-- Animated Voice Icon -->
+                    <div class="relative mx-auto w-24 h-24 mb-6">
+                        <!-- Pulsing rings -->
+                        <div class="absolute inset-0 rounded-full bg-brand-teal/20 animate-ping"></div>
+                        <div class="absolute inset-2 rounded-full bg-brand-teal/30 animate-pulse"></div>
+                        <!-- Center icon - also connects to Farah (LiveKit) -->
+                        <button @click="enableVoiceWithAgent()"
+                                :disabled="livekitConnecting || !sessionReady"
+                                class="relative w-full h-full rounded-full bg-gradient-to-br from-brand-teal to-brand-teal/80 flex items-center justify-center shadow-lg shadow-brand-teal/30 hover:shadow-brand-teal/50 hover:scale-105 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-wait">
+                            <svg class="w-10 h-10 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <h3 class="text-xl font-semibold text-dark-text mb-2">Enable Voice Assistant</h3>
+                    <p class="text-dark-text-secondary mb-6">
+                        Choose how you'd like to create your sidekick:
+                    </p>
+
+                    <div class="flex flex-col gap-3">
+                        <!-- Agent-Guided Mode (Recommended) -->
+                        <button @click="enableVoiceWithAgent()"
+                                :disabled="livekitConnecting || !sessionReady"
+                                class="btn-wizard-primary w-full flex items-center justify-center gap-2 py-4">
+                            <span x-show="!livekitConnecting && !sessionReady" class="flex items-center gap-2">
+                                <svg class="w-5 h-5 spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke-width="4"></circle>
+                                    <path class="opacity-75" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                </svg>
+                                <span class="opacity-75">Setting up...</span>
+                            </span>
+                            <span x-show="!livekitConnecting && sessionReady" class="flex items-center gap-2">
+                                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
+                                </svg>
+                                <span class="font-semibold">Talk with Farah</span>
+                                <span class="text-xs opacity-75">(Recommended)</span>
+                            </span>
+                            <span x-show="livekitConnecting" class="flex items-center gap-2">
+                                <svg class="w-5 h-5 spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke-width="4"></circle>
+                                    <path class="opacity-75" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                </svg>
+                                Connecting to Farah...
+                            </span>
+                        </button>
+                        <p x-show="sessionError" class="text-xs text-red-400 text-center -mt-1 mb-2" x-text="sessionError"></p>
+                        <p x-show="!sessionError" class="text-xs text-dark-text-secondary text-center -mt-1 mb-2">
+                            Have a conversation with Farah - she'll understand your answers and fill in the form
+                        </p>
+
+                        <!-- Skip Voice -->
+                        <button @click="voiceEnabled = true; ttsEnabled = false; micEnabled = false;"
+                                class="text-sm text-dark-text-secondary hover:text-dark-text transition-colors mt-2">
+                            Continue without voice
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Content Area (Scrollable) -->
+            <div class="overflow-y-auto p-6" style="max-height: calc(90vh - 160px);">
+                <!-- Step 1: Name -->
+                <div x-show="currentStep === 1" x-cloak class="step-content">
+                    <div class="text-center mb-8">
+                        <h3 class="text-2xl font-bold text-dark-text mb-2">What would you like to name your sidekick?</h3>
+                        <p class="text-dark-text-secondary">Choose a name that represents your AI assistant</p>
+                    </div>
+                    <div class="max-w-md mx-auto">
+                        <input type="text"
+                               x-model="stepData.name"
+                               @input="generateSlug()"
+                               class="wizard-input w-full text-center text-2xl"
+                               placeholder="Enter a name..."
+                               autofocus>
+                        <p class="text-sm text-dark-text-secondary mt-4 text-center">
+                            URL: <span class="text-brand-teal" x-text="stepData.slug || 'your-sidekick'"></span>
+                        </p>
+                        <button @click="randomizeName()"
+                                class="btn-wizard-secondary w-full mt-4 text-sm flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            Randomize Name
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Personality -->
+                <div x-show="currentStep === 2" x-cloak class="step-content">
+                    <div class="text-center mb-8">
+                        <h3 class="text-2xl font-bold text-dark-text mb-2">Describe your sidekick's personality</h3>
+                        <p class="text-dark-text-secondary">How should your sidekick communicate?</p>
+                    </div>
+                    <div class="max-w-lg mx-auto">
+                        <textarea x-model="stepData.personality_description"
+                                  class="wizard-textarea h-32"
+                                  placeholder="E.g., Friendly and approachable, always ready to help with a warm tone and patient explanations..."></textarea>
+                        <button @click="randomizePersonality()"
+                                class="btn-wizard-secondary w-full mt-4 text-sm flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            Randomize Personality
+                        </button>
+
+                        <!-- Personality Traits (Optional) -->
+                        <div class="mt-6 p-4 bg-dark-elevated rounded-lg border border-dark-border">
+                            <button @click="showTraits = !showTraits"
+                                    class="w-full flex items-center justify-between text-sm text-dark-text-secondary">
+                                <span>Advanced: Personality Traits</span>
+                                <svg class="w-4 h-4 transition-transform" :class="{ 'rotate-180': showTraits }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </button>
+                            <div x-show="showTraits" x-collapse class="mt-4 space-y-4">
+                                <template x-for="(value, trait) in stepData.personality_traits" :key="trait">
+                                    <div>
+                                        <div class="flex justify-between text-sm mb-1">
+                                            <span class="text-dark-text capitalize" x-text="trait"></span>
+                                            <span class="text-brand-teal" x-text="value"></span>
+                                        </div>
+                                        <input type="range" min="0" max="100" x-model="stepData.personality_traits[trait]" class="w-full">
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: Voice Selection -->
+                <div x-show="currentStep === 3" x-cloak class="step-content">
+                    <div class="text-center mb-6">
+                        <h3 class="text-2xl font-bold text-dark-text mb-2">Choose a voice for your sidekick</h3>
+                        <p class="text-dark-text-secondary">Clone your own voice, upload a sample, or pick from our presets</p>
+                    </div>
+
+                    <div class="max-h-[60vh] overflow-y-auto pr-2 space-y-6">
+                        <!-- Voice Cloning Section -->
+                        <div class="space-y-4">
+                            <h4 class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide">Create Custom Voice</h4>
+
+                            <!-- My Voice - Recording Option -->
+                            <div class="voice-card p-4"
+                                 :class="{ 'selected': stepData.voice_id && stepData.voice_is_cloned && voiceCloneSource === 'recording' }">
+                                <div class="flex items-start gap-4">
+                                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-brand-teal to-brand-orange flex items-center justify-center flex-shrink-0">
+                                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+                                        </svg>
+                                    </div>
+                                    <div class="flex-1">
+                                        <h5 class="font-semibold text-dark-text mb-1">My Voice</h5>
+                                        <p class="text-sm text-dark-text-secondary mb-3">Record yourself reading the text below to clone your voice</p>
+
+                                        <!-- Recording Text -->
+                                        <div class="bg-dark-elevated rounded-lg p-3 mb-3 border border-dark-border">
+                                            <p class="text-sm text-dark-text italic" x-text="voiceCloneText || 'Loading...'"></p>
+                                        </div>
+
+                                        <!-- Recording Controls -->
+                                        <div class="flex items-center gap-3">
+                                            <button type="button"
+                                                    @click="toggleVoiceRecording()"
+                                                    :disabled="voiceCloningInProgress"
+                                                    :class="isRecordingVoice ? 'bg-red-500 hover:bg-red-600' : 'bg-brand-teal hover:bg-brand-teal/80'"
+                                                    class="px-4 py-2 rounded-lg text-white font-medium transition-colors disabled:opacity-50 flex items-center gap-2">
+                                                <template x-if="!isRecordingVoice">
+                                                    <span class="flex items-center gap-2">
+                                                        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/></svg>
+                                                        Record
+                                                    </span>
+                                                </template>
+                                                <template x-if="isRecordingVoice">
+                                                    <span class="flex items-center gap-2">
+                                                        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12"/></svg>
+                                                        Stop
+                                                    </span>
+                                                </template>
+                                            </button>
+
+                                            <!-- Recording duration -->
+                                            <span x-show="isRecordingVoice" class="text-sm text-red-400 animate-pulse" x-text="recordingDuration + 's'"></span>
+
+                                            <!-- Recorded audio preview -->
+                                            <template x-if="recordedVoiceBlob && !isRecordingVoice">
+                                                <div class="flex items-center gap-2">
+                                                    <button type="button" @click="playRecordedVoice()" class="text-brand-teal hover:text-brand-teal/80">
+                                                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                                    </button>
+                                                    <button type="button"
+                                                            @click="submitVoiceClone('recording')"
+                                                            :disabled="voiceCloningInProgress"
+                                                            class="px-3 py-1.5 bg-brand-orange hover:bg-brand-orange/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
+                                                        <span x-show="!voiceCloningInProgress">Clone Voice</span>
+                                                        <span x-show="voiceCloningInProgress" class="flex items-center gap-2">
+                                                            <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                            </svg>
+                                                            Cloning...
+                                                        </span>
+                                                    </button>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Upload Voice Sample -->
+                            <div class="voice-card p-4"
+                                 :class="{ 'selected': stepData.voice_id && stepData.voice_is_cloned && voiceCloneSource === 'upload' }">
+                                <div class="flex items-start gap-4">
+                                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center flex-shrink-0">
+                                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                                        </svg>
+                                    </div>
+                                    <div class="flex-1">
+                                        <h5 class="font-semibold text-dark-text mb-1">Upload Voice Sample</h5>
+                                        <p class="text-sm text-dark-text-secondary mb-3">Upload a 5-10 second audio clip to clone any voice</p>
+
+                                        <div class="flex items-center gap-3">
+                                            <label class="px-4 py-2 bg-dark-elevated hover:bg-dark-border rounded-lg text-dark-text font-medium transition-colors cursor-pointer border border-dark-border">
+                                                <span x-text="uploadedVoiceFile ? uploadedVoiceFile.name : 'Choose File'"></span>
+                                                <input type="file"
+                                                       accept="audio/*"
+                                                       @change="handleVoiceFileUpload($event)"
+                                                       class="hidden">
+                                            </label>
+
+                                            <template x-if="uploadedVoiceFile">
+                                                <button type="button"
+                                                        @click="submitVoiceClone('upload')"
+                                                        :disabled="voiceCloningInProgress"
+                                                        class="px-3 py-1.5 bg-brand-orange hover:bg-brand-orange/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
+                                                    <span x-show="!voiceCloningInProgress">Clone Voice</span>
+                                                    <span x-show="voiceCloningInProgress" class="flex items-center gap-2">
+                                                        <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                        </svg>
+                                                        Cloning...
+                                                    </span>
+                                                </button>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Cloning Error Message -->
+                            <div x-show="voiceCloneError" class="text-red-400 text-sm bg-red-500/10 border border-red-500/30 rounded-lg p-3" x-text="voiceCloneError"></div>
+
+                            <!-- Cloned Voice Success -->
+                            <div x-show="clonedVoice" class="bg-green-500/10 border border-green-500/30 rounded-lg p-3">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center gap-3">
+                                        <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                        </svg>
+                                        <span class="text-green-400 font-medium">Voice cloned successfully!</span>
+                                    </div>
+                                    <button type="button"
+                                            @click="playVoiceSample(clonedVoice)"
+                                            class="text-brand-teal hover:text-brand-teal/80">
+                                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Divider -->
+                        <div class="flex items-center gap-4">
+                            <div class="flex-1 h-px bg-dark-border"></div>
+                            <span class="text-dark-text-secondary text-sm">or choose a preset voice</span>
+                            <div class="flex-1 h-px bg-dark-border"></div>
+                        </div>
+
+                        <!-- Preset Voices Section -->
+                        <div class="space-y-3">
+                            <h4 class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide">Preset Voices</h4>
+                            <div class="grid grid-cols-2 gap-3">
+                                <template x-for="voice in availableVoices" :key="voice.id">
+                                    <div @click="selectVoice(voice)"
+                                         :class="{ 'selected': stepData.voice_id === voice.id && !stepData.voice_is_cloned }"
+                                         class="voice-card text-left cursor-pointer">
+                                        <div class="flex items-center justify-between mb-2">
+                                            <span class="font-medium text-dark-text" x-text="voice.name"></span>
+                                            <button type="button"
+                                                    @click.stop="playVoiceSample(voice)"
+                                                    :disabled="voiceSampleLoading && playingVoiceId === voice.id"
+                                                    class="p-1.5 rounded-full hover:bg-brand-teal/20 transition-colors disabled:opacity-50">
+                                                <svg x-show="voiceSampleLoading && playingVoiceId === voice.id" class="w-4 h-4 text-brand-teal animate-spin" fill="none" viewBox="0 0 24 24">
+                                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                </svg>
+                                                <svg x-show="playingVoiceId !== voice.id && !(voiceSampleLoading && playingVoiceId === voice.id)" class="w-4 h-4 text-brand-teal" fill="currentColor" viewBox="0 0 24 24">
+                                                    <path d="M8 5v14l11-7z"/>
+                                                </svg>
+                                                <svg x-show="playingVoiceId === voice.id && !voiceSampleLoading" class="w-4 h-4 text-brand-teal" fill="currentColor" viewBox="0 0 24 24">
+                                                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                                                </svg>
+                                            </button>
+                                        </div>
+                                        <p class="text-xs text-dark-text-secondary" x-text="voice.description"></p>
+                                        <div class="flex flex-wrap gap-1 mt-2">
+                                            <template x-for="tag in voice.tags" :key="tag">
+                                                <span class="text-xs px-2 py-0.5 rounded-full bg-dark-elevated text-dark-text-secondary" x-text="tag"></span>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 4: Avatar -->
+                <div x-show="currentStep === 4" x-cloak class="step-content">
+                    <div class="text-center mb-8">
+                        <h3 class="text-2xl font-bold text-dark-text mb-2">Create an avatar for your sidekick</h3>
+                        <p class="text-dark-text-secondary">Generate or skip to use a default avatar</p>
+                    </div>
+                    <div class="max-w-lg mx-auto">
+                        <div class="flex gap-3 mb-4">
+                            <input type="text"
+                                   x-model="avatarPrompt"
+                                   class="wizard-input flex-1 text-base"
+                                   placeholder="Describe your avatar (optional)...">
+                            <button @click="generateAvatar()"
+                                    :disabled="generatingAvatar"
+                                    class="btn-wizard-primary whitespace-nowrap">
+                                <span x-show="!generatingAvatar">Generate</span>
+                                <span x-show="generatingAvatar" class="flex items-center gap-2">
+                                    <svg class="w-4 h-4 spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke-width="4"></circle>
+                                        <path class="opacity-75" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                    </svg>
+                                    Generating...
+                                </span>
+                            </button>
+                        </div>
+
+                        <!-- Avatar Grid -->
+                        <div x-show="avatarHistory.length > 0" class="grid grid-cols-3 gap-3">
+                            <template x-for="avatar in avatarHistory" :key="avatar.id">
+                                <button @click="selectAvatarImage(avatar)"
+                                        @dblclick.stop="openAvatarLightbox(avatar)"
+                                        :class="{ 'selected': stepData.avatar_url === avatar.image_url }"
+                                        class="avatar-card relative group"
+                                        title="Double-click to view full size">
+                                    <img :src="avatar.image_url" :alt="avatar.prompt" class="w-full h-full object-cover">
+                                    <!-- Zoom hint on hover -->
+                                    <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/>
+                                        </svg>
+                                    </div>
+                                </button>
+                            </template>
+                        </div>
+
+                        <!-- Divider -->
+                        <div class="flex items-center gap-4 my-4">
+                            <div class="flex-1 border-t border-white/10"></div>
+                            <span class="text-sm text-dark-text-secondary">or</span>
+                            <div class="flex-1 border-t border-white/10"></div>
+                        </div>
+
+                        <!-- Upload Own Image -->
+                        <div class="text-center">
+                            <input
+                                type="file"
+                                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                                @change="uploadAvatar($event)"
+                                x-ref="avatarFileInput"
+                                class="hidden"
+                            />
+                            <button
+                                @click="$refs.avatarFileInput.click()"
+                                :disabled="uploadingAvatar"
+                                class="btn-wizard-secondary inline-flex items-center gap-2">
+                                <svg x-show="uploadingAvatar" class="w-5 h-5 spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                </svg>
+                                <svg x-show="!uploadingAvatar" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                                </svg>
+                                <span x-text="uploadingAvatar ? 'Uploading...' : 'Upload Your Own Image'"></span>
+                            </button>
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                PNG, JPG, WEBP, GIF, or SVG. Max 5 MB.
+                            </p>
+                        </div>
+
+                        <p x-show="avatarHistory.length === 0" class="text-center text-dark-text-secondary py-8">
+                            Click "Generate" to create an avatar, upload your own, or skip this step.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Step 5: Abilities Selection -->
+                <div x-show="currentStep === 5" x-cloak class="step-content">
+                    <div class="text-center mb-8">
+                        <h3 class="text-2xl font-bold text-dark-text mb-2">
+                            Give <span class="text-brand-teal" x-text="stepData.name || 'your sidekick'"></span> superpowers
+                        </h3>
+                        <p class="text-dark-text-secondary">Enable built-in abilities for your sidekick</p>
+                    </div>
+                    <div class="max-w-lg mx-auto">
+                        <!-- Abilities Grid -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                            <template x-for="ability in availableAbilities" :key="ability.slug">
+                                <div @click="toggleAbility(ability.slug)"
+                                     :class="{
+                                         'border-brand-teal bg-brand-teal/10': stepData.abilities[ability.slug],
+                                         'border-dark-border hover:border-white/20': !stepData.abilities[ability.slug]
+                                     }"
+                                     class="p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 bg-dark-elevated/50">
+                                    <div class="flex items-start gap-3">
+                                        <!-- Icon -->
+                                        <div :class="stepData.abilities[ability.slug] ? 'bg-brand-teal/20' : 'bg-dark-elevated'"
+                                             class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors">
+                                            <img :src="ability.icon_url || '/static/images/ability-default.png'"
+                                                 :alt="ability.name"
+                                                 class="w-6 h-6"
+                                                 onerror="this.src='/static/images/ability-default.png'">
+                                        </div>
+                                        <!-- Content -->
+                                        <div class="flex-1 min-w-0">
+                                            <div class="flex items-center gap-2 mb-1">
+                                                <h4 class="font-medium text-dark-text text-sm" x-text="ability.name"></h4>
+                                                <span x-show="ability.requires_api_key"
+                                                      class="text-xs px-1.5 py-0.5 rounded-full bg-brand-orange/20 text-brand-orange">
+                                                    API Key
+                                                </span>
+                                            </div>
+                                            <p class="text-xs text-dark-text-secondary line-clamp-2" x-text="ability.description"></p>
+                                        </div>
+                                        <!-- Toggle -->
+                                        <div class="flex-shrink-0">
+                                            <div :class="stepData.abilities[ability.slug] ? 'bg-brand-teal' : 'bg-dark-border'"
+                                                 class="w-10 h-6 rounded-full relative transition-colors">
+                                                <div :class="stepData.abilities[ability.slug] ? 'translate-x-4' : 'translate-x-0'"
+                                                     class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- Info callout about API keys -->
+                        <div x-show="Object.entries(stepData.abilities).some(([slug, enabled]) =>
+                                     enabled && availableAbilities.find(a => a.slug === slug)?.requires_api_key)"
+                             x-transition
+                             class="flex items-start gap-3 p-4 bg-brand-orange/10 border border-brand-orange/20 rounded-xl mb-4">
+                            <svg class="w-5 h-5 text-brand-orange flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="text-sm">
+                                <p class="text-brand-orange font-medium">Some abilities require API keys</p>
+                                <p class="text-dark-text-secondary mt-1">
+                                    You'll configure these in the API Keys step.
+                                </p>
+                            </div>
+                        </div>
+
+                        <p class="text-center text-dark-text-secondary text-sm">
+                            You can change abilities anytime from your sidekick's settings
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Step 6: Knowledge Base -->
+                <div x-show="currentStep === 6" x-cloak class="step-content">
+                    <div class="text-center mb-8">
+                        <h3 class="text-2xl font-bold text-dark-text mb-2">Give your sidekick knowledge</h3>
+                        <p class="text-dark-text-secondary">Upload documents or add websites for your sidekick to learn from</p>
+                    </div>
+                    <div class="max-w-lg mx-auto">
+                        <!-- File Upload -->
+                        <div class="drop-zone mb-4"
+                             :class="{ 'uploading': uploadingFiles }"
+                             @dragover.prevent="$el.classList.add('dragover')"
+                             @dragleave="$el.classList.remove('dragover')"
+                             @drop.prevent="handleFileDrop($event)"
+                             @click="!uploadingFiles && $refs.fileInput.click()">
+                            <input type="file" x-ref="fileInput" @change="handleFileSelect($event)"
+                                   accept=".pdf,.doc,.docx,.txt,.md,.srt" class="hidden" multiple>
+                            <!-- Normal state -->
+                            <template x-if="!uploadingFiles">
+                                <div>
+                                    <svg class="w-12 h-12 mx-auto mb-3 text-dark-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                                    </svg>
+                                    <p class="text-dark-text mb-1">Drop files here or click to upload</p>
+                                    <p class="text-xs text-dark-text-secondary">PDF, DOC, DOCX, TXT, MD (max 100MB)</p>
+                                </div>
+                            </template>
+                            <!-- Uploading state -->
+                            <template x-if="uploadingFiles">
+                                <div class="flex flex-col items-center">
+                                    <svg class="w-12 h-12 mb-3 text-brand-teal animate-spin" fill="none" viewBox="0 0 24 24">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    <p class="text-brand-teal font-medium" x-text="uploadProgress || 'Uploading...'"></p>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- Website URL -->
+                        <div class="flex gap-2 mb-4">
+                            <input type="url"
+                                   x-model="websiteUrl"
+                                   class="wizard-input flex-1 text-base"
+                                   placeholder="https://example.com/docs">
+                            <button @click="addWebsite()"
+                                    :disabled="!websiteUrl || addingWebsite"
+                                    class="btn-wizard-secondary whitespace-nowrap">
+                                Add Site
+                            </button>
+                        </div>
+
+                        <!-- Pending Documents List -->
+                        <div x-show="pendingDocuments.length > 0" class="space-y-2 max-h-40 overflow-y-auto">
+                            <template x-for="doc in pendingDocuments" :key="doc.id">
+                                <div class="flex items-center justify-between p-3 bg-dark-elevated rounded-lg border border-dark-border">
+                                    <div class="flex items-center gap-3">
+                                        <svg x-show="doc.source_type === 'file'" class="w-5 h-5 text-dark-text-secondary" fill="currentColor" viewBox="0 0 24 24">
+                                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
+                                        </svg>
+                                        <svg x-show="doc.source_type === 'website'" class="w-5 h-5 text-dark-text-secondary" fill="currentColor" viewBox="0 0 24 24">
+                                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                                        </svg>
+                                        <span class="text-sm text-dark-text truncate max-w-[200px]" x-text="doc.source_name"></span>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <span :class="{
+                                            'status-uploading': doc.status === 'uploading',
+                                            'status-pending': doc.status === 'pending',
+                                            'status-processing': doc.status === 'processing',
+                                            'status-ready': doc.status === 'ready',
+                                            'status-error': doc.status === 'error'
+                                        }" class="status-badge" x-text="doc.status"></span>
+                                        <button @click="removeDocument(doc.id)" class="p-1 hover:bg-dark-border rounded">
+                                            <svg class="w-4 h-4 text-dark-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <p class="text-center text-dark-text-secondary text-sm mt-4">
+                            You can skip this step and add knowledge later from the sidekick settings.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Step 7: Configuration -->
+                <div x-show="currentStep === 7" x-cloak class="step-content">
+                    <div class="text-center mb-8">
+                        <h3 class="text-2xl font-bold text-dark-text mb-2">Choose your configuration</h3>
+                        <p class="text-dark-text-secondary">Use recommended settings or customize your providers</p>
+                    </div>
+                    <div class="max-w-lg mx-auto">
+                        <div class="grid grid-cols-2 gap-4">
+                            <button @click="stepData.config_mode = 'default'"
+                                    :class="{ 'border-brand-teal bg-brand-teal/10': stepData.config_mode === 'default' }"
+                                    class="p-6 rounded-xl border-2 border-dark-border hover:border-brand-teal/50 transition-all text-left">
+                                <div class="w-12 h-12 rounded-full bg-brand-teal/20 flex items-center justify-center mb-4">
+                                    <svg class="w-6 h-6 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                    </svg>
+                                </div>
+                                <h4 class="font-semibold text-dark-text mb-2">Recommended</h4>
+                                <p class="text-sm text-dark-text-secondary">Optimized settings for best performance and cost</p>
+                            </button>
+
+                            <button @click="stepData.config_mode = 'advanced'"
+                                    :class="{ 'border-brand-teal bg-brand-teal/10': stepData.config_mode === 'advanced' }"
+                                    class="p-6 rounded-xl border-2 border-dark-border hover:border-brand-teal/50 transition-all text-left">
+                                <div class="w-12 h-12 rounded-full bg-dark-elevated flex items-center justify-center mb-4">
+                                    <svg class="w-6 h-6 text-dark-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                    </svg>
+                                </div>
+                                <h4 class="font-semibold text-dark-text mb-2">Advanced</h4>
+                                <p class="text-sm text-dark-text-secondary">Customize STT, TTS, and LLM providers</p>
+                            </button>
+                        </div>
+
+                        <!-- Advanced Config (shown when advanced selected) -->
+                        <div x-show="stepData.config_mode === 'advanced'" x-collapse class="mt-6 space-y-5">
+                            <!-- LLM Provider -->
+                            <div class="provider-config-card">
+                                <div class="flex items-center justify-between mb-3">
+                                    <label class="text-sm font-medium text-dark-text">LLM Provider</label>
+                                </div>
+                                <select x-model="stepData.providers.llm"
+                                        @change="updateRequiredApiKey('llm')"
+                                        class="wizard-select w-full">
+                                    <option value="openai">OpenAI</option>
+                                    <option value="groq">Groq</option>
+                                    <option value="cerebras">Cerebras</option>
+                                    <option value="deepinfra">DeepInfra</option>
+                                </select>
+                                <!-- API Key field for LLM -->
+                                <div x-show="stepData.providers.llm" class="mt-3">
+                                    <input type="password"
+                                           x-model="stepData.api_keys[getApiKeyName(stepData.providers.llm)]"
+                                           class="wizard-input text-sm"
+                                           :placeholder="getApiKeyPlaceholder(stepData.providers.llm)">
+                                </div>
+                            </div>
+
+                            <!-- TTS Provider -->
+                            <div class="provider-config-card">
+                                <div class="flex items-center justify-between mb-3">
+                                    <label class="text-sm font-medium text-dark-text">TTS Provider (Voice)</label>
+                                </div>
+                                <select x-model="stepData.providers.tts"
+                                        @change="updateRequiredApiKey('tts')"
+                                        class="wizard-select w-full">
+                                    <option value="cartesia">Cartesia</option>
+                                    <option value="elevenlabs">ElevenLabs</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="deepgram">Deepgram</option>
+                                    <option value="speechify">Speechify</option>
+                                </select>
+                                <!-- API Key field for TTS (only if different from LLM) -->
+                                <div x-show="stepData.providers.tts && !isApiKeyShared('tts')" class="mt-3">
+                                    <input type="password"
+                                           x-model="stepData.api_keys[getApiKeyName(stepData.providers.tts)]"
+                                           class="wizard-input text-sm"
+                                           :placeholder="getApiKeyPlaceholder(stepData.providers.tts)">
+                                </div>
+                                <p x-show="isApiKeyShared('tts')" class="text-xs text-brand-teal mt-2">
+                                    Uses the same API key as LLM provider
+                                </p>
+                            </div>
+
+                            <!-- STT Provider -->
+                            <div class="provider-config-card">
+                                <div class="flex items-center justify-between mb-3">
+                                    <label class="text-sm font-medium text-dark-text">STT Provider (Speech-to-Text)</label>
+                                </div>
+                                <select x-model="stepData.providers.stt"
+                                        @change="updateRequiredApiKey('stt')"
+                                        class="wizard-select w-full">
+                                    <option value="deepgram">Deepgram</option>
+                                    <option value="openai">OpenAI (Whisper)</option>
+                                    <option value="groq">Groq (Whisper)</option>
+                                </select>
+                                <!-- API Key field for STT (only if different from others) -->
+                                <div x-show="stepData.providers.stt && !isApiKeyShared('stt')" class="mt-3">
+                                    <input type="password"
+                                           x-model="stepData.api_keys[getApiKeyName(stepData.providers.stt)]"
+                                           class="wizard-input text-sm"
+                                           :placeholder="getApiKeyPlaceholder(stepData.providers.stt)">
+                                </div>
+                                <p x-show="isApiKeyShared('stt')" class="text-xs text-brand-teal mt-2">
+                                    Uses the same API key as <span x-text="getSharedKeySource('stt')"></span>
+                                </p>
+                            </div>
+
+                            <!-- Embedding Provider -->
+                            <div class="provider-config-card">
+                                <div class="flex items-center justify-between mb-3">
+                                    <label class="text-sm font-medium text-dark-text">Embedding Provider</label>
+                                </div>
+                                <select x-model="stepData.providers.embedding"
+                                        @change="updateRequiredApiKey('embedding')"
+                                        class="wizard-select w-full">
+                                    <option value="local">Local (BGE-M3 On-Prem) - No API Key Required</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="siliconflow">SiliconFlow</option>
+                                    <option value="deepinfra">DeepInfra</option>
+                                    <option value="novita">Novita AI</option>
+                                </select>
+                                <!-- API Key field for Embedding (only if not local and different from others) -->
+                                <div x-show="stepData.providers.embedding && stepData.providers.embedding !== 'local' && !isApiKeyShared('embedding')" class="mt-3">
+                                    <input type="password"
+                                           x-model="stepData.api_keys[getApiKeyName(stepData.providers.embedding)]"
+                                           class="wizard-input text-sm"
+                                           :placeholder="getApiKeyPlaceholder(stepData.providers.embedding)">
+                                </div>
+                                <p x-show="stepData.providers.embedding === 'local'" class="text-xs text-green-400 mt-2">
+                                    No API key required - uses on-premise BGE-M3 model
+                                </p>
+                                <p x-show="stepData.providers.embedding !== 'local' && isApiKeyShared('embedding')" class="text-xs text-brand-teal mt-2">
+                                    Uses the same API key as <span x-text="getSharedKeySource('embedding')"></span>
+                                </p>
+                            </div>
+
+                            <p class="text-xs text-dark-text-secondary text-center mt-4">
+                                You can update these settings later in the sidekick configuration.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 8: API Keys (Only shown for Recommended mode) -->
+                <div x-show="currentStep === 8" x-cloak class="step-content">
+                    <div class="text-center mb-8">
+                        <h3 class="text-2xl font-bold text-dark-text mb-2">Enter your API keys</h3>
+                        <p class="text-dark-text-secondary">Required for your sidekick to work</p>
+                    </div>
+                    <div class="max-w-lg mx-auto space-y-4">
+                        <p class="text-sm text-dark-text-secondary text-center mb-6">
+                            The recommended configuration uses OpenAI for LLM & STT, and Cartesia for TTS.
+                        </p>
+                        <div>
+                            <label class="block text-sm font-medium text-dark-text mb-2">OpenAI API Key</label>
+                            <input type="password"
+                                   x-model="stepData.api_keys.openai"
+                                   class="wizard-input text-base"
+                                   placeholder="sk-...">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-dark-text mb-2">Cartesia API Key</label>
+                            <input type="password"
+                                   x-model="stepData.api_keys.cartesia"
+                                   class="wizard-input text-base"
+                                   placeholder="your-cartesia-key">
+                        </div>
+                        <p class="text-sm text-dark-text-secondary text-center">
+                            You can update these keys later in the settings.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Step 9: Launch -->
+                <div x-show="currentStep === 9" x-cloak class="step-content">
+                    <div class="text-center mb-8">
+                        <h3 class="text-2xl font-bold text-dark-text mb-2">Ready to launch!</h3>
+                        <p class="text-dark-text-secondary">Review your sidekick and create it</p>
+                    </div>
+                    <div class="max-w-lg mx-auto">
+                        <div class="bg-dark-elevated rounded-xl p-6 border border-dark-border">
+                            <div class="flex items-center gap-4 mb-6">
+                                <div class="w-16 h-16 rounded-full bg-dark-border flex items-center justify-center overflow-hidden">
+                                    <img x-show="stepData.avatar_url" :src="stepData.avatar_url" class="w-full h-full object-cover">
+                                    <svg x-show="!stepData.avatar_url" class="w-8 h-8 text-dark-text-secondary" fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <h4 class="text-xl font-semibold text-dark-text" x-text="stepData.name || 'Your Sidekick'"></h4>
+                                    <p class="text-sm text-dark-text-secondary" x-text="'/' + (stepData.slug || 'your-sidekick')"></p>
+                                </div>
+                            </div>
+
+                            <div class="space-y-3 text-sm">
+                                <div class="flex justify-between">
+                                    <span class="text-dark-text-secondary">Personality:</span>
+                                    <span class="text-dark-text truncate max-w-[200px]" x-text="stepData.personality_description?.substring(0, 50) + '...' || 'Not set'"></span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-dark-text-secondary">Voice:</span>
+                                    <span class="text-dark-text" x-text="availableVoices.find(v => v.id === stepData.voice_id)?.name || 'Not selected'"></span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-dark-text-secondary">Knowledge:</span>
+                                    <span class="text-dark-text" x-text="pendingDocuments.filter(d => d.status === 'ready').length + ' documents'"></span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-dark-text-secondary">Configuration:</span>
+                                    <span class="text-dark-text capitalize" x-text="stepData.config_mode"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer Navigation -->
+            <div class="flex items-center justify-between px-6 py-4 border-t border-dark-border bg-dark-surface">
+                <!-- Left: Back button -->
+                <button x-show="currentStep > 1"
+                        @click="prevStep()"
+                        class="btn-wizard-secondary flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                    </svg>
+                    Back
+                </button>
+                <div x-show="currentStep === 1" class="w-20"></div>
+
+                <!-- Center: Voice Controls -->
+                <div class="flex items-center gap-3">
+                    <!-- LiveKit Agent Status (when in agent mode) -->
+                    <div x-show="livekitMode" class="flex items-center gap-2">
+                        <div :class="{ 'bg-green-500': livekitConnected, 'bg-yellow-500 animate-pulse': livekitConnecting, 'bg-red-500': !livekitConnected && !livekitConnecting }"
+                             class="w-3 h-3 rounded-full"></div>
+                        <span class="text-sm" :class="{ 'text-green-400': livekitConnected, 'text-yellow-400': livekitConnecting, 'text-red-400': !livekitConnected && !livekitConnecting }">
+                            <span x-show="livekitConnected" x-text="'Talking with ' + agentGuideName"></span>
+                            <span x-show="livekitConnecting">Connecting...</span>
+                            <span x-show="!livekitConnected && !livekitConnecting">Disconnected</span>
+                        </span>
+                        <button x-show="livekitConnected" @click="disconnectLiveKit()"
+                                class="text-xs text-dark-text-secondary hover:text-red-400 transition-colors ml-2"
+                                title="End voice session">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- Simple TTS Controls (when not in agent mode) -->
+                    <template x-if="!livekitMode">
+                        <div class="flex items-center gap-3">
+                            <!-- TTS Toggle -->
+                            <button @click="toggleTTS()"
+                                    :class="{ 'active': ttsEnabled, 'playing': ttsPlaying }"
+                                    class="voice-control-btn"
+                                    title="Toggle Voice Prompts">
+                                <svg x-show="ttsEnabled && !ttsPlaying" class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                                </svg>
+                                <svg x-show="ttsPlaying" class="w-5 h-5 animate-pulse" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                                </svg>
+                                <svg x-show="!ttsEnabled" class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+                                </svg>
+                            </button>
+
+                            <!-- Mic Toggle -->
+                            <button x-show="voiceInputSupported && currentStep <= 2"
+                                    @click="micEnabled ? toggleVoiceInput() : toggleMic()"
+                                    :class="{ 'active': micEnabled, 'listening': isListening }"
+                                    class="voice-control-btn mic-btn"
+                                    title="Voice Input">
+                                <svg x-show="micEnabled && !isListening" class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
+                                </svg>
+                                <svg x-show="isListening" class="w-5 h-5 animate-pulse" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
+                                </svg>
+                                <svg x-show="!micEnabled" class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/>
+                                </svg>
+                            </button>
+
+                            <!-- Voice transcript display -->
+                            <span x-show="voiceTranscript && isListening"
+                                  x-text="voiceTranscript"
+                                  class="text-sm text-brand-teal italic max-w-[150px] truncate"></span>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Right: Continue button -->
+                <button @click="nextStep()"
+                        :disabled="!canAdvance || launching"
+                        class="btn-wizard-primary flex items-center gap-2">
+                    <span x-show="!launching" x-text="currentStep === totalSteps ? 'Create Sidekick' : 'Continue'"></span>
+                    <span x-show="launching" class="flex items-center gap-2">
+                        <svg class="w-5 h-5 spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke-width="4"></circle>
+                            <path class="opacity-75" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                        Creating...
+                    </span>
+                    <svg x-show="currentStep !== totalSteps && !launching" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Avatar Lightbox Modal -->
+    <div x-show="lightboxOpen"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         @click="closeAvatarLightbox()"
+         @keydown.escape.window="closeAvatarLightbox()"
+         class="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-sm cursor-zoom-out">
+        <!-- Close button -->
+        <button @click.stop="closeAvatarLightbox()"
+                class="absolute top-4 right-4 text-white/70 hover:text-white transition-colors p-2 rounded-lg hover:bg-white/10">
+            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+        </button>
+
+        <!-- Image container -->
+        <div @click.stop class="max-w-[90vw] max-h-[90vh] cursor-default">
+            <template x-if="lightboxImage">
+                <div class="text-center">
+                    <img :src="lightboxImage.image_url"
+                         :alt="lightboxImage.prompt || 'Avatar'"
+                         class="max-w-full max-h-[80vh] rounded-xl shadow-2xl">
+                    <!-- Prompt caption -->
+                    <p x-show="lightboxImage.prompt"
+                       x-text="lightboxImage.prompt"
+                       class="mt-4 text-white/70 text-sm max-w-lg mx-auto"></p>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Wizard Modal Styles */
+    [x-cloak] { display: none !important; }
+
+    .wizard-input {
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+        font-size: 1.5rem;
+        padding: 0.75rem 0;
+        width: 100%;
+        color: #e0e0e0;
+        transition: border-color 0.3s ease;
+    }
+    .wizard-input:focus {
+        outline: none;
+        border-bottom-color: #01a4a6;
+    }
+    .wizard-input::placeholder {
+        color: rgba(255, 255, 255, 0.3);
+    }
+
+    .wizard-textarea {
+        background: rgba(32, 32, 32, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 1rem;
+        width: 100%;
+        color: #e0e0e0;
+        resize: none;
+        transition: border-color 0.3s ease;
+    }
+    .wizard-textarea:focus {
+        outline: none;
+        border-color: #01a4a6;
+    }
+
+    .btn-wizard-primary {
+        background: linear-gradient(135deg, #01a4a6 0%, #018789 100%);
+        color: white;
+        padding: 0.75rem 1.5rem;
+        border-radius: 10px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        border: none;
+    }
+    .btn-wizard-primary:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(1, 164, 166, 0.3);
+    }
+    .btn-wizard-primary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .btn-wizard-secondary {
+        background: rgba(255, 255, 255, 0.1);
+        color: #e0e0e0;
+        padding: 0.75rem 1.5rem;
+        border-radius: 10px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .btn-wizard-secondary:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.15);
+    }
+
+    .voice-card {
+        background: rgba(32, 32, 32, 0.5);
+        border: 2px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 1rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+    }
+    .voice-card:hover {
+        border-color: rgba(1, 164, 166, 0.5);
+    }
+    .voice-card.selected {
+        border-color: #01a4a6;
+        background: rgba(1, 164, 166, 0.1);
+    }
+
+    .avatar-card {
+        aspect-ratio: 1;
+        border-radius: 12px;
+        overflow: hidden;
+        border: 3px solid transparent;
+        transition: all 0.3s ease;
+        cursor: pointer;
+    }
+    .avatar-card:hover {
+        border-color: rgba(1, 164, 166, 0.5);
+    }
+    .avatar-card.selected {
+        border-color: #01a4a6;
+        box-shadow: 0 0 20px rgba(1, 164, 166, 0.3);
+    }
+
+    .drop-zone {
+        border: 2px dashed rgba(255, 255, 255, 0.2);
+        border-radius: 16px;
+        padding: 2rem;
+        text-align: center;
+        transition: all 0.3s ease;
+        cursor: pointer;
+    }
+    .drop-zone:hover, .drop-zone.dragover {
+        border-color: #01a4a6;
+        background: rgba(1, 164, 166, 0.1);
+    }
+    .drop-zone.uploading {
+        border-color: #01a4a6;
+        background: rgba(1, 164, 166, 0.15);
+        cursor: wait;
+    }
+
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        text-transform: capitalize;
+    }
+    .status-uploading { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
+    .status-pending { background: rgba(252, 114, 68, 0.2); color: #fc7244; }
+    .status-processing { background: rgba(1, 164, 166, 0.2); color: #01a4a6; }
+    .status-ready { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+    .status-error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+    .provider-config-card {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 1rem;
+    }
+
+    .wizard-select {
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 0.625rem 0.875rem;
+        color: #f5f5f5;
+        font-size: 0.875rem;
+        transition: all 0.2s ease;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%23999' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.75rem center;
+        padding-right: 2.5rem;
+        cursor: pointer;
+    }
+    .wizard-select:focus {
+        outline: none;
+        border-color: #01a4a6;
+        box-shadow: 0 0 0 2px rgba(1, 164, 166, 0.2);
+    }
+    .wizard-select option {
+        background: #1a1a1a;
+        color: #f5f5f5;
+        padding: 0.5rem;
+    }
+
+    .voice-control-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: rgba(255, 255, 255, 0.5);
+    }
+    .voice-control-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.8);
+    }
+    .voice-control-btn.active {
+        color: #01a4a6;
+        border-color: rgba(1, 164, 166, 0.3);
+    }
+    .voice-control-btn.active:hover {
+        background: rgba(1, 164, 166, 0.1);
+    }
+    .voice-control-btn.playing,
+    .voice-control-btn.listening {
+        background: rgba(1, 164, 166, 0.2);
+        border-color: #01a4a6;
+        color: #01a4a6;
+        animation: pulse 1.5s infinite;
+    }
+    .mic-btn.listening {
+        box-shadow: 0 0 15px rgba(1, 164, 166, 0.5);
+    }
+
+    .spinner {
+        animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+    @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+    }
+
+    input[type="range"] {
+        -webkit-appearance: none;
+        width: 100%;
+        height: 6px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.2);
+    }
+    input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #01a4a6;
+        cursor: pointer;
+    }
+</style>
+
+<script>
+    // Close modal function
+    function closeWizardModal() {
+        // Clean up the Enter key handler if it exists
+        if (window._wizardEnterKeyHandler) {
+            document.removeEventListener('keydown', window._wizardEnterKeyHandler);
+            window._wizardEnterKeyHandler = null;
+        }
+        document.getElementById('modal-container').innerHTML = '';
+    }
+
+    // Helper to get cookie by name
+    function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+        return null;
+    }
+
+    // Get auth token - try cookie first, then localStorage
+    function getAuthToken() {
+        return getCookie('admin_token') || localStorage.getItem('admin_token');
+    }
+
+    // Refresh the Supabase auth token and update the cookie/localStorage
+    async function refreshAuthToken() {
+        try {
+            const client = window._adminSupabase || window.__adminSupabaseClient;
+            if (!client) {
+                console.warn('[auth] No Supabase client available for token refresh');
+                return null;
+            }
+            const { data, error } = await client.auth.refreshSession();
+            if (error) {
+                console.error('[auth] Token refresh failed:', error.message);
+                return null;
+            }
+            if (data?.session?.access_token) {
+                const token = data.session.access_token;
+                localStorage.setItem('admin_token', token);
+                const securePart = window.location.protocol === 'https:' ? '; Secure' : '';
+                document.cookie = `admin_token=${token}; path=/; max-age=28800${securePart}; SameSite=Lax`;
+                console.log('[auth] Token refreshed successfully');
+                return token;
+            }
+        } catch (e) {
+            console.error('[auth] Token refresh error:', e);
+        }
+        return null;
+    }
+
+    // Ensure we have a valid token, refreshing if needed
+    async function ensureValidToken() {
+        let token = getAuthToken();
+        if (!token) return null;
+        // Try a lightweight check — decode JWT expiry
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            const expiresAt = payload.exp * 1000;
+            const now = Date.now();
+            // Refresh if token expires within 5 minutes
+            if (expiresAt - now < 5 * 60 * 1000) {
+                console.log('[auth] Token expiring soon, refreshing...');
+                const newToken = await refreshAuthToken();
+                if (newToken) return newToken;
+            }
+        } catch (e) {
+            // Can't decode, try refresh anyway
+            const newToken = await refreshAuthToken();
+            if (newToken) return newToken;
+        }
+        return token;
+    }
+
+    // Force refresh the token (used after a 401 response)
+    async function forceRefreshToken() {
+        console.log('[auth] Force-refreshing token after 401...');
+        const newToken = await refreshAuthToken();
+        if (newToken) return newToken;
+        // If Supabase refresh failed, try getSession from base.html's refreshAdminToken
+        if (typeof refreshAdminToken === 'function') {
+            const fallback = await refreshAdminToken();
+            if (fallback) return fallback;
+        }
+        return null;
+    }
+
+    // Authenticated fetch with automatic retry on 401
+    async function authFetch(url, options = {}) {
+        let token = await ensureValidToken();
+        if (!token) throw new Error('No auth token available');
+
+        const headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
+        let response = await fetch(url, { ...options, headers });
+
+        if (response.status === 401) {
+            console.warn('[auth] Got 401, attempting token refresh and retry...');
+            const newToken = await forceRefreshToken();
+            if (newToken) {
+                headers['Authorization'] = `Bearer ${newToken}`;
+                response = await fetch(url, { ...options, headers });
+                if (response.status === 401) {
+                    console.error('[auth] Still 401 after refresh — session expired');
+                    alert('Your session has expired. Please close this wizard and log in again.');
+                }
+            } else {
+                console.error('[auth] Token refresh failed — session expired');
+                alert('Your session has expired. Please close this wizard and log in again.');
+            }
+        }
+        return response;
+    }
+
+    // Wizard Controller
+    function wizardController() {
+        return {
+            // State
+            sessionId: null,
+            currentStep: 1,
+            totalSteps: 9,
+            showTraits: false,
+
+            // TTS/Voice state
+            ttsEnabled: true,
+            ttsPlaying: false,
+            ttsAudio: null,
+            micEnabled: true,
+            voiceEnabled: false, // User must click to enable voice (browser autoplay policy)
+            _lastTTSStep: null, // Lock to prevent duplicate plays
+            _ttsLock: false, // Mutex lock for TTS
+
+            stepData: {
+                name: '',
+                slug: '',
+                personality_description: '',
+                personality_traits: {
+                    openness: 50,
+                    conscientiousness: 50,
+                    extraversion: 50,
+                    agreeableness: 50,
+                    neuroticism: 50
+                },
+                voice_id: '',
+                voice_provider: 'cartesia',
+                voice_is_cloned: false,
+                avatar_url: '',
+                abilities: {
+                    web_search: true,      // Pre-selected
+                    usersense: true,       // Pre-selected
+                    documentsense: false,
+                    content_catalyst: false
+                },
+                config_mode: 'default',
+                providers: {
+                    llm: 'openai',
+                    tts: 'cartesia',
+                    stt: 'deepgram',
+                    embedding: 'local'
+                },
+                advanced_config: {},
+                api_keys: {
+                    openai: '',
+                    cartesia: '',
+                    deepgram: '',
+                    elevenlabs: '',
+                    groq: '',
+                    cerebras: '',
+                    deepinfra: '',
+                    speechify: '',
+                    siliconflow: '',
+                    novita: ''
+                }
+            },
+
+            // Voice input
+            voiceInputSupported: false,
+            isListening: false,
+            voiceTranscript: '',
+            recognition: null,
+
+            // Voices
+            availableVoices: [],
+            playingVoiceId: null,
+
+            // Voice Cloning
+            voiceCloneText: '',
+            isRecordingVoice: false,
+            recordingDuration: 0,
+            recordingInterval: null,
+            mediaRecorder: null,
+            recordedVoiceBlob: null,
+            uploadedVoiceFile: null,
+            voiceCloningInProgress: false,
+            voiceCloneError: null,
+            voiceCloneSource: null,  // 'recording' or 'upload'
+            clonedVoice: null,
+
+            // Avatars
+            avatarHistory: [],
+            generatingAvatar: false,
+            uploadingAvatar: false,
+            avatarPrompt: '',
+
+            // Abilities
+            availableAbilities: [],
+
+            // Avatar Lightbox
+            lightboxOpen: false,
+            lightboxImage: null,
+
+            // Knowledge
+            pendingDocuments: [],
+            knowledgePolling: null,
+            websiteUrl: '',
+            addingWebsite: false,
+            uploadingFiles: false,
+            uploadProgress: '',
+
+            // LiveKit Agent-Guided Mode
+            livekitMode: false,  // true = agent-guided, false = simple TTS
+            livekitConnecting: false,
+            livekitConnected: false,
+            livekitRoom: null,
+            livekitToken: null,
+            livekitWsUrl: null,
+            agentGuideName: 'Farah',
+
+            // Session state
+            sessionReady: false,
+            sessionError: null,
+
+            // Completion
+            launching: false,
+
+            // Computed
+            get canAdvance() {
+                switch (this.currentStep) {
+                    case 1: return (this.stepData.name || '').trim().length > 0;
+                    case 2: return (this.stepData.personality_description || '').trim().length > 0;
+                    case 3: return this.stepData.voice_id !== '';
+                    case 4: return true;  // Avatar (optional)
+                    case 5: return true;  // Abilities (always can advance)
+                    case 6: return true;  // Knowledge (optional)
+                    case 7: return true;  // Config
+                    case 8: return true;  // API Keys
+                    case 9: return true;  // Launch
+                    default: return true;
+                }
+            },
+
+            // Track if init has run to prevent double initialization
+            _initialized: false,
+
+            // Methods
+            async init() {
+                // Prevent double initialization (can happen with Alpine + HTMX)
+                if (this._initialized) {
+                    console.log('Wizard init already completed, skipping duplicate init');
+                    return;
+                }
+                this._initialized = true;
+
+                console.log('Wizard init started');
+
+                // Refresh auth token immediately and then every 10 minutes
+                ensureValidToken();
+                this._tokenRefreshInterval = setInterval(() => ensureValidToken(), 10 * 60 * 1000);
+
+                this.voiceInputSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+                console.log('Voice input supported:', this.voiceInputSupported);
+                if (this.voiceInputSupported) {
+                    this.initVoiceInput();
+                    console.log('Voice input initialized, recognition:', !!this.recognition);
+                }
+                await this.loadVoices();
+                await this.loadVoiceCloneText();
+                await this.initSession();
+
+                // Watch for step changes to play TTS (only when voice is enabled and NOT in LiveKit mode)
+                // When livekitMode is active, the agent handles audio - don't play TTS
+                this.$watch('currentStep', (newStep, oldStep) => {
+                    if (this.voiceEnabled && this.ttsEnabled && !this.livekitMode && newStep !== oldStep) {
+                        this.playStepTTS(newStep);
+                    }
+                });
+
+                // Add document-level Enter key listener (more reliable than Alpine's @keydown.window with HTMX)
+                // Store on window so closeWizardModal can clean it up
+                window._wizardEnterKeyHandler = (event) => {
+                    if (event.key === 'Enter') {
+                        this.handleEnterKey(event);
+                    }
+                };
+                document.addEventListener('keydown', window._wizardEnterKeyHandler);
+                console.log('Wizard init complete, Enter key handler attached');
+            },
+
+            // Enable voice mode - called when user clicks the enable button
+            async enableVoice() {
+                console.log('enableVoice called, voiceInputSupported:', this.voiceInputSupported, 'currentStep:', this.currentStep);
+                this.voiceEnabled = true;
+
+                // Request mic permission
+                if (this.voiceInputSupported && this.currentStep <= 2) {
+                    console.log('Requesting mic permission...');
+                    await this.requestMicPermission();
+                    console.log('Mic permission request complete, micEnabled:', this.micEnabled);
+                } else {
+                    console.log('Skipping mic permission request - voiceInputSupported:', this.voiceInputSupported, 'currentStep:', this.currentStep);
+                }
+
+                // Play TTS for current step
+                if (this.ttsEnabled) {
+                    this.playStepTTS(this.currentStep);
+                }
+            },
+
+            async requestMicPermission() {
+                try {
+                    // Request microphone permission
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    // Stop the stream immediately - we just wanted the permission
+                    stream.getTracks().forEach(track => track.stop());
+                    console.log('Microphone permission granted');
+                } catch (e) {
+                    console.log('Microphone permission denied or unavailable:', e);
+                    this.micEnabled = false;
+                }
+            },
+
+            // TTS Methods
+            async playStepTTS(step) {
+                // Multiple guards to prevent duplicate plays
+                if (!this.ttsEnabled || !this.voiceEnabled) return;
+                if (this._ttsLock) {
+                    console.log('TTS locked, skipping duplicate play request');
+                    return;
+                }
+                if (this._lastTTSStep === step && this.ttsPlaying) {
+                    console.log('TTS already playing for this step, skipping');
+                    return;
+                }
+
+                // Acquire lock
+                this._ttsLock = true;
+                this._lastTTSStep = step;
+
+                // Stop any current TTS
+                this.stopTTS();
+
+                this.ttsPlaying = true;
+                console.log(`Playing TTS for step ${step}`);
+
+                // Try cached static file first
+                const staticUrl = `/static/audio/wizard/step_${step}.mp3`;
+
+                try {
+                    // Fetch the audio to check if it exists
+                    const response = await authFetch(staticUrl, { method: 'HEAD' });
+
+                    if (response.ok) {
+                        // Static file exists, use it
+                        this.ttsAudio = new Audio(staticUrl);
+                    } else {
+                        // Fallback to API
+                        console.log(`Cached audio not found for step ${step}, using API`);
+                        const apiResponse = await authFetch(`/api/v1/wizard/tts/step/${step}`, { method: 'POST' });
+                        if (!apiResponse.ok) throw new Error('API failed');
+                        const audioBlob = await apiResponse.blob();
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        this.ttsAudio = new Audio(audioUrl);
+                        this.ttsAudio.onended = () => URL.revokeObjectURL(audioUrl);
+                    }
+
+                    this.ttsAudio.onended = () => {
+                        this.ttsPlaying = false;
+                        this._ttsLock = false; // Release lock when audio ends
+                        console.log('TTS ended for step', step);
+
+                        // Log all condition values for debugging
+                        console.log('Auto-start conditions:', {
+                            voiceInputSupported: this.voiceInputSupported,
+                            micEnabled: this.micEnabled,
+                            step: step,
+                            isListening: this.isListening,
+                            recognition: !!this.recognition
+                        });
+
+                        // Auto-start listening after TTS for voice-enabled steps
+                        // Small delay to ensure audio system is ready
+                        if (this.voiceInputSupported && this.micEnabled && step <= 2 && !this.isListening) {
+                            console.log('Will auto-start voice input after 500ms delay');
+                            setTimeout(() => {
+                                if (!this.isListening) {
+                                    console.log('Auto-starting voice input after TTS');
+                                    this.toggleVoiceInput();
+                                }
+                            }, 500);
+                        } else {
+                            console.log('Auto-start skipped - condition not met');
+                        }
+                    };
+
+                    this.ttsAudio.onerror = () => {
+                        this.ttsPlaying = false;
+                        this._ttsLock = false; // Release lock on error
+                    };
+
+                    await this.ttsAudio.play();
+                } catch (e) {
+                    console.error('TTS playback error:', e);
+                    this.ttsPlaying = false;
+                    this._ttsLock = false; // Release lock on error
+                }
+            },
+
+            stopTTS() {
+                if (this.ttsAudio) {
+                    this.ttsAudio.pause();
+                    this.ttsAudio.currentTime = 0;
+                    this.ttsAudio = null;
+                }
+                this.ttsPlaying = false;
+                // Don't release lock here - let the new play acquire it
+            },
+
+            toggleTTS() {
+                this.ttsEnabled = !this.ttsEnabled;
+                if (!this.ttsEnabled) {
+                    this.stopTTS();
+                }
+            },
+
+            toggleMic() {
+                this.micEnabled = !this.micEnabled;
+                if (!this.micEnabled && this.isListening) {
+                    this.recognition.stop();
+                }
+            },
+
+            async initSession() {
+                console.log('initSession: starting...');
+                try {
+                    const token = await ensureValidToken();
+                    console.log('initSession: token found:', !!token, 'length:', token?.length || 0);
+                    if (!token) {
+                        console.error('initSession: No auth token found in cookie or localStorage');
+                        this.sessionError = 'Not authenticated - please log in again';
+                        return;
+                    }
+
+                    const response = await authFetch('/api/v1/wizard/sessions', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    console.log('initSession: response status', response.status);
+
+                    if (response.ok) {
+                        const session = await response.json();
+                        this.sessionId = session.id;
+                        this.currentStep = session.current_step;
+                        if (session.step_data) {
+                            Object.assign(this.stepData, session.step_data);
+                            // Ensure critical string fields are never null/undefined after restore
+                            if (!this.stepData.name) this.stepData.name = '';
+                            if (!this.stepData.personality_description) this.stepData.personality_description = '';
+                            if (!this.stepData.voice_id && this.stepData.voice_id !== '') this.stepData.voice_id = '';
+                        }
+                        this.sessionReady = true;
+                        console.log('initSession: session created', this.sessionId);
+                    } else {
+                        const errorText = await response.text();
+                        console.error('initSession: API error', response.status, errorText);
+                        this.sessionError = `Session creation failed: ${response.status}`;
+                    }
+                } catch (e) {
+                    console.error('initSession: exception', e);
+                    this.sessionError = e.message;
+                }
+            },
+
+            async loadVoices() {
+                try {
+                    console.log('🎤 Loading voices...');
+                    const response = await authFetch('/api/v1/wizard/voices', {});
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.availableVoices = data.voices;
+                        console.log('🎤 Voices loaded:', this.availableVoices.length);
+                        if (this.availableVoices.length > 0) {
+                            console.log('🎤 First voice sample_url:', this.availableVoices[0].sample_url);
+                        }
+                    } else {
+                        console.error('🎤 Failed to load voices, status:', response.status);
+                    }
+                } catch (e) {
+                    console.error('🎤 Failed to load voices:', e);
+                }
+            },
+
+            async loadAvailableAbilities() {
+                try {
+                    console.log('⚡ Loading abilities...');
+                    const response = await authFetch('/api/v1/wizard/abilities', {});
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.availableAbilities = data.abilities;
+                        console.log('⚡ Abilities loaded:', this.availableAbilities.length);
+                    } else {
+                        console.error('⚡ Failed to load abilities, status:', response.status);
+                    }
+                } catch (e) {
+                    console.error('⚡ Failed to load abilities:', e);
+                }
+            },
+
+            toggleAbility(slug) {
+                this.stepData.abilities[slug] = !this.stepData.abilities[slug];
+                console.log(`⚡ Toggled ability ${slug}:`, this.stepData.abilities[slug]);
+            },
+
+            initVoiceInput() {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                this.recognition = new SpeechRecognition();
+                this.recognition.continuous = false;
+                this.recognition.interimResults = true;
+                this.recognition.lang = 'en-US';
+
+                this.recognition.onstart = () => {
+                    console.log('Speech recognition started');
+                    this.isListening = true;
+                };
+
+                this.recognition.onresult = (event) => {
+                    let transcript = '';
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        transcript += event.results[i][0].transcript;
+                    }
+                    this.voiceTranscript = transcript;
+                    console.log('Voice transcript:', transcript, 'isFinal:', event.results[event.results.length - 1].isFinal);
+
+                    if (event.results[event.results.length - 1].isFinal) {
+                        console.log('Final transcript received, calling handleVoiceInput');
+                        this.handleVoiceInput(transcript);
+                    }
+                };
+
+                this.recognition.onerror = (event) => {
+                    console.error('Speech recognition error:', event.error);
+                    this.isListening = false;
+                    // If it's a "not-allowed" error, disable mic
+                    if (event.error === 'not-allowed') {
+                        this.micEnabled = false;
+                    }
+                };
+
+                this.recognition.onend = () => {
+                    console.log('Speech recognition ended');
+                    this.isListening = false;
+                };
+            },
+
+            toggleVoiceInput() {
+                console.log('toggleVoiceInput called, isListening:', this.isListening);
+                if (this.isListening) {
+                    this.recognition.stop();
+                } else {
+                    this.voiceTranscript = '';
+                    try {
+                        this.recognition.start();
+                        console.log('Recognition.start() called');
+                    } catch (e) {
+                        console.error('Failed to start recognition:', e);
+                        // Recognition might already be running, try to stop and restart
+                        if (e.name === 'InvalidStateError') {
+                            this.recognition.stop();
+                            setTimeout(() => {
+                                this.recognition.start();
+                                console.log('Recognition restarted after InvalidStateError');
+                            }, 100);
+                        }
+                    }
+                }
+            },
+
+            handleVoiceInput(transcript) {
+                console.log('handleVoiceInput called with:', transcript, 'for step:', this.currentStep);
+                const cleanTranscript = transcript.trim();
+                if (!cleanTranscript) {
+                    console.log('Empty transcript, ignoring');
+                    return;
+                }
+
+                switch (this.currentStep) {
+                    case 1:
+                        console.log('Setting name to:', cleanTranscript);
+                        this.stepData.name = cleanTranscript;
+                        this.generateSlug();
+                        break;
+                    case 2:
+                        console.log('Setting personality to:', cleanTranscript);
+                        this.stepData.personality_description = cleanTranscript;
+                        break;
+                }
+                setTimeout(() => { this.voiceTranscript = ''; }, 2000);
+            },
+
+            generateSlug() {
+                let slug = this.stepData.name.toLowerCase();
+                slug = slug.replace(/[^a-z0-9\s-]/g, '');
+                slug = slug.replace(/[\s_]+/g, '-');
+                slug = slug.replace(/-+/g, '-');
+                slug = slug.replace(/^-|-$/g, '');
+                this.stepData.slug = slug || 'sidekick';
+            },
+
+            async randomizeName() {
+                try {
+                    const response = await authFetch('/api/v1/wizard/randomize/name', {});
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.stepData.name = data.name;
+                        this.stepData.slug = data.slug;
+                    }
+                } catch (e) {
+                    console.error('Failed to randomize name:', e);
+                }
+            },
+
+            async randomizePersonality() {
+                try {
+                    const response = await authFetch('/api/v1/wizard/randomize/personality', {});
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.stepData.personality_description = data.description;
+                        this.stepData.personality_traits = data.traits;
+                    }
+                } catch (e) {
+                    console.error('Failed to randomize personality:', e);
+                }
+            },
+
+            selectVoice(voice) {
+                this.stepData.voice_id = voice.id;
+                this.stepData.voice_provider = voice.provider || 'cartesia';
+                this.stepData.voice_is_cloned = voice.is_cloned || false;
+                // Clear cloned voice state when selecting a preset
+                if (!voice.is_cloned) {
+                    this.clonedVoice = null;
+                    this.voiceCloneSource = null;
+                }
+            },
+
+            // Voice Cloning Methods
+            async loadVoiceCloneText() {
+                try {
+                    const response = await authFetch('/api/v1/wizard/voice-clone-text', {});
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.voiceCloneText = data.text;
+                    }
+                } catch (e) {
+                    console.error('Failed to load voice clone text:', e);
+                    this.voiceCloneText = 'I am the voice of innovation, ready to guide and inspire. Together, we will achieve greatness.';
+                }
+            },
+
+            async toggleVoiceRecording() {
+                if (this.isRecordingVoice) {
+                    // Stop recording
+                    this.stopVoiceRecording();
+                } else {
+                    // Start recording
+                    await this.startVoiceRecording();
+                }
+            },
+
+            async startVoiceRecording() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                    const chunks = [];
+
+                    this.mediaRecorder.ondataavailable = (e) => {
+                        if (e.data.size > 0) chunks.push(e.data);
+                    };
+
+                    this.mediaRecorder.onstop = () => {
+                        this.recordedVoiceBlob = new Blob(chunks, { type: 'audio/webm' });
+                        stream.getTracks().forEach(track => track.stop());
+                    };
+
+                    this.mediaRecorder.start();
+                    this.isRecordingVoice = true;
+                    this.recordingDuration = 0;
+                    this.recordedVoiceBlob = null;
+                    this.voiceCloneError = null;
+
+                    // Update duration counter
+                    this.recordingInterval = setInterval(() => {
+                        this.recordingDuration++;
+                        // Auto-stop at 15 seconds
+                        if (this.recordingDuration >= 15) {
+                            this.stopVoiceRecording();
+                        }
+                    }, 1000);
+                } catch (e) {
+                    console.error('Failed to start recording:', e);
+                    this.voiceCloneError = 'Could not access microphone. Please check permissions.';
+                }
+            },
+
+            stopVoiceRecording() {
+                if (this.mediaRecorder && this.isRecordingVoice) {
+                    this.mediaRecorder.stop();
+                    this.isRecordingVoice = false;
+                    if (this.recordingInterval) {
+                        clearInterval(this.recordingInterval);
+                        this.recordingInterval = null;
+                    }
+                }
+            },
+
+            playRecordedVoice() {
+                if (this.recordedVoiceBlob) {
+                    const url = URL.createObjectURL(this.recordedVoiceBlob);
+                    const audio = new Audio(url);
+                    audio.onended = () => URL.revokeObjectURL(url);
+                    audio.play();
+                }
+            },
+
+            handleVoiceFileUpload(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    this.uploadedVoiceFile = file;
+                    this.voiceCloneError = null;
+                }
+            },
+
+            async submitVoiceClone(source) {
+                this.voiceCloningInProgress = true;
+                this.voiceCloneError = null;
+                this.voiceCloneSource = source;
+
+                try {
+                    const formData = new FormData();
+
+                    if (source === 'recording') {
+                        if (!this.recordedVoiceBlob) {
+                            throw new Error('No recording found. Please record your voice first.');
+                        }
+                        formData.append('audio', this.recordedVoiceBlob, 'recording.webm');
+                        formData.append('name', 'My Voice');
+                    } else if (source === 'upload') {
+                        if (!this.uploadedVoiceFile) {
+                            throw new Error('No file selected. Please choose an audio file.');
+                        }
+                        formData.append('audio', this.uploadedVoiceFile);
+                        formData.append('name', 'Uploaded Voice');
+                    }
+
+                    const response = await authFetch('/api/v1/wizard/clone-voice', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || 'Voice cloning failed');
+                    }
+
+                    const clonedVoice = await response.json();
+                    this.clonedVoice = clonedVoice;
+
+                    // Auto-select the cloned voice
+                    this.stepData.voice_id = clonedVoice.id;
+                    this.stepData.voice_provider = clonedVoice.provider;
+                    this.stepData.voice_is_cloned = true;
+
+                    console.log('Voice cloned successfully:', clonedVoice);
+                } catch (e) {
+                    console.error('Voice cloning error:', e);
+                    this.voiceCloneError = e.message;
+                } finally {
+                    this.voiceCloningInProgress = false;
+                }
+            },
+
+            voiceSampleLoading: false,
+
+            async playVoiceSample(voice) {
+                console.log('🔊 playVoiceSample called:', voice?.name, voice?.id);
+                console.log('🔊 voice.sample_url:', voice?.sample_url);
+
+                // Get or create audio element
+                let audioEl = this.$refs.voiceSampleAudio;
+                if (!audioEl) {
+                    console.log('🔊 Creating audio element');
+                    audioEl = document.createElement('audio');
+                    audioEl.id = 'voiceSampleAudio';
+                    document.body.appendChild(audioEl);
+                    this.$refs.voiceSampleAudio = audioEl;
+                }
+
+                // If same voice is playing, pause it
+                if (this.playingVoiceId === voice.id) {
+                    console.log('🔊 Pausing same voice');
+                    audioEl.pause();
+                    this.playingVoiceId = null;
+                    return;
+                }
+
+                // Stop any currently playing sample
+                if (this.playingVoiceId) {
+                    audioEl.pause();
+                }
+
+                if (!voice.sample_url) {
+                    console.error('🔊 Voice sample URL not found for:', voice?.name);
+                    return;
+                }
+
+                // Set loading state
+                this.playingVoiceId = voice.id;
+                this.voiceSampleLoading = true;
+                console.log('🔊 Fetching sample from:', voice.sample_url);
+
+                try {
+                    // Fetch with auth token
+                    const response = await authFetch(voice.sample_url, {});
+
+                    console.log('🔊 Fetch response:', response.status, response.statusText);
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.error('🔊 Response error body:', errorText);
+                        throw new Error(`Failed to load sample: ${response.status}`);
+                    }
+
+                    // Create blob URL from audio data
+                    const audioBlob = await response.blob();
+                    console.log('🔊 Audio blob size:', audioBlob.size, 'type:', audioBlob.type);
+
+                    // Ensure correct MIME type for WAV
+                    const wavBlob = new Blob([audioBlob], { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(wavBlob);
+                    console.log('🔊 Created blob URL:', audioUrl);
+
+                    // Set source and play
+                    audioEl.src = audioUrl;
+                    audioEl.volume = 1.0;  // Ensure volume is up
+
+                    audioEl.onloadeddata = () => {
+                        console.log('🔊 Audio loaded, duration:', audioEl.duration);
+                    };
+                    audioEl.onended = () => {
+                        console.log('🔊 Audio ended');
+                        this.playingVoiceId = null;
+                        URL.revokeObjectURL(audioUrl);
+                    };
+                    audioEl.onerror = (e) => {
+                        console.error('🔊 Audio playback error:', e, audioEl.error);
+                        this.playingVoiceId = null;
+                        URL.revokeObjectURL(audioUrl);
+                    };
+
+                    console.log('🔊 Starting playback...');
+                    await audioEl.play();
+                    console.log('🔊 Playback started successfully, currentTime:', audioEl.currentTime);
+                } catch (error) {
+                    console.error('🔊 Error playing voice sample:', error);
+                    this.playingVoiceId = null;
+                } finally {
+                    this.voiceSampleLoading = false;
+                }
+            },
+
+            async generateAvatar() {
+                if (this.generatingAvatar) return;
+                this.generatingAvatar = true;
+
+                try {
+                    const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/generate-avatar`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ prompt: this.avatarPrompt })
+                    });
+
+                    if (response.ok) {
+                        const avatar = await response.json();
+                        this.avatarHistory.unshift(avatar);
+                        this.stepData.avatar_url = avatar.image_url;
+                    }
+                } catch (e) {
+                    console.error('Failed to generate avatar:', e);
+                } finally {
+                    this.generatingAvatar = false;
+                }
+            },
+
+            async uploadAvatar(event) {
+                const file = event?.target?.files?.[0];
+                if (!file || this.uploadingAvatar || !this.sessionId) return;
+
+                this.uploadingAvatar = true;
+
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/upload-avatar`, {
+                        method: 'POST',
+                                                body: formData
+                    });
+
+                    if (response.ok) {
+                        const avatar = await response.json();
+                        this.avatarHistory.unshift(avatar);
+                        this.stepData.avatar_url = avatar.image_url;
+                    } else {
+                        const err = await response.json().catch(() => ({}));
+                        alert(err.detail || 'Failed to upload image. Please try again.');
+                    }
+                } catch (e) {
+                    console.error('Failed to upload avatar:', e);
+                    alert('Failed to upload image. Please try again.');
+                } finally {
+                    this.uploadingAvatar = false;
+                    if (this.$refs.avatarFileInput) this.$refs.avatarFileInput.value = '';
+                }
+            },
+
+            selectAvatarImage(avatar) {
+                this.stepData.avatar_url = avatar.image_url;
+            },
+
+            openAvatarLightbox(avatar) {
+                this.lightboxImage = avatar;
+                this.lightboxOpen = true;
+            },
+
+            closeAvatarLightbox() {
+                this.lightboxOpen = false;
+                this.lightboxImage = null;
+            },
+
+            handleFileDrop(event) {
+                event.target.classList.remove('dragover');
+                const files = event.dataTransfer.files;
+                this.uploadFiles(files);
+            },
+
+            handleFileSelect(event) {
+                const files = event.target.files;
+                this.uploadFiles(files);
+            },
+
+            async uploadFiles(files) {
+                if (!files || files.length === 0) return;
+
+                this.uploadingFiles = true;
+                const totalFiles = files.length;
+                let uploadedCount = 0;
+
+                for (const file of files) {
+                    // Generate a temporary ID for immediate feedback
+                    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+                    // Add to list immediately with "uploading" status
+                    this.pendingDocuments.push({
+                        id: tempId,
+                        source_type: 'file',
+                        source_name: file.name,
+                        status: 'uploading'
+                    });
+
+                    this.uploadProgress = `Uploading ${uploadedCount + 1} of ${totalFiles}...`;
+
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    try {
+                        const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/documents`, {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        if (response.ok) {
+                            const result = await response.json();
+                            // Replace temp entry with real one
+                            const idx = this.pendingDocuments.findIndex(d => d.id === tempId);
+                            if (idx !== -1) {
+                                this.pendingDocuments[idx] = {
+                                    id: result.pending_doc_id,
+                                    source_type: 'file',
+                                    source_name: file.name,
+                                    status: 'pending'
+                                };
+                            }
+                            this.startKnowledgePolling();
+                        } else {
+                            // Mark as error
+                            const idx = this.pendingDocuments.findIndex(d => d.id === tempId);
+                            if (idx !== -1) {
+                                this.pendingDocuments[idx].status = 'error';
+                                this.pendingDocuments[idx].error_message = `Upload failed (${response.status})`;
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to upload file:', e);
+                        // Mark as error
+                        const idx = this.pendingDocuments.findIndex(d => d.id === tempId);
+                        if (idx !== -1) {
+                            this.pendingDocuments[idx].status = 'error';
+                            this.pendingDocuments[idx].error_message = 'Upload failed';
+                        }
+                    }
+
+                    uploadedCount++;
+                }
+
+                this.uploadingFiles = false;
+                this.uploadProgress = '';
+            },
+
+            async addWebsite() {
+                if (!this.websiteUrl || this.addingWebsite) return;
+                this.addingWebsite = true;
+
+                try {
+                    const formData = new FormData();
+                    formData.append('url', this.websiteUrl);
+
+                    const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/websites`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        this.pendingDocuments.push({
+                            id: result.pending_doc_id,
+                            source_type: 'website',
+                            source_name: this.websiteUrl,
+                            status: 'pending'
+                        });
+                        this.websiteUrl = '';
+                        this.startKnowledgePolling();
+                    }
+                } catch (e) {
+                    console.error('Failed to add website:', e);
+                } finally {
+                    this.addingWebsite = false;
+                }
+            },
+
+            startKnowledgePolling() {
+                if (this.knowledgePolling) return;
+
+                this.knowledgePolling = setInterval(async () => {
+                    try {
+                        const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/knowledge-status`, {});
+
+                        if (response.ok) {
+                            const status = await response.json();
+
+                            // Update local document status
+                            for (const item of status.items) {
+                                const doc = this.pendingDocuments.find(d => d.id === item.id);
+                                if (doc) {
+                                    doc.status = item.status;
+                                }
+                            }
+
+                            // Stop polling if all complete
+                            if (status.all_complete) {
+                                clearInterval(this.knowledgePolling);
+                                this.knowledgePolling = null;
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to poll knowledge status:', e);
+                    }
+                }, 3000);
+            },
+
+            async removeDocument(docId) {
+                try {
+                    await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/documents/${docId}`, {
+                        method: 'DELETE',
+                    });
+
+                    this.pendingDocuments = this.pendingDocuments.filter(d => d.id !== docId);
+                } catch (e) {
+                    console.error('Failed to remove document:', e);
+                }
+            },
+
+            async saveStep() {
+                if (!this.sessionId) return;
+
+                try {
+                    await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/step/${this.currentStep}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            step_data: this.stepData,
+                            advance: false
+                        })
+                    });
+                } catch (e) {
+                    console.error('Failed to save step:', e);
+                }
+            },
+
+            handleEnterKey(event) {
+                console.log('Enter key pressed', {
+                    target: event.target.tagName,
+                    canAdvance: this.canAdvance,
+                    currentStep: this.currentStep,
+                    lightboxOpen: this.lightboxOpen,
+                    launching: this.launching
+                });
+
+                // Don't trigger if typing in a textarea
+                if (event.target.tagName === 'TEXTAREA') {
+                    console.log('Blocked: textarea');
+                    return;
+                }
+
+                // Don't trigger if in a select element
+                if (event.target.tagName === 'SELECT') {
+                    console.log('Blocked: select');
+                    return;
+                }
+
+                // Don't trigger if lightbox is open
+                if (this.lightboxOpen) {
+                    console.log('Blocked: lightbox open');
+                    return;
+                }
+
+                // Don't trigger if currently recording voice
+                if (this.isRecordingVoice) {
+                    console.log('Blocked: recording voice');
+                    return;
+                }
+
+                // Don't trigger if voice cloning is in progress
+                if (this.voiceCloningInProgress) {
+                    console.log('Blocked: voice cloning');
+                    return;
+                }
+
+                // Don't trigger if generating avatar
+                if (this.generatingAvatar) {
+                    console.log('Blocked: generating avatar');
+                    return;
+                }
+
+                // Don't trigger if launching
+                if (this.launching) {
+                    console.log('Blocked: launching');
+                    return;
+                }
+
+                // Don't trigger if adding website
+                if (this.addingWebsite) {
+                    console.log('Blocked: adding website');
+                    return;
+                }
+
+                // Don't trigger if can't advance
+                if (!this.canAdvance) {
+                    console.log('Blocked: cannot advance');
+                    return;
+                }
+
+                // Prevent default form submission behavior
+                event.preventDefault();
+
+                console.log('Advancing to next step...');
+                // Advance to next step
+                this.nextStep();
+            },
+
+            async nextStep() {
+                if (!this.canAdvance) return;
+
+                if (this.currentStep === this.totalSteps) {
+                    await this.completeWizard();
+                    return;
+                }
+
+                // If in LiveKit mode, notify the agent that this step was completed via UI
+                // This allows the agent's task to complete even if the user clicked instead of speaking
+                if (this.livekitMode && this.livekitConnected && this.livekitRoom) {
+                    await this.sendUIActionToAgent('step_completed', this.currentStep);
+                }
+
+                try {
+                    const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/step/${this.currentStep}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            step_data: this.stepData,
+                            advance: true
+                        })
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        let nextStep = result.current_step;
+
+                        // Skip step 8 (API keys) - API keys are collected inline in step 7
+                        // for Advanced mode, and not required for Recommended mode
+                        if (nextStep === 8) {
+                            nextStep = 9;
+                        }
+
+                        this.currentStep = nextStep;
+
+                        // Start polling when entering knowledge step (step 6)
+                        if (this.currentStep === 6 && this.pendingDocuments.length > 0) {
+                            this.startKnowledgePolling();
+                        }
+
+                        // Load abilities when entering abilities step (step 5)
+                        if (this.currentStep === 5) {
+                            this.loadAvailableAbilities();
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to advance step:', e);
+                }
+            },
+
+            prevStep() {
+                if (this.currentStep > 1) {
+                    let prevStep = this.currentStep - 1;
+
+                    // Skip step 8 (API keys) - it's no longer used
+                    // API keys are collected inline in step 7 for Advanced mode
+                    if (prevStep === 8) {
+                        prevStep = 7;
+                    }
+
+                    this.currentStep = prevStep;
+                }
+            },
+
+            // Provider configuration helpers
+            getApiKeyName(provider) {
+                // Map provider names to API key field names
+                const mapping = {
+                    'openai': 'openai',
+                    'groq': 'groq',
+                    'cerebras': 'cerebras',
+                    'deepinfra': 'deepinfra',
+                    'cartesia': 'cartesia',
+                    'elevenlabs': 'elevenlabs',
+                    'deepgram': 'deepgram',
+                    'speechify': 'speechify',
+                    'siliconflow': 'siliconflow',
+                    'novita': 'novita',
+                    'local': null  // No API key needed
+                };
+                return mapping[provider] || provider;
+            },
+
+            getApiKeyPlaceholder(provider) {
+                const placeholders = {
+                    'openai': 'sk-...',
+                    'groq': 'gsk_...',
+                    'cerebras': 'csk-...',
+                    'deepinfra': 'your-deepinfra-key',
+                    'cartesia': 'your-cartesia-key',
+                    'elevenlabs': 'your-elevenlabs-key',
+                    'deepgram': 'your-deepgram-key',
+                    'speechify': 'your-speechify-key',
+                    'siliconflow': 'sk-...',
+                    'novita': 'your-novita-key'
+                };
+                return placeholders[provider] || 'Enter API key';
+            },
+
+            isApiKeyShared(providerType) {
+                // Check if this provider's API key is already used by another selected provider
+                const provider = this.stepData.providers[providerType];
+                if (!provider || provider === 'local') return false;
+
+                const apiKeyName = this.getApiKeyName(provider);
+                if (!apiKeyName) return false;
+
+                // Check if any other provider type uses the same API key
+                const providerTypes = ['llm', 'tts', 'stt', 'embedding'];
+                for (const type of providerTypes) {
+                    if (type === providerType) continue;
+                    const otherProvider = this.stepData.providers[type];
+                    if (otherProvider && this.getApiKeyName(otherProvider) === apiKeyName) {
+                        // Check if that provider type comes before this one in the list
+                        if (providerTypes.indexOf(type) < providerTypes.indexOf(providerType)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            },
+
+            getSharedKeySource(providerType) {
+                // Return the name of the provider type that already requested this API key
+                const provider = this.stepData.providers[providerType];
+                if (!provider || provider === 'local') return '';
+
+                const apiKeyName = this.getApiKeyName(provider);
+                if (!apiKeyName) return '';
+
+                const providerTypes = ['llm', 'tts', 'stt', 'embedding'];
+                const typeLabels = {
+                    'llm': 'LLM provider',
+                    'tts': 'TTS provider',
+                    'stt': 'STT provider',
+                    'embedding': 'Embedding provider'
+                };
+
+                for (const type of providerTypes) {
+                    if (type === providerType) continue;
+                    const otherProvider = this.stepData.providers[type];
+                    if (otherProvider && this.getApiKeyName(otherProvider) === apiKeyName) {
+                        if (providerTypes.indexOf(type) < providerTypes.indexOf(providerType)) {
+                            return typeLabels[type];
+                        }
+                    }
+                }
+                return '';
+            },
+
+            updateRequiredApiKey(providerType) {
+                // This could be used to trigger validation or other updates
+                // Currently just a placeholder for potential future logic
+                console.log(`Provider ${providerType} updated to:`, this.stepData.providers[providerType]);
+            },
+
+            async completeWizard() {
+                this.launching = true;
+
+                try {
+                    const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/complete`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        // Disconnect from LiveKit if connected
+                        if (this.livekitRoom) {
+                            await this.disconnectLiveKit();
+                        }
+                        closeWizardModal();
+                        // Redirect to agents page with celebration parameters
+                        window.location.href = `/admin/agents?new_sidekick=${result.agent_id}&name=${encodeURIComponent(result.name)}`;
+                    } else {
+                        const errorData = await response.json().catch(() => ({}));
+                        alert(errorData.detail || 'Failed to create sidekick. Please try again.');
+                    }
+                } catch (e) {
+                    console.error('Failed to complete wizard:', e);
+                    alert('Failed to create sidekick. Please try again.');
+                } finally {
+                    this.launching = false;
+                }
+            },
+
+            // ============================================================
+            // LiveKit Agent-Guided Mode Methods
+            // ============================================================
+
+            async startAgentVoiceSession() {
+                console.log('startAgentVoiceSession: sessionId =', this.sessionId);
+                if (!this.sessionId) {
+                    console.error('startAgentVoiceSession: No session ID - sessionReady:', this.sessionReady, 'sessionError:', this.sessionError);
+                    this.sessionError = 'Session not ready. Please wait or refresh.';
+                    return false;
+                }
+
+                this.livekitConnecting = true;
+                console.log('startAgentVoiceSession: Creating voice session...');
+
+                try {
+                    const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/voice`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    console.log('startAgentVoiceSession: voice API response status', response.status);
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.error('startAgentVoiceSession: API error', response.status, errorText);
+                        throw new Error(`Failed to create voice session: ${response.status} - ${errorText}`);
+                    }
+
+                    const data = await response.json();
+                    console.log('startAgentVoiceSession: Voice session created:', data);
+
+                    this.livekitToken = data.token;
+                    this.livekitWsUrl = data.ws_url;
+                    this.agentGuideName = data.guide_name || 'Farah';
+
+                    // Connect to LiveKit room
+                    await this.connectToLiveKit();
+                    return true;
+
+                } catch (e) {
+                    console.error('startAgentVoiceSession: Exception:', e);
+                    this.livekitConnecting = false;
+                    this.sessionError = e.message;
+                    return false;
+                }
+            },
+
+            async connectToLiveKit() {
+                // Check if LiveKit client SDK is loaded
+                if (typeof LivekitClient === 'undefined' && typeof window.LivekitClient === 'undefined') {
+                    console.log('Loading LiveKit client SDK...');
+                    await this.loadLiveKitSDK();
+                }
+
+                const Room = (window.LivekitClient || LivekitClient).Room;
+                const RoomEvent = (window.LivekitClient || LivekitClient).RoomEvent;
+                const DataPacketKind = (window.LivekitClient || LivekitClient).DataPacketKind;
+
+                this.livekitRoom = new Room();
+
+                // Handle data messages from agent
+                this.livekitRoom.on(RoomEvent.DataReceived, (payload, participant) => {
+                    this.handleAgentDataMessage(payload, participant);
+                });
+
+                // Handle connection events
+                this.livekitRoom.on(RoomEvent.Connected, () => {
+                    console.log('LiveKit room connected');
+                    this.livekitConnected = true;
+                    this.livekitConnecting = false;
+                });
+
+                this.livekitRoom.on(RoomEvent.Disconnected, () => {
+                    console.log('LiveKit room disconnected');
+                    this.livekitConnected = false;
+                });
+
+                this.livekitRoom.on(RoomEvent.ParticipantConnected, (participant) => {
+                    console.log('Participant connected:', participant.identity);
+                });
+
+                // Handle incoming audio tracks from the agent
+                this.livekitRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                    console.log('Track subscribed:', track.kind, 'from', participant.identity);
+                    if (track.kind === 'audio') {
+                        // Attach the audio track to play it
+                        const audioElement = track.attach();
+                        audioElement.id = `agent-audio-${participant.identity}`;
+                        audioElement.style.display = 'none';
+                        audioElement.volume = 1.0;
+                        document.body.appendChild(audioElement);
+
+                        // Explicitly play the audio (required by some browsers)
+                        audioElement.play().then(() => {
+                            console.log('Agent audio playing from:', participant.identity);
+                        }).catch(err => {
+                            console.warn('Could not autoplay agent audio:', err);
+                            // Try again with user gesture
+                            document.addEventListener('click', () => {
+                                audioElement.play().catch(e => console.warn('Still cannot play:', e));
+                            }, { once: true });
+                        });
+                    }
+                });
+
+                this.livekitRoom.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+                    console.log('Track unsubscribed:', track.kind, 'from', participant.identity);
+                    // Clean up the audio element
+                    track.detach().forEach(el => el.remove());
+                });
+
+                // Connect to the room with audio enabled
+                try {
+                    const LK = window.LivekitClient || LivekitClient;
+
+                    // Create local audio track using LiveKit's createLocalTracks before connecting
+                    // This avoids sandbox issues with setMicrophoneEnabled
+                    let localAudioTrack = null;
+                    try {
+                        const tracks = await LK.createLocalTracks({ audio: true, video: false });
+                        localAudioTrack = tracks.find(t => t.kind === 'audio');
+                        console.log('Created local audio track via LiveKit');
+                    } catch (trackErr) {
+                        console.warn('Could not create local audio track:', trackErr);
+                        // Fallback: try raw getUserMedia
+                        try {
+                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                            console.log('Got microphone access via getUserMedia fallback');
+                        } catch (micErr) {
+                            console.warn('Could not get microphone access:', micErr);
+                        }
+                    }
+
+                    // Connect to room
+                    await this.livekitRoom.connect(this.livekitWsUrl, this.livekitToken);
+                    console.log('Connected to LiveKit room');
+
+                    // Attach any already-subscribed audio tracks (agent may have connected first)
+                    for (const participant of this.livekitRoom.remoteParticipants.values()) {
+                        console.log('Found remote participant:', participant.identity);
+                        for (const publication of participant.audioTrackPublications.values()) {
+                            if (publication.track && publication.isSubscribed) {
+                                console.log('Attaching existing audio track from:', participant.identity);
+                                const audioElement = publication.track.attach();
+                                audioElement.id = `agent-audio-${participant.identity}`;
+                                audioElement.style.display = 'none';
+                                audioElement.volume = 1.0;
+                                document.body.appendChild(audioElement);
+
+                                // Explicitly play
+                                audioElement.play().then(() => {
+                                    console.log('Existing agent audio playing from:', participant.identity);
+                                }).catch(err => {
+                                    console.warn('Could not play existing audio:', err);
+                                });
+                            }
+                        }
+                    }
+
+                    // Publish the pre-created audio track if available
+                    if (localAudioTrack) {
+                        try {
+                            await this.livekitRoom.localParticipant.publishTrack(localAudioTrack);
+                            this.micEnabled = true;
+                            console.log('Microphone track published successfully');
+                        } catch (pubErr) {
+                            console.warn('Could not publish audio track:', pubErr);
+                        }
+                    } else {
+                        // Fallback: try setMicrophoneEnabled (may fail due to sandbox)
+                        try {
+                            await this.livekitRoom.localParticipant.setMicrophoneEnabled(true);
+                            this.micEnabled = true;
+                            console.log('Microphone enabled via setMicrophoneEnabled');
+                        } catch (micErr) {
+                            console.warn('Could not enable microphone:', micErr);
+                            // The room is still connected, agent can still speak to user
+                        }
+                    }
+
+                } catch (e) {
+                    console.error('Failed to connect to LiveKit room:', e);
+                    this.livekitConnecting = false;
+                    throw e;
+                }
+            },
+
+            async loadLiveKitSDK() {
+                return new Promise((resolve, reject) => {
+                    if (typeof LivekitClient !== 'undefined' || typeof window.LivekitClient !== 'undefined') {
+                        resolve();
+                        return;
+                    }
+
+                    const script = document.createElement('script');
+                    script.src = 'https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js';
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                });
+            },
+
+            handleAgentDataMessage(payload, participant) {
+                try {
+                    const decoder = new TextDecoder();
+                    const message = JSON.parse(decoder.decode(payload));
+                    console.log('Agent data message:', message.type, message);
+
+                    switch (message.type) {
+                        case 'wizard_field_update':
+                            this.handleFieldUpdate(message.data);
+                            break;
+                        case 'wizard_step_change':
+                            this.handleStepChange(message.data);
+                            break;
+                        case 'wizard_complete':
+                            this.handleWizardComplete(message.data);
+                            break;
+                        case 'wizard_avatar_generate':
+                            // Agent triggered avatar generation
+                            console.log('Agent triggered avatar generation:', message.data);
+                            if (message.data.prompt) {
+                                this.avatarPrompt = message.data.prompt;
+                            }
+                            this.generateAvatar();
+                            break;
+                        case 'wizard_avatar_select':
+                            // Agent selected avatar by index
+                            console.log('Agent selected avatar by index:', message.data.index);
+                            if (this.avatarHistory && this.avatarHistory[message.data.index]) {
+                                this.selectAvatar(this.avatarHistory[message.data.index]);
+                            }
+                            break;
+                        default:
+                            console.log('Unknown message type:', message.type);
+                    }
+                } catch (e) {
+                    console.error('Failed to parse agent message:', e);
+                }
+            },
+
+            handleFieldUpdate(data) {
+                console.log('Field update:', data.field, '=', data.value);
+
+                // Update the corresponding field
+                if (data.field && data.value !== undefined) {
+                    if (data.field === 'api_keys') {
+                        // Handle nested api_keys object
+                        Object.assign(this.stepData.api_keys, data.value);
+                    } else if (data.field === 'personality_traits') {
+                        Object.assign(this.stepData.personality_traits, data.value);
+                    } else {
+                        this.stepData[data.field] = data.value;
+                    }
+
+                    // Sync special fields that have separate Alpine properties
+                    if (data.field === 'name' && data.slug) {
+                        this.stepData.slug = data.slug;
+                    } else if (data.field === 'name') {
+                        this.generateSlug();
+                    } else if (data.field === 'avatar_prompt') {
+                        // Sync avatarPrompt input field with agent-provided description
+                        this.avatarPrompt = data.value;
+                    }
+
+                    console.log('Updated stepData:', this.stepData);
+                }
+            },
+
+            handleStepChange(data) {
+                console.log('Step change:', data.direction, '-> step', data.current_step);
+
+                if (data.current_step) {
+                    this.currentStep = data.current_step;
+
+                    // Load abilities when entering abilities step (step 5)
+                    if (this.currentStep === 5) {
+                        this.loadAvailableAbilities();
+                    }
+
+                    // Start knowledge polling when entering knowledge step (step 6)
+                    if (this.currentStep === 6 && this.pendingDocuments.length > 0) {
+                        this.startKnowledgePolling();
+                    }
+                }
+
+                // Update form data if provided
+                if (data.form_data) {
+                    Object.assign(this.stepData, data.form_data);
+                }
+            },
+
+            handleWizardComplete(data) {
+                console.log('Wizard complete signal from agent');
+
+                if (data.ready_to_submit) {
+                    // Update form data and trigger completion
+                    if (data.form_data) {
+                        Object.assign(this.stepData, data.form_data);
+                    }
+
+                    // Move to final step and auto-submit
+                    this.currentStep = this.totalSteps;
+
+                    // Small delay then submit
+                    setTimeout(() => {
+                        this.completeWizard();
+                    }, 1000);
+                }
+            },
+
+            async disconnectLiveKit() {
+                if (this.livekitRoom) {
+                    try {
+                        await this.livekitRoom.disconnect();
+                    } catch (e) {
+                        console.error('Error disconnecting from LiveKit:', e);
+                    }
+                    this.livekitRoom = null;
+                }
+
+                this.livekitConnected = false;
+                this.livekitMode = false;
+
+                // Also call the API to clean up the room
+                try {
+                    await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/voice`, {
+                        method: 'DELETE',
+                    });
+                } catch (e) {
+                    console.warn('Failed to cleanup voice session:', e);
+                }
+            },
+
+            /**
+             * Send a UI action to the LiveKit agent via data channel.
+             * This enables bidirectional sync - when users click Continue/Skip buttons
+             * instead of speaking, this notifies the agent to complete the current task.
+             *
+             * @param {string} action - The action type (e.g., 'step_completed')
+             * @param {number} step - The current step number
+             */
+            async sendUIActionToAgent(action, step) {
+                if (!this.livekitRoom || !this.livekitConnected) {
+                    console.log('sendUIActionToAgent: Not connected to LiveKit, skipping');
+                    return;
+                }
+
+                try {
+                    // Build field data based on current step
+                    let fieldData = {};
+                    switch (step) {
+                        case 1: // Name step
+                            fieldData = {
+                                name: this.stepData.name || '',
+                                slug: this.stepData.slug || ''
+                            };
+                            break;
+                        case 2: // Personality step
+                            fieldData = {
+                                personality_description: this.stepData.personality_description || 'A helpful AI assistant',
+                                communication_style: this.stepData.communication_style || null,
+                                energy_level: this.stepData.energy_level || null,
+                                warmth: this.stepData.warmth || null,
+                                expertise_focus: this.stepData.expertise_focus || null,
+                                humor_style: this.stepData.humor_style || null
+                            };
+                            break;
+                        case 3: // Voice step
+                            fieldData = {
+                                voice_id: this.stepData.voice_id || 'a0e99841-438c-4a64-b679-ae501e7d6091',
+                                voice_provider: 'cartesia'
+                            };
+                            break;
+                        case 4: // Avatar step
+                            fieldData = {
+                                avatar_prompt: this.stepData.avatar_prompt || null,
+                                skipped: !this.stepData.avatar_prompt
+                            };
+                            break;
+                        case 5: // Knowledge step
+                            fieldData = {
+                                skipped: this.stepData.knowledge_skipped || false
+                            };
+                            break;
+                        case 6: // Config step
+                            fieldData = {
+                                config_mode: this.stepData.config_mode || 'default'
+                            };
+                            break;
+                        case 7: // Review step
+                            fieldData = {
+                                confirmed: true
+                            };
+                            break;
+                    }
+
+                    const message = {
+                        type: 'wizard_ui_action',
+                        data: {
+                            action: action,
+                            step: step,
+                            field_data: fieldData
+                        },
+                        timestamp: Date.now()
+                    };
+
+                    const encoder = new TextEncoder();
+                    const data = encoder.encode(JSON.stringify(message));
+
+                    // Publish data to the room (reliable mode)
+                    await this.livekitRoom.localParticipant.publishData(data, { reliable: true });
+                    console.log(`sendUIActionToAgent: Sent ${action} for step ${step}`, fieldData);
+                } catch (e) {
+                    console.error('sendUIActionToAgent: Failed to send UI action:', e);
+                }
+            },
+
+            // Modified enableVoice to support agent mode
+            async enableVoiceWithAgent() {
+                console.log('enableVoiceWithAgent: Starting... sessionReady:', this.sessionReady, 'sessionId:', this.sessionId);
+
+                // Double-check session is ready
+                if (!this.sessionReady || !this.sessionId) {
+                    console.error('enableVoiceWithAgent: Session not ready');
+                    this.sessionError = 'Session not ready yet. Please wait...';
+                    return;
+                }
+
+                this.sessionError = null;  // Clear any previous errors
+                this.livekitMode = true;
+                this.voiceEnabled = true;
+
+                const success = await this.startAgentVoiceSession();
+                if (!success) {
+                    console.error('enableVoiceWithAgent: Failed to start agent session, falling back to simple TTS');
+                    this.livekitMode = false;
+                    // Fall back to simple TTS
+                    if (this.ttsEnabled) {
+                        this.playStepTTS(this.currentStep);
+                    }
+                }
+            }
+        }
+    }
+
+    // Load Alpine.js and initialize the modal
+    (function initWizardModal() {
+        const modal = document.getElementById('wizardModal');
+        if (!modal) return;
+
+        // Check if already initialized by Alpine (has _x_dataStack)
+        if (modal._x_dataStack) {
+            console.log('Wizard modal already initialized by Alpine, skipping');
+            return;
+        }
+
+        function initAlpine() {
+            const modal = document.getElementById('wizardModal');
+            if (typeof Alpine !== 'undefined' && modal && !modal._x_dataStack) {
+                console.log('Initializing wizard modal with Alpine');
+                Alpine.initTree(modal);
+            }
+        }
+
+        if (typeof Alpine === 'undefined') {
+            // Alpine not loaded yet, load it
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js';
+            script.onload = function() {
+                // Small delay to ensure Alpine is fully ready
+                setTimeout(initAlpine, 10);
+            };
+            document.head.appendChild(script);
+        } else {
+            // Alpine already loaded - it may have auto-initialized, check first
+            initAlpine();
+        }
+    })();
+</script>

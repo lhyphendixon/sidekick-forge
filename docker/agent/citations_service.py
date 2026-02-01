@@ -80,7 +80,8 @@ class RAGCitationsService:
         rerank_top_k: Optional[int] = None,
         rerank_provider: Optional[str] = None,
         rerank_model: Optional[str] = None,
-        api_keys: Optional[Dict[str, Any]] = None
+        api_keys: Optional[Dict[str, Any]] = None,
+        hosting_type: Optional[str] = None
     ) -> RAGRetrievalResult:
         """
         Retrieve documents with full citation metadata.
@@ -148,7 +149,10 @@ class RAGCitationsService:
                 "p_match_threshold": similarity_threshold,
                 "p_match_count": top_k,
             }
-            logger.info(f"[DEBUG] match_documents params: agent_slug={effective_agent_slug}, threshold={similarity_threshold}, count={top_k}, embedding_dim={embedding_dim}")
+            # Shared pool match_documents requires p_client_id for tenant isolation
+            if hosting_type == "shared" and client_id:
+                rpc_params["p_client_id"] = str(client_id)
+            logger.info(f"[DEBUG] match_documents params: agent_slug={effective_agent_slug}, threshold={similarity_threshold}, count={top_k}, embedding_dim={embedding_dim}, hosting_type={hosting_type}")
             # Log embedding format for debugging
             emb_type = type(query_embedding).__name__
             emb_sample = str(query_embedding[:3]) if query_embedding else "None"
@@ -575,6 +579,9 @@ class RAGCitationsService:
         expanded_chunks: List[Dict[str, Any]] = []
         chunks_already_fetched: Dict[Any, Dict[int, Dict[str, Any]]] = {}  # doc_id -> {chunk_index -> chunk}
 
+        # First pass: collect all fetch tasks to run in parallel
+        fetch_tasks: List[tuple] = []  # List of (doc_id, indices_to_fetch)
+
         for doc_id, doc_chunks in doc_chunks_map.items():
             # Get all chunk indices we already have for this document
             existing_indices = {c.get("chunk_index", 0) for c in doc_chunks}
@@ -591,27 +598,46 @@ class RAGCitationsService:
                     if (chunk_idx + i) not in existing_indices:
                         indices_to_fetch.add(chunk_idx + i)
 
-            # Fetch adjacent chunks if needed
-            adjacent_chunks: Dict[int, Dict[str, Any]] = {}
             if indices_to_fetch:
+                fetch_tasks.append((doc_id, list(indices_to_fetch)))
+            else:
+                chunks_already_fetched[doc_id] = {}
+
+        # Run all fetch tasks in PARALLEL instead of sequentially
+        if fetch_tasks:
+            async def fetch_adjacent_for_doc(doc_id: str, indices: List[int]) -> tuple:
+                """Fetch adjacent chunks for a single document"""
                 try:
-                    # Query document_chunks table for adjacent chunks
-                    result = await asyncio.to_thread(
-                        lambda: self.supabase.table("document_chunks")
-                        .select("id, document_id, chunk_index, content, chunk_metadata")
-                        .eq("document_id", doc_id)
-                        .in_("chunk_index", list(indices_to_fetch))
-                        .execute()
-                    )
+                    # Capture doc_id in closure to avoid lambda capture issues
+                    def do_query(did=doc_id, idx=indices):
+                        return self.supabase.table("document_chunks") \
+                            .select("id, document_id, chunk_index, content, chunk_metadata") \
+                            .eq("document_id", did) \
+                            .in_("chunk_index", idx) \
+                            .execute()
+
+                    result = await asyncio.to_thread(do_query)
+                    adjacent = {}
                     if result.data:
                         for adj_chunk in result.data:
-                            adjacent_chunks[adj_chunk.get("chunk_index", -1)] = adj_chunk
+                            adjacent[adj_chunk.get("chunk_index", -1)] = adj_chunk
                         logger.debug(f"Fetched {len(result.data)} adjacent chunks for doc {doc_id}")
+                    return (doc_id, adjacent)
                 except Exception as e:
                     logger.warning(f"Failed to fetch adjacent chunks for doc {doc_id}: {e}")
+                    return (doc_id, {})
 
-            # Store fetched chunks for this document
-            chunks_already_fetched[doc_id] = adjacent_chunks
+            # Execute all queries in parallel
+            results = await asyncio.gather(*[
+                fetch_adjacent_for_doc(doc_id, indices)
+                for doc_id, indices in fetch_tasks
+            ])
+
+            # Store results
+            for doc_id, adjacent in results:
+                chunks_already_fetched[doc_id] = adjacent
+
+            logger.info(f"[PERF] Fetched adjacent chunks for {len(fetch_tasks)} documents in parallel")
 
         # Now expand each original chunk by merging with adjacent content
         for chunk in chunks:

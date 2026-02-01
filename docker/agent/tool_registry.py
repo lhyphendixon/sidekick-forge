@@ -17,20 +17,76 @@ import logging
 from livekit.agents import llm
 from livekit.agents.llm.tool_context import function_tool as lk_function_tool, ToolError
 
+# Import ability modules separately from OAuth services so abilities can work
+# even if OAuth services fail to import (e.g., due to Settings validation in container)
+
+# Asana ability module
 try:
     from app.agent_modules.abilities.asana import (  # type: ignore
         AsanaAbilityConfigError,
         build_asana_tool,
     )
-    from app.services.asana_oauth_service import AsanaOAuthService  # type: ignore
 except Exception as exc:  # pragma: no cover - agent runtime runs standalone
     logging.getLogger(__name__).warning(
-        "Failed to import Asana ability modules in agent runtime: %s", exc,
-        exc_info=True,
+        "Failed to import Asana ability module: %s", exc,
     )
     build_asana_tool = None
     AsanaAbilityConfigError = None  # type: ignore
+
+# Asana OAuth service (optional - may fail due to Settings validation)
+try:
+    from app.services.asana_oauth_service import AsanaOAuthService  # type: ignore
+except Exception as exc:  # pragma: no cover
+    logging.getLogger(__name__).debug(
+        "Asana OAuth service not available (expected in container): %s", exc,
+    )
     AsanaOAuthService = None  # type: ignore
+
+# HelpScout ability module
+try:
+    from app.agent_modules.abilities.helpscout import (  # type: ignore
+        HelpScoutAbilityConfigError,
+        build_helpscout_tool,
+    )
+except Exception as exc:  # pragma: no cover - agent runtime runs standalone
+    logging.getLogger(__name__).warning(
+        "Failed to import HelpScout ability module: %s", exc,
+    )
+    build_helpscout_tool = None
+    HelpScoutAbilityConfigError = None  # type: ignore
+
+# HelpScout OAuth service (optional - may fail due to Settings validation)
+try:
+    from app.services.helpscout_oauth_service import HelpScoutOAuthService  # type: ignore
+except Exception as exc:  # pragma: no cover
+    logging.getLogger(__name__).debug(
+        "HelpScout OAuth service not available (expected in container): %s", exc,
+    )
+    HelpScoutOAuthService = None  # type: ignore
+
+
+def _is_glm_reasoning_model(model_name: str) -> bool:
+    """
+    Check if the model is a GLM model that supports the reasoning toggle.
+
+    GLM-4.7 (and potentially future versions) support a `disable_reasoning` parameter
+    that can be passed to the Cerebras API to control whether the model uses
+    extended reasoning capabilities.
+
+    Args:
+        model_name: The model name/identifier to check
+
+    Returns:
+        True if the model supports reasoning toggle, False otherwise
+    """
+    if not model_name:
+        return False
+    model_lower = model_name.lower()
+    # Match various naming patterns for GLM-4.7
+    return any(pattern in model_lower for pattern in [
+        "glm-4.7", "glm-4-7", "glm4.7", "glm47",
+        "zai-glm", "z-ai/glm", "zai/glm"
+    ])
 
 
 class ToolRegistry:
@@ -51,16 +107,33 @@ class ToolRegistry:
         self._platform_supabase = platform_supabase_client
         self._tool_result_callback = tool_result_callback
 
-    def build(self, tool_defs: List[Dict[str, Any]]) -> List[Any]:
+    def build(
+        self,
+        tool_defs: List[Dict[str, Any]],
+        model_name: Optional[str] = None,
+        agent_ref: Optional[Any] = None
+    ) -> List[Any]:
+        """
+        Build all tools for the agent session.
+
+        Args:
+            tool_defs: List of tool definitions from metadata
+            model_name: The LLM model name (for model-specific system tools)
+            agent_ref: Reference to the agent instance (for system tools that need state access)
+
+        Returns:
+            List of built LiveKit function tools
+        """
         try:
-            self._logger.info(f"🔧 ToolRegistry.build: received {len(tool_defs or [])} tool defs")
+            self._logger.info(f"🔧 ToolRegistry.build: received {len(tool_defs or [])} tool defs, model={model_name}")
         except Exception:
             pass
         self._tools.clear()
         out: List[Any] = []
 
         # Add default built-in tools that are always available
-        default_tools = self._build_default_tools()
+        # Pass model_name and agent_ref for model-specific system tools (e.g., GLM reasoning toggle)
+        default_tools = self._build_default_tools(model_name=model_name, agent_ref=agent_ref)
         out.extend(default_tools)
 
         for t in tool_defs or []:
@@ -78,14 +151,21 @@ class ToolRegistry:
                     ft = self._build_code_tool(t)
                 elif ttype == "asana":
                     ft = self._build_asana_tool(t)
+                elif ttype == "helpscout":
+                    ft = self._build_helpscout_tool(t)
                 elif ttype == "user_overview":
                     ft = self._build_user_overview_tool(t)
                 elif ttype == "documentsense":
                     ft = self._build_documentsense_tool(t)
                 elif ttype == "content_catalyst":
                     ft = self._build_content_catalyst_tool(t)
+                elif ttype == "lingua":
+                    ft = self._build_lingua_tool(t)
                 elif ttype == "scrape_url":
                     ft = self._build_scrape_url_tool(t)
+                elif ttype == "builtin":
+                    # Handle built-in tools by mapping slug to appropriate builder
+                    ft = self._build_builtin_tool(t)
                 else:
                     self._logger.warning(f"Unsupported tool type '{ttype}' for slug={slug}; skipping")
                     continue
@@ -108,10 +188,18 @@ class ToolRegistry:
             pass
         return out
 
-    def _build_default_tools(self) -> List[Any]:
+    def _build_default_tools(
+        self,
+        model_name: Optional[str] = None,
+        agent_ref: Optional[Any] = None
+    ) -> List[Any]:
         """
         Build default tools that are always available to all agents.
         These tools don't need to be configured in the database.
+
+        Args:
+            model_name: The LLM model name (used for model-specific tools like GLM reasoning toggle)
+            agent_ref: Reference to the agent instance (for state manipulation by system tools)
         """
         default_tools = []
 
@@ -138,7 +226,128 @@ class ToolRegistry:
         except Exception as e:
             self._logger.warning(f"⚠️ Failed to build default scrape_url tool: {e}")
 
+        # GLM reasoning toggle - Only available for GLM models (system-level, not user-configurable)
+        if model_name and agent_ref and _is_glm_reasoning_model(model_name):
+            try:
+                reasoning_tool = self._build_reasoning_toggle_tool(agent_ref, model_name)
+                if reasoning_tool:
+                    default_tools.append(reasoning_tool)
+                    self._tools["_system_toggle_reasoning"] = reasoning_tool
+                    self._logger.info(f"✅ Built system tool: _system_toggle_reasoning (GLM-4.7 reasoning toggle for model {model_name})")
+            except Exception as e:
+                self._logger.warning(f"⚠️ Failed to build reasoning toggle tool: {e}")
+
         return default_tools
+
+    def _build_reasoning_toggle_tool(self, agent_ref: Any, model_name: str) -> Any:
+        """
+        Build the system-level reasoning toggle tool for GLM models.
+
+        This tool allows the agent to dynamically enable/disable reasoning mode
+        when using GLM-4.7 on Cerebras. It is a SYSTEM-LEVEL tool that is:
+        - NOT visible to users as a configurable ability
+        - Automatically added when GLM model is detected
+        - Used by the agent to optimize response speed vs. depth
+
+        Args:
+            agent_ref: Either a direct reference to the SidekickAgent instance,
+                      or a mutable dict container {"agent": <agent>} that will be
+                      populated after agent creation (for deferred binding)
+            model_name: The model name for logging
+
+        Returns:
+            A LiveKit function_tool that toggles reasoning mode
+        """
+        slug = "_system_toggle_reasoning"
+        description = """Toggle reasoning mode for complex tasks.
+
+Use enable=true when you need to think harder about:
+- Complex multi-step analysis or calculations
+- Ambiguous questions requiring careful interpretation
+- Content creation that benefits from structured thinking
+- Problem-solving that requires exploring multiple approaches
+
+Use enable=false (default) when:
+- Answering simple factual questions
+- Casual conversation
+- Quick responses are more important than deep analysis
+- The task is straightforward
+
+Note: Reasoning mode increases response quality but takes longer. Only enable it when the task truly benefits from deeper thinking."""
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "enable": {
+                        "type": "boolean",
+                        "description": "true to enable extended reasoning (slower, deeper), false to disable (faster, direct)"
+                    }
+                },
+                "required": ["enable"],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _toggle_reasoning(enable: bool) -> str:
+            """Toggle reasoning mode on the agent."""
+            # Support both direct agent reference and container pattern
+            # Container pattern: {"agent": <agent>} - used when tool is built before agent exists
+            actual_agent = agent_ref.get("agent") if isinstance(agent_ref, dict) else agent_ref
+
+            if actual_agent is None:
+                self._logger.warning("_system_toggle_reasoning called but agent reference not yet set")
+                return "Reasoning toggle not available yet - agent initializing."
+
+            if hasattr(actual_agent, '_reasoning_enabled'):
+                previous_state = actual_agent._reasoning_enabled
+                actual_agent._reasoning_enabled = enable
+                mode = "ENABLED" if enable else "DISABLED"
+
+                # Only log if state actually changed
+                if previous_state != enable:
+                    self._logger.info(f"🧠 GLM reasoning {mode} (was {'enabled' if previous_state else 'disabled'})")
+
+                if enable:
+                    return f"Reasoning mode enabled. Take your time to think through the problem carefully."
+                else:
+                    return f"Reasoning mode disabled. Responding quickly and directly."
+            else:
+                self._logger.warning("_system_toggle_reasoning called but agent has no _reasoning_enabled attribute")
+                return "Reasoning toggle not available for this session."
+
+        return lk_function_tool(raw_schema=raw_schema)(_toggle_reasoning)
+
+    def _build_builtin_tool(self, t: Dict[str, Any]) -> Any:
+        """
+        Handle built-in tools by mapping known slugs to appropriate builders.
+        This allows tools to be configured with type='builtin' and a slug that
+        maps to known functionality.
+        """
+        slug = t.get("slug") or t.get("name") or t.get("id") or "builtin_tool"
+
+        # Map known slugs to their builders
+        if slug in ("usersense", "user_sense", "user_overview", "update_user_overview"):
+            # UserSense is the user overview tool
+            self._logger.info(f"🔧 Mapping builtin '{slug}' to user_overview tool")
+            return self._build_user_overview_tool(t)
+        elif slug in ("documentsense", "document_sense", "query_document_intelligence"):
+            self._logger.info(f"🔧 Mapping builtin '{slug}' to documentsense tool")
+            return self._build_documentsense_tool(t)
+        elif slug in ("scrape_url", "scrape", "web_scrape"):
+            self._logger.info(f"🔧 Mapping builtin '{slug}' to scrape_url tool")
+            return self._build_scrape_url_tool(t)
+        elif slug in ("content_catalyst", "article_writer"):
+            self._logger.info(f"🔧 Mapping builtin '{slug}' to content_catalyst tool")
+            return self._build_content_catalyst_tool(t)
+        elif slug in ("lingua", "transcribe", "subtitles"):
+            self._logger.info(f"🔧 Mapping builtin '{slug}' to lingua tool")
+            return self._build_lingua_tool(t)
+        else:
+            self._logger.warning(f"⚠️ Unknown builtin tool slug '{slug}'; skipping")
+            return None
 
     def _emit_tool_result(
         self,
@@ -299,9 +508,11 @@ class ToolRegistry:
                         dynamic_context[key] = value
 
             user_inquiry = kwargs.get("user_inquiry")
+            self._logger.info(f"🌐 n8n tool: initial user_inquiry from kwargs = '{user_inquiry}'")
             if not isinstance(user_inquiry, str) or not user_inquiry.strip():
                 candidate = None
                 candidate_source = None
+                # Try metadata payload first
                 if isinstance(metadata_payload, dict):
                     for key in (
                         "user_inquiry",
@@ -318,11 +529,22 @@ class ToolRegistry:
                             candidate = val.strip()
                             candidate_source = f"metadata.{key}"
                             break
+                # Try runtime context
                 if not candidate and isinstance(runtime_ctx, dict):
+                    self._logger.info(f"🌐 n8n tool: checking runtime_ctx keys={list(runtime_ctx.keys())}")
                     user_text = runtime_ctx.get("latest_user_text")
                     if isinstance(user_text, str) and user_text.strip():
                         candidate = user_text.strip()
                         candidate_source = "runtime.latest_user_text"
+                # Try dynamic_context which includes context_payload
+                if not candidate and isinstance(dynamic_context, dict):
+                    self._logger.info(f"🌐 n8n tool: checking dynamic_context keys={list(dynamic_context.keys())}")
+                    for key in ("latest_user_text", "latestUserText", "user_text", "query"):
+                        val = dynamic_context.get(key)
+                        if isinstance(val, str) and val.strip():
+                            candidate = val.strip()
+                            candidate_source = f"dynamic_context.{key}"
+                            break
                 if candidate:
                     user_inquiry = candidate
                     try:
@@ -337,6 +559,7 @@ class ToolRegistry:
                     except Exception:
                         pass
                 else:
+                    self._logger.error(f"🌐 n8n tool: no user_inquiry found! runtime_ctx={runtime_ctx}, dynamic_context keys={list(dynamic_context.keys()) if dynamic_context else 'None'}")
                     raise ToolError(
                         "user_inquiry must be a non-empty string. Provide a short natural language summary of the user's request."
                     )
@@ -883,7 +1106,9 @@ class ToolRegistry:
         if original_tool is None:
             return None
 
-        @functools.wraps(original_tool)
+        # Extract the tool info from the original decorated function
+        original_tool_info = getattr(original_tool, "__livekit_tool_info", None)
+
         async def _invoke_with_context(**kwargs: Any) -> Any:
             runtime_ctx = self._runtime_context.get(slug) or {}
 
@@ -913,7 +1138,20 @@ class ToolRegistry:
                         break
 
             try:
-                result = await original_tool(**kwargs)
+                # Extract underlying callable from original_tool (which is a RawFunctionTool)
+                # RawFunctionTool stores the wrapped function in _func attribute (not _callable!)
+                inner_callable = getattr(original_tool, '_func', None)
+                if inner_callable is None:
+                    inner_callable = original_tool
+
+                import asyncio as _asyncio
+                if _asyncio.iscoroutinefunction(inner_callable):
+                    result = await inner_callable(**kwargs)
+                else:
+                    result = inner_callable(**kwargs)
+                    # Handle case where sync function returns a coroutine
+                    if _asyncio.iscoroutine(result):
+                        result = await result
             except Exception as exc:
                 self._emit_tool_result(
                     slug=slug,
@@ -937,10 +1175,260 @@ class ToolRegistry:
             )
             return result
 
-        if hasattr(original_tool, "__livekit_tool_info"):
-            setattr(_invoke_with_context, "__livekit_tool_info", getattr(original_tool, "__livekit_tool_info"))
+        # CRITICAL: Re-wrap with lk_function_tool to create a proper FunctionTool
+        # The LiveKit SDK requires FunctionTool instances, not plain functions
+        # Always wrap the tool to inject runtime context (client_id, etc.)
+        description = t.get("description") or f"Asana task management for {slug}"
+        return lk_function_tool(
+            raw_schema={
+                "name": slug,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "user_inquiry": {
+                            "type": "string",
+                            "description": "Pass the COMPLETE user request VERBATIM including the action verb.",
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "description": "Additional session metadata.",
+                            "additionalProperties": True,
+                        },
+                    },
+                    "required": ["user_inquiry"],
+                },
+            }
+        )(_invoke_with_context)
 
-        return _invoke_with_context
+    def _build_helpscout_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the HelpScout tool for managing support tickets."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "helpscout_tickets"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            lookup_keys = (
+                slug,
+                t.get("id"),
+                t.get("name"),
+            )
+            for key in lookup_keys:
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        access_token = merged_cfg.get("access_token")
+        key_name = merged_cfg.get("access_token_key") or merged_cfg.get("api_key_name") or "helpscout_access_token"
+        if not access_token and key_name:
+            access_token = self._api_keys.get(key_name)
+        env_key = merged_cfg.get("access_token_env")
+        if not access_token and env_key:
+            access_token = os.getenv(str(env_key))
+        if not access_token and key_name:
+            env_candidate = os.getenv(str(key_name).upper())
+            if env_candidate:
+                access_token = env_candidate
+        if access_token:
+            merged_cfg["access_token"] = access_token
+        if not build_helpscout_tool:
+            self._logger.warning("HelpScout ability not available in agent runtime; skipping.")
+            return None
+
+        oauth_service = None
+        client_service = None
+        if HelpScoutOAuthService is not None:
+            try:  # pragma: no cover - best-effort in agent runtime
+                from app.core.dependencies import get_client_service
+                client_service = get_client_service()
+                platform_client = self._platform_supabase or getattr(client_service, "supabase", None)
+                oauth_service = HelpScoutOAuthService(
+                    client_service,
+                    primary_supabase=self._primary_supabase,
+                    platform_supabase=platform_client,
+                )
+            except Exception:
+                oauth_service = None
+                client_service = None
+
+        if oauth_service is None and HelpScoutOAuthService is not None:
+            platform_client = self._platform_supabase or getattr(client_service, "supabase", None) if client_service else self._platform_supabase
+            if platform_client is not None or self._primary_supabase is not None:
+                try:
+                    stub_service = SimpleNamespace(supabase=platform_client)
+                    oauth_service = HelpScoutOAuthService(
+                        stub_service,
+                        primary_supabase=self._primary_supabase,
+                        platform_supabase=platform_client,
+                    )
+                    self._logger.info(
+                        "HelpScout OAuth fallback initialized via Supabase clients: platform=%s primary=%s",
+                        bool(platform_client),
+                        bool(self._primary_supabase),
+                    )
+                except Exception as exc:  # pragma: no cover - logging path
+                    self._logger.warning("Failed to initialize HelpScout OAuth fallback: %s", exc)
+                    oauth_service = None
+
+        try:
+            original_tool = build_helpscout_tool(t, merged_cfg, oauth_service=oauth_service)
+        except Exception as exc:
+            if not HelpScoutAbilityConfigError or not isinstance(exc, HelpScoutAbilityConfigError):
+                raise
+            message = f"HelpScout ability is not ready: {exc}"
+            try:
+                self._logger.warning(
+                    "HelpScout ability could not be built",
+                    extra={"slug": slug, "reason": str(exc)},
+                )
+            except Exception:
+                pass
+
+            async def _misconfigured_tool(**_: Any) -> Dict[str, str]:
+                return {"error": message, "slug": slug}
+
+            description = t.get("description") or "HelpScout integration is not configured yet."
+            return lk_function_tool(
+                raw_schema={
+                    "name": slug,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_inquiry": {
+                                "type": "string",
+                                "description": "Latest user request describing the desired HelpScout action.",
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional session metadata.",
+                                "additionalProperties": True,
+                            },
+                        },
+                        "required": ["user_inquiry"],
+                    },
+                }
+            )(_misconfigured_tool)
+
+        if original_tool is None:
+            return None
+
+        # Extract the tool info from the original decorated function
+        original_tool_info = getattr(original_tool, "__livekit_tool_info", None)
+
+        async def _invoke_with_context(**kwargs: Any) -> Any:
+            runtime_ctx = self._runtime_context.get(slug) or {}
+
+            # DEBUG: Log runtime context lookup for HelpScout
+            self._logger.info(
+                f"🔍 HelpScout _invoke_with_context: slug={slug}, "
+                f"runtime_ctx_keys={list(runtime_ctx.keys()) if runtime_ctx else 'EMPTY'}, "
+                f"client_id_in_ctx={runtime_ctx.get('client_id', 'MISSING')}"
+            )
+
+            incoming_metadata = kwargs.get("metadata")
+            merged_metadata: Dict[str, Any] = {}
+            if isinstance(runtime_ctx, dict):
+                merged_metadata.update(runtime_ctx)
+            if isinstance(incoming_metadata, dict):
+                merged_metadata.update(incoming_metadata)
+
+            if merged_metadata:
+                kwargs["metadata"] = merged_metadata
+
+            # DEBUG: Log merged metadata for HelpScout
+            self._logger.info(
+                f"🔍 HelpScout merged_metadata: client_id={merged_metadata.get('client_id', 'MISSING')}, "
+                f"keys={list(merged_metadata.keys())}"
+            )
+
+            user_inquiry = kwargs.get("user_inquiry")
+            if not isinstance(user_inquiry, str) or not user_inquiry.strip():
+                for key in (
+                    "user_inquiry",
+                    "latest_user_text",
+                    "user_text",
+                    "text",
+                    "message",
+                    "transcript",
+                ):
+                    candidate = merged_metadata.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        kwargs["user_inquiry"] = candidate.strip()
+                        break
+
+            try:
+                # Extract underlying callable from original_tool (which is a RawFunctionTool)
+                # RawFunctionTool stores the wrapped function in _func attribute (not _callable!)
+                inner_callable = getattr(original_tool, '_func', None)
+                if inner_callable is None:
+                    inner_callable = original_tool
+
+                import asyncio as _asyncio
+                if _asyncio.iscoroutinefunction(inner_callable):
+                    result = await inner_callable(**kwargs)
+                else:
+                    result = inner_callable(**kwargs)
+                    # Handle case where sync function returns a coroutine
+                    if _asyncio.iscoroutine(result):
+                        result = await result
+            except Exception as exc:
+                self._emit_tool_result(
+                    slug=slug,
+                    tool_type="helpscout",
+                    success=False,
+                    error=str(exc),
+                )
+                raise
+
+            summary = None
+            if isinstance(result, dict):
+                summary = result.get("summary") or result.get("text")
+            output_value = summary or (result if isinstance(result, str) else str(result))
+
+            self._emit_tool_result(
+                slug=slug,
+                tool_type="helpscout",
+                success=True,
+                output=output_value,
+                raw_output=result,
+            )
+            return result
+
+        # CRITICAL: Re-wrap with lk_function_tool to create a proper FunctionTool
+        # The LiveKit SDK requires FunctionTool instances, not plain functions
+        # Always wrap the tool to inject runtime context (client_id, etc.)
+        description = t.get("description") or f"HelpScout ticket management for {slug}"
+        return lk_function_tool(
+            raw_schema={
+                "name": slug,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "user_inquiry": {
+                            "type": "string",
+                            "description": "Pass the COMPLETE user request VERBATIM including the action verb.",
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "description": "Additional session metadata.",
+                            "additionalProperties": True,
+                        },
+                    },
+                    "required": ["user_inquiry"],
+                },
+            }
+        )(_invoke_with_context)
 
     def _build_user_overview_tool(self, t: Dict[str, Any]) -> Any:
         """
@@ -1399,6 +1887,69 @@ Do NOT use this for general knowledge questions - only for document-specific que
             )
 
             return f"WIDGET_TRIGGER:content_catalyst:{suggested_topic}"
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_lingua_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the LINGUA tool for audio transcription and subtitle translation."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "lingua"
+        cfg = dict(t.get("config") or {})
+        description = t.get("description") or (
+            "Trigger the LINGUA audio transcription and subtitle translation widget. "
+            "When the user wants to transcribe audio, generate subtitles, or translate subtitles, "
+            "use this tool to open the LINGUA configuration widget. "
+            "The user will upload their audio file and select translation languages "
+            "directly in the widget interface. "
+            "Call this tool with trigger_widget=true when the user mentions transcription, subtitles, "
+            "captions, or audio-to-text conversion."
+        )
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_widget": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Set to true to trigger the LINGUA widget UI",
+                    },
+                    "suggested_context": {
+                        "type": "string",
+                        "description": "Optional context from conversation (e.g., language preferences)",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            """Trigger the LINGUA widget UI for audio transcription."""
+            try:
+                self._logger.info("🌐 LINGUA widget trigger invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+
+            suggested_context = kwargs.get("suggested_context", "")
+
+            widget_trigger = {
+                "widget_type": "lingua",
+                "suggested_context": suggested_context,
+                "message": "Opening LINGUA transcription widget...",
+            }
+
+            # Emit the widget trigger through tool result callback
+            self._emit_tool_result(
+                slug=slug,
+                tool_type="lingua",
+                success=True,
+                output="Widget triggered",
+                raw_output=widget_trigger,
+            )
+
+            return f"WIDGET_TRIGGER:lingua:{suggested_context}"
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
 

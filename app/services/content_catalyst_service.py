@@ -165,7 +165,7 @@ class DeepInfraProvider(LLMProvider):
 class CerebrasProvider(LLMProvider):
     """Cerebras LLM provider using OpenAI-compatible API."""
 
-    def __init__(self, api_key: str, model: str = "llama-3.3-70b"):
+    def __init__(self, api_key: str, model: str = "zai-glm-4.7"):
         self.api_key = api_key
         self.model = model
         self.base_url = "https://api.cerebras.ai/v1"
@@ -219,7 +219,7 @@ def create_llm_provider(
     elif provider_name == "deepinfra":
         return DeepInfraProvider(api_key, model or "meta-llama/Llama-3.3-70B-Instruct")
     elif provider_name == "cerebras":
-        return CerebrasProvider(api_key, model or "llama-3.3-70b")
+        return CerebrasProvider(api_key, model or "zai-glm-4.7")
     else:
         raise ValueError(f"Unsupported LLM provider: {provider_name}")
 

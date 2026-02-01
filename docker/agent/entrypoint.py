@@ -20,16 +20,28 @@ from datetime import datetime
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2026-01-17T19:33:37Z"
-AGENT_BUILD_HASH = "fix-transcript-storage"
+AGENT_BUILD_VERSION = "2026-01-20T16:45:00Z"
+AGENT_BUILD_HASH = "error-notification-to-user"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
-from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia, bithuman
+from livekit.agents import BackgroundAudioPlayer, AudioConfig, BuiltinAudioClip
+from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
+# bithuman is imported lazily when needed to avoid dependency conflicts
+try:
+    from livekit.plugins import bithuman
+except ImportError:
+    bithuman = None
 # bey (Beyond Presence) is imported lazily when needed to avoid import issues
 from livekit.plugins.turn_detector.english import EnglishModel
-from livekit.agents import RoomIO, RoomInputOptions, RoomOutputOptions
+# Noise cancellation for echo mitigation - BVC (Background Voice Cancellation)
+# This removes background voices including the agent's own TTS output being picked up by the mic
+try:
+    from livekit.plugins import noise_cancellation
+except ImportError:
+    noise_cancellation = None
+# RoomIO, RoomInputOptions, RoomOutputOptions are now accessed via room_io.RoomOptions
 from PIL import Image
 from io import BytesIO
 from api_key_loader import APIKeyLoader
@@ -38,6 +50,10 @@ from context import AgentContextManager
 from sidekick_agent import SidekickAgent
 from tool_registry import ToolRegistry
 from supabase import create_client
+try:
+    from wizard_tasks import WizardGuideAgent
+except ImportError:
+    WizardGuideAgent = None
 
 # Enable SDK debug logging for better diagnostics
 os.environ["LIVEKIT_LOG_LEVEL"] = "debug"
@@ -111,7 +127,207 @@ async def send_model_ready(room: rtc.Room) -> None:
         logger.warning(f"Failed to send model ready event: {e}")
 
 
+async def download_imx_from_supabase(
+    storage_path: str,
+    client_supabase_url: str,
+    client_supabase_key: str,
+    room: Optional[rtc.Room] = None
+) -> str:
+    """
+    Download an IMX model file from Supabase storage to local temp directory.
+
+    Args:
+        storage_path: Supabase storage path (format: supabase://bucket/path/to/file.imx)
+        client_supabase_url: Client's Supabase project URL
+        client_supabase_key: Client's Supabase service role key
+        room: Optional room to send progress updates to
+
+    Returns:
+        Local file path where the IMX was downloaded
+
+    Raises:
+        ValueError: If the storage path is invalid or download fails
+    """
+    if not storage_path.startswith("supabase://"):
+        raise ValueError(f"Invalid Supabase storage path: {storage_path}")
+
+    # Parse the storage path: supabase://bucket/path/to/file.imx
+    path_without_scheme = storage_path[len("supabase://"):]
+    parts = path_without_scheme.split("/", 1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid storage path format: {storage_path}")
+
+    bucket_name = parts[0]
+    file_path = parts[1]
+
+    logger.info(f"📥 Downloading IMX from Supabase: bucket={bucket_name}, path={file_path}")
+
+    if room:
+        await send_model_loading_progress(room, 12, "Downloading avatar model from cloud...")
+
+    try:
+        # Create Supabase client for the specific client
+        client_sb = create_client(client_supabase_url, client_supabase_key)
+
+        # Create a signed URL for the file
+        signed = client_sb.storage.from_(bucket_name).create_signed_url(file_path, expires_in=300)
+        if not signed or not signed.get("signedURL"):
+            raise ValueError(f"Failed to create signed URL for IMX file: {storage_path}")
+
+        signed_url = signed["signedURL"]
+        logger.info(f"📥 Got signed URL for IMX download")
+
+        # Download the file using aiohttp
+        local_dir = "/tmp/imx_models"
+        os.makedirs(local_dir, exist_ok=True)
+
+        # Use a consistent filename based on the path to enable caching
+        import hashlib
+        path_hash = hashlib.md5(storage_path.encode()).hexdigest()[:12]
+        local_path = os.path.join(local_dir, f"model_{path_hash}.imx")
+
+        # Check if file already exists and is valid (non-zero size)
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            logger.info(f"✅ Using cached IMX model: {local_path}")
+            return local_path
+
+        if room:
+            await send_model_loading_progress(room, 14, "Downloading avatar model...")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(signed_url) as resp:
+                if resp.status != 200:
+                    raise ValueError(f"Failed to download IMX file: HTTP {resp.status}")
+
+                total_size = resp.content_length or 0
+                downloaded = 0
+
+                with open(local_path, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(1024 * 1024):  # 1MB chunks
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0 and room:
+                            pct = min(18, 14 + int((downloaded / total_size) * 4))
+                            await send_model_loading_progress(room, pct, f"Downloading avatar model... {downloaded // (1024*1024)}MB")
+
+        file_size_mb = os.path.getsize(local_path) / (1024 * 1024)
+        logger.info(f"✅ Downloaded IMX model: {local_path} ({file_size_mb:.1f}MB)")
+
+        if room:
+            await send_model_loading_progress(room, 18, "Avatar model downloaded")
+
+        return local_path
+
+    except Exception as e:
+        logger.error(f"❌ Failed to download IMX from Supabase: {e}", exc_info=True)
+        raise ValueError(f"Failed to download IMX model: {e}")
+
+
 # Agent logic handled via AgentSession and SidekickAgent
+
+
+class DebugLLMWrapper:
+    """
+    Debug wrapper for LLM plugins that logs all chat() calls.
+    This helps diagnose issues where the LLM isn't being called as expected.
+    """
+
+    def __init__(self, llm_plugin, label: str = "LLM"):
+        self._llm = llm_plugin
+        self._label = label
+        self._call_count = 0
+        # Forward all attributes to the wrapped LLM
+
+    def __getattr__(self, name):
+        """Forward all attribute access to the wrapped LLM."""
+        return getattr(self._llm, name)
+
+    def chat(self, **kwargs):
+        """Wrap the chat method to log calls and results."""
+        self._call_count += 1
+        call_id = self._call_count
+
+        # Log the call
+        chat_ctx = kwargs.get('chat_ctx')
+        tools = kwargs.get('tools', [])
+        tool_choice = kwargs.get('tool_choice')
+
+        ctx_len = len(chat_ctx.items) if chat_ctx and hasattr(chat_ctx, 'items') else 0
+        tool_names = [getattr(t, 'name', str(t)) for t in (tools or [])][:5]  # First 5 tool names
+
+        logger.info(f"🔍 [{self._label}] chat() CALLED #{call_id}: ctx_items={ctx_len}, tools={len(tools or [])}, tool_choice={tool_choice}")
+        logger.info(f"🔍 [{self._label}] #{call_id} tool_names: {tool_names}")
+
+        # Log recent chat context items for debugging
+        if chat_ctx and hasattr(chat_ctx, 'items'):
+            for i, item in enumerate(chat_ctx.items[-3:]):  # Last 3 items
+                item_role = getattr(item, 'role', 'unknown')
+                item_type = getattr(item, 'type', 'message')
+                content = getattr(item, 'content', '')
+                content_preview = str(content)[:100] if content else ''
+                logger.info(f"🔍 [{self._label}] #{call_id} ctx[-{3-i}]: role={item_role}, type={item_type}, content={content_preview}")
+
+        # Return wrapped stream that logs chunks
+        return _DebugChatStream(self._llm.chat(**kwargs), self._label, call_id)
+
+
+class _DebugChatStream:
+    """Wrapper for chat stream that logs chunks as they arrive."""
+
+    def __init__(self, stream, label: str, call_id: int):
+        self._stream = stream
+        self._label = label
+        self._call_id = call_id
+        self._chunk_count = 0
+        self._text_chunks = []
+        self._tool_calls = []
+
+    async def __aenter__(self):
+        logger.info(f"🔍 [{self._label}] #{self._call_id} stream ENTERED")
+        entered = await self._stream.__aenter__()
+        return _DebugStreamIterator(entered, self._label, self._call_id)
+
+    async def __aexit__(self, *args):
+        logger.info(f"🔍 [{self._label}] #{self._call_id} stream EXITING")
+        return await self._stream.__aexit__(*args)
+
+
+class _DebugStreamIterator:
+    """Iterator wrapper that logs chunks."""
+
+    def __init__(self, iterator, label: str, call_id: int):
+        self._iterator = iterator
+        self._label = label
+        self._call_id = call_id
+        self._chunk_count = 0
+        self._text_len = 0
+        self._tool_calls = []
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            chunk = await self._iterator.__anext__()
+            self._chunk_count += 1
+
+            # Log first few chunks in detail
+            if self._chunk_count <= 3:
+                logger.info(f"🔍 [{self._label}] #{self._call_id} chunk {self._chunk_count}: type={type(chunk).__name__}")
+
+            # Track text content
+            if hasattr(chunk, 'delta') and chunk.delta:
+                if hasattr(chunk.delta, 'content') and chunk.delta.content:
+                    self._text_len += len(chunk.delta.content)
+                if hasattr(chunk.delta, 'tool_calls') and chunk.delta.tool_calls:
+                    for tc in chunk.delta.tool_calls:
+                        self._tool_calls.append(getattr(tc, 'name', str(tc)))
+
+            return chunk
+        except StopAsyncIteration:
+            # Log final summary
+            logger.info(f"🔍 [{self._label}] #{self._call_id} FINISHED: {self._chunk_count} chunks, {self._text_len} chars, tool_calls={self._tool_calls}")
+            raise
 
 
 def _parse_structured_output(text: Any) -> Optional[Any]:
@@ -140,6 +356,49 @@ def _normalize_transcript_text(value: Any) -> str:
     return text
 
 
+def _get_cartesia_emotion_instructions(voice_settings: dict) -> str:
+    """Return Cartesia emotion instructions if enabled, for dynamic expression."""
+    if not voice_settings:
+        return ""
+
+    provider = voice_settings.get("tts_provider") or voice_settings.get("provider")
+    model = voice_settings.get("model") or voice_settings.get("tts_model") or ""
+    emotions_enabled = voice_settings.get("cartesia_emotions_enabled")
+
+    # Debug log to verify values
+    logger.info(f"🎭 Emotion check: provider={provider}, model={model}, emotions_enabled={emotions_enabled}")
+
+    # Only enable for Cartesia sonic models with emotions toggle on
+    if provider != "cartesia" or not model.startswith("sonic") or not emotions_enabled:
+        logger.info(f"🎭 Emotions disabled: provider_match={provider == 'cartesia'}, model_match={model.startswith('sonic') if model else False}, enabled={emotions_enabled}")
+        return ""
+
+    return """
+
+## Emotional Expression (Cartesia)
+
+You can express emotions using SSML tags. Place the self-closing emotion tag BEFORE the text you want to affect:
+
+**Syntax**: `<emotion value="EMOTION" /> text to speak emotionally`
+
+**Available emotions**: neutral, angry, excited, content, sad, scared, curious, proud, worried, hopeful, surprised, amused, disappointed, grateful, confused, determined, sympathetic, playful, serious, enthusiastic
+
+**Laughter**: Insert `[laughter]` to laugh naturally.
+
+**Guidelines**:
+- Place the emotion tag before the sentence or phrase it should affect
+- Match the emotion to the content (empathy for problems, excitement for good news)
+- Use sparingly for impact - not every sentence needs an emotion tag
+- Use `[laughter]` when something is genuinely funny
+
+**Examples**:
+- `<emotion value="excited" /> I have great news! Your application was approved.`
+- `I understand. <emotion value="sympathetic" /> That sounds really frustrating.`
+- `<emotion value="curious" /> Tell me more about that.`
+- `[laughter] That's hilarious! <emotion value="amused" /> I love that joke.`
+"""
+
+
 def _should_skip_user_commit(agent: Any, text: str) -> bool:
     """Return True when the same user transcript is already pending for this turn."""
     normalized_text = _normalize_transcript_text(text)
@@ -153,7 +412,8 @@ def _should_skip_user_commit(agent: Any, text: str) -> bool:
     if last_user != normalized_text:
         return False
 
-    active_turn_id = getattr(agent, "_current_turn_id", None)
+    # Use _user_turn_id for user speech deduplication (persistent across pauses)
+    active_turn_id = getattr(agent, "_user_turn_id", None)
     last_turn_id = getattr(agent, "_last_user_commit_turn", None)
     if getattr(agent, "_pending_user_commit", False):
         return True
@@ -252,12 +512,23 @@ def _initialize_tts_plugin(
                 "Cartesia voice_id appears invalid (too short); provide the full Cartesia UUID"
             )
         voice_settings["voice_id"] = cartesia_voice_id
+        # Speed: sonic-3 requires float (normal=1.0), sonic-2 accepts strings like "fast"
+        raw_speed = provider_config.get("speed") or voice_settings.get("tts_speed")
+        if tts_model and "sonic-3" in str(tts_model):
+            try:
+                tts_speed = float(raw_speed) if raw_speed else 1.0  # Default to normal speed
+            except (ValueError, TypeError):
+                speed_map = {"slowest": 0.7, "slow": 0.85, "normal": 1.0, "fast": 1.15, "fastest": 1.3}
+                tts_speed = speed_map.get(str(raw_speed).lower(), 1.0)
+        else:
+            tts_speed = raw_speed or "fast"
         tts_plugin = cartesia.TTS(
             voice=cartesia_voice_id,
             model=tts_model,
             api_key=cartesia_key,
+            speed=tts_speed,
         )
-        logger.info("✅ Cartesia TTS configured with voice_id=%s model=%s", cartesia_voice_id, tts_model)
+        logger.info("✅ Cartesia TTS configured with voice_id=%s model=%s speed=%s", cartesia_voice_id, tts_model, tts_speed)
 
     ConfigValidator.validate_provider_initialization(f"{tts_provider} TTS", tts_plugin)
     return tts_plugin
@@ -703,14 +974,19 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
     # Use _built_tools stored during registration, fall back to agent.tools
     agent_tools = list(getattr(agent, "_built_tools", None) or getattr(agent, "tools", []) or [])
 
-    # Build tool lookup - LiveKit function_tool stores name in __livekit_raw_tool_info.name
+    # Build tool lookup - LiveKit function_tool stores name in .info.name (RawFunctionTool)
     tool_lookup = {}
     for t in agent_tools:
         tool_name_candidate = None
-        # LiveKit function_tool decorator stores info in __livekit_raw_tool_info (raw_schema version)
-        tool_info = getattr(t, "__livekit_raw_tool_info", None)
-        if tool_info and hasattr(tool_info, "name"):
-            tool_name_candidate = tool_info.name
+        # RawFunctionTool (from lk_function_tool with raw_schema) stores name in .info.name
+        info_obj = getattr(t, "info", None)
+        if info_obj and hasattr(info_obj, "name"):
+            tool_name_candidate = info_obj.name
+        # Fallback: LiveKit function_tool decorator may also use __livekit_raw_tool_info
+        if not tool_name_candidate:
+            tool_info = getattr(t, "__livekit_raw_tool_info", None)
+            if tool_info and hasattr(tool_info, "name"):
+                tool_name_candidate = tool_info.name
         # Fallback to __livekit_tool_info if present
         if not tool_name_candidate:
             tool_info = getattr(t, "__livekit_tool_info", None)
@@ -729,8 +1005,8 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
         tool_name = tc.get("name")
         tool_args = tc.get("arguments", {})
 
-        # Skip content_catalyst - it's a widget trigger, not a backend execution
-        if tool_name == "content_catalyst":
+        # Skip widget triggers - these trigger frontend widgets, not backend execution
+        if tool_name in ("content_catalyst", "lingua"):
             continue
 
         # Find the tool function
@@ -742,20 +1018,28 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
         logger.info(f"🧰 TEXT-MODE: Executing tool '{tool_name}' with args: {tool_args}")
 
         try:
-            # Get the actual callable from the tool wrapper
-            if hasattr(tool_fn, "_callable"):
-                callable_fn = tool_fn._callable
-            elif callable(tool_fn):
-                callable_fn = tool_fn
+            # Execute the tool - RawFunctionTool from lk_function_tool wraps our context-injecting wrapper
+            # RawFunctionTool stores the callable in _func (not _callable)
+            inner_fn = getattr(tool_fn, '_func', None)
+            if inner_fn is not None and callable(inner_fn):
+                logger.info(f"🧰 TEXT-MODE: Calling inner _func: {inner_fn.__name__ if hasattr(inner_fn, '__name__') else type(inner_fn).__name__}")
+                if asyncio.iscoroutinefunction(inner_fn):
+                    tool_output = await inner_fn(**tool_args)
+                else:
+                    result = inner_fn(**tool_args)
+                    if asyncio.iscoroutine(result):
+                        tool_output = await result
+                    else:
+                        tool_output = result
+            elif asyncio.iscoroutinefunction(tool_fn):
+                tool_output = await tool_fn(**tool_args)
             else:
-                logger.warning(f"🧰 TEXT-MODE: Tool '{tool_name}' is not callable")
-                continue
-
-            # Execute the tool
-            if asyncio.iscoroutinefunction(callable_fn):
-                tool_output = await callable_fn(**tool_args)
-            else:
-                tool_output = callable_fn(**tool_args)
+                result = tool_fn(**tool_args)
+                # Handle case where sync function returns a coroutine
+                if asyncio.iscoroutine(result):
+                    tool_output = await result
+                else:
+                    tool_output = result
 
             logger.info(f"🧰 TEXT-MODE: Tool '{tool_name}' returned: {str(tool_output)[:200]}...")
 
@@ -837,6 +1121,29 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
 
             logger.info(f"🎨 TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
             break
+
+    # Check for lingua tool call from native function calling
+    if not widget_trigger:
+        for tc in detected_tool_calls:
+            if tc["name"] == "lingua":
+                logger.info(f"🌐 TEXT-MODE: Processing LINGUA tool call: {tc['arguments']}")
+                args = tc["arguments"]
+                suggested_context = args.get("suggested_context", "")
+
+                widget_trigger = {
+                    "type": "lingua",
+                    "config": {
+                        "suggested_context": suggested_context,
+                    },
+                    "message": "Opening LINGUA transcription widget..."
+                }
+
+                # Set a helpful response if none was generated
+                if not response_text:
+                    response_text = "I'll help you transcribe your audio. Please upload your file and select your preferences in the LINGUA widget below."
+
+                logger.info(f"🌐 TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
+                break
 
     # Fallback: Also check for JSON tool call in LLM text response (for models that don't support native function calling)
     if not widget_trigger:
@@ -949,6 +1256,11 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
         logger=logger,
         retries=2,
     )
+
+    # NOTE: Transcript storage for text mode is handled by FastAPI layer (embed.py)
+    # after the streaming response completes. Do NOT store here to avoid duplicates.
+    # The FastAPI layer's store_turn() handles both user and assistant messages.
+
     return payload
 
 
@@ -1146,6 +1458,9 @@ async def agent_job_handler(ctx: JobContext):
     room = ctx.room
 
     # Attach detailed LiveKit room diagnostics for track lifecycle events
+    # Event to track when avatar video is actually published (for video mode loading UX)
+    avatar_video_published_event = asyncio.Event()
+
     try:
         def _on_local_track_published(publication, track):
             try:
@@ -1160,13 +1475,20 @@ async def agent_job_handler(ctx: JobContext):
 
         def _on_track_published(publication, participant):
             try:
+                kind = getattr(publication, "kind", None)
+                identity = getattr(participant, "identity", None) or ""
                 logger.info(
                     "📡 track_published kind=%s track_sid=%s participant=%s muted=%s",
-                    getattr(publication, "kind", None),
+                    kind,
                     getattr(publication, "track_sid", None) or getattr(publication, "sid", None),
-                    getattr(participant, "identity", None),
+                    identity,
                     getattr(publication, "muted", None),
                 )
+                # Signal avatar video published when Bithuman avatar publishes video track (kind=1)
+                # This allows the frontend to hide the loading spinner only when video is ready
+                if kind == 1 and ("bithuman" in identity.lower() or "avatar" in identity.lower()):
+                    avatar_video_published_event.set()
+                    logger.info("🎬 Avatar video track published - signaling model_ready")
             except Exception as log_err:
                 logger.debug(f"Failed to log track_published: {log_err}")
 
@@ -1399,6 +1721,34 @@ async def agent_job_handler(ctx: JobContext):
         logger.info(f"🎯 Agent job running in {mode_label} mode")
         text_response_collector: Optional[TextResponseCollector] = TextResponseCollector() if is_text_mode else None
 
+        # Check for wizard mode (special guided experience)
+        room_type = metadata.get("type", "")
+        is_wizard_mode = room_type == "wizard_guide"
+        wizard_greeting = None  # Will be set if wizard mode
+
+        if is_wizard_mode:
+            logger.info(f"🧙 WIZARD MODE detected - loading wizard-specific configuration")
+            wizard_config = metadata.get("wizard_config", {})
+            current_step = wizard_config.get("current_step", 1)
+            form_data = wizard_config.get("form_data", {})
+
+            # Build wizard-specific greeting based on state
+            if current_step == 1 and not form_data.get("name"):
+                wizard_greeting = (
+                    "Hi! I'm Farah, and I'll help you create your AI sidekick today. "
+                    "Let's start with the basics. What would you like to name your sidekick?"
+                )
+            elif current_step > 1:
+                name = form_data.get("name", "your sidekick")
+                wizard_greeting = (
+                    f"Welcome back! We were working on creating {name}. "
+                    f"Let me check where we left off and continue from there."
+                )
+            else:
+                wizard_greeting = "Hi! I'm here to help you create your sidekick. What would you like to name them?"
+
+            logger.info(f"🧙 Wizard greeting prepared: {wizard_greeting[:50]}...")
+
         # Load API keys using the loader (follows dynamic loading policy)
         api_keys = APIKeyLoader.load_api_keys(metadata)
         metadata['api_keys'] = api_keys
@@ -1422,8 +1772,15 @@ async def agent_job_handler(ctx: JobContext):
             # Extract configuration from metadata
             system_prompt = metadata.get("system_prompt", "You are a helpful AI assistant.")
             voice_settings = metadata.get("voice_settings", {})
-            llm_provider = voice_settings.get("llm_provider", metadata.get("llm_provider", "openai"))
-            
+            llm_provider = voice_settings.get("llm_provider", metadata.get("llm_provider", "cerebras"))
+
+            # GLM reasoning toggle support
+            # These variables track whether we're using a GLM model that supports reasoning toggle
+            # and hold a mutable reference to the agent for the reasoning toggle tool
+            is_glm_model = False
+            glm_model_name = ""
+            agent_ref_container = {"agent": None}  # Mutable container for tool closure
+
             # Configure LLM based on provider - NO FALLBACK to environment variables
             if not llm_provider:
                 raise ConfigurationError("LLM provider required but not found (llm_provider)")
@@ -1434,7 +1791,7 @@ async def agent_job_handler(ctx: JobContext):
                 # Get model from voice_settings or metadata, with updated default
                 model = voice_settings.get("llm_model", metadata.get("model", "llama-3.3-70b-versatile"))
                 # Map old model names to new ones
-                if model == "llama3-70b-8192" or model == "llama-3.1-70b-versatile":
+                if model in ("llama3-70b-8192", "llama-3.1-70b-versatile"):
                     model = "llama-3.3-70b-versatile"
                 
                 # Groq LLM with explicit tool calling configuration
@@ -1445,6 +1802,7 @@ async def agent_job_handler(ctx: JobContext):
                     api_key=groq_key,
                     temperature=voice_settings.get("temperature", 0.8)
                 )
+                logger.info(f"✅ Groq LLM initialized: {model}")
             elif llm_provider == "cerebras":
                 cerebras_key = api_keys.get("cerebras_api_key")
                 if not cerebras_key:
@@ -1454,10 +1812,17 @@ async def agent_job_handler(ctx: JobContext):
                 os.environ["CEREBRAS_API_KEY"] = cerebras_key
                 # Align with Cerebras documented chat models
                 # https://inference-docs.cerebras.ai/api-reference/chat-completions
-                model = voice_settings.get("llm_model", metadata.get("model", "llama3.1-8b"))
+                model = voice_settings.get("llm_model", metadata.get("model", "zai-glm-4.7"))
                 llm_plugin = openai.LLM.with_cerebras(
                     model=model
                 )
+                # Check if this is a GLM model that supports reasoning toggle
+                # GLM-4.7 supports disable_reasoning parameter for fast voice responses
+                from tool_registry import _is_glm_reasoning_model
+                is_glm_model = _is_glm_reasoning_model(model)
+                if is_glm_model:
+                    glm_model_name = model
+                    logger.info(f"🧠 GLM model detected ({model}), reasoning toggle will be enabled")
             elif llm_provider == "deepinfra":
                 deepinfra_key = api_keys.get("deepinfra_api_key")
                 if not deepinfra_key:
@@ -1521,16 +1886,18 @@ async def agent_job_handler(ctx: JobContext):
                 )
 
                 try:
-                    # VAD parameters tuned to reduce false positives from ambient noise/music
+                    # VAD parameters tuned for natural speech with pauses
                     # min_speech_duration: 0.25s - requires sustained speech, filters brief sounds
-                    # min_silence_duration: 0.5s - standard pause detection
+                    # min_silence_duration: 1.5s - allow natural pauses (breathing, thinking) without triggering turn end
+                    # NOTE: This was increased from 0.5s to fix premature turn completion when users pause mid-sentence.
+                    # The turn_detection model (EnglishModel) with min_endpointing_delay=1.0s provides additional protection.
                     vad = silero.VAD.load(
                         min_speech_duration=0.25,
-                        min_silence_duration=0.5,
+                        min_silence_duration=1.5,
                     )
                     logger.info("✅ VAD loaded successfully with optimized parameters")
                     logger.info(f"📊 DIAGNOSTIC: VAD type: {type(vad)}")
-                    logger.info("📊 DIAGNOSTIC: VAD params: min_speech=0.25s, min_silence=0.5s")
+                    logger.info("📊 DIAGNOSTIC: VAD params: min_speech=0.25s, min_silence=1.5s")
                 except Exception as e:
                     logger.error(f"❌ Failed to load VAD: {e}", exc_info=True)
                     raise
@@ -1549,8 +1916,15 @@ async def agent_job_handler(ctx: JobContext):
                     )
                     tts_plugin = None
             
-            # Remove multilingual turn detector to avoid heavy HF model load/crash
-            turn_detect = None
+            # EnglishModel: lightweight ONNX-based turn detector that evaluates whether
+            # the transcript so far looks like a complete utterance before committing the turn.
+            # This prevents premature turn completion on partial/garbled STT transcripts.
+            try:
+                turn_detect = EnglishModel()
+                logger.info("✅ EnglishModel turn detector loaded successfully")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to load EnglishModel turn detector: {e}. Falling back to STT-only turn detection.")
+                turn_detect = None
             
             # Initialize context manager if we have Supabase credentials
             context_manager = None
@@ -1571,14 +1945,22 @@ async def agent_job_handler(ctx: JobContext):
                         if client_supabase_key:
                             logger.info(f"📌 Using service key from environment: {env_key}")
                 
-                # NO FALLBACK POLICY: Fail fast if no service role key
-                if not client_supabase_key:
-                    logger.error("❌ No service role key found for client Supabase - cannot proceed")
-                    raise ValueError("Client Supabase service role key is required - no fallback to anon key allowed")
-                
+                # NO FALLBACK POLICY: Fail fast if credentials are missing
+                # Both URL and service role key are required for transcript storage
                 logger.info(f"📌 Supabase URL found: {bool(client_supabase_url)}")
                 logger.info(f"📌 Supabase key found: {bool(client_supabase_key)}")
-                
+
+                if not client_supabase_url and not client_supabase_key:
+                    logger.error("❌ No Supabase credentials found (both URL and key missing) - transcript storage will be disabled")
+                    raise ValueError("Client Supabase URL and service role key are required - no fallback allowed")
+                elif not client_supabase_url:
+                    logger.error(f"❌ Supabase URL missing but key found - check client configuration (client_id={client_id})")
+                    raise ValueError("Client Supabase URL is required but missing - transcript storage cannot proceed")
+                elif not client_supabase_key:
+                    logger.error(f"❌ Supabase key missing but URL found - check client configuration (client_id={client_id})")
+                    raise ValueError("Client Supabase service role key is required - no fallback to anon key allowed")
+
+                # Both URL and key are present - proceed with client creation
                 if client_supabase_url and client_supabase_key:
                     from supabase import create_client
                     try:
@@ -1598,12 +1980,18 @@ async def agent_job_handler(ctx: JobContext):
                     )
                     logger.info("✅ Context manager initialized successfully")
                 else:
+                    # This branch should not be reached since we check both URL and key above
                     logger.warning("No client Supabase credentials found - context features disabled")
+            except ValueError as ve:
+                # Re-raise ValueError for missing credentials - NO FALLBACK POLICY
+                # This ensures the agent doesn't start without transcript storage capability
+                logger.error(f"❌ CRITICAL: Supabase credential error - {ve}")
+                raise
             except Exception as e:
                 logger.error(f"Failed to initialize context manager: {e}")
                 logger.error(f"Context initialization error details: {type(e).__name__}: {str(e)}")
                 context_manager = None
-                # Continue without context - don't fail the entire agent
+                # Continue without context for non-credential errors (e.g., network issues during client creation)
             perf_summary['context_manager_init'] = time.perf_counter() - start_context_manager
 
             # Connect to the room first
@@ -1662,6 +2050,13 @@ async def agent_job_handler(ctx: JobContext):
                 "- Keep sentences concise and easy to follow when spoken aloud"
             )
             enhanced_prompt = enhanced_prompt + voice_instruction
+
+            # Add Cartesia emotion instructions if enabled
+            emotion_instructions = _get_cartesia_emotion_instructions(voice_settings)
+            if emotion_instructions:
+                enhanced_prompt = enhanced_prompt + emotion_instructions
+                logger.info("🎭 Cartesia emotion controls enabled for dynamic expression")
+
             greeting_enhanced_prompt = enhanced_prompt
             
             # Extract the user profile from initial context if available
@@ -1727,53 +2122,234 @@ async def agent_job_handler(ctx: JobContext):
             logger.info("Creating voice agent session with system prompt...")
             # Create SidekickAgent directly - eliminate nested AgentSession + voice.Agent architecture
             # This fixes duplicate event handling by using single layer architecture
-            
+
             # Get agent_id and config from metadata (prefer UUID)
             agent_id = metadata.get("agent_id") or metadata.get("agent_slug") or "default"
             agent_slug = metadata.get("agent_slug") or metadata.get("agent_id") or "default"
-            show_citations = metadata.get("show_citations", True)
+            # WIZARD MODE: Disable citations - wizard has no documents and RAG failure kills pipeline
+            show_citations = False if is_wizard_mode else metadata.get("show_citations", True)
+            if is_wizard_mode:
+                logger.info("🧙 Wizard mode: citations DISABLED to prevent RAG exceptions")
             dataset_ids = metadata.get("dataset_ids", [])
-            
-            agent = SidekickAgent(
-                instructions=enhanced_prompt,
-                stt=stt_plugin,
-                llm=llm_plugin,
-                tts=tts_plugin,
-                vad=vad,
-                context_manager=context_manager,
-                user_id=ctx.user_id,
-                client_id=client_id,
-                agent_config={
-                    'id': agent_id,
-                    'agent_slug': agent_slug,
-                    'show_citations': show_citations,
-                    'dataset_ids': dataset_ids,
-                    'rag_results_limit': metadata.get("rag_results_limit"),
-                    'rerank': metadata.get("rerank"),
-                    'api_keys': metadata.get("api_keys"),
-                },
-            )
-            logger.info("✅ Voice agent created with single-layer architecture")
-            if is_text_mode and text_response_collector:
-                agent.attach_text_response_collector(text_response_collector)
-                logger.info("📝 Text-only mode collector attached to agent")
-            
-            # Store references for event handlers in agent
-            agent._room = ctx.room  # Store room reference for agent use
-            # Enforce conversation_id from metadata (no-fallback policy)
-            conv_id = metadata.get("conversation_id")
-            if not conv_id:
-                logger.critical("❌ Missing conversation_id in metadata - cannot proceed (no-fallback policy)")
-                raise ConfigurationError("conversation_id is required in room/job metadata")
-            agent._conversation_id = conv_id
-            logger.info(f"📌 Using conversation_id: {agent._conversation_id}")
-            client_conv_id = metadata.get("client_conversation_id") or conv_id
-            agent._client_conversation_id = client_conv_id
-            # Pass the Supabase client that was created earlier
-            agent._supabase_client = client_supabase if 'client_supabase' in locals() else None
-            # Ensure transcript storage uses UUID when available
-            agent._agent_id = metadata.get("agent_id") or metadata.get("agent_slug")
-            agent._user_id = metadata.get("user_id") or ctx.user_id
+
+            # ========================================================================
+            # BUILD TOOLS BEFORE CREATING AGENT
+            # Tools must be passed to the Agent constructor for LLM to use them
+            # ========================================================================
+            built_tools: List[Any] = []
+            registry: Optional[ToolRegistry] = None
+            tracked_tool_slugs: List[str] = []
+
+            try:
+                tool_defs = list(metadata.get("tools") or [])
+
+                # Only add built-in user_overview tool if:
+                # 1. It's not a wizard (wizards don't need user overview)
+                # 2. The sidekick has 'usersense' ability OR tools include a user_overview type
+                abilities = metadata.get("abilities") or []
+                has_usersense = (
+                    "usersense" in [a.lower() for a in abilities] or
+                    any(t.get("type") == "user_overview" for t in tool_defs)
+                )
+
+                if has_usersense and not is_wizard_mode:
+                    user_overview_tool_def = {
+                        "id": "builtin_update_user_overview",
+                        "slug": "update_user_overview",
+                        "type": "user_overview",
+                        "description": "Update persistent notes about this user (shared across all sidekicks)."
+                    }
+                    tool_defs.append(user_overview_tool_def)
+                    logger.info("🧰 UserSense enabled: adding update_user_overview tool")
+                elif not is_wizard_mode:
+                    logger.info("🧰 UserSense not enabled: skipping update_user_overview tool")
+
+                if tool_defs:
+                    logger.info(f"🧰 Building tools before agent creation: count={len(tool_defs)}")
+                    try:
+                        slugs = [t.get("slug") or t.get("name") or t.get("id") for t in tool_defs]
+                        logger.info(f"🧰 Tool defs slugs: {slugs}")
+                    except Exception:
+                        pass
+                    primary_supabase_client = client_supabase if 'client_supabase' in locals() else None
+                    registry = ToolRegistry(
+                        tools_config=metadata.get("tools_config") or {},
+                        api_keys=metadata.get("api_keys") or {},
+                        primary_supabase_client=primary_supabase_client,
+                        platform_supabase_client=PLATFORM_SUPABASE,
+                        tool_result_callback=None,  # Set later for text mode after callback is defined
+                    )
+                    # Pass GLM model info and agent container for reasoning toggle tool
+                    # The agent_ref_container will be populated after agent creation
+                    built_tools = registry.build(
+                        tool_defs,
+                        model_name=glm_model_name if is_glm_model else None,
+                        agent_ref=agent_ref_container
+                    )
+                    if built_tools:
+                        logger.info(f"🧰 Built {len(built_tools)} tools successfully")
+                        for tool_def in tool_defs:
+                            tool_type = tool_def.get("type")
+                            if tool_type not in {"n8n", "asana", "helpscout", "user_overview", "content_catalyst", "documentsense", "lingua"}:
+                                continue
+                            slug_candidate = tool_def.get("slug") or tool_def.get("name") or tool_def.get("id")
+                            if slug_candidate:
+                                tracked_tool_slugs.append(slug_candidate)
+                    else:
+                        logger.warning("🧰 No tools were built from provided definitions")
+            except Exception as e:
+                logger.warning(f"Tool building failed: {type(e).__name__}: {e}")
+                import traceback
+                logger.warning(f"Tool building traceback: {traceback.format_exc()}")
+
+            # ========================================================================
+            # WIZARD MODE: Skip tool building - WizardGuideAgent uses TaskGroup with per-step tools
+            # ========================================================================
+            if is_wizard_mode:
+                # WizardGuideAgent handles its own tools via AgentTask classes
+                # Each task has focused tools (e.g., NameTask has set_name)
+                # No need to build wizard tools here
+                logger.info("🧙 Wizard mode: skipping tool building - WizardGuideAgent uses TaskGroup-based flow")
+
+            # Load conversation history for resumed conversations (voice/video mode)
+            # This allows the agent to have context from previous turns in the conversation
+            initial_chat_ctx = None
+            conv_id_for_history = metadata.get("conversation_id")
+            if conv_id_for_history and not is_text_mode:
+                try:
+                    supabase_for_history = client_supabase if 'client_supabase' in locals() else None
+                    history_messages = await _load_conversation_history(
+                        supabase_for_history,
+                        conv_id_for_history,
+                        limit=30  # Limit to avoid token overflow
+                    )
+                    if history_messages:
+                        initial_chat_ctx = llm.ChatContext()
+                        # NOTE: Do NOT add system prompt here - the agent's `instructions` parameter handles it
+                        # Adding it here would create duplicate system messages in the chat context
+                        # Add conversation history (skip any system messages as those are handled by instructions)
+                        for msg in history_messages:
+                            if msg.get("role") == "system":
+                                continue  # Skip system messages - handled by agent instructions
+                            initial_chat_ctx.add_message(role=msg["role"], content=msg["content"])
+                        logger.info(f"📜 Loaded {len(history_messages)} messages into initial chat context for voice mode")
+                except Exception as hist_err:
+                    logger.warning(f"Failed to load conversation history for chat context: {hist_err}")
+
+            # NOTE: For wizard mode, we DON'T need to add the greeting to initial_chat_ctx
+            # The greeting is spoken via session.say() later, and the SDK automatically adds
+            # spoken content to the chat context. Adding it here would create duplicate messages.
+            #
+            # Previously we added it manually which caused:
+            # - Duplicate assistant messages in chat context
+            # - LLM confusion leading to empty responses
+            #
+            # The SDK handles chat context management automatically when using session.say()
+            if is_wizard_mode and wizard_greeting:
+                logger.info(f"🧙 Wizard greeting will be spoken via session.say() - SDK handles chat context automatically")
+
+            # ========================================================================
+            # CREATE AGENT (WizardGuideAgent for wizard mode, SidekickAgent otherwise)
+            # ========================================================================
+            if is_wizard_mode:
+                # WIZARD MODE: Use WizardGuideAgent with TaskGroup-based flow
+                # Each wizard step is a separate AgentTask with focused tools
+                if WizardGuideAgent is None:
+                    logger.error("❌ Wizard mode requested but WizardGuideAgent is not available (import failed)")
+                    raise ValueError("Wizard mode is not available in this version of the agent")
+                wizard_config = metadata.get("wizard_config", {})
+                wizard_session_id = wizard_config.get("session_id")
+                wizard_current_step = wizard_config.get("current_step", 1)
+                wizard_form_data = wizard_config.get("form_data", {})
+                agent = WizardGuideAgent(
+                    session_id=wizard_session_id,
+                    current_step=wizard_current_step,
+                    form_data=wizard_form_data,
+                    supabase_url=metadata.get("platform_supabase_url") or metadata.get("supabase_url"),
+                    supabase_service_key=metadata.get("platform_supabase_service_role_key") or metadata.get("supabase_service_role_key"),
+                )
+                logger.info("✅ WizardGuideAgent created with TaskGroup-based flow")
+                # Wizard agent doesn't need these attributes but set them for compatibility
+                agent._room = ctx.room
+                agent._agent_id = None  # Skip transcript storage for wizard
+                agent._user_id = metadata.get("user_id") or ctx.user_id
+                agent._conversation_id = metadata.get("conversation_id")
+                agent._client_conversation_id = metadata.get("client_conversation_id") or agent._conversation_id
+                agent._supabase_client = client_supabase if 'client_supabase' in locals() else None
+            else:
+                # NORMAL MODE: Use SidekickAgent with full RAG/citations support
+                agent = SidekickAgent(
+                    instructions=enhanced_prompt,
+                    stt=stt_plugin,
+                    llm=llm_plugin,
+                    tts=tts_plugin,
+                    vad=vad,
+                    tools=built_tools if built_tools else None,
+                    chat_ctx=initial_chat_ctx,  # Pass conversation history for resumed conversations
+                    context_manager=context_manager,
+                    user_id=ctx.user_id,
+                    client_id=client_id,
+                    agent_config={
+                        'id': agent_id,
+                        'agent_slug': agent_slug,
+                        'show_citations': show_citations,
+                        'dataset_ids': dataset_ids,
+                        'rag_results_limit': metadata.get("rag_results_limit"),
+                        'rerank': metadata.get("rerank"),
+                        'api_keys': metadata.get("api_keys"),
+                        'is_wizard_mode': False,
+                        'hosting_type': metadata.get("hosting_type"),
+                    },
+                )
+                # Store registry on agent for text-mode tool execution
+                if registry:
+                    agent._tool_registry = registry
+                    agent._built_tools = built_tools
+
+                # Configure GLM reasoning toggle if using GLM model
+                # This sets up the agent for reasoning mode and populates the container
+                # that the reasoning toggle tool closure uses to access the agent
+                if is_glm_model and glm_model_name:
+                    agent_ref_container["agent"] = agent  # Populate container for tool closure
+                    agent.configure_for_glm_model(glm_model_name)
+                    logger.info(f"🧠 GLM reasoning toggle configured for agent (model: {glm_model_name})")
+
+                logger.info("✅ Voice agent created with single-layer architecture")
+                if is_text_mode and text_response_collector:
+                    agent.attach_text_response_collector(text_response_collector)
+                    logger.info("📝 Text-only mode collector attached to agent")
+
+                # Store references for event handlers in agent
+                agent._room = ctx.room  # Store room reference for agent use
+                # Enforce conversation_id from metadata (no-fallback policy)
+                conv_id = metadata.get("conversation_id")
+                if not conv_id:
+                    logger.critical("❌ Missing conversation_id in metadata - cannot proceed (no-fallback policy)")
+                    raise ConfigurationError("conversation_id is required in room/job metadata")
+                agent._conversation_id = conv_id
+                logger.info(f"📌 Using conversation_id: {agent._conversation_id}")
+                client_conv_id = metadata.get("client_conversation_id") or conv_id
+                agent._client_conversation_id = client_conv_id
+                # Pass the Supabase client that was created earlier
+                agent._supabase_client = client_supabase if 'client_supabase' in locals() else None
+                agent._agent_id = metadata.get("agent_id") or metadata.get("agent_slug")
+                agent._user_id = metadata.get("user_id") or ctx.user_id
+
+                # Diagnostic logging for transcript storage prerequisites
+                logger.info(
+                    "📋 Transcript storage prerequisites: "
+                    f"supabase_client={'SET' if agent._supabase_client else 'MISSING'}, "
+                    f"conversation_id={'SET' if agent._conversation_id else 'MISSING'}, "
+                    f"agent_id={'SET' if agent._agent_id else 'MISSING'}"
+                )
+                if not agent._supabase_client:
+                    # Log what credentials were in metadata to help debug
+                    logger.warning(
+                        "⚠️ No Supabase client - transcripts will NOT be stored. "
+                        f"Metadata had: supabase_url={bool(metadata.get('supabase_url'))}, "
+                        f"supabase_service_role_key={bool(metadata.get('supabase_service_role_key'))}, "
+                        f"supabase_service_key={bool(metadata.get('supabase_service_key'))}"
+                    )
 
             base_tool_context: Dict[str, Any] = {
                 "conversation_id": agent._conversation_id,
@@ -1796,8 +2372,9 @@ async def agent_job_handler(ctx: JobContext):
                     except Exception:
                         pass
 
-            registry: Optional[ToolRegistry] = None
-            tracked_tool_slugs: List[str] = []
+            # NOTE: registry and tracked_tool_slugs are already initialized
+            # above at the start of the tools building section.
+            # DO NOT reinitialize them here - that would overwrite the populated values.
             tool_results_buffer: List[Dict[str, Any]] = []
             try:
                 agent._tool_results_buffer = tool_results_buffer  # type: ignore[attr-defined]
@@ -1834,6 +2411,10 @@ async def agent_job_handler(ctx: JobContext):
                     except Exception as e:
                         logger.warning(f"Failed to update citations from DocumentSense: {e}")
 
+            # Set the tool result callback on the registry now that it's defined (text mode only)
+            if is_text_mode and registry:
+                registry._tool_result_callback = _tool_result_callback
+
             def push_runtime_context(updates: Dict[str, Any]) -> None:
                 if not registry or not tracked_tool_slugs or not isinstance(updates, dict):
                     return
@@ -1852,122 +2433,102 @@ async def agent_job_handler(ctx: JobContext):
                     pass
             
             # Log what's available for transcript storage
-            logger.info(f"📝 Transcript storage setup:")
-            logger.info(f"   - Has Supabase: {agent._supabase_client is not None}")
-            logger.info(f"   - Conversation ID: {agent._conversation_id}")
-            logger.info(f"   - Agent ID: {agent._agent_id}")
-            logger.info(f"   - User ID: {agent._user_id}")
-            
             logger.info(f"📊 DIAGNOSTIC: Agent type: {type(agent)}")
             logger.info(f"📊 DIAGNOSTIC: Agent inherits from: {type(agent).__bases__}")
-            
-            # Set up transcript storage with room reference
-            agent.setup_transcript_storage(ctx.room)
-            
-            # Register tools (Abilities) if provided in metadata
-            # Always include built-in tools like update_user_overview
-            try:
-                tool_defs = list(metadata.get("tools") or [])
 
-                # Add built-in user_overview tool for all agents
-                user_overview_tool_def = {
-                    "id": "builtin_update_user_overview",
-                    "slug": "update_user_overview",
-                    "type": "user_overview",
-                    "description": "Update persistent notes about this user (shared across all sidekicks)."
-                }
-                tool_defs.append(user_overview_tool_def)
+            # Set up transcript storage with room reference (SidekickAgent only)
+            # WizardGuideAgent doesn't have transcript storage - it uses TaskGroup
+            if hasattr(agent, 'setup_transcript_storage'):
+                logger.info(f"📝 Transcript storage setup:")
+                logger.info(f"   - Has Supabase: {agent._supabase_client is not None}")
+                logger.info(f"   - Conversation ID: {agent._conversation_id}")
+                logger.info(f"   - Agent ID: {agent._agent_id}")
+                logger.info(f"   - User ID: {agent._user_id}")
+                agent.setup_transcript_storage(ctx.room)
+            else:
+                logger.info(f"🧙 Skipping transcript storage setup for {type(agent).__name__}")
 
-                if tool_defs:
-                    logger.info(f"🧰 Preparing to register tools: count={len(tool_defs)} (including built-in)")
-                    try:
-                        slugs = [t.get("slug") or t.get("name") or t.get("id") for t in tool_defs]
-                        logger.info(f"🧰 Tool defs slugs: {slugs}")
-                    except Exception:
-                        pass
-                    primary_supabase_client = client_supabase if 'client_supabase' in locals() else None
-                    registry = ToolRegistry(
-                        tools_config=metadata.get("tools_config") or {},
-                        api_keys=metadata.get("api_keys") or {},
-                        primary_supabase_client=primary_supabase_client,
-                        platform_supabase_client=PLATFORM_SUPABASE,
-                        tool_result_callback=_tool_result_callback if is_text_mode else None,
-                    )
-                    tools = registry.build(tool_defs)
-                    if tools:
-                        tracked_tool_slugs = []
-                        for tool_def in tool_defs:
-                            tool_type = tool_def.get("type")
-                            # Track runtime context for tools that need user/client context
-                            if tool_type not in {"n8n", "asana", "user_overview", "content_catalyst", "documentsense"}:
-                                continue
-                            slug_candidate = (
-                                tool_def.get("slug")
-                                or tool_def.get("name")
-                                or tool_def.get("id")
-                            )
-                            if slug_candidate:
-                                tracked_tool_slugs.append(slug_candidate)
-                        if tracked_tool_slugs:
-                            logger.info(
-                                "🧰 Tracking runtime context for tools: %s",
-                                tracked_tool_slugs,
-                            )
-                            push_runtime_context(base_tool_context)
-                        combined_tools = list(agent.tools) + list(tools)
-                        update_fn = getattr(agent, "update_tools", None)
-                        if callable(update_fn):
-                            result = update_fn(combined_tools)
-                            if inspect.isawaitable(result):
-                                await result
-                            logger.info(
-                                "🧰 Registered %s tools via agent.update_tools",
-                                len(tools),
-                            )
-                        else:
-                            fallback = list(getattr(agent, "_injected_tools", []) or [])
-                            fallback.extend(tools)
-                            setattr(agent, "_injected_tools", fallback)
-                            logger.info(
-                                "🧰 Agent update_tools missing; stored %s tools on agent fallback",
-                                len(tools)
-                            )
-                        # Store registry on agent for text-mode tool execution
-                        agent._tool_registry = registry
-                        agent._built_tools = tools
-                    else:
-                        logger.warning("🧰 No tools were built from provided definitions")
-            except Exception as e:
-                logger.warning(f"Tool registration failed: {type(e).__name__}: {e}")
-            
+            # Initialize runtime context for tools if we have tracked tools
+            if tracked_tool_slugs:
+                logger.info(f"🧰 Tracking runtime context for tools: {tracked_tool_slugs}")
+                push_runtime_context(base_tool_context)
+
             # ========================================================================
-            # CREATE AGENT SESSION **AFTER** TOOLS ARE REGISTERED
-            # This ensures the LLM has function definitions available for calling
+            # CREATE AGENT SESSION
+            # Tools are already passed to Agent constructor above
             # ========================================================================
             logger.info("Creating AgentSession with plugins (after tool registration)...")
-            # Use LiveKit's ML-based turn detection model instead of STT-based turn detection
-            # This provides better handling of multi-part requests and natural pauses
-            # The model understands conversational context to reduce fragmentation
-            session = voice.AgentSession(
-                vad=vad,
-                stt=stt_plugin,
-                llm=llm_plugin,
-                tts=tts_plugin,
-                turn_detection=EnglishModel(),           # ML-based turn detection
-                # TTS-aligned transcriptions for better frontend synchronization
-                use_tts_aligned_transcript=True,         # Enable word-level transcription timing (Cartesia/ElevenLabs)
-                # Endpointing parameters for turn detection model
-                min_endpointing_delay=1.0,               # 1s pause before considering turn complete (balanced responsiveness)
-                max_endpointing_delay=6.0,               # Allow thoughtful pauses but not too long
-                # Interruption settings that prevent scheduler from getting stuck
-                allow_interruptions=True,
-                min_interruption_duration=0.5,           # Increased to avoid accidental interruptions
-                min_interruption_words=0,                # Duration-based, not word-based
-                resume_false_interruption=False,         # CRITICAL: Never try to resume - treat all interruptions as final
-                false_interruption_timeout=10.0,         # Very high timeout - essentially disable false interruption detection
-                discard_audio_if_uninterruptible=True   # Always discard audio on interruption
-            )
-            logger.info("✅ AgentSession created with %s tools available to LLM", len(agent.tools))
+            # TURN DETECTION STRATEGY (per LiveKit MCP documentation):
+            # - "stt" mode: Most robust for pause-safe speech. STT providers (Deepgram, OpenAI)
+            #   are trained to NOT emit END_OF_SPEECH during natural pauses - they wait for
+            #   sentence boundaries and grammar completion signals.
+            # - EnglishModel(): ML-based context-aware turn detection (fallback option)
+            # - "vad" mode: Fastest but prone to premature turn completion on pauses
+            #
+            # We use "stt" as primary with EnglishModel as backup for edge cases.
+            # The STT provider handles natural pauses better than VAD/ML models.
+            # WIZARD MODE: Disable interruptions to prevent reply cancellation
+            # The "user transcript final chunk" interruption was killing replies before any LLM tokens emitted
+            if is_wizard_mode:
+                logger.info("🧙 Wizard mode: using simplified session settings (no interruptions)")
+                session = voice.AgentSession(
+                    vad=vad,
+                    stt=stt_plugin,
+                    llm=llm_plugin,
+                    tts=tts_plugin,
+                    turn_detection=turn_detect or "stt",     # EnglishModel ML turn detector, fallback to STT
+                    use_tts_aligned_transcript=False,        # Disable TTS alignment in wizard mode
+                    # WIZARD TURN DETECTION: Be very patient - users give long descriptions
+                    # min_endpointing_delay: Wait this long after silence before considering turn complete
+                    # max_endpointing_delay: Absolute max wait before forcing turn completion
+                    # NOTE: Users often pause while thinking during personality descriptions
+                    min_endpointing_delay=5.0,               # Wait 5 seconds of silence before responding (increased from 3)
+                    max_endpointing_delay=15.0,              # Allow up to 15 seconds for long pauses (increased from 10)
+                    preemptive_generation=False,
+                    # WIZARD TOOL CALLS: Keep low to force one-question-at-a-time in PersonalityTask
+                    # With too many steps, LLM extracts all traits from one answer and skips questions
+                    max_tool_steps=10,                       # Needs headroom for: 6 record_* calls + skip_anything_else + confirm_personality per turn
+                    # CRITICAL: Disable interruptions in wizard mode
+                    allow_interruptions=False,               # No interruptions - let replies complete
+                    min_interruption_duration=2.0,           # High threshold if somehow enabled
+                    min_interruption_words=10,               # Require many words to interrupt
+                    resume_false_interruption=False,
+                    false_interruption_timeout=None,         # No false interruption handling
+                    # CRITICAL: Discard audio while agent is speaking to prevent echo
+                    # This fixes the issue where STT picks up agent's own TTS output
+                    discard_audio_if_uninterruptible=True    # Discard audio during agent speech (prevents echo)
+                )
+                # Mark session as wizard mode for interrupt handler
+                session._allow_interruptions = False
+            else:
+                session = voice.AgentSession(
+                    vad=vad,
+                    stt=stt_plugin,
+                    llm=llm_plugin,
+                    tts=tts_plugin,
+                    # NOTE: Tools are passed to SidekickAgent constructor only
+                    # Do NOT pass tools here - causes "duplicate function name" error
+                    # PRIMARY: EnglishModel ML-based turn detection with STT fallback
+                    # ML model evaluates whether transcript looks like a complete utterance
+                    turn_detection=turn_detect or "stt",
+                    # TTS-aligned transcriptions disabled - using TextOutputOptions with sync_transcription=False instead
+                    # This avoids duplicate transcription issues and segment synchronization problems
+                    use_tts_aligned_transcript=False,        # Disabled to prevent duplicates with TextOutputOptions
+                    # Endpointing parameters (still used as safety bounds even with STT turn detection)
+                    min_endpointing_delay=0.8,               # Buffer after STT END_OF_SPEECH before committing
+                    max_endpointing_delay=4.0,               # Max wait before forcing turn completion
+                    # PREEMPTIVE GENERATION: Disabled - was causing issues with tool call follow-up
+                    # When enabled, the second LLM call after tool execution returns empty
+                    preemptive_generation=False,
+                    # Interruption settings that prevent scheduler from getting stuck
+                    allow_interruptions=True,
+                    min_interruption_duration=0.5,           # Avoid accidental interruptions
+                    min_interruption_words=0,                # Duration-based, not word-based
+                    resume_false_interruption=False,         # CRITICAL: Never try to resume - treat all interruptions as final
+                    false_interruption_timeout=2.0,          # Standard timeout for false interruption detection
+                    discard_audio_if_uninterruptible=True   # Always discard audio on interruption
+                )
+            logger.info("✅ AgentSession created with %s tools available to LLM", len(built_tools))
             # Preserve the TTS plugin reference for text-mode diagnostics
             try:
                 session._text_tts_plugin = tts_plugin
@@ -1975,8 +2536,13 @@ async def agent_job_handler(ctx: JobContext):
                 pass
             
             # Log and capture STT transcripts; commit turn on finals
-            commit_delay = float(os.getenv("VOICE_TURN_COMMIT_DELAY", "1.4"))
-            commit_timeout = float(os.getenv("VOICE_TRANSCRIPT_TIMEOUT", "0.8"))
+            # NOTE: With turn_detection="stt", manual commit scheduling is mostly disabled.
+            # These values are used as fallbacks for edge cases where STT doesn't emit END_OF_SPEECH.
+            # Per LiveKit docs:
+            # - transcript_timeout: Max wait for final transcript (2.0-3.0s recommended)
+            # - stt_flush_duration: Silence appended to flush STT buffer (2.0s recommended)
+            commit_delay = float(os.getenv("VOICE_TURN_COMMIT_DELAY", "2.5"))
+            commit_timeout = float(os.getenv("VOICE_TRANSCRIPT_TIMEOUT", "2.5"))
 
             if not hasattr(session, "_pending_commit_task"):
                 session._pending_commit_task = None
@@ -1988,6 +2554,46 @@ async def agent_job_handler(ctx: JobContext):
                 session._last_committed_text = ""
             if not hasattr(agent, "_last_committed_text"):
                 agent._last_committed_text = ""
+            if not hasattr(session, "_watchdog_commit_task"):
+                session._watchdog_commit_task = None
+            if not hasattr(session, "_agent_state"):
+                session._agent_state = None
+            if not hasattr(session, "_turn_committed_time"):
+                session._turn_committed_time = 0.0
+
+            # Grace period after turn commit - ignore false "user speaking" during this window
+            # This prevents thinking sound feedback from interrupting the turn processing
+            turn_processing_grace_period = float(os.getenv("VOICE_TURN_GRACE_PERIOD", "3.0"))
+
+            # Watchdog timeout - longer safety net that cannot be cancelled by user_state_changed
+            # This handles cases where the thinking sound feedback causes false "speaking" detection
+            watchdog_timeout = float(os.getenv("VOICE_TURN_WATCHDOG_TIMEOUT", "8.0"))
+
+            # Event loop health check - logs periodically to verify event loop is responsive
+            async def _event_loop_health_check():
+                """Background task that logs every 2s to verify event loop is running"""
+                import time as _time_health
+                check_count = 0
+                while True:
+                    try:
+                        check_count += 1
+                        # Use INFO level for first 10 checks to make debugging easier
+                        if check_count <= 10:
+                            logger.info(f"🔄 Event loop health check #{check_count} at {_time_health.time():.3f}")
+                        else:
+                            logger.debug(f"🔄 Event loop health check #{check_count} at {_time_health.time():.3f}")
+                        await asyncio.sleep(2.0)
+                    except asyncio.CancelledError:
+                        logger.info("🔄 Event loop health check cancelled")
+                        break
+                    except Exception as health_err:
+                        logger.warning(f"🔄 Event loop health check error: {health_err}")
+                        break
+
+            # Start the health check task
+            if not hasattr(session, "_event_loop_health_task"):
+                session._event_loop_health_task = asyncio.create_task(_event_loop_health_check())
+                logger.info("🔄 Started event loop health check task")
 
             def _schedule_turn_commit():
                 pending = getattr(session, "_pending_commit_task", None)
@@ -1996,16 +2602,28 @@ async def agent_job_handler(ctx: JobContext):
 
                 async def _delayed_commit():
                     try:
-                        await asyncio.sleep(commit_delay)
+                        import time as _time_diagnostic
+                        _sleep_start = _time_diagnostic.time()
+                        logger.info(f"⏱️ Delayed commit sleeping for {commit_delay}s... (started at {_sleep_start:.3f})")
+                        try:
+                            await asyncio.sleep(commit_delay)
+                        except Exception as sleep_exc:
+                            logger.error(f"⏱️ Delayed commit asyncio.sleep FAILED: {type(sleep_exc).__name__}: {sleep_exc}")
+                            raise
+                        _sleep_end = _time_diagnostic.time()
+                        logger.info(f"⏱️ Delayed commit woke up after {_sleep_end - _sleep_start:.3f}s (expected {commit_delay}s), checking buffer...")
                         buffered = getattr(session, "_current_turn_text", "").strip()
                         if not buffered:
-                            logger.debug("Delayed commit skipped (buffer cleared before execution)")
+                            logger.info("⏱️ Delayed commit skipped (buffer cleared before execution)")
                             return
                         session.latest_user_text = buffered
                         agent.latest_user_text = buffered
                         session._last_committed_text = buffered
                         agent._last_committed_text = buffered
                         push_runtime_context({"latest_user_text": buffered})
+                        # Mark the turn commit time for grace period protection
+                        import time as _time_mod_commit
+                        session._turn_committed_time = _time_mod_commit.time()
                         session.commit_user_turn(transcript_timeout=commit_timeout)
                         # NOTE: Do NOT clear _current_turn_text here!
                         # The buffer should persist across multiple STT final chunks during a long utterance.
@@ -2018,22 +2636,106 @@ async def agent_job_handler(ctx: JobContext):
                         session._pending_commit_task = None
 
                 session._pending_commit_task = asyncio.create_task(_delayed_commit())
+                logger.info(f"⏱️ Delayed commit task scheduled (delay={commit_delay}s)")
+
+                # Start the uncancellable watchdog timer as a safety net
+                # This handles edge cases where _delayed_commit is cancelled by false speech detection
+                # (e.g., thinking sound feedback picked up by microphone)
+                _schedule_watchdog_commit()
+
+            def _schedule_watchdog_commit():
+                """
+                Schedule an uncancellable watchdog that forces commit if no LLM response starts.
+                This is a safety net for cases where:
+                1. The _delayed_commit task is cancelled by false speech detection
+                2. The STT doesn't emit END_OF_SPEECH properly
+                3. Any other edge case where the turn never completes
+                """
+                # Don't stack multiple watchdogs - cancel any existing one first
+                existing_watchdog = getattr(session, "_watchdog_commit_task", None)
+                if existing_watchdog and not existing_watchdog.done():
+                    existing_watchdog.cancel()
+
+                async def _watchdog_commit():
+                    try:
+                        # Wait for the watchdog timeout
+                        import time as _time_watchdog_diag
+                        _watchdog_sleep_start = _time_watchdog_diag.time()
+                        logger.info(f"⏱️ Watchdog sleeping for {watchdog_timeout}s... (started at {_watchdog_sleep_start:.3f})")
+                        try:
+                            await asyncio.sleep(watchdog_timeout)
+                        except Exception as watchdog_sleep_exc:
+                            logger.error(f"⏱️ Watchdog asyncio.sleep FAILED: {type(watchdog_sleep_exc).__name__}: {watchdog_sleep_exc}")
+                            raise
+                        _watchdog_sleep_end = _time_watchdog_diag.time()
+                        logger.info(f"⏱️ Watchdog woke up after {_watchdog_sleep_end - _watchdog_sleep_start:.3f}s (expected {watchdog_timeout}s), checking state...")
+
+                        # Check if agent has already started speaking (turn completed successfully)
+                        agent_state = getattr(session, "_agent_state", None)
+                        if agent_state == "speaking":
+                            logger.info("⏱️ Watchdog: agent already speaking, no action needed")
+                            return
+
+                        # Check if we already committed this turn
+                        last_committed = getattr(session, "_last_committed_text", "")
+                        buffered = getattr(session, "_current_turn_text", "").strip()
+                        if not buffered:
+                            logger.debug("Watchdog: buffer empty, no action needed")
+                            return
+
+                        if buffered == last_committed:
+                            logger.debug("Watchdog: text already committed, no action needed")
+                            return
+
+                        # Check if there's a pending commit task still running
+                        pending = getattr(session, "_pending_commit_task", None)
+                        if pending and not pending.done():
+                            logger.debug("Watchdog: pending commit task still active, waiting for it")
+                            return
+
+                        # Safety net triggered - force the commit
+                        logger.warning(
+                            f"⚠️ Watchdog triggered after {watchdog_timeout}s - forcing user turn commit "
+                            f"(buffered={len(buffered)} chars, agent_state={agent_state})"
+                        )
+                        session.latest_user_text = buffered
+                        agent.latest_user_text = buffered
+                        session._last_committed_text = buffered
+                        agent._last_committed_text = buffered
+                        push_runtime_context({"latest_user_text": buffered})
+                        # Mark the turn commit time for grace period protection
+                        import time as _time_mod_watchdog
+                        session._turn_committed_time = _time_mod_watchdog.time()
+                        session.commit_user_turn(transcript_timeout=commit_timeout)
+                        logger.info("✅ Watchdog commit successful")
+
+                    except asyncio.CancelledError:
+                        logger.debug("Watchdog commit cancelled")
+                    except Exception as we:
+                        logger.warning(f"Watchdog commit_user_turn failed: {type(we).__name__}: {we}")
+                    finally:
+                        session._watchdog_commit_task = None
+
+                session._watchdog_commit_task = asyncio.create_task(_watchdog_commit())
+                logger.info(f"⏱️ Watchdog commit task scheduled (timeout={watchdog_timeout}s)")
 
             def _commit_user_transcript_text(user_text: str) -> None:
                 if not hasattr(agent, "store_transcript"):
                     return
                 try:
+                    # Log user_turn_id which is the persistent ID for user speech merging
+                    user_turn_id = getattr(agent, "_user_turn_id", None)
                     logger.info(
-                        "📝 Scheduling user transcript commit (turn_id=%s, len=%s)",
-                        getattr(agent, "_current_turn_id", None),
+                        "📝 Scheduling user transcript commit (user_turn_id=%s, len=%s)",
+                        user_turn_id[:8] if user_turn_id else "new",
                         len(user_text),
                     )
                 except Exception:
                     pass
                 if _should_skip_user_commit(agent, user_text):
                     logger.info(
-                        "📝 Duplicate user transcript suppressed for active turn (turn_id=%s)",
-                        getattr(agent, "_current_turn_id", None) or "pending",
+                        "📝 Duplicate user transcript suppressed for active turn (user_turn_id=%s)",
+                        getattr(agent, "_user_turn_id", None) or "pending",
                     )
                     return
                 try:
@@ -2042,13 +2744,14 @@ async def agent_job_handler(ctx: JobContext):
                 except Exception:
                     pass
                 normalized_user_text = _normalize_transcript_text(user_text)
-                turn_snapshot = getattr(agent, "_current_turn_id", None)
+                turn_snapshot = getattr(agent, "_user_turn_id", None)
 
                 async def _store_user_transcript():
                     try:
                         await agent.store_transcript("user", user_text)
                         try:
-                            agent._last_user_commit_turn = turn_snapshot or getattr(agent, "_current_turn_id", None)  # type: ignore[attr-defined]
+                            # Track using user_turn_id for consistency
+                            agent._last_user_commit_turn = turn_snapshot or getattr(agent, "_user_turn_id", None)  # type: ignore[attr-defined]
                             agent._last_user_commit_normalized = normalized_user_text  # type: ignore[attr-defined]
                         except Exception:
                             pass
@@ -2193,8 +2896,8 @@ async def agent_job_handler(ctx: JobContext):
                             pass
 
                 # Second pass: word-level overlap detection
-                # If >60% of words in the transcript match words from assistant speech, it's likely echo
-                # Use lower threshold (40%) when in echo window
+                # If >80% of words in the transcript match words from assistant speech, it's likely echo
+                # Use lower threshold (60%) when in echo window
                 if clean_norm and (recent_greet or last_assistant):
                     transcript_words = set(clean_norm.split())
                     if len(transcript_words) >= 2:  # Only check if there are at least 2 words
@@ -2205,22 +2908,41 @@ async def agent_job_handler(ctx: JobContext):
                             assistant_words.update(_normalize_for_compare(last_assistant).split())
 
                         if assistant_words:
-                            # Remove common stop words from comparison
-                            stop_words = {"i", "a", "the", "to", "is", "it", "and", "or", "of", "in", "on", "at", "for", "with", "you", "me", "my", "your"}
+                            # Remove common stop words and contraction artifacts from comparison
+                            # Added: s, let, lets, ll, ve, re, d, m (common contractions split artifacts)
+                            # Added: like, would, could, should, can, will, just, what, how, when, where, why (common filler words)
+                            stop_words = {
+                                "i", "a", "the", "to", "is", "it", "and", "or", "of", "in", "on", "at", "for", "with",
+                                "you", "me", "my", "your", "we", "our", "they", "them", "their", "he", "she", "him", "her",
+                                "s", "t", "let", "lets", "ll", "ve", "re", "d", "m",  # contraction artifacts
+                                "like", "would", "could", "should", "can", "will", "just", "so", "be", "do", "does", "did",
+                                "what", "how", "when", "where", "why", "who", "which", "that", "this", "these", "those",
+                                "if", "but", "not", "no", "yes", "yeah", "ok", "okay", "um", "uh", "ah"
+                            }
                             transcript_content_words = transcript_words - stop_words
                             assistant_content_words = assistant_words - stop_words
 
                             if transcript_content_words and assistant_content_words:
                                 overlap = transcript_content_words & assistant_content_words
-                                overlap_ratio = len(overlap) / len(transcript_content_words)
 
-                                # Use lower threshold when in echo window (agent just spoke)
-                                overlap_threshold = 0.4 if in_echo_window else 0.6
+                                # Check for UNIQUE words in transcript (>4 chars, not in assistant speech)
+                                # This indicates real user input, not echo
+                                unique_content_words = {w for w in transcript_content_words if len(w) > 4 and w not in assistant_content_words}
+                                has_unique_content = len(unique_content_words) > 0
 
-                                if overlap_ratio >= overlap_threshold:
-                                    logger.info(f"🔇 Echo detected via word overlap ({overlap_ratio:.0%}, threshold={overlap_threshold}): transcript words={transcript_content_words}, assistant words overlap={overlap}")
-                                    clean_raw = ""
-                                    clean_norm = ""
+                                if has_unique_content:
+                                    logger.info(f"✅ Transcript has unique content words not in assistant speech: {unique_content_words} - NOT treating as echo")
+                                else:
+                                    overlap_ratio = len(overlap) / len(transcript_content_words)
+
+                                    # Use lower threshold when in echo window (agent just spoke)
+                                    # Increased thresholds: 0.6 -> 0.8 (normal), 0.4 -> 0.6 (echo window)
+                                    overlap_threshold = 0.6 if in_echo_window else 0.8
+
+                                    if overlap_ratio >= overlap_threshold:
+                                        logger.info(f"🔇 Echo detected via word overlap ({overlap_ratio:.0%}, threshold={overlap_threshold}): transcript words={transcript_content_words}, assistant words overlap={overlap}")
+                                        clean_raw = ""
+                                        clean_norm = ""
 
                 # Third pass: check for very short transcripts that are likely just noise/echo
                 # If transcript is <= 4 words and shares ANY significant word with assistant speech, drop it
@@ -2291,7 +3013,11 @@ async def agent_job_handler(ctx: JobContext):
                         if is_final:
                             # Only interrupt if this is NOT a duplicate transcript for the same turn
                             should_skip_duplicate = _should_skip_user_commit(agent, merged)
-                            if not should_skip_duplicate:
+                            # Check if interruptions are allowed (wizard mode disables them)
+                            allow_interrupts = getattr(session, '_allow_interruptions', True)
+                            if not allow_interrupts:
+                                logger.info("🧙 Wizard mode: skipping interrupt (allow_interruptions=False)")
+                            elif not should_skip_duplicate:
                                 try:
                                     current_speech = getattr(session, 'current_speech', None)
                                     logger.info("🔊 Attempting interrupt: current_speech=%s, merged_text=%s",
@@ -2380,7 +3106,8 @@ async def agent_job_handler(ctx: JobContext):
                             try:
                                 session._user_transcript_committed = True
                                 session._user_transcript_committed_text = _normalize_transcript_text(merged)
-                                session._user_transcript_committed_turn = getattr(agent, "_current_turn_id", None)
+                                # Track using _user_turn_id for consistent turn grouping
+                                session._user_transcript_committed_turn = getattr(agent, "_user_turn_id", None)
                             except Exception:
                                 pass
                             _schedule_turn_commit()
@@ -2392,6 +3119,12 @@ async def agent_job_handler(ctx: JobContext):
             @session.on("user_speech_committed")
             def on_user_speech(msg: llm.ChatMessage):
                 try:
+                    # Mark turn commit time for grace period protection
+                    # This prevents false speech detection from interrupting turn processing
+                    import time as _time_mod_speech_committed
+                    session._turn_committed_time = _time_mod_speech_committed.time()
+                    logger.debug(f"📝 user_speech_committed: set grace period start time")
+
                     user_text = None
                     if hasattr(msg, 'content'):
                         if isinstance(msg.content, str):
@@ -2417,104 +3150,134 @@ async def agent_job_handler(ctx: JobContext):
                             try:
                                 session._user_transcript_committed = True
                                 session._user_transcript_committed_text = normalized_user_text
-                                session._user_transcript_committed_turn = getattr(agent, "_current_turn_id", None)
+                                # Track using _user_turn_id for consistent turn grouping
+                                session._user_transcript_committed_turn = getattr(agent, "_user_turn_id", None)
                             except Exception:
                                 pass
                         _commit_user_transcript_text(user_text)
                 except Exception as e:
                     logger.error(f"Failed to capture user speech: {e}")
 
-            # Deterministic finalize: commit assistant transcript on agent_speech_committed
-            # NOTE: For voice mode, transcription_node handles all assistant transcript storage
-            # This handler is now a NO-OP for assistant transcripts to prevent duplicates
-            @session.on("agent_speech_committed")
-            def on_agent_speech(msg: llm.ChatMessage):
+            # Turn boundary detection using agent_state_changed event
+            # When agent transitions from "speaking" to another state, reset user turn state
+            # This ensures each new user utterance starts a fresh turn
+            @session.on("agent_state_changed")
+            def on_agent_state_changed(ev):
                 try:
-                    agent_text = None
-                    if hasattr(msg, 'content'):
-                        if isinstance(msg.content, str):
-                            agent_text = msg.content
-                        elif isinstance(msg.content, list):
-                            for part in msg.content:
-                                if isinstance(part, dict) and part.get("type") == "text":
-                                    agent_text = part.get("text")
-                                    break
-                    if not agent_text:
-                        return
+                    import time as _time_module
+                    old_state = getattr(ev, 'old_state', None)
+                    new_state = getattr(ev, 'new_state', None)
 
-                    # ALWAYS skip assistant transcript storage here - transcription_node handles it
-                    # The transcription_node provides better streaming UX and is the authoritative source
-                    logger.debug(f"📝 agent_speech_committed received ({len(agent_text)} chars) - skipping storage (transcription_node handles it)")
+                    # Track agent state for watchdog to check
+                    session._agent_state = new_state
 
-                    # Just track for deduplication in case store_transcript is called elsewhere
-                    # Also track timestamp for echo window suppression
-                    try:
-                        import time as _time_module
-                        agent._last_assistant_commit = agent_text
-                        agent._last_assistant_commit_time = _time_module.time()
-                        session._last_agent_speech_time = _time_module.time()
-                        logger.debug(f"📝 Updated echo tracking: last_assistant_commit_time={agent._last_assistant_commit_time}")
-                    except Exception:
-                        pass
+                    logger.info(f"📝 agent_state_changed: {old_state} → {new_state}")
 
-                    # Reset user transcript state for next turn
-                    try:
-                        session._user_transcript_committed = False
-                        session._user_transcript_committed_text = ""
-                        session._user_transcript_committed_turn = None
-                        # Clear the turn text buffer - this marks the true turn boundary
-                        session._current_turn_text = ""
-                        agent._current_turn_text = ""
-                    except Exception:
-                        pass
+                    # Stop thinking sound when agent starts speaking
+                    # NOTE: agent_started_speaking event doesn't exist in SDK 1.3.x, so we handle it here
+                    if new_state == "speaking" and old_state != "speaking":
+                        # Debug: log current state
+                        is_playing = getattr(session, "_thinking_sound_playing", False)
+                        has_handle = getattr(session, "_thinking_sound_handle", None) is not None
+                        logger.info(f"🔈 Agent started speaking - stopping thinking sound (playing={is_playing}, has_handle={has_handle})")
+
+                        # Cancel watchdog timer - turn completed successfully
+                        watchdog = getattr(session, "_watchdog_commit_task", None)
+                        if watchdog and not watchdog.done():
+                            watchdog.cancel()
+                            session._watchdog_commit_task = None
+                            logger.debug("Cancelled watchdog timer - agent started speaking")
+                        # Stop thinking sound inline (can't call _stop_thinking_sound_loop as it's defined later)
+                        try:
+                            # Always try to stop the PlayHandle if it exists, regardless of _thinking_sound_playing flag
+                            play_handle = getattr(session, "_thinking_sound_handle", None)
+                            if play_handle:
+                                try:
+                                    play_handle.stop()
+                                    logger.info("🎵 Stopped PlayHandle (agent speaking)")
+                                except Exception as handle_err:
+                                    logger.warning(f"🎵 PlayHandle stop error: {handle_err}")
+                                session._thinking_sound_handle = None
+
+                            # Also cancel the task and reset the flag
+                            if getattr(session, "_thinking_sound_playing", False):
+                                session._thinking_sound_playing = False
+                                task = getattr(session, "_thinking_sound_task", None)
+                                if task and not task.done():
+                                    task.cancel()
+                                session._thinking_sound_task = None
+                                logger.info("🎵 Cancelled thinking sound task")
+                        except Exception as stop_err:
+                            logger.warning(f"🎵 Failed to stop thinking sound: {stop_err}")
+
+                    # Reset turn state when agent finishes speaking
+                    # This happens when agent goes from "speaking" to "listening" or "idle"
+                    if old_state == "speaking" and new_state in ("listening", "idle", "thinking"):
+                        logger.info("📝 Turn boundary detected - agent finished speaking, resetting user turn state")
+                        try:
+                            session._last_agent_speech_time = _time_module.time()
+                            session._user_transcript_committed = False
+                            session._user_transcript_committed_text = ""
+                            session._user_transcript_committed_turn = None
+                            # Clear the turn text buffer - this marks the true turn boundary
+                            prev_turn_text = getattr(session, '_current_turn_text', '') or ''
+                            session._current_turn_text = ""
+                            agent._current_turn_text = ""
+                            # Reset user_turn_id when assistant completes - allows new turn to start fresh
+                            prev_turn_id = getattr(agent, '_user_turn_id', None)
+                            agent._user_turn_id = None
+                            # Also cancel any pending watchdog since turn completed
+                            watchdog = getattr(session, "_watchdog_commit_task", None)
+                            if watchdog and not watchdog.done():
+                                watchdog.cancel()
+                                session._watchdog_commit_task = None
+                            logger.info(f"📝 Turn reset complete: prev_turn_text_len={len(prev_turn_text)}, prev_turn_id={prev_turn_id[:8] if prev_turn_id else None}")
+                        except Exception as reset_err:
+                            logger.error(f"❌ Failed to reset turn state: {reset_err}")
                 except Exception as e:
-                    logger.error(f"Failed in agent_speech_committed handler: {e}")
+                    logger.error(f"Failed in agent_state_changed handler: {e}")
 
             # Store session reference on agent for access in on_user_turn_completed
             agent._agent_session = session
 
             # Debug: Confirm event handlers were registered
-            logger.info("📢 Event handlers registered: user_input_transcribed, user_speech_committed, agent_speech_committed")
+            logger.info("📢 Event handlers registered: user_input_transcribed, user_speech_committed, agent_state_changed")
 
             # Start the session with the agent and room
             logger.info("Starting AgentSession with agent and room...")
-            # Import room_io for input options
+            # Import room_io for RoomOptions configuration
             from livekit.agents.voice import room_io
-            
-            # Configure input options to prevent early disconnect
-            input_options = room_io.RoomInputOptions(
-                close_on_disconnect=False  # Keep agent running even if user disconnects briefly
-            )
 
-            # For video mode, avatar publishes audio so we disable agent's direct audio output
-            # For voice mode, agent publishes audio directly to the room
-            output_options = room_io.RoomOutputOptions(
-                audio_enabled=not is_video_mode,  # Disable for video mode - avatar handles audio
-                transcription_enabled=True,
-                audio_track_name="agent_audio",
-            )
-
+            # Configure room options for the session
+            # Per LiveKit docs, pass room_options to session.start() instead of manually creating RoomIO
+            # This ensures proper audio subscription and STT processing
             if not is_text_mode:
                 mode_str = "VIDEO" if is_video_mode else "VOICE"
-                logger.info(f"Priming RoomIO for {mode_str} mode (audio_enabled={not is_video_mode})...")
-                try:
-                    session_room_io = room_io.RoomIO(
-                        agent_session=session,
-                        room=ctx.room,
-                        input_options=input_options,
-                        output_options=output_options,
+                logger.info(f"Configuring RoomOptions for {mode_str} mode (audio_output={not is_video_mode})...")
+                # Use BVC (Background Voice Cancellation) to filter out the agent's own TTS
+                # output being picked up by the microphone - prevents echo/self-hearing issues
+                # where STT transcribes the agent's own speech as user input
+                audio_input_opts = room_io.AudioInputOptions()
+                if noise_cancellation is not None:
+                    audio_input_opts = room_io.AudioInputOptions(
+                        noise_cancellation=noise_cancellation.BVC(),  # Filter background voices including agent's TTS
                     )
-                    await session_room_io.start()
-                    logger.info(
-                        "✅ RoomIO primed | audio_attached=%s transcription_attached=%s",
-                        bool(session.output.audio),
-                        bool(session.output.transcription),
-                    )
-                except Exception as room_io_err:
-                    logger.error(f"❌ Failed to initialize RoomIO before session.start: {room_io_err}")
-                    raise
+                room_options = room_io.RoomOptions(
+                    audio_input=audio_input_opts,
+                    audio_output=not is_video_mode,  # Disable for video mode - avatar handles audio
+                    # Transcription output with sync disabled to prevent segment synchronization issues
+                    # When sync_transcription=False, text is sent immediately rather than word-by-word
+                    # This fixes the "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done" warning
+                    text_output=room_io.TextOutputOptions(
+                        sync_transcription=False,  # Send transcriptions immediately, avoid sync issues
+                    ),
+                    close_on_disconnect=False,  # Keep agent running even if user disconnects briefly
+                )
+                nc_status = "with BVC" if noise_cancellation else "without noise cancellation"
+                logger.info(f"✅ RoomOptions configured {nc_status}: audio_input=True, audio_output={not is_video_mode}, text_output=True (sync disabled)")
             else:
-                logger.info("📝 Text-only mode: skipping RoomIO audio priming")
+                logger.info("📝 Text-only mode: no RoomOptions needed")
+                room_options = None
 
             # Initialize avatar for video mode
             avatar_session = None
@@ -2582,81 +3345,92 @@ async def agent_job_handler(ctx: JobContext):
 
                     else:
                         # Bithuman avatar provider (default)
+                        # Requires a .imx model file created via Bithuman ImagineX Console
+                        if bithuman is None:
+                            raise ValueError("Bithuman plugin not available - install livekit-plugins-bithuman")
+
                         avatar_model_path = voice_settings.get("avatar_model_path")
-                        avatar_image_url = voice_settings.get("avatar_image_url")
                         avatar_model_type = voice_settings.get("avatar_model_type", "expression")
                         bithuman_api_secret = api_keys.get("bithuman_api_secret")
 
                         if not bithuman_api_secret:
                             raise ValueError("Video chat with Bithuman requires API secret in client settings")
 
+                        if not avatar_model_path:
+                            raise ValueError("Video chat with Bithuman requires avatar_model_path - upload an .imx model file in agent settings")
+
                         # Send initial loading progress
                         await send_model_loading_progress(ctx.room, 10, "Initializing avatar system...")
 
-                        # Determine mode: Local IMX (self-hosted) vs Cloud (image-based)
-                        if avatar_model_path:
-                            # LOCAL/SELF-HOSTED MODE: Use .imx model file
+                        # Check if the model is stored in Supabase (new format) or local filesystem (legacy)
+                        if avatar_model_path.startswith("supabase://"):
+                            # Download from Supabase storage
+                            logger.info(f"🎬 Bithuman: downloading IMX model from Supabase storage")
+                            client_supabase_url = metadata.get("supabase_url")
+                            client_supabase_key = metadata.get("supabase_service_key") or metadata.get("supabase_service_role_key")
+
+                            if not client_supabase_url or not client_supabase_key:
+                                raise ValueError("Cannot download IMX model: client Supabase credentials not available")
+
+                            avatar_model_path = await download_imx_from_supabase(
+                                storage_path=avatar_model_path,
+                                client_supabase_url=client_supabase_url,
+                                client_supabase_key=client_supabase_key,
+                                room=ctx.room
+                            )
+                            logger.info(f"✅ IMX model downloaded to: {avatar_model_path}")
+                        else:
+                            # Legacy: Local filesystem path
                             logger.info(f"🎬 Bithuman LOCAL mode: using IMX model at {avatar_model_path}")
                             await send_model_loading_progress(ctx.room, 15, "Loading local avatar model...")
 
-                            # Check if the model file exists
-                            if not os.path.exists(avatar_model_path):
-                                raise ValueError(f"IMX model file not found: {avatar_model_path}")
+                        # Check if the model file exists
+                        if not os.path.exists(avatar_model_path):
+                            raise ValueError(f"IMX model file not found: {avatar_model_path}")
 
-                            await send_model_loading_progress(ctx.room, 20, "Creating avatar session...")
-                            avatar_session = bithuman.AvatarSession(
-                                model_path=avatar_model_path,
-                                model=avatar_model_type,
-                                api_secret=bithuman_api_secret,
-                            )
-                            logger.info(f"✅ Bithuman AvatarSession created with local IMX model")
-                            await send_model_loading_progress(ctx.room, 30, "Avatar session created...")
-
-                        else:
-                            # CLOUD MODE: Use avatar image URL
-                            if not avatar_image_url:
-                                raise ValueError("Video chat with Bithuman requires either avatar_model_path (local) or avatar_image_url (cloud)")
-
-                            # Handle relative URLs - prepend base URL if needed
-                            if avatar_image_url.startswith('/'):
-                                base_url = os.getenv('PLATFORM_API_URL', 'https://staging.sidekickforge.com')
-                                avatar_image_url = f"{base_url}{avatar_image_url}"
-                                logger.info(f"📷 Converted relative path to full URL: {avatar_image_url[:80]}...")
-
-                            await send_model_loading_progress(ctx.room, 15, "Downloading avatar image...")
-                            logger.info(f"🎬 Bithuman CLOUD mode: downloading avatar image from {avatar_image_url[:80]}...")
-                            import httpx
-                            async with httpx.AsyncClient() as http_client:
-                                img_response = await http_client.get(avatar_image_url, timeout=30.0)
-                                img_response.raise_for_status()
-                                avatar_image = Image.open(BytesIO(img_response.content)).convert("RGB")
-                            logger.info("✅ Avatar image loaded successfully")
-                            await send_model_loading_progress(ctx.room, 25, "Creating avatar session...")
-
-                            avatar_session = bithuman.AvatarSession(
-                                avatar_image=avatar_image,
-                                model=avatar_model_type,
-                                api_secret=bithuman_api_secret,
-                            )
-                            await send_model_loading_progress(ctx.room, 30, "Avatar session created...")
+                        await send_model_loading_progress(ctx.room, 20, "Creating avatar session...")
+                        avatar_session = bithuman.AvatarSession(
+                            model_path=avatar_model_path,
+                            model=avatar_model_type,
+                            api_secret=bithuman_api_secret,
+                        )
+                        logger.info(f"✅ Bithuman AvatarSession created with local IMX model")
+                        await send_model_loading_progress(ctx.room, 30, "Avatar session created...")
 
                         logger.info(f"🎬 Starting Bithuman avatar session with LiveKit URL: {livekit_url[:30] if livekit_url else 'NOT SET'}...")
                         await send_model_loading_progress(ctx.room, 35, "Starting avatar model (this may take 15-20 seconds)...")
 
                         # Start avatar session with simulated progress updates
-                        # The actual start() call is slow (~20s), so we run progress updates in parallel
+                        # The actual start() call is fast but video track takes ~30-40s to publish
                         async def update_progress_during_load():
-                            """Send periodic progress updates during slow model load."""
+                            """Send periodic progress updates during avatar model load and video initialization."""
+                            # Phase 1: Avatar session startup (fast)
                             progress_steps = [
                                 (2.0, 45, "Loading neural network weights..."),
                                 (4.0, 55, "Initializing inference engine..."),
-                                (6.0, 65, "Warming up avatar model..."),
-                                (8.0, 75, "Preparing video stream..."),
-                                (10.0, 85, "Almost ready..."),
                             ]
                             for delay, progress, msg in progress_steps:
                                 await asyncio.sleep(delay)
                                 await send_model_loading_progress(ctx.room, progress, msg)
+
+                            # Phase 2: Wait for video track (can take 30-40 seconds)
+                            # Continue showing progress while waiting for avatar_video_published_event
+                            video_wait_steps = [
+                                (5.0, 60, "Connecting to avatar service..."),
+                                (5.0, 65, "Avatar service initializing..."),
+                                (5.0, 70, "Rendering first frames..."),
+                                (5.0, 75, "Preparing video stream..."),
+                                (5.0, 80, "Starting video broadcast..."),
+                                (5.0, 85, "Waiting for video..."),
+                                (10.0, 90, "Almost ready..."),
+                                (10.0, 95, "Finalizing video connection..."),
+                            ]
+                            for delay, progress, msg in video_wait_steps:
+                                if avatar_video_published_event.is_set():
+                                    break  # Video is ready, stop progress updates
+                                await asyncio.sleep(delay)
+                                if not avatar_video_published_event.is_set():
+                                    await send_model_loading_progress(ctx.room, progress, msg)
 
                         # Run avatar start and progress updates concurrently
                         progress_task = asyncio.create_task(update_progress_during_load())
@@ -2675,27 +3449,115 @@ async def agent_job_handler(ctx: JobContext):
                             except asyncio.CancelledError:
                                 pass
 
-                        await send_model_loading_progress(ctx.room, 100, "Avatar ready!")
-                        await send_model_ready(ctx.room)
-                        logger.info("✅ Bithuman avatar session started - video will be published")
+                        # Don't send model_ready yet - wait for actual video track to be published
+                        logger.info("✅ Bithuman avatar session started - waiting for video track to be published...")
+
+                        # Start a background task to wait for video and send model_ready
+                        async def wait_for_avatar_video_and_signal():
+                            try:
+                                # Wait up to 90 seconds for avatar video track
+                                await asyncio.wait_for(avatar_video_published_event.wait(), timeout=90.0)
+                                await send_model_loading_progress(ctx.room, 100, "Avatar ready!")
+                                await send_model_ready(ctx.room)
+                                logger.info("✅ Avatar video track published - model_ready sent to frontend")
+                            except asyncio.TimeoutError:
+                                logger.warning("⚠️ Avatar video track not published within 90s - sending model_ready anyway")
+                                await send_model_loading_progress(ctx.room, 100, "Avatar ready!")
+                                await send_model_ready(ctx.room)
+                            except Exception as e:
+                                logger.warning(f"⚠️ Error waiting for avatar video: {e}")
+                                # Still send model_ready as fallback
+                                await send_model_loading_progress(ctx.room, 100, "Avatar ready!")
+                                await send_model_ready(ctx.room)
+
+                        asyncio.create_task(wait_for_avatar_video_and_signal())
 
                 except Exception as avatar_err:
                     logger.error(f"❌ Failed to initialize {avatar_provider} avatar: {avatar_err}")
                     raise ValueError(f"Video chat initialization failed ({avatar_provider}): {avatar_err}") from avatar_err
 
-            # Start the agent session
-            if is_video_mode:
-                # In video mode, avatar publishes audio so we disable agent audio output
+            # Start the agent session with room_options (proper RoomIO integration)
+            # This ensures the session creates and manages its own RoomIO for proper audio handling
+            logger.info("Starting agent session with room_options...")
+            if room_options:
                 await session.start(
                     room=ctx.room,
                     agent=agent,
-                    room_output_options=RoomOutputOptions(audio_enabled=False),
+                    room_options=room_options,
                 )
+                logger.info(f"✅ Agent session started with RoomOptions (audio_input enabled for STT)")
             else:
                 await session.start(
                     room=ctx.room,
                     agent=agent,
                 )
+                logger.info("✅ Agent session started (text-only mode)")
+
+            # Initialize thinking sounds for voice and video modes
+            # This provides subtle audio feedback during RAG searches and tool calls
+            background_audio = None
+            if not is_text_mode:
+                try:
+                    # Read sound settings from agent configuration
+                    sound_settings = metadata.get("sound_settings", {})
+                    thinking_sound_type = sound_settings.get("thinking_sound", "none")
+                    thinking_volume = float(sound_settings.get("thinking_volume", 0.3))
+                    ambient_sound_type = sound_settings.get("ambient_sound", "none")
+                    ambient_volume = float(sound_settings.get("ambient_volume", 0.15))
+
+                    # Configure thinking sounds based on agent settings
+                    thinking_sounds = None
+                    if thinking_sound_type == "keyboard":
+                        thinking_sounds = [
+                            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=thinking_volume),
+                            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=thinking_volume * 0.8),
+                        ]
+                    elif thinking_sound_type == "beta1":
+                        # Custom thinking sound from file
+                        beta1_sound_path = "/app/sounds/thinking_beta1.mp3"
+                        thinking_sounds = [
+                            AudioConfig(beta1_sound_path, volume=thinking_volume),
+                        ]
+                    # If thinking_sound_type == "none", leave thinking_sounds as None
+
+                    # Configure ambient sounds based on agent settings
+                    ambient_sound = None
+                    if ambient_sound_type == "office":
+                        ambient_sound = AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=ambient_volume)
+                    elif ambient_sound_type == "forest":
+                        ambient_sound = AudioConfig(BuiltinAudioClip.FOREST_AMBIENCE, volume=ambient_volume)
+                    elif ambient_sound_type == "city":
+                        ambient_sound = AudioConfig(BuiltinAudioClip.CITY_AMBIENCE, volume=ambient_volume)
+                    elif ambient_sound_type == "crowded_room":
+                        ambient_sound = AudioConfig(BuiltinAudioClip.CROWDED_ROOM, volume=ambient_volume)
+                    # If ambient_sound_type == "none", leave ambient_sound as None
+
+                    # Initialize BackgroundAudioPlayer for ambient sound only
+                    # We handle thinking sound manually with looping below
+                    background_audio = None
+                    if ambient_sound:
+                        background_audio = BackgroundAudioPlayer(
+                            thinking_sound=None,  # We'll handle thinking sound manually with looping
+                            ambient_sound=ambient_sound,
+                        )
+                        await background_audio.start(room=ctx.room, agent_session=session)
+                        logger.info(f"🎵 Background audio initialized: ambient={ambient_sound_type}")
+
+                    # Store thinking sound config for manual looping playback
+                    # The built-in thinking_sound doesn't loop, so we play it manually
+                    session._thinking_sound_config = thinking_sounds
+                    session._thinking_sound_type = thinking_sound_type
+                    session._thinking_sound_playing = False
+                    session._thinking_sound_task = None
+                    session._background_audio_player = background_audio
+
+                    if thinking_sounds:
+                        logger.info(f"🎵 Thinking sound configured for manual looping: type={thinking_sound_type}")
+                    else:
+                        logger.info("🔇 No thinking sound configured")
+                except Exception as bg_audio_err:
+                    logger.warning(f"⚠️ Failed to initialize thinking sounds: {bg_audio_err}")
+                    background_audio = None
 
             if is_text_mode:
                 user_message = metadata.get("user_message")
@@ -2853,19 +3715,200 @@ async def agent_job_handler(ctx: JobContext):
             except Exception as audio_patch_err:
                 logger.warning(f"Audio output diagnostics attachment failed: {audio_patch_err}")
 
+            # Helper functions for looping thinking sound
+            # The built-in BackgroundAudioPlayer thinking_sound doesn't loop,
+            # so we implement manual looping here
+            def _start_thinking_sound_loop():
+                """Start playing thinking sound in a loop until agent starts speaking"""
+                try:
+                    thinking_config = getattr(session, "_thinking_sound_config", None)
+                    if not thinking_config:
+                        return
+                    if getattr(session, "_thinking_sound_playing", False):
+                        logger.debug("🎵 Thinking sound already playing, skipping start")
+                        return
+
+                    # Get the BackgroundAudioPlayer instance
+                    bg_player = getattr(session, "_background_audio_player", None)
+                    if not bg_player:
+                        # Create one on demand if it wasn't created for ambient sound
+                        bg_player = BackgroundAudioPlayer()
+                        asyncio.create_task(bg_player.start(room=ctx.room, agent_session=session))
+                        session._background_audio_player = bg_player
+
+                    session._thinking_sound_playing = True
+
+                    async def _play_thinking_loop():
+                        """Play thinking sound in a loop until stopped"""
+                        try:
+                            thinking_type = getattr(session, "_thinking_sound_type", "keyboard")
+                            logger.info(f"🎵 Starting looping thinking sound: type={thinking_type}")
+
+                            # Wait for BackgroundAudioPlayer to be ready before trying to play
+                            # This prevents tight loop when player isn't started yet
+                            wait_attempts = 0
+                            max_wait_attempts = 20  # 2 seconds max wait
+                            while not getattr(bg_player, '_mixer_atask', None) and wait_attempts < max_wait_attempts:
+                                wait_attempts += 1
+                                logger.debug(f"🎵 Waiting for BackgroundAudioPlayer to start (attempt {wait_attempts})")
+                                await asyncio.sleep(0.1)
+
+                            if not getattr(bg_player, '_mixer_atask', None):
+                                logger.warning("🎵 BackgroundAudioPlayer failed to start after 2s, skipping thinking sound")
+                                return
+
+                            # For file-based sounds (beta1), use the play() method with loop=True
+                            if thinking_type == "beta1":
+                                beta1_path = "/app/sounds/thinking_beta1.mp3"
+                                if os.path.exists(beta1_path):
+                                    # Store the PlayHandle so we can stop it later
+                                    # NOTE: Do NOT await - play() returns immediately, awaiting blocks until done
+                                    # With loop=True, await would block forever since audio never finishes
+                                    play_handle = bg_player.play(beta1_path, loop=True)
+                                    session._thinking_sound_handle = play_handle
+                                    logger.info(f"🎵 Started looping audio, stored PlayHandle: {play_handle}")
+                                else:
+                                    logger.warning(f"🎵 Thinking sound file not found: {beta1_path}")
+                            else:
+                                # For built-in sounds, we need to manually loop since they don't support loop=True
+                                # CRITICAL: Always yield to event loop, even on errors!
+                                consecutive_errors = 0
+                                max_consecutive_errors = 5
+                                while getattr(session, "_thinking_sound_playing", False):
+                                    for config in thinking_config:
+                                        if not getattr(session, "_thinking_sound_playing", False):
+                                            break
+                                        try:
+                                            # play() is synchronous - returns PlayHandle immediately
+                                            play_handle = bg_player.play(config)
+                                            consecutive_errors = 0  # Reset on success
+                                            # Yield to event loop - CRITICAL for other tasks to run
+                                            await asyncio.sleep(0.5)
+                                            # Stop previous sound before next iteration
+                                            if play_handle and not play_handle.done():
+                                                play_handle.stop()
+                                        except Exception as play_err:
+                                            consecutive_errors += 1
+                                            logger.warning(f"🎵 Thinking sound error ({consecutive_errors}): {type(play_err).__name__}: {play_err}")
+                                            # CRITICAL: Always sleep to prevent tight loop!
+                                            await asyncio.sleep(0.5)
+                                            if consecutive_errors >= max_consecutive_errors:
+                                                logger.warning(f"🎵 Too many consecutive errors, stopping thinking sound")
+                                                session._thinking_sound_playing = False
+                                                break
+                        except asyncio.CancelledError:
+                            logger.debug("🎵 Thinking sound loop cancelled")
+                        except Exception as loop_err:
+                            logger.warning(f"🎵 Thinking sound loop error: {loop_err}")
+                        finally:
+                            session._thinking_sound_playing = False
+
+                    # Cancel any existing task
+                    existing_task = getattr(session, "_thinking_sound_task", None)
+                    if existing_task and not existing_task.done():
+                        existing_task.cancel()
+
+                    session._thinking_sound_task = asyncio.create_task(_play_thinking_loop())
+                except Exception as start_err:
+                    logger.warning(f"🎵 Failed to start thinking sound: {start_err}")
+
+            def _stop_thinking_sound_loop():
+                """Stop the looping thinking sound"""
+                try:
+                    if not getattr(session, "_thinking_sound_playing", False):
+                        return
+
+                    logger.info("🎵 Stopping thinking sound loop")
+                    session._thinking_sound_playing = False
+
+                    # Cancel the playing task
+                    task = getattr(session, "_thinking_sound_task", None)
+                    if task and not task.done():
+                        task.cancel()
+                    session._thinking_sound_task = None
+
+                    # Stop active playback using the stored PlayHandle
+                    play_handle = getattr(session, "_thinking_sound_handle", None)
+                    if play_handle:
+                        try:
+                            play_handle.stop()
+                            logger.info("🎵 Stopped PlayHandle")
+                        except Exception as handle_err:
+                            logger.debug(f"🎵 PlayHandle stop error: {handle_err}")
+                        session._thinking_sound_handle = None
+
+                    # Also try stopping via BackgroundAudioPlayer as fallback
+                    bg_player = getattr(session, "_background_audio_player", None)
+                    if bg_player:
+                        try:
+                            bg_player.stop()
+                        except Exception:
+                            pass
+                except Exception as stop_err:
+                    logger.warning(f"🎵 Failed to stop thinking sound: {stop_err}")
+
             # Additional diagnostics: speaking and error events
             try:
                 @session.on("agent_started_speaking")
                 def _on_agent_started():
                     logger.info("🔈 agent_started_speaking")
+                    # Stop the looping thinking sound when agent starts speaking
+                    _stop_thinking_sound_loop()
 
                 @session.on("agent_stopped_speaking")
                 def _on_agent_stopped():
                     logger.info("🔇 agent_stopped_speaking")
 
                 @session.on("error")
-                def _on_session_error(err: Exception):
-                    logger.error(f"🛑 session error: {type(err).__name__}: {err}")
+                def _on_session_error(err):
+                    """Handle session errors and notify user of critical failures"""
+                    # Extract the actual error from ErrorEvent wrapper if present
+                    actual_error = err
+                    error_str = str(err)
+                    if hasattr(err, 'error'):
+                        actual_error = err.error
+                        error_str = str(actual_error)
+
+                    logger.error(f"🛑 session error: {err}")
+
+                    # Check for critical API errors that should notify the user
+                    user_message = None
+
+                    # Payment/billing errors (402)
+                    if "402" in error_str or "payment_required" in error_str.lower() or "billing" in error_str.lower():
+                        user_message = "I'm sorry, but there's a billing issue with my AI service. Please contact the administrator to resolve the payment issue."
+                        logger.error("🚨 CRITICAL: Payment required error - user notified")
+
+                    # Authentication errors (401)
+                    elif "401" in error_str or "unauthorized" in error_str.lower() or "invalid_api_key" in error_str.lower():
+                        user_message = "I'm sorry, there's an authentication problem with my AI service. Please contact the administrator."
+                        logger.error("🚨 CRITICAL: Authentication error - user notified")
+
+                    # Rate limit errors (429)
+                    elif "429" in error_str or "rate_limit" in error_str.lower() or "too_many_requests" in error_str.lower():
+                        user_message = "I'm experiencing high demand right now. Please try again in a moment."
+                        logger.warning("⚠️ Rate limit hit - user notified")
+
+                    # Model/service unavailable (503, 500)
+                    elif "503" in error_str or "500" in error_str or "service_unavailable" in error_str.lower():
+                        user_message = "My AI service is temporarily unavailable. Please try again in a few minutes."
+                        logger.error("🚨 Service unavailable - user notified")
+
+                    # Check if error is marked as non-recoverable
+                    is_recoverable = getattr(actual_error, 'recoverable', True) if hasattr(actual_error, 'recoverable') else True
+                    if hasattr(err, 'error') and hasattr(err.error, 'recoverable'):
+                        is_recoverable = err.error.recoverable
+
+                    # Only speak if we have a message and the error is not recoverable (retries exhausted)
+                    if user_message and not is_recoverable:
+                        async def _speak_error():
+                            try:
+                                # Use session.say() to speak the error message to the user
+                                await session.say(user_message, allow_interruptions=False)
+                                logger.info(f"🔊 Spoke error message to user: {user_message}")
+                            except Exception as speak_err:
+                                logger.error(f"Failed to speak error message to user: {speak_err}")
+                        asyncio.create_task(_speak_error())
 
                 # Mirror events for SDKs that emit 'assistant_*'
                 @session.on("assistant_started_speaking")
@@ -2926,71 +3969,113 @@ async def agent_job_handler(ctx: JobContext):
                     except Exception:
                         logger.info("🔊 speech_created (unable to serialize event)")
 
-                @session.on("user_started_speaking")
-                def _on_user_started():
-                    logger.info("🎤 user_started_speaking")
-                    pending = getattr(session, "_pending_commit_task", None)
-                    if pending and not pending.done():
-                        pending.cancel()
+                # NOTE: In LiveKit agents SDK 1.3.x, the user_started_speaking and user_stopped_speaking
+                # events were replaced with user_state_changed. We handle state transitions here.
+                @session.on("user_state_changed")
+                def _on_user_state_changed(ev):
+                    old_state = getattr(ev, 'old_state', None)
+                    new_state = getattr(ev, 'new_state', None)
+                    logger.info(f"🎤 user_state_changed: {old_state} → {new_state}")
 
-                    # WORKAROUND: Directly interrupt our stored speech handle
-                    # The SDK's _current_speech may be None even when audio is playing
-                    try:
-                        active_handle = getattr(session, '_active_speech_handle', None)
-                        if active_handle and not active_handle.done() and not active_handle.interrupted:
-                            logger.info("🔇 Directly interrupting stored speech handle on user_started_speaking")
-                            active_handle.interrupt(force=True)
-                    except Exception as handle_err:
-                        logger.debug("Could not interrupt stored handle: %s", handle_err)
+                    # Handle user STARTED speaking (transition TO "speaking")
+                    if new_state == "speaking" and old_state != "speaking":
+                        logger.info("🎤 User started speaking")
+                        # Stop thinking sound when user starts speaking (interruption)
+                        _stop_thinking_sound_loop()
 
-                    # Also clear audio buffers immediately
-                    try:
-                        if session.output and session.output.audio:
-                            audio_output = session.output.audio
-                            while audio_output:
-                                if hasattr(audio_output, 'clear_buffer'):
-                                    audio_output.clear_buffer()
-                                if hasattr(audio_output, '_audio_source') and hasattr(audio_output._audio_source, 'clear_queue'):
-                                    audio_output._audio_source.clear_queue()
-                                audio_output = getattr(audio_output, '_next_in_chain', None)
-                            logger.info("🔇 Audio buffers cleared on user_started_speaking")
-                    except Exception as buf_err:
-                        logger.debug("Could not clear audio buffers: %s", buf_err)
+                        # Check if we're within the grace period after a turn commit
+                        # If so, this is likely false speech detection from thinking sound feedback
+                        # and we should NOT interrupt the ongoing turn processing
+                        import time as _time_mod_grace
+                        turn_committed_at = getattr(session, "_turn_committed_time", 0) or 0
+                        time_since_commit = _time_mod_grace.time() - turn_committed_at if turn_committed_at else float('inf')
+                        agent_state = getattr(session, "_agent_state", None)
 
-                    # Attempt to barge-in by interrupting any active assistant speech via SDK
-                    try:
-                        interrupt_future = session.interrupt(force=True)
+                        if time_since_commit < turn_processing_grace_period and agent_state != "speaking":
+                            logger.warning(
+                                f"🛡️ Grace period active ({time_since_commit:.2f}s < {turn_processing_grace_period}s since commit) - "
+                                f"ignoring potential false speech detection (agent_state={agent_state})"
+                            )
+                            # Don't cancel pending commit or interrupt - let turn processing complete
+                            return
 
-                        if interrupt_future:
-                            async def _log_interrupt_result(fut: asyncio.Future):
-                                try:
-                                    await fut
-                                    logger.info("⛔ Assistant speech interrupted due to user start")
-                                except Exception as interrupt_err:
-                                    logger.debug(
-                                        "Interrupt future raised %s: %s",
-                                        type(interrupt_err).__name__,
-                                        interrupt_err,
-                                    )
+                        pending = getattr(session, "_pending_commit_task", None)
+                        if pending and not pending.done():
+                            # Log this cancellation - it can indicate false speech detection from thinking sound feedback
+                            buffered = getattr(session, "_current_turn_text", "").strip()
+                            logger.info(
+                                f"⚠️ Cancelling pending commit due to user started speaking "
+                                f"(buffered={len(buffered)} chars, watchdog will still run as fallback)"
+                            )
+                            pending.cancel()
 
-                            asyncio.create_task(_log_interrupt_result(interrupt_future))
-                    except RuntimeError:
-                        logger.debug("Interrupt called while session inactive")
-                    except Exception as interrupt_call_err:
-                        logger.warning(
-                            "Failed to interrupt assistant speech: %s: %s",
-                            type(interrupt_call_err).__name__,
-                            interrupt_call_err,
-                        )
+                        # WORKAROUND: Directly interrupt our stored speech handle
+                        # The SDK's _current_speech may be None even when audio is playing
+                        try:
+                            active_handle = getattr(session, '_active_speech_handle', None)
+                            if active_handle and not active_handle.done() and not active_handle.interrupted:
+                                logger.info("🔇 Directly interrupting stored speech handle on user started speaking")
+                                active_handle.interrupt(force=True)
+                        except Exception as handle_err:
+                            logger.debug("Could not interrupt stored handle: %s", handle_err)
 
-                @session.on("user_stopped_speaking")
-                def _on_user_stopped():
-                    logger.info("🛑 user_stopped_speaking")
-                    final_text = getattr(session, "_current_turn_text", "").strip()
-                    if not final_text:
-                        logger.info("🛑 user_stopped_speaking but no buffered transcript; skipping commit schedule")
-                        return
-                    _schedule_turn_commit()
+                        # Also clear audio buffers immediately
+                        try:
+                            if session.output and session.output.audio:
+                                audio_output = session.output.audio
+                                while audio_output:
+                                    if hasattr(audio_output, 'clear_buffer'):
+                                        audio_output.clear_buffer()
+                                    if hasattr(audio_output, '_audio_source') and hasattr(audio_output._audio_source, 'clear_queue'):
+                                        audio_output._audio_source.clear_queue()
+                                    audio_output = getattr(audio_output, '_next_in_chain', None)
+                                logger.info("🔇 Audio buffers cleared on user started speaking")
+                        except Exception as buf_err:
+                            logger.debug("Could not clear audio buffers: %s", buf_err)
+
+                        # Attempt to barge-in by interrupting any active assistant speech via SDK
+                        try:
+                            interrupt_future = session.interrupt(force=True)
+
+                            if interrupt_future:
+                                async def _log_interrupt_result(fut: asyncio.Future):
+                                    try:
+                                        await fut
+                                        logger.info("⛔ Assistant speech interrupted due to user start")
+                                    except Exception as interrupt_err:
+                                        logger.debug(
+                                            "Interrupt future raised %s: %s",
+                                            type(interrupt_err).__name__,
+                                            interrupt_err,
+                                        )
+
+                                asyncio.create_task(_log_interrupt_result(interrupt_future))
+                        except RuntimeError:
+                            logger.debug("Interrupt called while session inactive")
+                        except Exception as interrupt_call_err:
+                            logger.warning(
+                                "Failed to interrupt assistant speech: %s: %s",
+                                type(interrupt_call_err).__name__,
+                                interrupt_call_err,
+                            )
+
+                    # Handle user STOPPED speaking (transition FROM "speaking" to "listening")
+                    elif old_state == "speaking" and new_state == "listening":
+                        logger.info("🛑 User stopped speaking")
+                        # NOTE: With turn_detection="stt", we do NOT manually trigger turn commits here.
+                        # The STT provider's END_OF_SPEECH event handles turn detection automatically.
+                        # STT providers (Deepgram, OpenAI) are trained to detect utterance boundaries,
+                        # not just silence - they wait for sentence completion and grammar signals.
+                        #
+                        # Manual commit scheduling was causing race conditions and premature turn completion.
+                        # Only log for diagnostics - let the STT handle the actual turn detection.
+                        final_text = getattr(session, "_current_turn_text", "").strip()
+                        if final_text:
+                            logger.info(f"🛑 User stopped: buffered={len(final_text)} chars (STT will handle turn detection)")
+
+                        # Start looping thinking sound when user stops speaking
+                        # This provides immediate feedback that the agent is processing
+                        _start_thinking_sound_loop()
 
                 if VOICE_ITEM_COMMIT_FALLBACK:
                     logger.info("ℹ️ conversation_item_added transcript fallback ENABLED")
@@ -3092,10 +4177,22 @@ async def agent_job_handler(ctx: JobContext):
             logger.info(f"   - TTS: {tts_provider}")
             
             # Note: ctx.agent is read-only property - agent is already managed by the framework
-            
+
             # Proactive greeting: trigger only when a user is present per LiveKit specs
-            if (not is_text_mode) and os.getenv("ENABLE_PROACTIVE_GREETING", "false").lower() == "true":
-                greeting_message = f"Hi {user_name}, how can I help you?"
+            # NOTE: Wizard mode is now handled by WizardGuideAgent's on_enter() via TaskGroup
+            # The NameTask greets the user, so we skip proactive greeting for wizard mode
+            proactive_greeting_enabled = (
+                (not is_wizard_mode) and  # Skip for wizard - WizardGuideAgent handles greeting
+                os.getenv("ENABLE_PROACTIVE_GREETING", "false").lower() == "true"
+            )
+            if (not is_text_mode) and proactive_greeting_enabled:
+                # Use regular greeting (wizard mode skipped above)
+                if is_wizard_mode and wizard_greeting:
+                    # This branch won't be reached since wizard mode is excluded above
+                    greeting_message = wizard_greeting
+                    logger.info(f"🧙 Using wizard-specific greeting")
+                else:
+                    greeting_message = f"Hi {user_name}, how can I help you?"
                 greeting_norm = _normalize_for_compare(greeting_message)
                 greeted_flag = {"done": False}
                 greet_lock = asyncio.Lock()
@@ -3129,7 +4226,8 @@ async def agent_job_handler(ctx: JobContext):
                                 # Wait briefly for session/audio to be fully ready
                                 await asyncio.sleep(0.5)
                                 # Get the speech handle so we can interrupt it later
-                                greeting_speech_handle = session.say(greeting_message)
+                                # Use allow_interruptions=False to ensure greeting completes fully
+                                greeting_speech_handle = session.say(greeting_message, allow_interruptions=False)
                                 # Store the handle for interrupt tracking
                                 try:
                                     session._active_speech_handle = greeting_speech_handle
@@ -3156,6 +4254,13 @@ async def agent_job_handler(ctx: JobContext):
                                             session._active_speech_handle = None
                                         except Exception:
                                             pass
+                                        # Store the greeting in the transcript database
+                                        try:
+                                            if hasattr(agent, "store_transcript"):
+                                                logger.info(f"📝 Storing greeting in transcript (LiveAvatar): '{greeting_message[:50]}...'")
+                                                await agent.store_transcript("assistant", greeting_message)
+                                        except Exception as store_err:
+                                            logger.warning(f"Failed to store greeting transcript: {store_err}")
                                     else:
                                         # Bithuman/Beyond Presence: DataStreamAudioOutput doesn't signal completion
                                         # Use the interrupt workaround
@@ -3190,18 +4295,45 @@ async def agent_job_handler(ctx: JobContext):
                                         except Exception:
                                             pass
                                         logger.info("✅ Proactive greeting sent to Bithuman (video mode - no wait)")
+                                        # Store the greeting in the transcript database
+                                        try:
+                                            if hasattr(agent, "store_transcript"):
+                                                logger.info(f"📝 Storing greeting in transcript (Bithuman): '{greeting_message[:50]}...'")
+                                                await agent.store_transcript("assistant", greeting_message)
+                                        except Exception as store_err:
+                                            logger.warning(f"Failed to store greeting transcript: {store_err}")
                                 else:
                                     # Voice mode: wait for playout completion
-                                    await asyncio.wait_for(greeting_speech_handle, timeout=6.0)
+                                    # For wizard mode, use longer timeout since greeting is longer
+                                    greeting_timeout = 15.0 if is_wizard_mode else 6.0
+                                    try:
+                                        await asyncio.wait_for(greeting_speech_handle, timeout=greeting_timeout)
+                                    except asyncio.TimeoutError:
+                                        logger.warning(f"⚠️ Greeting timed out after {greeting_timeout}s")
                                     # Clear the stored handle after playout completes
                                     try:
                                         session._active_speech_handle = None
                                     except Exception:
                                         pass
                                     logger.info("✅ Proactive greeting delivered via session.say()")
+
+                                    # Store the greeting in the transcript database
+                                    # SDK events don't reliably capture session.say() output
+                                    try:
+                                        if hasattr(agent, "store_transcript"):
+                                            logger.info(f"📝 Storing greeting in transcript: '{greeting_message[:50]}...'")
+                                            await agent.store_transcript("assistant", greeting_message)
+                                    except Exception as store_err:
+                                        logger.warning(f"Failed to store greeting transcript: {store_err}")
+
+                                    # For wizard mode, add extra settling time after greeting
+                                    # This prevents stray audio/noise from being interpreted as user input
+                                    if is_wizard_mode:
+                                        logger.info("🧙 Wizard mode: waiting for audio to settle before accepting input...")
+                                        await asyncio.sleep(1.5)  # Extra delay for wizard
+                                        logger.info("🧙 Wizard mode: ready to accept user input")
                                 if room_id:
                                     _greeted_rooms.add(room_id)
-                                # Conversation events will capture the greeting transcript; no manual store needed
                             else:
                                 logger.info("⚠️ No greeting method available on session; skipping proactive greeting")
                         except Exception as e:
@@ -3369,7 +4501,7 @@ if __name__ == "__main__":
             sys.argv.append('start')
         
         # The LiveKit CLI manages its own event loop
-        url = os.getenv("LIVEKIT_URL", "wss://litebridge-hw6srhvi.livekit.cloud")
+        url = os.getenv("LIVEKIT_URL")
         api_key = os.getenv("LIVEKIT_API_KEY")
         api_secret = os.getenv("LIVEKIT_API_SECRET")
 

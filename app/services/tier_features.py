@@ -51,7 +51,7 @@ TIER_FEATURES = {
         "display_name": "Champion",
         "display_emoji": "\U0001F535",  # Blue circle
         "hosting_type": HostingType.DEDICATED,
-        "max_sidekicks": None,  # Unlimited
+        "max_sidekicks": 5,
         "max_documents": None,
         "max_document_size_mb": 50,
         "max_conversations_stored": None,

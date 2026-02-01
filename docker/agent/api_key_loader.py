@@ -19,7 +19,7 @@ class APIKeyLoader:
     PLATFORM_DEFAULT_CONFIG = {
         "llm": {
             "provider": "cerebras",
-            "model": "glm-4-9b-chat",  # GLM 4.6
+            "model": "zai-glm-4.7",  # Cerebras GLM 4.7 (reasoning toggle enabled)
         },
         "stt": {
             "provider": "cartesia",
@@ -259,11 +259,12 @@ class APIKeyLoader:
         try:
             from supabase import create_client, Client
 
-            supabase_url = os.getenv('SUPABASE_URL')
-            supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+            # Use platform-specific Supabase credentials (fallback to regular if not set)
+            supabase_url = os.getenv('PLATFORM_SUPABASE_URL') or os.getenv('SUPABASE_URL')
+            supabase_key = os.getenv('PLATFORM_SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_SERVICE_ROLE_KEY')
 
             if not supabase_url or not supabase_key:
-                logger.error("Supabase credentials not available - cannot load platform keys")
+                logger.error("Platform Supabase credentials not available - cannot load platform keys")
                 return {}
 
             supabase: Client = create_client(supabase_url, supabase_key)

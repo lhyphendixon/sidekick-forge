@@ -428,6 +428,279 @@ TIER_HOSTING = {
     "paragon": "dedicated",
 }
 
+# Valid coupon codes and their discounts (staging/testing only)
+VALID_COUPONS = {
+    "STAGING100": {"discount_percent": 100, "message": "100% off - Free checkout!", "staging_only": True},
+    "FOUNDER50": {"discount_percent": 50, "message": "50% off - Founder's discount!", "staging_only": False},
+    "BETA25": {"discount_percent": 25, "message": "25% off - Beta tester discount!", "staging_only": False},
+}
+
+
+# ============================================================
+# COUPON VALIDATION ENDPOINT
+# ============================================================
+
+@router.post("/api/coupon/validate")
+async def validate_coupon(request: Request):
+    """
+    Validate a coupon code and return discount percentage.
+    """
+    try:
+        data = await request.json()
+        coupon_code = data.get("coupon_code", "").strip().upper()
+
+        if not coupon_code:
+            return JSONResponse(
+                content={"valid": False, "error": "Please enter a coupon code."},
+                status_code=400
+            )
+
+        coupon = VALID_COUPONS.get(coupon_code)
+
+        if not coupon:
+            return JSONResponse(
+                content={"valid": False, "error": "Invalid coupon code."},
+                status_code=400
+            )
+
+        # Check if coupon is staging-only and we're not on staging
+        is_staging = settings.app_env == "staging" or settings.development_mode
+        if coupon.get("staging_only") and not is_staging:
+            return JSONResponse(
+                content={"valid": False, "error": "This coupon is not valid in production."},
+                status_code=400
+            )
+
+        return JSONResponse(content={
+            "valid": True,
+            "discount_percent": coupon["discount_percent"],
+            "message": coupon["message"]
+        })
+
+    except Exception as e:
+        logger.error(f"Error validating coupon: {e}")
+        return JSONResponse(
+            content={"valid": False, "error": "Failed to validate coupon."},
+            status_code=500
+        )
+
+
+# ============================================================
+# FREE CHECKOUT ENDPOINT (100% discount)
+# ============================================================
+
+@router.post("/api/checkout/free")
+async def process_free_checkout(
+    request: Request,
+    tier: str = Form(...),
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+    company: Optional[str] = Form(None),
+    coupon_code: Optional[str] = Form(None),
+):
+    """
+    Process a free checkout (100% discount coupon).
+    Creates user, client, and provisions the account without payment.
+    """
+    try:
+        # Normalize email
+        email = email.lower().strip()
+        full_name = f"{first_name} {last_name}"
+
+        # Validate coupon is 100% off
+        coupon_code = (coupon_code or "").strip().upper()
+        coupon = VALID_COUPONS.get(coupon_code)
+
+        if not coupon or coupon.get("discount_percent") != 100:
+            return JSONResponse(
+                content={"error": "Invalid coupon for free checkout."},
+                status_code=400
+            )
+
+        # Check staging-only restriction
+        is_staging = settings.app_env == "staging" or settings.development_mode
+        if coupon.get("staging_only") and not is_staging:
+            return JSONResponse(
+                content={"error": "This coupon is not valid in production."},
+                status_code=400
+            )
+
+        # Validate tier
+        if tier not in TIER_PRICES:
+            tier = "champion"
+
+        # Validate passwords match
+        if password != password_confirm:
+            return JSONResponse(
+                content={"error": "Passwords don't match."},
+                status_code=400
+            )
+
+        # Validate password length
+        if len(password) < 8:
+            return JSONResponse(
+                content={"error": "Password must be at least 8 characters."},
+                status_code=400
+            )
+
+        # Check if email already exists
+        existing_user = supabase.table("profiles").select("user_id").eq("email", email).execute()
+        if existing_user.data:
+            return JSONResponse(
+                content={"error": "Email already registered. Please login instead."},
+                status_code=400
+            )
+
+        # Generate IDs
+        order_number = _generate_order_number()
+        user_id = str(uuid.uuid4())
+        client_id = str(uuid.uuid4())
+        tier_name = TIER_NAMES.get(tier, "Champion")
+        hosting_type = TIER_HOSTING.get(tier, "dedicated")
+
+        logger.info(f"Processing FREE checkout for {email} - Tier: {tier_name} - Coupon: {coupon_code}")
+
+        # 1. Create user in Supabase Auth (requires email verification like paid accounts)
+        try:
+            auth_response = supabase.auth.admin.create_user({
+                "email": email,
+                "password": password,
+                "email_confirm": False,  # Require email verification like paid accounts
+                "user_metadata": {
+                    "full_name": full_name,
+                    "company": company,
+                    "signup_source": "free_checkout",
+                    "tier": tier,
+                    "coupon_code": coupon_code,
+                }
+            })
+            if auth_response.user:
+                user_id = auth_response.user.id
+                logger.info(f"Created Supabase Auth user: {user_id}")
+            else:
+                raise Exception("Failed to create user in Supabase Auth")
+
+            # Send verification email via resend endpoint (generate_link doesn't send emails)
+            try:
+                import httpx
+                resend_response = httpx.post(
+                    f"{settings.supabase_url}/auth/v1/resend",
+                    headers={
+                        "apikey": settings.supabase_anon_key,
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "type": "signup",
+                        "email": email
+                    },
+                    timeout=10.0
+                )
+                if resend_response.status_code == 200:
+                    logger.info(f"Sent verification email to: {email}")
+                else:
+                    logger.warning(f"Resend API returned {resend_response.status_code}: {resend_response.text}")
+            except Exception as email_error:
+                logger.warning(f"Failed to send verification email: {email_error}")
+                # Continue anyway - user can request resend
+
+        except Exception as auth_error:
+            error_str = str(auth_error)
+            if "already been registered" in error_str.lower() or "already exists" in error_str.lower():
+                return JSONResponse(
+                    content={"error": "Email already registered. Please login instead."},
+                    status_code=400
+                )
+            raise
+
+        # 2. Create user profile
+        profile_data = {
+            "user_id": user_id,
+            "email": email,
+            "full_name": full_name,
+        }
+        supabase.table("profiles").insert(profile_data).execute()
+        logger.info(f"Created profile for user: {user_id}")
+
+        # 3. Create client (business entity)
+        client_name = company or full_name
+        client_data = {
+            "id": client_id,
+            "name": client_name,
+            "tier": tier,
+            "hosting_type": hosting_type,
+            "max_sidekicks": 1 if tier == "adventurer" else None,
+            "owner_user_id": user_id,
+            "owner_email": email,
+            "provisioning_status": "queued",
+        }
+        supabase.table("clients").insert(client_data).execute()
+        logger.info(f"Created client: {client_id} ({client_name})")
+
+        # 4. Update user metadata with tenant_assignments to grant admin role
+        try:
+            supabase.auth.admin.update_user_by_id(
+                user_id,
+                {
+                    "user_metadata": {
+                        "full_name": full_name,
+                        "company": company,
+                        "signup_source": "free_checkout",
+                        "tier": tier,
+                        "coupon_code": coupon_code,
+                        "tenant_assignments": {
+                            "admin_client_ids": [client_id],
+                            "subscriber_client_ids": [],
+                        }
+                    }
+                }
+            )
+            logger.info(f"Updated user metadata with admin role for client: {client_id}")
+        except Exception as meta_error:
+            logger.warning(f"Failed to update user metadata: {meta_error}")
+
+        # 5. Create order record
+        order_data = {
+            "order_number": order_number,
+            "user_id": user_id,
+            "email": email,
+            "first_name": first_name,
+            "last_name": last_name,
+            "company": company,
+            "tier": tier,
+            "price_cents": 0,
+            "payment_status": "completed",
+            "payment_method": "coupon",
+            "payment_provider": "coupon",
+            "client_id": client_id,
+            "paid_at": datetime.utcnow().isoformat(),
+        }
+        supabase.table("orders").insert(order_data).execute()
+        logger.info(f"Created order: {order_number}")
+
+        # Build success URL
+        base_url = f"https://{settings.domain_name}"
+        success_url = f"{base_url}/checkout/success?free=true&order={order_number}"
+
+        logger.info(f"FREE checkout completed for {email}")
+
+        return JSONResponse(content={
+            "success": True,
+            "redirect_url": success_url,
+            "order_number": order_number,
+        })
+
+    except Exception as e:
+        logger.error(f"Error processing free checkout: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return JSONResponse(
+            content={"error": "Failed to process checkout. Please try again."},
+            status_code=500
+        )
+
 
 def _generate_order_number() -> str:
     """Generate a unique order number like ORD-ABC12345"""
@@ -1356,20 +1629,45 @@ async def _handle_checkout_session_completed(session: dict):
         raise
 
 
+@router.get("/auth/callback", response_class=HTMLResponse)
+async def auth_callback(request: Request):
+    """
+    Handle Supabase auth callbacks (email verification, password reset, etc.)
+    Supabase redirects here with hash parameters that are parsed client-side.
+    """
+    return templates.TemplateResponse(
+        "marketing/auth-callback.html",
+        {"request": request, "current_year": datetime.now().year}
+    )
+
+
 @router.get("/checkout/success", response_class=HTMLResponse)
 async def checkout_success(
     request: Request,
     session_id: Optional[str] = None,
     pending_id: Optional[str] = None,
+    order: Optional[str] = None,
+    free: Optional[str] = None,
 ):
     """
     Display checkout success page.
-    Called after successful Stripe payment.
+    Called after successful Stripe payment or free checkout.
     """
     order_data = None
 
+    # Handle free checkout - look up order directly by order_number
+    if order and free == "true":
+        order_result = supabase.table("orders").select("*").eq(
+            "order_number", order
+        ).execute()
+        if order_result.data:
+            order_data = order_result.data[0]
+            order_data["tier_name"] = TIER_NAMES.get(order_data.get("tier"), "Unknown")
+            order_data["price"] = order_data.get("price_cents", 0) // 100
+            order_data["free_checkout"] = True
+
     # Try to get order from pending checkout
-    if pending_id:
+    if pending_id and not order_data:
         pending_result = supabase.table("pending_checkouts").select(
             "order_number, status, email, tier, first_name"
         ).eq("id", pending_id).execute()

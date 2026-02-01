@@ -633,7 +633,15 @@ class KnowledgeBaseManager {
                 console.log('Received clients:', clients);
                 this.clients = Array.isArray(clients) ? clients : [];
                 
-                if (this.clients.length > 1) {
+                const isAdventurer = {{ 'true' if user.get('is_adventurer_only') else 'false' }};
+
+                if (isAdventurer && this.clients.length >= 1) {
+                    // Adventurer tier: auto-select their single client, no dropdown
+                    console.log('Adventurer detected, auto-selecting client:', this.clients[0]);
+                    this.currentClient = this.clients[0].id;
+                    await this.loadAgents();
+                    await this.loadDocuments();
+                } else if (this.clients.length > 1) {
                     console.log('Multiple clients detected, showing client selection');
                     this.isMultiClient = true;
                     this.showClientSelection();

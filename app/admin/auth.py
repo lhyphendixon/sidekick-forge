@@ -1,6 +1,7 @@
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Dict, Any, Optional
+from uuid import UUID
 import jwt
 import os
 import logging
@@ -11,8 +12,11 @@ logger = logging.getLogger(__name__)
 # Security scheme
 security = HTTPBearer()
 
-# Admin JWT secret (in production, this would be from environment)
-ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "your-admin-secret-key")
+ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET")
+if not ADMIN_JWT_SECRET:
+    logger.warning("ADMIN_JWT_SECRET not set - using generated fallback. Set this env var in production.")
+    import secrets
+    ADMIN_JWT_SECRET = secrets.token_hex(32)
 ADMIN_JWT_ALGORITHM = "HS256"
 
 # Hardcoded admin users for now (in production, use database)
@@ -134,9 +138,8 @@ async def authenticate_admin_user(username: str, password: str) -> Optional[Dict
     if not user:
         return None
     
-    # In production, use proper password hashing (bcrypt)
-    # For now, simple comparison
-    if password == "secret":  # This would be: bcrypt.checkpw(password.encode(), user["password_hash"].encode())
+    import bcrypt
+    if bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
         return {
             "username": user["username"],
             "role": user["role"]
@@ -155,16 +158,6 @@ async def get_admin_user_from_session(request: Request) -> Optional[Dict[str, An
 async def get_admin_user(request: Request) -> Dict[str, Any]:
     """Get admin user using Supabase authentication"""
     
-    def _dev_bypass_allowed(req: Request) -> bool:
-        if os.getenv("DEVELOPMENT_MODE", "false").lower() != "true":
-            return False
-        client = getattr(req, "client", None)
-        host = getattr(client, "host", None)
-        allowed_hosts = {h.strip() for h in os.getenv("DEV_BYPASS_ALLOWED_HOSTS", "127.0.0.1,::1,localhost").split(',') if h.strip()}
-        if host and host in allowed_hosts:
-            return True
-        return False
-
     # PREFER cookie token over header token - cookie is more reliably refreshed by browser
     # This fixes issues where JavaScript sends stale localStorage tokens in headers
     cookie_token = request.cookies.get("admin_token")
@@ -179,16 +172,6 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
         token = header_token
         token_source = "header"
     else:
-        if _dev_bypass_allowed(request):
-            return {
-                "user_id": "dev-admin",
-                "email": "admin@autonomite.ai",
-                "role": "superadmin",
-                "first_name": "Dev",
-                "full_name": "Dev Admin",
-                "auth_method": "development",
-                "authenticated_at": datetime.utcnow().isoformat()
-            }
         logger.warning(f"[AUTH] No token found for {request.url.path}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -200,24 +183,6 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
     token_preview = f"{token[:10]}...{token[-10:]}" if len(token) > 20 else "short-token"
     logger.info(f"[AUTH] {request.url.path} - Token from {token_source}: {token_preview}")
 
-    # Check for development token
-    if token == "dev-token":
-        if not _dev_bypass_allowed(request):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Development token is not permitted from this host",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return {
-            "user_id": "dev-admin",
-            "email": "admin@autonomite.ai",
-            "role": "superadmin",
-            "first_name": "Dev",
-            "full_name": "Dev Admin",
-            "auth_method": "development",
-            "authenticated_at": datetime.utcnow().isoformat()
-        }
-    
     try:
         # Verify token with Supabase
         from app.integrations.supabase_client import supabase_manager
@@ -344,16 +309,103 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             is_adventurer_only = False
             user_tier = None
             primary_client_id = None
-            if role == 'admin' and visible_client_ids and len(visible_client_ids) == 1:
-                # Single-client admin - check their client's tier
-                primary_client_id = visible_client_ids[0]
-                try:
-                    client_result = admin_client.table('clients').select('tier').eq('id', primary_client_id).single().execute()
-                    if client_result.data:
-                        user_tier = client_result.data.get('tier')
-                        is_adventurer_only = (user_tier == 'adventurer')
-                except Exception as tier_err:
-                    logger.warning(f"Failed to fetch client tier for {primary_client_id}: {tier_err}")
+            # Superadmins can always create; others must have limit checked
+            can_create_sidekick = (role == 'superadmin')
+            sidekick_limit = None
+            current_sidekick_count = 0
+
+            # Check sidekick limits for non-superadmin users
+            logger.info(f"[AUTH] Sidekick limit check starting - role={role}, visible_client_ids={visible_client_ids}, tenant_assignments={tenant_assignments}")
+            if role != 'superadmin':
+                # Determine primary client - use first from visible_client_ids, or query by owner
+                if visible_client_ids:
+                    primary_client_id = visible_client_ids[0]
+                    logger.info(f"[AUTH] Using primary_client_id={primary_client_id} from visible_client_ids")
+                else:
+                    # Fallback: query client by owner_user_id
+                    try:
+                        owner_result = admin_client.table('clients').select('id').eq('owner_user_id', user.id).limit(1).execute()
+                        if owner_result.data:
+                            primary_client_id = owner_result.data[0].get('id')
+                            # Also add to visible_client_ids so routes.py can use it
+                            visible_client_ids = [primary_client_id]
+                            logger.info(f"[AUTH] Found client {primary_client_id} by owner_user_id for {user.id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to query client by owner: {e}")
+
+                if primary_client_id:
+                    try:
+                        client_result = admin_client.table('clients').select('tier').eq('id', primary_client_id).single().execute()
+                        logger.info(f"[AUTH] Client tier query result for {primary_client_id}: data={client_result.data}")
+                        if client_result.data:
+                            user_tier = client_result.data.get('tier')
+                            is_adventurer_only = (user_tier == 'adventurer')
+
+                            # Get sidekick limit for this tier
+                            from app.services.tier_features import get_feature
+                            sidekick_limit = get_feature(user_tier, 'max_sidekicks')
+                            logger.info(f"[AUTH] Tier={user_tier}, sidekick_limit={sidekick_limit}")
+
+                            # Check sidekick limit using ClientConnectionManager
+                            # This properly routes to shared pool (Adventurer) or dedicated DB (Champion/Paragon)
+                            logger.info(f"[AUTH-v4] Processing sidekick_limit={sidekick_limit} (type={type(sidekick_limit).__name__})")
+                            try:
+                                if sidekick_limit is None:
+                                    # Unlimited - can always create
+                                    can_create_sidekick = True
+                                    logger.info(f"[AUTH-v4] Sidekick limit for {primary_client_id}: unlimited, can_create=True")
+                                else:
+                                    logger.info(f"[AUTH-v4] Entering else branch (limit={sidekick_limit})")
+                                    # Use ClientConnectionManager to query the correct database
+                                    from app.services.client_connection_manager import get_connection_manager
+                                    connection_manager = get_connection_manager()
+
+                                    total_sidekick_count = 0
+                                    client_ids_to_check = visible_client_ids if visible_client_ids else [primary_client_id]
+                                    logger.info(f"[AUTH-v4] Checking clients: {client_ids_to_check}")
+
+                                    for cid in client_ids_to_check:
+                                        try:
+                                            client_uuid = UUID(cid) if isinstance(cid, str) else cid
+                                            # Get the correct database (shared pool or dedicated)
+                                            client_db = connection_manager.get_client_db_client(client_uuid)
+                                            logger.info(f"[AUTH-v4] Got client_db for {cid}")
+
+                                            # Count agents in the correct database
+                                            count_result = client_db.table('agents').select('id', count='exact').eq('client_id', str(client_uuid)).execute()
+                                            cid_count = count_result.count if count_result.count else 0
+                                            logger.info(f"[AUTH-v4] Agent count for client {cid}: {cid_count}")
+                                            total_sidekick_count += cid_count
+                                        except Exception as db_err:
+                                            logger.warning(f"[AUTH-v4] Could not count agents for client {cid}: {db_err}")
+                                            # Continue with other clients
+                                            continue
+
+                                    current_sidekick_count = total_sidekick_count
+
+                                    # Calculate if under limit
+                                    count_int = int(current_sidekick_count)
+                                    limit_int = int(sidekick_limit)
+                                    is_under_limit = count_int < limit_int
+                                    can_create_sidekick = bool(is_under_limit)
+                                    logger.info(f"[AUTH-v4] FINAL: count_int={count_int}, limit_int={limit_int}, is_under_limit={is_under_limit}, can_create_sidekick={can_create_sidekick}")
+                            except Exception as count_err:
+                                logger.error(f"[AUTH-v4] EXCEPTION in count block: {type(count_err).__name__}: {count_err}")
+                                import traceback
+                                logger.error(f"[AUTH-v4] Traceback: {traceback.format_exc()}")
+                                # Default to NOT allowing creation on error for safety
+                                can_create_sidekick = False
+                        else:
+                            logger.warning(f"[AUTH] No tier data found for client {primary_client_id}, can_create_sidekick stays False")
+                    except Exception as tier_err:
+                        logger.warning(f"Failed to fetch client tier for {primary_client_id}: {tier_err}")
+                else:
+                    # Fallback: if we can't find the client, use permissive default (matches routes.py behavior)
+                    # routes.py defaults to tier="champion" and counts 0 agents, so can_create=True
+                    logger.warning(f"[AUTH] No primary_client_id found for user {user.id} (role={role}), using permissive fallback")
+                    user_tier = "champion"  # Default tier
+                    sidekick_limit = 5  # Champion tier limit
+                    can_create_sidekick = True  # Assume 0 sidekicks since we can't count them
 
             return {
                 "user_id": user.id,
@@ -369,6 +421,9 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                 "is_adventurer_only": is_adventurer_only,
                 "user_tier": user_tier,
                 "primary_client_id": primary_client_id,
+                "can_create_sidekick": can_create_sidekick,
+                "sidekick_limit": sidekick_limit,
+                "current_sidekick_count": current_sidekick_count,
             }
         else:
             raise HTTPException(
@@ -377,19 +432,26 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             )
             
     except Exception as e:
-        # For development, allow bypass only from explicitly trusted hosts
-        if _dev_bypass_allowed(request):
-            return {
-                "user_id": "dev-admin",
-                "email": "dev@autonomite.ai",
-                "role": "superadmin",
-                "first_name": "Dev",
-                "full_name": "Dev Admin",
-                "auth_method": "development"
-            }
-        
+        logger.error(f"[AUTH] Authentication error: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed - please login again",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+async def require_admin_role(request: Request) -> Dict[str, Any]:
+    """
+    Dependency that requires the user to have admin or superadmin role.
+    Subscribers are blocked from admin-only routes.
+    """
+    user = await get_admin_user(request)
+
+    if user.get("role") == "subscriber":
+        logger.warning(f"[AUTH] Subscriber {user.get('email')} attempted to access admin-only route: {request.url.path}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This feature is not available for your account type. Please contact your administrator."
+        )
+
+    return user

@@ -434,12 +434,19 @@ class AgentContextManager:
             emb_vec = "[" + ",".join(map(str, query_embedding)) + "]"
 
             # NO FALLBACKS: Only use the correct RPC function
-            result = self.supabase.rpc("match_documents", {
+            rpc_params = {
                 "p_query_embedding": emb_vec,          # Pass as pgvector string
                 "p_agent_slug": agent_slug,            # Database function expects p_ prefix
                 "p_match_threshold": 0.3,              # Lowered from 0.5 for better recall
                 "p_match_count": match_count
-            }).execute()
+            }
+            # Shared pool match_documents requires p_client_id for tenant isolation
+            client_id = self.agent_config.get("client_id")
+            hosting_type = self.agent_config.get("hosting_type", "dedicated")
+            if client_id and hosting_type == "shared":
+                rpc_params["p_client_id"] = str(client_id)
+
+            result = self.supabase.rpc("match_documents", rpc_params).execute()
             
             match_rows = list(result.data or [])
 

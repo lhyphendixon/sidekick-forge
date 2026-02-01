@@ -256,7 +256,7 @@ class HelpScoutToolHandler:
 
         return self._client_factory(token), resolved_client_id
 
-    async def _run_action(self, client: HelpScoutClient, action: str, details: Dict[str, Any]) -> str:
+    async def _run_action(self, client: HelpScoutClient, action: str, details: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> str:
         if action == "skip":
             return ""
         if action == "list":
@@ -268,7 +268,7 @@ class HelpScoutToolHandler:
         if action == "update":
             return await self._handle_update(client, details)
         if action == "reply":
-            return await self._handle_reply(client, details)
+            return await self._handle_reply(client, details, metadata)
         if action == "note":
             return await self._handle_add_note(client, details)
         if action == "close":
@@ -301,7 +301,7 @@ class HelpScoutToolHandler:
         refresh_attempted = False
         while True:
             try:
-                return await self._run_action(client, action, details)
+                return await self._run_action(client, action, details, metadata)
             except HelpScoutAPIError as exc:
                 status = getattr(exc, "status_code", None)
                 if (
@@ -342,26 +342,44 @@ class HelpScoutToolHandler:
         if not is_helpscout_related:
             return ("skip", {"raw": message, "lower": lower})
 
-        # Determine action priority
+        # Determine action priority - use regex patterns for flexible matching
+        action = None
+
+        # Close ticket
         if any(phrase in lower for phrase in ("close ticket", "close the ticket", "close conversation", "mark closed", "mark as closed")):
             action = "close"
+        # Reopen
         elif any(phrase in lower for phrase in ("reopen", "re-open", "open again", "make active")):
             action = "reopen"
+        # Assign
         elif any(phrase in lower for phrase in ("assign to", "assign ticket", "assign the ticket", "assign conversation")):
             action = "assign"
+        # Add note
         elif any(phrase in lower for phrase in ("add note", "add a note", "internal note", "private note")):
             action = "note"
+        # Reply - check before update since "update with a message" should be a reply
         elif any(phrase in lower for phrase in ("reply to", "respond to", "send reply", "send a reply", "write back")):
             action = "reply"
+        # IMPORTANT: Check for "update ... with a message/reply" pattern - this is actually a reply action
+        elif re.search(r"\bupdate\b.*\bticket\b.*\b(with a message|with a reply|letting|telling|informing|saying)\b", lower):
+            action = "reply"
+        # Create
         elif any(word in lower for word in ("create", "new ticket", "open ticket", "create ticket", "submit ticket")):
             action = "create"
-        elif any(phrase in lower for phrase in ("update ticket", "update the ticket", "change ticket", "modify ticket")):
+        # Update - use flexible regex to match "update" followed by "ticket" with anything in between
+        elif re.search(r"\b(update|change|modify|edit)\b.*\bticket\b", lower) or re.search(r"\bticket\b.*\b(update|change|modify|edit)\b", lower):
             action = "update"
+        # Get/view
         elif any(phrase in lower for phrase in ("get ticket", "show ticket", "view ticket", "ticket details", "ticket #", "conversation #")):
             action = "get"
-        elif any(word in lower for word in ("list", "show", "what", "pending", "open", "active", "tickets", "conversations")):
+        # List - be careful not to match "ticket" (singular) as list
+        elif any(word in lower for word in ("list", "what", "pending", "tickets", "conversations")):
             action = "list"
-        else:
+        elif "show" in lower and ("tickets" in lower or "all" in lower or "my" in lower):
+            action = "list"
+
+        # Default action if nothing matched
+        if action is None:
             action = self.default_action if self.default_action in {"list", "create", "get", "update", "reply", "close"} else "list"
 
         details: Dict[str, Any] = {
@@ -383,6 +401,12 @@ class HelpScoutToolHandler:
         quoted = QUOTE_PATTERN.findall(message)
         if quoted:
             details["quoted_text"] = quoted
+
+        # Also try to extract ticket name from patterns like "the X ticket" when no quoted text
+        if not quoted and action in ("reply", "update", "get", "close", "reopen"):
+            ticket_name = self._extract_ticket_name_from_phrase(message)
+            if ticket_name:
+                details["quoted_text"] = [ticket_name]
 
         # Extract status filter
         status = self._extract_status(message)
@@ -464,11 +488,37 @@ class HelpScoutToolHandler:
         return None
 
     @staticmethod
-    def _extract_message_text(message: str) -> Optional[str]:
-        # Look for message patterns
+    def _extract_ticket_name_from_phrase(message: str) -> Optional[str]:
+        """Extract ticket name from phrases like 'the X ticket' or 'ticket X' or 'to the X ticket'."""
         patterns = [
-            r"(?:message|reply|note|text)[:\s]+[\"']?(.+?)[\"']?$",
-            r"(?:saying|with)[:\s]+[\"']?(.+?)[\"']?$",
+            # "reply to the X ticket" or "update the X ticket" - require "the" before ticket name
+            r"(?:reply|send\s+a\s+reply|respond)\s+to\s+the\s+([a-zA-Z0-9\s!?'.,]+?)\s+ticket",
+            # "update/close/reopen the X ticket"
+            r"(?:update|close|reopen|get|show|view)\s+the\s+([a-zA-Z0-9\s!?'.,]+?)\s+ticket",
+            # "the X ticket" anywhere in message
+            r"the\s+([a-zA-Z0-9\s!?'.,]+?)\s+ticket",
+            # "ticket named X" or "ticket called X"
+            r"ticket\s+(?:named|called|titled)\s+[\"']?([a-zA-Z0-9\s!?'.,]+?)[\"']?(?:\s|$)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                # Filter out common words that are not ticket names
+                stop_words = {"a", "an", "the", "this", "that", "my", "your", "our", "their", "to"}
+                if name.lower() not in stop_words and len(name) > 2:
+                    return name
+        return None
+
+    @staticmethod
+    def _extract_message_text(message: str) -> Optional[str]:
+        # Look for explicit message patterns with colon delimiter (not just whitespace)
+        # This prevents matching "reply to..." as "reply: ..."
+        patterns = [
+            # Explicit colon-delimited patterns: "message: text" or "reply: text"
+            r"(?:message|note|text)\s*:\s*[\"']?(.+?)[\"']?$",
+            # "saying X" or "with message X"
+            r"(?:saying)\s+[\"']?(.+?)[\"']?$",
         ]
         for pattern in patterns:
             match = re.search(pattern, message, re.IGNORECASE | re.DOTALL)
@@ -669,17 +719,61 @@ class HelpScoutToolHandler:
 
         return "Please specify what to update (e.g., subject or status)."
 
-    async def _handle_reply(self, client: HelpScoutClient, details: Dict[str, Any]) -> str:
+    async def _handle_reply(self, client: HelpScoutClient, details: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> str:
         conversation_id = details.get("conversation_id")
-        if not conversation_id:
-            return "Please specify a ticket ID to reply to (e.g., 'reply to ticket #123456')."
+        quoted_text = details.get("quoted_text", [])
+        metadata = metadata or {}
 
-        text = details.get("text")
-        if not text:
-            quoted = details.get("quoted_text", [])
-            if quoted:
-                text = quoted[-1]
+        # If no conversation ID but we have quoted text (ticket name), try to find it
+        if not conversation_id and quoted_text:
+            ticket_name = quoted_text[0]
+            logger.info(f"HelpScout reply: searching for ticket by name: {ticket_name}")
+            found_conv = await self._find_conversation_by_subject(client, ticket_name)
+            if found_conv:
+                conversation_id = found_conv.get("id")
+                logger.info(f"HelpScout reply: found ticket #{conversation_id} matching '{ticket_name}'")
             else:
+                return f"Could not find a ticket matching '{ticket_name}'. Please specify the ticket ID directly."
+
+        if not conversation_id:
+            return "Please specify a ticket ID or name to reply to (e.g., 'reply to ticket #123456' or 'reply to \"Subject Name\" ticket')."
+
+        # Extract the reply text - check multiple sources
+        text = details.get("text")
+
+        # Check metadata for response/message (LLM sometimes puts it there)
+        if not text and metadata:
+            for key in ("response", "message", "reply_text", "text", "body"):
+                val = metadata.get(key)
+                if isinstance(val, str) and val.strip() and len(val.strip()) > 5:
+                    text = val.strip()
+                    logger.info(f"HelpScout reply: found text in metadata.{key}")
+                    break
+
+        if not text:
+            raw = details.get("raw", "")
+            # Try to extract message content from patterns like "with a message letting them know X"
+            message_patterns = [
+                # "with a message letting them know X" or "with a reply saying X"
+                r"(?:with a message|with a reply|with message|with reply)\s+(?:letting|telling|informing|saying)\s+(?:the user|them|the customer|him|her)\s+(?:know\s+)?(.+?)(?:\.|$)",
+                # "letting/telling them know X" (gerund form)
+                r"(?:letting|telling|informing)\s+(?:the user|them|the customer|him|her)\s+(?:know\s+)?(?:that\s+)?(.+?)(?:\.|$)",
+                # "let/tell them know X" (infinitive form) - common pattern
+                r"(?:and\s+)?(?:let|tell|inform)\s+(?:the user|them|the customer|him|her)\s+(?:know\s+)?(?:that\s+)?(.+?)(?:\.|$)",
+                # Explicit colon-delimited: "message: X"
+                r"(?:message|reply)\s*:\s*[\"']?(.+?)[\"']?(?:\.|$)",
+            ]
+            for pattern in message_patterns:
+                match = re.search(pattern, raw, re.IGNORECASE | re.DOTALL)
+                if match:
+                    text = match.group(1).strip()
+                    break
+
+        if not text:
+            # Fall back to quoted text (use last one if multiple)
+            if len(quoted_text) > 1:
+                text = quoted_text[-1]
+            elif not text:
                 return "Please provide the reply message content."
 
         # First get the conversation to find the customer ID
@@ -695,7 +789,7 @@ class HelpScoutToolHandler:
 
         logger.info(
             "HelpScout reply: creating reply",
-            extra={"conversation_id": conversation_id, "customer_id": customer_id},
+            extra={"conversation_id": conversation_id, "customer_id": customer_id, "text_preview": text[:100] if text else None},
         )
 
         try:
@@ -707,7 +801,45 @@ class HelpScoutToolHandler:
         except HelpScoutAPIError as exc:
             return f"Failed to send reply: {exc}"
 
-        return f"Reply sent to ticket #{conversation_id} successfully."
+        subject = conv.get("subject", f"#{conversation_id}")
+        return f"Reply sent to ticket '{subject}' (#{conversation_id}) successfully. Message: \"{text[:100]}{'...' if len(text) > 100 else ''}\""
+
+    async def _find_conversation_by_subject(self, client: HelpScoutClient, subject_query: str) -> Optional[Dict[str, Any]]:
+        """Search for a conversation by subject name (fuzzy match)."""
+        try:
+            data = await client.list_conversations(status="all", page=1)
+            conversations = data.get("_embedded", {}).get("conversations", [])
+
+            subject_lower = subject_query.lower().strip()
+
+            # First try exact match
+            for conv in conversations:
+                conv_subject = conv.get("subject", "").lower().strip()
+                if conv_subject == subject_lower:
+                    return conv
+
+            # Then try contains match
+            for conv in conversations:
+                conv_subject = conv.get("subject", "").lower().strip()
+                if subject_lower in conv_subject or conv_subject in subject_lower:
+                    return conv
+
+            # Finally try word overlap match
+            query_words = set(subject_lower.split())
+            best_match = None
+            best_score = 0
+            for conv in conversations:
+                conv_subject = conv.get("subject", "").lower().strip()
+                conv_words = set(conv_subject.split())
+                overlap = len(query_words & conv_words)
+                if overlap > best_score and overlap >= 2:  # Require at least 2 word matches
+                    best_score = overlap
+                    best_match = conv
+
+            return best_match
+        except HelpScoutAPIError:
+            logger.warning("Failed to search for conversation by subject", exc_info=True)
+            return None
 
     async def _handle_add_note(self, client: HelpScoutClient, details: Dict[str, Any]) -> str:
         conversation_id = details.get("conversation_id")
@@ -849,6 +981,25 @@ def build_helpscout_tool(
     async def _invoke(**kwargs: Any) -> Dict[str, Any]:
         metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
         user_inquiry = kwargs.get("user_inquiry")
+
+        # Check if user_inquiry has action keywords
+        action_keywords = ("reply", "respond", "list", "show", "get", "view", "create", "new", "update", "close", "reopen", "assign", "note")
+        has_action = False
+        if isinstance(user_inquiry, str) and user_inquiry.strip():
+            lower_inquiry = user_inquiry.lower()
+            has_action = any(kw in lower_inquiry for kw in action_keywords)
+
+        # Prefer latest_user_text from metadata if user_inquiry is missing action context
+        if isinstance(metadata, dict):
+            latest_text = metadata.get("latest_user_text")
+            if isinstance(latest_text, str) and latest_text.strip():
+                latest_lower = latest_text.lower()
+                latest_has_action = any(kw in latest_lower for kw in action_keywords)
+                # Use latest_user_text if it has better action context
+                if latest_has_action and (not has_action or len(latest_text) > len(user_inquiry or "")):
+                    logger.info(f"HelpScout: Using latest_user_text (has better action context): {latest_text[:100]}")
+                    user_inquiry = latest_text.strip()
+
         if not isinstance(user_inquiry, str) or not user_inquiry.strip():
             auto_fallback = _coalesce_user_inquiry(metadata, kwargs.get("messages"))
             if auto_fallback:

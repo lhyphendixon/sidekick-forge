@@ -382,17 +382,28 @@ class LiveKitManager:
             return False
     
     def verify_webhook(self, auth_header: str, body: bytes) -> bool:
-        """Verify LiveKit webhook signature"""
+        """Verify LiveKit webhook signature using WebhookReceiver"""
         try:
+            # Create TokenVerifier and WebhookReceiver
             token_verifier = api.TokenVerifier(
                 self.api_key,
                 self.api_secret
             )
-            
-            # LiveKit uses SHA256 HMAC for webhook verification
-            token_verifier.verify(auth_header, body)
+            webhook_receiver = api.WebhookReceiver(token_verifier)
+
+            # Extract token from Authorization header (format: "Bearer <token>" or just "<token>")
+            auth_token = auth_header
+            if auth_header.lower().startswith("bearer "):
+                auth_token = auth_header[7:]  # Remove "Bearer " prefix
+
+            # Convert body to string if needed
+            body_str = body.decode("utf-8") if isinstance(body, bytes) else body
+
+            # Verify and parse the webhook event
+            # This will raise an exception if verification fails
+            webhook_receiver.receive(body_str, auth_token)
             return True
-            
+
         except Exception as e:
             logger.error(f"Webhook verification failed: {e}")
             return False

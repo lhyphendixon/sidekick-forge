@@ -19,9 +19,9 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000)
     api_workers: int = Field(default=4)
     
-    # Security
-    secret_key: str = Field(default="dev-secret-key")
-    jwt_secret_key: str = Field(default="dev-jwt-secret")
+    # Security (no defaults - must be set in environment)
+    secret_key: str = Field(...)
+    jwt_secret_key: str = Field(...)
     jwt_algorithm: str = Field(default="HS256")
     jwt_expiration_minutes: int = Field(default=1440)
     wordpress_bridge_secret: Optional[str] = Field(default=None)
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     
     # Supabase Auth Configuration
     supabase_auth_enabled: bool = Field(default=True)
-    supabase_jwt_secret: str = Field(default="demo-jwt")
+    supabase_jwt_secret: Optional[str] = Field(None)  # Deprecated: now using Signing Keys (JWKS)
     
     # Database (using Supabase)
     database_url: Optional[str] = Field(None)

@@ -6,6 +6,8 @@
     <title>Admin Login - Autonomite</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <!-- Futura PT Font from Adobe Fonts -->
+    <link rel="stylesheet" href="https://use.typekit.net/oqv5jkr.css">
     <script>
         // Custom Tailwind config with brand colors
         tailwind.config = {
@@ -71,17 +73,64 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
+
+        /* Logo text - Futura PT Light, all caps */
+        .logo-text {
+            font-family: "futura-pt", sans-serif;
+            font-weight: 300;
+            font-style: normal;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            font-size: 32px;
+            white-space: nowrap;
+            color: #111827;
+        }
+
+        /* Rotating gem logo */
+        @keyframes gem-rotate {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .logo-container {
+            position: relative;
+            width: 80px;
+            height: 80px;
+            flex-shrink: 0;
+        }
+        .logo-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 12px;
+        }
+        .logo-gem {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            animation: gem-rotate 8s linear infinite;
+        }
     </style>
 </head>
 <body class="min-h-screen flex items-center justify-center bg-dark-bg">
     <div class="login-form bg-white rounded-lg p-8 w-full max-w-md">
         <div class="text-center mb-8">
-            <img src="https://sidekickforge.com/static/images/sidekick-forge-logo.png" alt="Sidekick Forge" class="h-16 mx-auto mb-6">
-            <h1 class="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
-            <p class="text-gray-600">Sign in to access the admin dashboard</p>
+            <div class="flex items-center justify-center gap-3 mb-2">
+                <div class="logo-container">
+                    <img src="/static/images/Logos/SF-Symbol-Medium-bg.jpg" alt="" class="logo-bg" />
+                    <img src="/static/images/Logos/SF-Symbol-Medium-Gem.png" alt="Sidekick Forge" class="logo-gem" />
+                </div>
+                <span class="logo-text">Sidekick Forge</span>
+            </div>
+            <p class="text-gray-600">Sign in to continue</p>
         </div>
         
-        <form id="loginForm" class="space-y-6" method="POST" action="/admin/login" onsubmit="return handleLogin(event);">
+        <div id="loginForm" class="space-y-6">
             <div>
                 <label for="email" class="block text-sm font-medium text-gray-900">Email</label>
                 <input 
@@ -107,8 +156,8 @@
             </div>
             
             <div>
-                <button 
-                    type="submit" 
+                <button
+                    type="button"
                     id="loginBtn"
                     class="btn-primary w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-teal"
                 >
@@ -125,8 +174,8 @@
                     Forgot your password?
                 </button>
             </div>
-        </form>
-        
+        </div>
+
         {% if error %}
         <div class="mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded">
             {{ error }}
@@ -138,80 +187,75 @@
         </div>
         <div id="successMessage" class="mt-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded hidden"></div>
         
-        <!-- Development mode hint -->
-        {% if development_mode %}
-        <div class="mt-4 p-3 bg-teal-50 border border-teal-200 text-teal-700 rounded text-sm">
-            <strong>Development Mode:</strong> Use email <code>admin@autonomite.ai</code> and password <code>dev</code>
-        </div>
-        {% endif %}
     </div>
 
     <script>
+    (function() {
         // Initialize Supabase client with production credentials injected server-side
         const supabaseUrl = "{{ supabase_url }}";
         const supabaseKey = "{{ supabase_anon_key }}";
-        const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
 
-        // Check if already logged in or handle password reset
-        document.addEventListener('DOMContentLoaded', async () => {
+        // Create Supabase client instance
+        let supabaseClient;
+        try {
+            supabaseClient = window.supabase.createClient(supabaseUrl, supabaseKey);
+        } catch (err) {
+            console.error('Failed to create Supabase client:', err);
+        }
+
+        // Initialize on page load
+        async function init() {
             // Check if we were redirected from admin (to prevent loops)
             const referrer = document.referrer;
             const isFromAdmin = referrer && referrer.includes('/admin') && !referrer.includes('/admin/login');
-            
+
             // Check if we're in a redirect loop (came from admin page)
             const urlParams = new URLSearchParams(window.location.search);
             const fromRedirect = urlParams.get('redirect') === 'auth_required';
-            
+
             if (isFromAdmin || fromRedirect) {
                 // Clear any stale tokens if we were redirected from admin
-                console.log('Clearing stale tokens due to redirect from admin');
                 localStorage.removeItem('admin_token');
                 document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-                await supabase.auth.signOut();
-                // Don't try to auto-redirect, stay on login page
-                return;
+                await supabaseClient.auth.signOut();
             }
-            
+
             // Check if this is a password reset callback
             const hashParams = new URLSearchParams(window.location.hash.substring(1));
             const accessToken = hashParams.get('access_token');
             const refreshToken = hashParams.get('refresh_token');
             const type = hashParams.get('type');
-            
+
             if (type === 'recovery' && accessToken && refreshToken) {
                 // This is a password reset callback - set the session
                 try {
-                    const { data, error } = await supabase.auth.setSession({
+                    const { data, error } = await supabaseClient.auth.setSession({
                         access_token: accessToken,
                         refresh_token: refreshToken
                     });
-                    
+
                     if (error) throw error;
-                    
+
                     // Store tokens and redirect to password change
                     localStorage.setItem('admin_token', accessToken);
-                    document.cookie = `admin_token=${accessToken}; path=/; max-age=28800`;
-                    
+                    const securePart1 = window.location.protocol === 'https:' ? '; Secure' : '';
+                    document.cookie = `admin_token=${accessToken}; path=/; max-age=28800${securePart1}; SameSite=Lax`;
+
                     // Show password change form
                     showPasswordChangeForm();
                     return;
-                    
+
                 } catch (error) {
                     console.error('Session setup error:', error);
                     document.getElementById('errorMessage').textContent = 'Invalid reset link. Please try again.';
                     document.getElementById('errorMessage').classList.remove('hidden');
                 }
             }
-            
-            // DISABLE auto-redirect to prevent loops
-            // Users must manually login even if they have a session
-            // This prevents the redirect loop issue
-            console.log('Auto-redirect disabled to prevent loops');
-        });
+        }
 
-        // Handle login form - defined as global function for onsubmit fallback
+        // Handle login form
         async function handleLogin(e) {
-            e.preventDefault();
+            if (e && e.preventDefault) e.preventDefault();
 
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
@@ -224,28 +268,13 @@
             loadingMessage.classList.remove('hidden');
             errorMessage.classList.add('hidden');
 
-            // Check for development mode bypass
-            const isDevelopment = window.location.hostname === 'localhost' ||
-                                 window.location.hostname === '127.0.0.1' ||
-                                 {% if development_mode %}true{% else %}false{% endif %};
-
-            if (isDevelopment && email === 'admin@autonomite.ai' && password === 'dev') {
-                // Development mode bypass
-                console.log('Using development mode bypass');
-                localStorage.setItem('admin_token', 'dev-token');
-                document.cookie = 'admin_token=dev-token; path=/; max-age=28800';
-                document.cookie = 'DEVELOPMENT_MODE=true; path=/; max-age=28800';
-                window.location.href = '/admin/';
-                return false;
-            }
-
             try {
                 // Check if Supabase is loaded
-                if (typeof supabase === 'undefined') {
+                if (typeof supabaseClient === 'undefined') {
                     throw new Error('Authentication library failed to load. Please refresh the page.');
                 }
 
-                const { data, error } = await supabase.auth.signInWithPassword({
+                const { data, error } = await supabaseClient.auth.signInWithPassword({
                     email: email,
                     password: password
                 });
@@ -261,7 +290,10 @@
                     localStorage.setItem('admin_token', session.access_token);
 
                     // Also set as a cookie for backend authentication
-                    document.cookie = `admin_token=${session.access_token}; path=/; max-age=28800`; // 8 hours
+                    // Only use Secure flag if on HTTPS (some staging setups terminate SSL at proxy)
+                    const securePart = window.location.protocol === 'https:' ? '; Secure' : '';
+                    document.cookie = `admin_token=${session.access_token}; path=/; max-age=28800${securePart}; SameSite=Lax`; // 8 hours
+                    console.log('[login] Cookie set:', document.cookie.substring(0, 50) + '...');
 
                     // Redirect to admin dashboard
                     window.location.href = '/admin/';
@@ -281,43 +313,57 @@
             return false; // Prevent form submission
         }
 
-        // Also attach via addEventListener as backup
-        document.getElementById('loginForm').addEventListener('submit', handleLogin);
-        
         // Handle password reset
-        document.getElementById('resetPasswordBtn').addEventListener('click', async () => {
-            const email = document.getElementById('email').value;
+        async function handlePasswordReset() {
+            const resetBtn = document.getElementById('resetPasswordBtn');
+            const email = document.getElementById('email').value.trim();
             const errorMessage = document.getElementById('errorMessage');
             const successMessage = document.getElementById('successMessage');
-            
+
+            // Clear previous messages
+            errorMessage.classList.add('hidden');
+            successMessage.classList.add('hidden');
+
             if (!email) {
                 errorMessage.textContent = 'Please enter your email address first.';
                 errorMessage.classList.remove('hidden');
-                successMessage.classList.add('hidden');
+                // Scroll to make error visible
+                errorMessage.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 return;
             }
-            
+
+            // Show loading state
+            const originalText = resetBtn.textContent;
+            resetBtn.textContent = 'Sending...';
+            resetBtn.disabled = true;
+            resetBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
             try {
-                const { error } = await supabase.auth.resetPasswordForEmail(email, {
+                const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
                     redirectTo: window.location.origin + '/admin/login'
                 });
-                
+
                 if (error) {
                     throw error;
                 }
-                
-                successMessage.textContent = 'Password reset email sent! Check your inbox.';
+
+                successMessage.textContent = 'Password reset email sent! Check your inbox (and spam folder).';
                 successMessage.classList.remove('hidden');
-                errorMessage.classList.add('hidden');
-                
+                successMessage.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
             } catch (error) {
                 console.error('Password reset error:', error);
                 errorMessage.textContent = error.message || 'Failed to send password reset email.';
                 errorMessage.classList.remove('hidden');
-                successMessage.classList.add('hidden');
+                errorMessage.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } finally {
+                // Restore button state
+                resetBtn.textContent = originalText;
+                resetBtn.disabled = false;
+                resetBtn.classList.remove('opacity-50', 'cursor-not-allowed');
             }
-        });
-        
+        }
+
         // Show password change form
         function showPasswordChangeForm() {
             const form = document.getElementById('loginForm');
@@ -386,7 +432,7 @@
                 changePasswordBtn.disabled = true;
                 
                 try {
-                    const { error } = await supabase.auth.updateUser({
+                    const { error } = await supabaseClient.auth.updateUser({
                         password: newPassword
                     });
                     
@@ -410,6 +456,64 @@
                 }
             });
         }
+
+        // Expose login function globally
+        window.doLogin = function() {
+            handleLogin(null);
+        };
+
+        // Setup all event listeners when DOM is ready
+        function setupEventListeners() {
+            // Get the login button
+            const loginBtn = document.getElementById('loginBtn');
+            if (loginBtn) {
+                loginBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleLogin(e);
+                });
+            }
+
+            // Handle Enter key on password field
+            const passwordField = document.getElementById('password');
+            if (passwordField) {
+                passwordField.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleLogin(e);
+                    }
+                });
+            }
+
+            // Handle Enter key on email field
+            const emailField = document.getElementById('email');
+            if (emailField) {
+                emailField.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        document.getElementById('password').focus();
+                    }
+                });
+            }
+
+            // Attach password reset handler
+            const resetBtn = document.getElementById('resetPasswordBtn');
+            if (resetBtn) {
+                resetBtn.addEventListener('click', handlePasswordReset);
+            }
+        }
+
+        // Run setup after DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                setupEventListeners();
+                init();
+            });
+        } else {
+            setupEventListeners();
+            init();
+        }
+    })();
     </script>
 </body>
 </html>

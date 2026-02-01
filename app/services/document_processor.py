@@ -62,6 +62,19 @@ class DocumentProcessor:
             'docx': self._extract_docx_text,
             'srt': self._extract_srt_text,
         }
+        # Whitelist of allowed MIME types mapped to their expected extensions
+        # This prevents attackers from uploading malicious files with renamed extensions
+        self.allowed_mime_types = {
+            'application/pdf': ['pdf'],
+            'text/plain': ['txt', 'md', 'srt'],
+            'text/markdown': ['md'],
+            'text/x-markdown': ['md'],
+            'application/msword': ['doc'],
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['docx'],
+            # Some systems report text/srt for subtitle files
+            'text/srt': ['srt'],
+            'application/x-subrip': ['srt'],
+        }
         self.max_file_size = DOCUMENT_MAX_UPLOAD_BYTES
         self.chunk_size = 500  # words
         self.chunk_overlap = 50  # words
@@ -117,6 +130,25 @@ class DocumentProcessor:
             if hasattr(client_settings, 'dict'):
                 client_settings = client_settings.dict()
 
+            # Inject fallback embedding config for platform-key clients (Adventurer tier)
+            _existing_emb = client_settings.get('embedding') if isinstance(client_settings, dict) else None
+            _has_valid_embedding = _existing_emb and _existing_emb.get('provider')
+            if isinstance(client_settings, dict) and not _has_valid_embedding:
+                _additional = {}
+                if isinstance(client, dict):
+                    _additional = client.get('additional_settings') or {}
+                else:
+                    _additional = getattr(client, 'additional_settings', None) or {}
+                uses_platform = _additional.get('uses_platform_keys', False)
+                if uses_platform:
+                    client_settings['embedding'] = {
+                        "provider": "siliconflow",
+                        "document_model": "Qwen/Qwen3-Embedding-4B",
+                        "conversation_model": "Qwen/Qwen3-Embedding-4B",
+                        "dimension": 1024,
+                    }
+                    logger.info(f"Injected fallback embedding config for platform-key client {client_id}")
+
             if not supabase_config:
                 logger.warning(f"Client {client_id} missing Supabase credentials")
                 return None, client_settings or {}
@@ -144,11 +176,19 @@ class DocumentProcessor:
                 client_supabase = create_client(supabase_url, service_key)
                 used_key = service_key
 
+            # Determine hosting type for shared-pool tenant isolation
+            if isinstance(client, dict):
+                _hosting_type = client.get('hosting_type', client.get('additional_settings', {}).get('hosting_type', 'dedicated'))
+            else:
+                _additional = getattr(client, 'additional_settings', {}) or {}
+                _hosting_type = getattr(client, 'hosting_type', _additional.get('hosting_type', 'dedicated'))
+
             self.client_supabase_connections[client_id] = {
                 'client': client_supabase,
                 'url': supabase_url,
                 'key': used_key,
                 'settings': client_settings or {},
+                'hosting_type': _hosting_type,
                 'fetched_at': datetime.now(timezone.utc).isoformat(),
             }
 
@@ -162,6 +202,11 @@ class DocumentProcessor:
         """Compatibility helper that returns only the Supabase client."""
         supabase, _ = await self._get_client_context(client_id)
         return supabase
+
+    def _is_shared_pool(self, client_id: str) -> bool:
+        """Check if a client uses the shared pool (Adventurer tier)."""
+        cached = self.client_supabase_connections.get(client_id)
+        return cached.get('hosting_type') == 'shared' if cached else False
 
     def _calculate_checksum(self, file_path: str) -> str:
         """Calculate SHA256 checksum for deduplication."""
@@ -562,6 +607,9 @@ class DocumentProcessor:
                     **(metadata or {}),
                 }
             }
+            # Shared pool requires client_id for tenant isolation
+            if client_id and self._is_shared_pool(client_id):
+                document_data['client_id'] = client_id
 
             result = supabase_client.table('documents').insert(document_data).execute()
 
@@ -684,7 +732,7 @@ class DocumentProcessor:
                 try:
                     doc_result = supabase_client.table('documents').select(
                         'title, metadata'
-                    ).eq('id', int(document_id)).limit(1).execute()
+                    ).eq('id', document_id).limit(1).execute()
                     if doc_result.data:
                         doc_title = doc_result.data[0].get('title')
                         metadata = doc_result.data[0].get('metadata') or {}
@@ -754,14 +802,23 @@ class DocumentProcessor:
                 )
 
     async def _validate_file(self, file_path: str) -> Dict[str, Any]:
-        """Validate uploaded file"""
+        """Validate uploaded file with strict MIME type checking"""
         try:
             if not os.path.exists(file_path):
                 return {
                     'valid': False,
                     'error': 'File not found'
                 }
-            
+
+            # Sanitize filename - prevent path traversal
+            file_path_obj = Path(file_path)
+            if '..' in str(file_path_obj) or file_path_obj.name.startswith('/'):
+                logger.warning(f"Potential path traversal attempt: {file_path}")
+                return {
+                    'valid': False,
+                    'error': 'Invalid file path'
+                }
+
             # Check file size
             file_size = os.path.getsize(file_path)
             if file_size > self.max_file_size:
@@ -769,34 +826,69 @@ class DocumentProcessor:
                     'valid': False,
                     'error': f'File too large. Maximum size is {self.max_file_size // (1024*1024)}MB'
                 }
-            
-            # Detect file type
-            file_path_obj = Path(file_path)
+
+            # Reject empty files
+            if file_size == 0:
+                return {
+                    'valid': False,
+                    'error': 'Empty files are not allowed'
+                }
+
+            # Detect file type from extension
             file_extension = file_path_obj.suffix.lower().lstrip('.')
-            
-            # Use python-magic for more accurate detection
+
+            # Use python-magic for accurate MIME type detection from file content
             try:
-                mime_type = magic.from_file(file_path, mime=True)
-            except:
-                mime_type = mimetypes.guess_type(file_path)[0]
-            
-            # Validate against supported types
+                detected_mime = magic.from_file(file_path, mime=True)
+            except Exception as e:
+                logger.warning(f"Magic MIME detection failed for {file_path}: {e}")
+                detected_mime = mimetypes.guess_type(file_path)[0]
+
+            # Validate extension is in supported types
             if file_extension not in self.supported_types:
                 return {
                     'valid': False,
                     'error': f'Unsupported file type: {file_extension}'
                 }
-            
+
+            # SECURITY: Validate detected MIME type matches expected types for extension
+            # This prevents uploading malicious files with spoofed extensions
+            if detected_mime:
+                allowed_extensions = self.allowed_mime_types.get(detected_mime, [])
+                if not allowed_extensions:
+                    # Check if it's an unknown but potentially safe text type
+                    if not detected_mime.startswith('text/') and file_extension in ['txt', 'md', 'srt']:
+                        logger.warning(
+                            f"MIME type {detected_mime} not in whitelist for {file_extension} file, "
+                            "but allowing text-like extension"
+                        )
+                    else:
+                        logger.warning(
+                            f"Rejected file upload: MIME type {detected_mime} not in whitelist"
+                        )
+                        return {
+                            'valid': False,
+                            'error': f'File content type ({detected_mime}) is not allowed'
+                        }
+                elif file_extension not in allowed_extensions:
+                    logger.warning(
+                        f"MIME/extension mismatch: {detected_mime} detected but extension is .{file_extension}"
+                    )
+                    return {
+                        'valid': False,
+                        'error': f'File extension .{file_extension} does not match detected content type'
+                    }
+
             return {
                 'valid': True,
                 'file_info': {
                     'name': file_path_obj.name,
                     'size': file_size,
                     'extension': file_extension,
-                    'mime_type': mime_type
+                    'mime_type': detected_mime
                 }
             }
-            
+
         except Exception as e:
             logger.error(f"Error validating file: {e}")
             return {
@@ -837,7 +929,7 @@ class DocumentProcessor:
                     'checksum': checksum,
                 }
             }
-            
+
             # Use client-specific Supabase if client_id provided
             supabase_client = supabase
             if client_id and supabase_client is None:
@@ -847,7 +939,11 @@ class DocumentProcessor:
                     return None
             elif supabase_client is None:
                 supabase_client = self._ensure_supabase()
-            
+
+            # Shared pool requires client_id for tenant isolation
+            if client_id and self._is_shared_pool(client_id):
+                document_data['client_id'] = client_id
+
             # Don't include ID for clients using auto-incrementing bigint IDs
             # The database will auto-generate the ID
             result = supabase_client.table('documents').insert(document_data).execute()
@@ -928,7 +1024,7 @@ class DocumentProcessor:
                 try:
                     doc_result = supabase_client.table('documents').select(
                         'title, metadata'
-                    ).eq('id', int(document_id)).limit(1).execute()
+                    ).eq('id', document_id).limit(1).execute()
                     if doc_result.data:
                         doc_title = doc_result.data[0].get('title')
                         metadata = doc_result.data[0].get('metadata') or {}
@@ -1292,16 +1388,9 @@ class DocumentProcessor:
     ) -> Optional[str]:
         """Store a document chunk in Supabase"""
         try:
-            # For clients with bigint document IDs, convert to int
-            try:
-                doc_id_for_chunk = int(document_id)
-            except ValueError:
-                # If it's not a valid int, keep as string (UUID case)
-                doc_id_for_chunk = document_id
-
             chunk_data = {
                 'id': str(uuid.uuid4()),
-                'document_id': doc_id_for_chunk,
+                'document_id': document_id,
                 'content': chunk_text,
                 'chunk_index': chunk_index,
                 'embeddings': embeddings,  # Store in vector column for pgvector similarity search
@@ -1314,7 +1403,7 @@ class DocumentProcessor:
                     'document_title': document_title,  # Also in metadata for flexibility
                 }
             }
-            
+
             # Use client-specific Supabase if client_id provided
             supabase_client = supabase
             if client_id and supabase_client is None:
@@ -1324,6 +1413,10 @@ class DocumentProcessor:
                     return None
             elif supabase_client is None:
                 supabase_client = self._ensure_supabase()
+
+            # Shared pool requires client_id for tenant isolation
+            if client_id and self._is_shared_pool(client_id):
+                chunk_data['client_id'] = client_id
             
             result = supabase_client.table('document_chunks').insert(chunk_data).execute()
             
@@ -1344,7 +1437,24 @@ class DocumentProcessor:
         chunk_count: int,
     ):
         """Track embedding usage for quota enforcement."""
-        if not client_id or chunk_count <= 0:
+        # Log diagnostic info
+        logger.info(
+            "Tracking embedding usage: client_id=%s, agent_id=%s, chunks=%d",
+            client_id, agent_id, chunk_count
+        )
+
+        if not client_id:
+            logger.warning(
+                "Embedding usage NOT tracked - missing client_id: agent_id=%s, chunks=%d",
+                agent_id, chunk_count
+            )
+            return
+
+        if chunk_count <= 0:
+            logger.warning(
+                "Embedding usage NOT tracked - zero/negative chunk count: client_id=%s, agent_id=%s, chunks=%d",
+                client_id, agent_id, chunk_count
+            )
             return
 
         try:
@@ -1356,10 +1466,15 @@ class DocumentProcessor:
                     agent_id=agent_id,
                     chunks=chunk_count,
                 )
+                logger.info(
+                    "Tracked embedding usage: agent=%s, client=%s, chunks=%d, total=%d/%d (%.1f%%)",
+                    agent_id, client_id, chunk_count,
+                    status.used, status.limit, status.percent_used
+                )
                 if not is_within:
                     logger.warning(
-                        "Client %s embedding quota exceeded after processing %d chunks",
-                        client_id, chunk_count
+                        "Client %s embedding quota exceeded after processing %d chunks: %d/%d",
+                        client_id, chunk_count, status.used, status.limit
                     )
             else:
                 # No agent_id - track at client level only
@@ -1367,9 +1482,14 @@ class DocumentProcessor:
                     client_id=client_id,
                     chunks=chunk_count,
                 )
+                logger.info(
+                    "Tracked embedding usage (client-level): client=%s, chunks=%d, total=%d/%d (%.1f%%)",
+                    client_id, chunk_count,
+                    status.used, status.limit, status.percent_used
+                )
 
         except Exception as e:
-            logger.warning("Failed to track embedding usage for client %s: %s", client_id, e)
+            logger.error("Failed to track embedding usage for client %s: %s", client_id, e, exc_info=True)
 
     async def _finalize_document_processing(
         self,
@@ -1420,13 +1540,7 @@ class DocumentProcessor:
             elif supabase is None:
                 supabase = self._ensure_supabase()
             
-            # Convert document_id to int if it's numeric
-            try:
-                doc_id_for_update = int(document_id)
-            except ValueError:
-                doc_id_for_update = document_id
-            
-            result = supabase.table('documents').update(update_data).eq('id', doc_id_for_update).execute()
+            result = supabase.table('documents').update(update_data).eq('id', document_id).execute()
             
             if not result.data:
                 raise Exception("Failed to update document status")
@@ -1468,13 +1582,6 @@ class DocumentProcessor:
         try:
             assigned_agent_ids: List[str] = []
             for agent_id in agent_ids:
-                agent_doc_data = {
-                    'agent_id': agent_id,
-                    'document_id': document_id,
-                    'access_type': 'read',
-                    'enabled': True
-                }
-                
                 # Use client-specific Supabase if client_id provided
                 supabase_client = supabase
                 if client_id and supabase_client is None:
@@ -1484,6 +1591,16 @@ class DocumentProcessor:
                         continue
                 elif supabase_client is None:
                     supabase_client = self._ensure_supabase()
+
+                agent_doc_data = {
+                    'agent_id': agent_id,
+                    'document_id': document_id,
+                    'access_type': 'read',
+                    'enabled': True
+                }
+                # Shared pool requires client_id for tenant isolation
+                if client_id and self._is_shared_pool(client_id):
+                    agent_doc_data['client_id'] = client_id
 
                 # Skip duplicate assignments
                 try:
@@ -1591,16 +1708,11 @@ class DocumentProcessor:
             if not slugs:
                 return
 
-            try:
-                doc_id_for_update = int(document_id)
-            except (TypeError, ValueError):
-                doc_id_for_update = document_id
-
             existing = (
                 supabase_client
                 .table('documents')
                 .select('agent_permissions')
-                .eq('id', doc_id_for_update)
+                .eq('id', document_id)
                 .limit(1)
                 .execute()
             )
@@ -1615,7 +1727,7 @@ class DocumentProcessor:
 
             supabase_client.table('documents').update(
                 {'agent_permissions': merged}
-            ).eq('id', doc_id_for_update).execute()
+            ).eq('id', document_id).execute()
 
         except Exception as exc:
             logger.warning(
@@ -1659,13 +1771,7 @@ class DocumentProcessor:
             elif supabase_client is None:
                 supabase_client = self._ensure_supabase()
             
-            # Convert document_id to int if it's numeric
-            try:
-                doc_id_for_update = int(document_id)
-            except ValueError:
-                doc_id_for_update = document_id
-            
-            supabase_client.table('documents').update(update_data).eq('id', doc_id_for_update).execute()
+            supabase_client.table('documents').update(update_data).eq('id', document_id).execute()
 
         except Exception as e:
             logger.error(f"Error updating document status: {e}")

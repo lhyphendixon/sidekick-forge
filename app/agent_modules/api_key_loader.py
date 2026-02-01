@@ -97,11 +97,11 @@ class APIKeyLoader:
             # Get client API keys from the 'clients' table
             # Platform database stores API keys as individual columns
             api_key_columns = [
-                'openai_api_key', 'groq_api_key', 'deepgram_api_key', 
+                'openai_api_key', 'groq_api_key', 'deepgram_api_key',
                 'elevenlabs_api_key', 'cartesia_api_key', 'speechify_api_key',
                 'deepinfra_api_key', 'replicate_api_key', 'novita_api_key',
                 'cohere_api_key', 'siliconflow_api_key', 'jina_api_key',
-                'anthropic_api_key'
+                'anthropic_api_key', 'assemblyai_api_key'
             ]
             
             columns_str = ', '.join(api_key_columns)

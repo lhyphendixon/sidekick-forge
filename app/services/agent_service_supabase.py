@@ -8,7 +8,7 @@ import logging
 import json
 import re
 
-from app.models.agent import Agent, AgentCreate, AgentUpdate, VoiceSettings, WebhookSettings
+from app.models.agent import Agent, AgentCreate, AgentUpdate, VoiceSettings, WebhookSettings, SoundSettings
 from app.models.client import ChannelSettings, TelegramChannelSettings
 from app.services.client_service_supabase import ClientService
 
@@ -67,6 +67,25 @@ class AgentService:
         except Exception:
             webhooks = WebhookSettings()
         
+        # Parse sound_settings
+        sound_settings_raw = agent_data.get("sound_settings", {})
+        if isinstance(sound_settings_raw, str):
+            try:
+                sound_settings_dict = json.loads(sound_settings_raw)
+            except (json.JSONDecodeError, TypeError):
+                sound_settings_dict = {}
+        elif isinstance(sound_settings_raw, dict):
+            sound_settings_dict = sound_settings_raw
+        else:
+            sound_settings_dict = {}
+
+        # Create SoundSettings object with defaults
+        try:
+            sound_settings = SoundSettings(**sound_settings_dict)
+        except Exception as e:
+            logger.warning(f"[_parse_agent_data] Failed to parse sound_settings: {e}, using defaults")
+            sound_settings = SoundSettings()
+
         # Parse tools_config
         tools_config_raw = agent_data.get("tools_config", {})
         if isinstance(tools_config_raw, str):
@@ -118,6 +137,7 @@ class AgentService:
             agent_image=agent_data.get("agent_image") or None,
             system_prompt=agent_data.get("system_prompt", ""),
             voice_settings=voice_settings,
+            sound_settings=sound_settings,
             webhooks=webhooks,
             enabled=agent_data.get("enabled", True),
             show_citations=agent_data.get("show_citations", True),
@@ -428,6 +448,22 @@ class AgentService:
                     except Exception as e:
                         logger.error(f"[agents.update] voice_settings conversion error: {e}")
                 
+                # Handle sound_settings serialization (similar to voice_settings)
+                if "sound_settings" in update_dict and update_dict["sound_settings"]:
+                    try:
+                        if hasattr(update_dict["sound_settings"], "model_dump"):
+                            # Pydantic v2
+                            update_dict["sound_settings"] = update_dict["sound_settings"].model_dump(mode='json')
+                        elif hasattr(update_dict["sound_settings"], "dict"):
+                            # Pydantic v1 fallback
+                            update_dict["sound_settings"] = update_dict["sound_settings"].dict()
+                        elif isinstance(update_dict["sound_settings"], dict):
+                            # Already a dict - ensure it's a clean copy
+                            update_dict["sound_settings"] = dict(update_dict["sound_settings"])
+                        logger.info(f"[agents.update] SOUND_SETTINGS DICT: {update_dict['sound_settings']}")
+                    except Exception as e:
+                        logger.error(f"[agents.update] sound_settings conversion error: {e}")
+
                 # Do not update legacy webhook columns here to avoid 400s on tenants
                 # where these columns may not exist. Skip mapping entirely.
                 if "webhooks" in update_dict:
@@ -437,7 +473,7 @@ class AgentService:
                 # Known core columns that exist on all agents tables (fallback if RPC fails)
                 KNOWN_AGENT_COLUMNS = {
                     'id', 'slug', 'name', 'description', 'client_id', 'agent_image',
-                    'system_prompt', 'voice_settings', 'enabled', 'show_citations',
+                    'system_prompt', 'voice_settings', 'sound_settings', 'enabled', 'show_citations',
                     'rag_results_limit', 'supertab_enabled', 'supertab_experience_id',
                     'voice_chat_enabled', 'text_chat_enabled', 'video_chat_enabled',
                     'tools_config', 'rag_config',
@@ -511,7 +547,8 @@ class AgentService:
                 optional_columns = [
                     'voice_chat_enabled', 'text_chat_enabled', 'video_chat_enabled',
                     'show_citations', 'rag_results_limit', 'supertab_enabled',
-                    'supertab_experience_id', 'tools_config', 'rag_config'
+                    'supertab_experience_id', 'tools_config', 'rag_config',
+                    'sound_settings'
                 ]
 
                 result = None
@@ -737,6 +774,7 @@ class AgentService:
                 agent_doc_data = {
                     'agent_id': agent_id,
                     'document_id': doc_id,
+                    'client_id': client_id,
                     'access_type': 'read',
                     'enabled': True
                 }

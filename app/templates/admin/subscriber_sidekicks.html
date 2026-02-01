@@ -1,0 +1,71 @@
+{% extends "admin/base.html" %}
+
+{% block title %}My Sidekicks - Sidekick Forge{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold text-dark-text">My Sidekicks</h1>
+        <p class="text-dark-text-secondary mt-1">Chat with your assigned sidekicks</p>
+    </div>
+
+    {% if sidekicks %}
+    <!-- Sidekicks Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {% for sidekick in sidekicks %}
+        <div class="bg-dark-surface border border-dark-border rounded-xl p-6 hover:border-brand-teal/50 transition-colors">
+            <div class="flex items-start gap-4">
+                <!-- Avatar -->
+                <div class="flex-shrink-0">
+                    {% if sidekick.agent_image %}
+                    <img src="{{ sidekick.agent_image }}" alt="{{ sidekick.name }}"
+                         class="w-16 h-16 rounded-full object-cover border-2 border-brand-teal/30">
+                    {% else %}
+                    <div class="w-16 h-16 rounded-full bg-gradient-to-br from-brand-teal to-brand-orange flex items-center justify-center">
+                        <span class="text-2xl font-bold text-white">{{ sidekick.name[0] if sidekick.name else 'S' }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Info -->
+                <div class="flex-1 min-w-0">
+                    <h3 class="text-lg font-semibold text-dark-text truncate">{{ sidekick.name }}</h3>
+                    {% if sidekick.description %}
+                    <p class="text-sm text-dark-text-secondary mt-1 line-clamp-2">{{ sidekick.description }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Chat Button -->
+            <div class="mt-4">
+                <a href="/admin/agents/{{ sidekick.client_id }}/{{ sidekick.slug }}"
+                   class="btn-primary w-full py-3 rounded-lg text-center flex items-center justify-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                    </svg>
+                    Start Chat
+                </a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <!-- Empty State -->
+    <div class="bg-dark-surface border border-dark-border rounded-xl p-12 text-center">
+        <div class="w-16 h-16 mx-auto rounded-full bg-dark-elevated flex items-center justify-center mb-4">
+            <svg class="w-8 h-8 text-dark-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                      d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+            </svg>
+        </div>
+        <h3 class="text-lg font-semibold text-dark-text mb-2">No Sidekicks Available</h3>
+        <p class="text-dark-text-secondary max-w-md mx-auto">
+            You don't have any sidekicks assigned to your account yet.
+            Please contact your administrator to get access.
+        </p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

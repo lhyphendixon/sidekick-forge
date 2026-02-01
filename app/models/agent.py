@@ -35,6 +35,12 @@ class VoiceSettings(BaseModel):
     
     # TTS provider-specific settings
     model: Optional[str] = Field(None, description="TTS model (for providers that support multiple models)")
+    tts_speed: Optional[float] = Field(
+        default=None,
+        ge=0.5,
+        le=2.0,
+        description="TTS speech speed (0.5-2.0, 1.0 is normal). For Cartesia sonic-3: 0.6-2.0"
+    )
     output_format: Optional[str] = Field(None, description="Output format (for Cartesia)")
     stability: Optional[float] = Field(None, description="Voice stability (for ElevenLabs)")
     similarity_boost: Optional[float] = Field(None, description="Voice similarity boost (for ElevenLabs)")
@@ -44,19 +50,7 @@ class VoiceSettings(BaseModel):
     # Provider-specific settings
     provider_config: Dict[str, Any] = Field(default_factory=dict)
     cartesia_emotions_enabled: Optional[bool] = Field(
-        default=False, description="Enable Cartesia Sonic-3 emotion tagging"
-    )
-    cartesia_emotion_style: Optional[str] = Field(
-        default=None, description="Default emotion style for Cartesia Sonic-3"
-    )
-    cartesia_emotion_intensity: Optional[int] = Field(
-        default=None, description="Default intensity (1-5) when using emotion tags"
-    )
-    cartesia_emotion_volume: Optional[str] = Field(
-        default=None, description="Default volume hint for Cartesia Sonic-3 emotion tags"
-    )
-    cartesia_emotion_speed: Optional[str] = Field(
-        default=None, description="Default speed hint for Cartesia Sonic-3 emotion tags"
+        default=False, description="Enable Cartesia dynamic emotion expression - agent chooses emotions based on context"
     )
 
     # Video avatar settings
@@ -64,10 +58,10 @@ class VoiceSettings(BaseModel):
         default="bithuman", description="Avatar provider: 'bithuman', 'beyondpresence', or 'liveavatar'"
     )
     avatar_image_url: Optional[str] = Field(
-        default=None, description="URL to avatar image for video chat (Bithuman cloud mode)"
+        default=None, description="DEPRECATED - Bithuman cloud mode removed. Use avatar_model_path instead."
     )
     avatar_model_path: Optional[str] = Field(
-        default=None, description="Path to .imx model file for Bithuman local/self-hosted mode"
+        default=None, description="Supabase storage path to .imx model file (format: supabase://bucket/path)"
     )
     avatar_model_type: Optional[str] = Field(
         default="expression", description="Avatar model type for Bithuman: 'expression' or 'essence'"
@@ -77,6 +71,22 @@ class VoiceSettings(BaseModel):
     )
     liveavatar_avatar_id: Optional[str] = Field(
         default=None, description="Avatar ID for HeyGen LiveAvatar"
+    )
+
+
+class SoundSettings(BaseModel):
+    """Sound configuration for voice/video chat"""
+    thinking_sound: Optional[str] = Field(
+        default=None, description="Sound to play during RAG/tool processing: 'keyboard', 'none', or null for silent"
+    )
+    thinking_volume: Optional[float] = Field(
+        default=0.3, ge=0.0, le=1.0, description="Volume for thinking sound (0.0-1.0)"
+    )
+    ambient_sound: Optional[str] = Field(
+        default="none", description="Background ambient sound: 'none', 'office', 'forest', 'city', 'crowded_room'"
+    )
+    ambient_volume: Optional[float] = Field(
+        default=0.15, ge=0.0, le=1.0, description="Volume for ambient sound (0.0-1.0)"
     )
 
 
@@ -102,7 +112,10 @@ class Agent(BaseModel):
     
     # Voice settings
     voice_settings: VoiceSettings = Field(default_factory=VoiceSettings)
-    
+
+    # Sound settings for voice/video chat
+    sound_settings: SoundSettings = Field(default_factory=SoundSettings)
+
     # Webhooks
     webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
     
@@ -180,6 +193,7 @@ class AgentUpdate(BaseModel):
     agent_image: Optional[str] = None
     system_prompt: Optional[str] = None
     voice_settings: Optional[VoiceSettings] = None
+    sound_settings: Optional[SoundSettings] = None
     webhooks: Optional[WebhookSettings] = None
     enabled: Optional[bool] = None
     tools_config: Optional[Dict[str, Any]] = None
