@@ -5,12 +5,25 @@
     <div class="sidekick-card bg-dark-elevated border border-dark-border rounded-lg p-4 hover:border-brand-teal/50 transition-all">
         <div class="flex items-start gap-3">
             <!-- Avatar with Status Indicator -->
-            <div class="relative">
-                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-teal/20 to-brand-orange/20 flex items-center justify-center">
-                    <svg class="w-5 h-5 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+            <div class="relative flex-shrink-0">
+                {% if sidekick.agent_image %}
+                <img src="{{ sidekick.agent_image }}"
+                     alt="{{ sidekick.name }}"
+                     class="w-10 h-10 rounded-lg object-cover"
+                     loading="lazy"
+                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-teal/20 to-brand-orange/20 items-center justify-center" style="display:none;">
+                    <svg class="w-5 h-5 text-brand-teal" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
                     </svg>
                 </div>
+                {% else %}
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-teal/20 to-brand-orange/20 flex items-center justify-center">
+                    <svg class="w-5 h-5 text-brand-teal" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                    </svg>
+                </div>
+                {% endif %}
                 <!-- Status dot -->
                 <div class="absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-dark-elevated
                     {% if sidekick.status == 'in_conversation' %}bg-brand-teal status-pulse online
