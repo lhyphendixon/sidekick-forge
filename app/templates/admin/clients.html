@@ -130,7 +130,7 @@
                    class="text-brand-teal hover:text-brand-teal/80 text-sm font-medium transition-colors">
                     Edit
                 </a>
-                <button onclick="confirmDeleteClient({{ client.id|tojson }}, {{ client.name|tojson }})" class="text-brand-salmon hover:text-brand-salmon/80 text-sm font-medium transition-colors">
+                <button type="button" class="delete-client-btn text-brand-salmon hover:text-brand-salmon/80 text-sm font-medium transition-colors" data-client-id="{{ client.id }}" data-client-name="{{ client.name }}">
                     Delete
                 </button>
             </div>
@@ -661,6 +661,17 @@ function startClientProvisioningPolling() {
 
 document.addEventListener('DOMContentLoaded', () => {
     startClientProvisioningPolling();
+
+    // Set up delete button click handlers
+    document.querySelectorAll('.delete-client-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            const clientId = this.dataset.clientId;
+            const clientName = this.dataset.clientName;
+            console.log('Delete button clicked for:', clientId, clientName);
+            confirmDeleteClient(clientId, clientName);
+        });
+    });
 });
 </script>
 {% endblock %}
