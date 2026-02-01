@@ -125,23 +125,26 @@ async def update_client(
 async def delete_client(client_id: str) -> dict:
     """
     Delete a client
-    
+
     This endpoint removes a client from the platform (use with caution).
     """
+    logger.info(f"DELETE /clients/{client_id} - Starting delete request")
     try:
         success = await client_service.delete_client(client_id)
+        logger.info(f"DELETE /clients/{client_id} - Service returned: {success}")
         if not success:
+            logger.warning(f"DELETE /clients/{client_id} - Returning 404")
             raise HTTPException(
                 status_code=404,
                 detail=f"Client {client_id} not found"
             )
-        
-        logger.info(f"Deleted client {client_id}")
+
+        logger.info(f"DELETE /clients/{client_id} - Success, client deleted")
         return {"success": True, "message": f"Client {client_id} deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting client: {e}")
+        logger.error(f"DELETE /clients/{client_id} - Exception: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to delete client")
 
 

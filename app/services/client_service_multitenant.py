@@ -362,29 +362,36 @@ class ClientService:
     
     async def delete_client(self, client_id: str) -> bool:
         """Delete a client from the platform database"""
+        logger.info(f"delete_client called with client_id={client_id}")
         try:
             # Check if client exists first
+            logger.info(f"Checking if client {client_id} exists...")
             check = self.platform_db.table("clients").select("id").eq("id", client_id).execute()
+            logger.info(f"Check result: {check.data}")
             if not check.data:
                 logger.warning(f"Client {client_id} not found for deletion")
                 return False
 
             # Execute delete
-            self.platform_db.table("clients").delete().eq("id", client_id).execute()
+            logger.info(f"Executing delete for client {client_id}...")
+            delete_result = self.platform_db.table("clients").delete().eq("id", client_id).execute()
+            logger.info(f"Delete result: {delete_result.data}")
 
             # Verify deletion succeeded (Supabase delete may return empty result.data)
+            logger.info(f"Verifying deletion for client {client_id}...")
             verify = self.platform_db.table("clients").select("id").eq("id", client_id).execute()
+            logger.info(f"Verify result: {verify.data}")
             if verify.data:
-                logger.error(f"Delete failed for client {client_id} - still exists")
+                logger.error(f"Delete failed for client {client_id} - still exists after delete")
                 return False
 
-            logger.info(f"Deleted client {client_id}")
+            logger.info(f"Successfully deleted client {client_id}")
             # Clear cache for deleted client
             self.connection_manager.clear_cache(UUID(client_id))
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting client {client_id}: {e}")
+            logger.error(f"Error deleting client {client_id}: {e}", exc_info=True)
             return False
 
     async def retry_provisioning(self, client_id: str) -> bool:
