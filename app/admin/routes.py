@@ -3675,34 +3675,71 @@ async def health_partial(
     request: Request,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """System health partial for HTMX updates"""
-    # Get clients and create mock health status
+    """System health partial for HTMX updates - with real health checks"""
     from app.core.dependencies import get_client_service
+    from app.integrations.livekit_client import livekit_manager
+    import httpx
+
     client_service = get_client_service()
     scoped_ids = get_scoped_client_ids(admin_user)
 
     health_statuses = []
+
+    # Global LiveKit health check (done once)
+    livekit_healthy = False
+    try:
+        if not livekit_manager._initialized:
+            await livekit_manager.initialize()
+        livekit_api = livekit_manager._get_api_client()
+        # Try to list rooms as a health check
+        await livekit_api.room.list_rooms(api.ListRoomsRequest())
+        livekit_healthy = True
+    except Exception as e:
+        logger.warning(f"LiveKit health check failed: {e}")
+
     try:
         clients = await client_service.get_all_clients()
         if scoped_ids is not None:
             allowed = {str(cid) for cid in scoped_ids}
             clients = [c for c in clients if str(getattr(c, 'id', '')) in allowed]
 
-        # Create health status for each client (mocked for now)
+        # Real health checks for each client
         for client in clients[:5]:  # Limit to first 5 for dashboard
+            db_healthy = False
+            api_healthy = False
+
+            # Check Supabase database connectivity
+            supabase_url = None
+            if hasattr(client, 'settings') and client.settings:
+                if hasattr(client.settings, 'supabase') and client.settings.supabase:
+                    supabase_url = getattr(client.settings.supabase, 'url', None)
+
+            if supabase_url:
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as http_client:
+                        # Check if Supabase REST API is reachable
+                        resp = await http_client.get(f"{supabase_url}/rest/v1/", headers={"apikey": "anon"})
+                        db_healthy = resp.status_code in (200, 401, 403)  # 401/403 means API is up but needs auth
+                        api_healthy = db_healthy
+                except Exception as e:
+                    logger.debug(f"Supabase health check failed for {client.name}: {e}")
+
+            # Overall health based on checks
+            overall_healthy = db_healthy and livekit_healthy
+
             health_statuses.append({
                 "client_id": client.id,
                 "client_name": client.name,
-                "healthy": client.active,  # Use active status as health indicator
+                "healthy": overall_healthy,
                 "checks": {
-                    "api": {"healthy": True},
-                    "database": {"healthy": True},
-                    "livekit": {"healthy": client.settings.livekit is not None if client.settings else False}
+                    "api": {"healthy": api_healthy},
+                    "database": {"healthy": db_healthy},
+                    "livekit": {"healthy": livekit_healthy}
                 }
             })
     except Exception as e:
         logger.warning(f"Failed to get health statuses: {e}")
-    
+
     return templates.TemplateResponse("admin/partials/health.html", {
         "request": request,
         "health_statuses": health_statuses
