@@ -1166,6 +1166,10 @@ async function refreshTools(){
   const showActive = !phase || phase === 'active';
   const showAmbient = !phase || phase === 'ambient';
 
+  // Clear grids before rendering (removes loading spinner)
+  activeGrid.innerHTML = '';
+  ambientGrid.innerHTML = '';
+
   // Render active tools
   if(showActive){
     if(activeTools.length === 0){
