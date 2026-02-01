@@ -121,6 +121,8 @@ dump.rdb
 backups/
 *.backup
 *.sql
+# But allow Supabase migrations
+!supabase/migrations/*.sql
 
 # Local artifacts to exclude from version control
 cookies.txt

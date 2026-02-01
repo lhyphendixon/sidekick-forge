@@ -359,9 +359,17 @@ class ClientService:
     
     async def delete_client(self, client_id: str) -> bool:
         """Delete a client"""
-        result = self.supabase.table(self.table_name).delete().eq("id", client_id).execute()
-        
-        return len(result.data) > 0 if result.data else False
+        # Check if client exists first
+        check = self.supabase.table(self.table_name).select("id").eq("id", client_id).execute()
+        if not check.data:
+            return False
+
+        # Execute delete
+        self.supabase.table(self.table_name).delete().eq("id", client_id).execute()
+
+        # Verify deletion succeeded (Supabase delete may return empty result.data)
+        verify = self.supabase.table(self.table_name).select("id").eq("id", client_id).execute()
+        return not verify.data
     
     async def get_active_clients(self) -> List[ClientInDB]:
         """Get all active clients"""

@@ -6,7 +6,10 @@
 <div class="container mx-auto px-4">
   <div class="flex items-center justify-between mb-6">
     <h1 class="text-3xl font-bold text-dark-text">Abilities</h1>
-    <button class="btn-primary px-4 py-2 rounded" onclick="openCreateToolModal()">Add Ability</button>
+    <div class="flex items-center gap-3">
+      <span class="text-xs text-dark-text-secondary italic">Custom Abilities Coming Soon</span>
+      <button class="px-4 py-2 rounded bg-dark-border text-dark-text-secondary cursor-not-allowed opacity-60" disabled>Add Ability</button>
+    </div>
   </div>
 
   <div class="mb-4 flex gap-2 items-center flex-wrap">
@@ -1184,11 +1187,11 @@ async function refreshTools(){
 
 function createToolCard(t){
   const card = document.createElement('div');
-  card.className = 'bg-dark-surface border border-dark-border rounded flex flex-col';
+  card.className = 'bg-dark-surface border border-dark-border rounded flex flex-col h-full';
 
-  // Top section with content
+  // Top section with content - flex-1 to push banner to bottom
   const topSection = document.createElement('div');
-  topSection.className = 'p-4 flex gap-3 items-start';
+  topSection.className = 'p-4 flex gap-3 items-start flex-1';
 
   const icon = document.createElement('img');
   icon.src = t.icon_url || '/static/images/ability-default.png';
