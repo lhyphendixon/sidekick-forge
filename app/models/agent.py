@@ -55,7 +55,7 @@ class VoiceSettings(BaseModel):
 
     # Video avatar settings
     avatar_provider: Optional[str] = Field(
-        default="bithuman", description="Avatar provider: 'bithuman', 'beyondpresence', or 'liveavatar'"
+        default="bithuman", description="Avatar provider: 'bithuman', 'beyondpresence', 'liveavatar', or 'ken_burns'"
     )
     avatar_image_url: Optional[str] = Field(
         default=None, description="DEPRECATED - Bithuman cloud mode removed. Use avatar_model_path instead."
@@ -71,6 +71,23 @@ class VoiceSettings(BaseModel):
     )
     liveavatar_avatar_id: Optional[str] = Field(
         default=None, description="Avatar ID for HeyGen LiveAvatar"
+    )
+
+    # Ken Burns (AI-generated images) settings
+    video_provider: Optional[str] = Field(
+        default=None, description="Video provider: 'ken_burns' for AI-generated images with pan/zoom effect"
+    )
+    kenburns_style: Optional[str] = Field(
+        default="cinematic", description="Ken Burns visual style: 'cinematic', 'futuristic', 'realistic', 'artistic', 'documentary'"
+    )
+    kenburns_duration: Optional[int] = Field(
+        default=20, ge=5, le=60, description="Ken Burns animation duration in seconds (5-60)"
+    )
+    kenburns_auto_interval: Optional[int] = Field(
+        default=15, ge=5, le=60, description="Auto-generate new images every N seconds during speech (5-60, 0 to disable)"
+    )
+    kenburns_starting_image: Optional[str] = Field(
+        default=None, description="URL of the starting image shown before first AI-generated image loads"
     )
 
 

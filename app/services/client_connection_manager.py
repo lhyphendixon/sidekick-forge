@@ -238,20 +238,52 @@ class ClientConnectionManager:
             )
             return False
 
-    def get_client_api_keys(self, client_id: UUID) -> Dict[str, Optional[str]]:
+    def get_client_api_keys(self, client_id: UUID, include_platform_keys: bool = False) -> Dict[str, Optional[str]]:
         """
         Get all API keys configured for a client.
-        
+
         Returns a dictionary of all third-party API keys.
+        If uses_platform_keys is True and include_platform_keys is False (default),
+        returns an empty dict with a special '_uses_platform_keys' flag set to True.
+        This prevents platform keys from being exposed to users.
+
+        Set include_platform_keys=True only for internal agent runtime use.
         """
         client_id_str = str(client_id)
-        
+
         # Ensure client config is loaded
         if client_id_str not in self._client_cache:
             self._load_client_config(client_id)
-        
+
         client_config = self._client_cache[client_id_str]
-        
+
+        # Check if this client uses platform keys
+        uses_platform_keys = client_config.get('uses_platform_keys', False)
+
+        # If uses_platform_keys, either return platform keys (internal use) or empty dict with flag
+        if uses_platform_keys:
+            if include_platform_keys:
+                # Internal agent runtime use - load actual platform keys
+                platform_keys = self._load_platform_api_keys()
+                if platform_keys:
+                    logger.info(f"Client {client_id_str} uses platform keys: {list(platform_keys.keys())}")
+                    # Also include LiveKit credentials from client config
+                    platform_keys['livekit_url'] = client_config.get('livekit_url')
+                    platform_keys['livekit_api_key'] = client_config.get('livekit_api_key')
+                    platform_keys['livekit_api_secret'] = client_config.get('livekit_api_secret')
+                    return platform_keys
+            else:
+                # User-facing - don't expose platform keys, just indicate they're using them
+                logger.info(f"Client {client_id_str} uses Sidekick Forge Inference (platform keys)")
+                return {
+                    '_uses_platform_keys': True,
+                    '_platform_inference_name': 'Sidekick Forge Inference',
+                    # Still include LiveKit credentials as those are client-specific
+                    'livekit_url': client_config.get('livekit_url'),
+                    'livekit_api_key': client_config.get('livekit_api_key'),
+                    'livekit_api_secret': client_config.get('livekit_api_secret'),
+                }
+
         # Check additional_settings.api_keys for any stored keys
         additional_api_keys = (client_config.get('additional_settings') or {}).get('api_keys', {}) or {}
 
@@ -270,6 +302,7 @@ class ClientConnectionManager:
             'siliconflow_api_key': client_config.get('siliconflow_api_key') or additional_api_keys.get('siliconflow_api_key'),
             'jina_api_key': client_config.get('jina_api_key') or additional_api_keys.get('jina_api_key'),
             'anthropic_api_key': client_config.get('anthropic_api_key') or additional_api_keys.get('anthropic_api_key'),
+            'cerebras_api_key': client_config.get('cerebras_api_key') or additional_api_keys.get('cerebras_api_key'),
             'bithuman_api_secret': client_config.get('bithuman_api_secret') or additional_api_keys.get('bithuman_api_secret'),
             'bey_api_key': client_config.get('bey_api_key') or additional_api_keys.get('bey_api_key'),
         }
@@ -280,6 +313,26 @@ class ClientConnectionManager:
         api_keys['livekit_api_secret'] = client_config.get('livekit_api_secret')
 
         return api_keys
+
+    def _load_platform_api_keys(self) -> Dict[str, Optional[str]]:
+        """Load API keys from the platform_api_keys table."""
+        try:
+            result = self._platform_supabase.table('platform_api_keys').select(
+                'key_name, key_value'
+            ).execute()
+
+            if result.data:
+                api_keys = {}
+                for row in result.data:
+                    key_name = row.get('key_name')
+                    key_value = row.get('key_value')
+                    if key_name and key_value:
+                        api_keys[key_name] = key_value
+                return api_keys
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to load platform API keys: {e}")
+            return {}
     
     def get_client_info(self, client_id: UUID) -> Dict[str, Any]:
         """

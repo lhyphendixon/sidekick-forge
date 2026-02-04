@@ -183,8 +183,16 @@ async def entrypoint(ctx: JobContext):
     room_type = combined_metadata.get("type", "")
     is_wizard_mode = room_type == "wizard_guide"
 
+    # Check for Ken Burns video provider (check both video_provider and avatar_provider for compatibility)
+    video_provider = voice_settings.get("video_provider", "")
+    avatar_provider = voice_settings.get("avatar_provider", "")
+    is_kenburns_mode = video_provider == "ken_burns" or avatar_provider == "ken_burns"
+
     if is_wizard_mode:
         logger.info(f"[{AGENT_NAME}] 🧙 Wizard mode detected - loading wizard tools")
+
+    if is_kenburns_mode:
+        logger.info(f"[{AGENT_NAME}] 🎬 Ken Burns mode detected - loading image generation tools")
 
     try:
         # Create voice AI components
@@ -250,6 +258,29 @@ async def entrypoint(ctx: JobContext):
             )
             assistant_kwargs["chat_ctx"] = chat_ctx
             logger.info(f"[{AGENT_NAME}] Set wizard system prompt ({len(wizard_system_prompt)} chars) with initial greeting")
+
+        # For Ken Burns mode, load image generation tools
+        if is_kenburns_mode and not is_wizard_mode:
+            kenburns_tools, kenburns_system_addition = await setup_kenburns_mode(
+                ctx.room,
+                combined_metadata
+            )
+
+            if kenburns_tools:
+                assistant_kwargs["fnc_ctx"] = kenburns_tools
+                logger.info(f"[{AGENT_NAME}] Loaded {len(kenburns_tools)} Ken Burns tools")
+
+            # Set up chat context with enhanced system prompt
+            base_system_prompt = combined_metadata.get("system_prompt", "You are a helpful AI assistant.")
+            enhanced_prompt = base_system_prompt + kenburns_system_addition
+
+            chat_ctx = ChatContext()
+            chat_ctx.append(
+                role="system",
+                text=enhanced_prompt
+            )
+            assistant_kwargs["chat_ctx"] = chat_ctx
+            logger.info(f"[{AGENT_NAME}] Set Ken Burns enhanced system prompt ({len(enhanced_prompt)} chars)")
 
         assistant = agents.VoiceAssistant(**assistant_kwargs)
 
@@ -346,6 +377,58 @@ async def _speak_wizard_greeting(assistant, greeting: str):
         await assistant.say(greeting)
     except Exception as e:
         logger.warning(f"[{AGENT_NAME}] Could not speak wizard greeting: {e}")
+
+
+async def setup_kenburns_mode(
+    room: rtc.Room,
+    metadata: Dict[str, Any]
+) -> tuple[Optional[List], str]:
+    """
+    Set up Ken Burns mode with image generation tools.
+
+    Args:
+        room: LiveKit room for data messages
+        metadata: Room metadata containing ken burns configuration
+
+    Returns:
+        Tuple of (list of tools, system prompt addition)
+    """
+    try:
+        # Try to import Ken Burns tools from the app
+        from app.agent_modules.kenburns_tools import (
+            build_kenburns_tools,
+            KENBURNS_SYSTEM_PROMPT_ADDITION
+        )
+
+        voice_settings = _as_dict(metadata.get("voice_settings", {}))
+
+        # Build kenburns_config from voice_settings fields
+        # UI saves kenburns_style and kenburns_duration directly in voice_settings
+        kenburns_config = {
+            "style_preset": voice_settings.get("kenburns_style", "cinematic"),
+            "animation_duration": voice_settings.get("kenburns_duration", 20),
+        }
+
+        # Also support nested kenburns_settings for backwards compatibility
+        nested_config = _as_dict(voice_settings.get("kenburns_settings", {}))
+        if nested_config:
+            kenburns_config.update(nested_config)
+
+        # Build tools with room context for data messages
+        tools = build_kenburns_tools(
+            room=room,
+            kenburns_config=kenburns_config,
+        )
+
+        logger.info(f"[{AGENT_NAME}] Ken Burns tools built: {len(tools)} tools")
+        return tools, KENBURNS_SYSTEM_PROMPT_ADDITION
+
+    except ImportError as e:
+        logger.warning(f"[{AGENT_NAME}] Could not import Ken Burns tools: {e}")
+        return None, ""
+    except Exception as e:
+        logger.error(f"[{AGENT_NAME}] Error setting up Ken Burns mode: {e}", exc_info=True)
+        return None, ""
 
 
 def create_stt(config: Dict[str, Any]):

@@ -35,6 +35,7 @@
 
     {% set channels = client.get('additional_settings', {}).get('channels', {}) if client.get('additional_settings') else {} %}
     {% set telegram = channels.get('telegram', {}) %}
+    {% set uses_platform_keys = client.get('uses_platform_keys', client.get('additional_settings', {}).get('uses_platform_keys', true)) %}
 
     <form id="clientForm" action="/admin/clients/{{ client.id }}/update" method="POST">
         <!-- Basic Information -->
@@ -246,65 +247,95 @@
                 </div>
             </div>
         </div>
+        {% endif %}
 
-        <!-- Platform Configuration Info (Adventurer only) -->
+        <!-- AI Configuration - Inference Mode Toggle -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
             <div class="border-b border-dark-border px-6 py-4">
                 <h5 class="text-lg font-semibold text-dark-text flex items-center">
-                    <svg class="h-5 w-5 text-green-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    <svg class="h-5 w-5 text-brand-teal mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
                     </svg>
-                    AI Configuration
+                    AI Inference
                 </h5>
             </div>
             <div class="p-6">
-                <div class="flex items-start p-4 bg-green-500/10 border border-green-500/30 rounded-lg mb-4">
-                    <svg class="h-5 w-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                    </svg>
-                    <div>
-                        <p class="text-sm text-green-400 font-medium">All set! Your AI services are automatically configured.</p>
-                        <p class="text-xs text-green-300/80 mt-1">You're using Sidekick Forge's managed AI infrastructure - no API keys needed.</p>
+                <!-- Hidden input to track uses_platform_keys -->
+                <input type="hidden" name="uses_platform_keys" id="usesPlatformKeysInput" value="{{ 'true' if uses_platform_keys else 'false' }}">
+
+                <!-- Toggle Switch -->
+                <div class="flex items-center justify-between mb-6">
+                    <div class="flex items-center space-x-4">
+                        <span id="platformKeysLabel" class="text-sm font-medium {% if uses_platform_keys %}text-brand-teal{% else %}text-dark-text-secondary{% endif %}">
+                            Sidekick Forge Inference
+                        </span>
+                        <button type="button" id="inferenceToggle"
+                                class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-brand-teal focus:ring-offset-2 focus:ring-offset-dark-bg {% if uses_platform_keys %}bg-dark-border{% else %}bg-brand-teal{% endif %}"
+                                role="switch"
+                                aria-checked="{{ 'false' if uses_platform_keys else 'true' }}">
+                            <span class="sr-only">Toggle inference mode</span>
+                            <span aria-hidden="true"
+                                  class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out {% if uses_platform_keys %}translate-x-0{% else %}translate-x-5{% endif %}"></span>
+                        </button>
+                        <span id="byokLabel" class="text-sm font-medium {% if uses_platform_keys %}text-dark-text-secondary{% else %}text-brand-orange{% endif %}">
+                            Bring Your Own Keys
+                        </span>
                     </div>
                 </div>
 
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
-                        <div class="text-xs text-dark-text-secondary mb-1">Language Model</div>
-                        <div class="text-sm font-medium text-dark-text">Cerebras GLM</div>
+                <!-- Platform Keys Info (shown when toggle is OFF / using platform keys) -->
+                <div id="platformKeysInfo" class="{% if not uses_platform_keys %}hidden{% endif %}">
+                    <div class="flex items-start p-4 bg-green-500/10 border border-green-500/30 rounded-lg mb-4">
+                        <svg class="h-5 w-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                        </svg>
+                        <div>
+                            <p class="text-sm text-green-400 font-medium">All set! Your AI services are automatically configured.</p>
+                            <p class="text-xs text-green-300/80 mt-1">You're using Sidekick Forge's managed AI infrastructure - no API keys needed.</p>
+                        </div>
                     </div>
-                    <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
-                        <div class="text-xs text-dark-text-secondary mb-1">Voice</div>
-                        <div class="text-sm font-medium text-dark-text">Cartesia</div>
-                    </div>
-                    <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
-                        <div class="text-xs text-dark-text-secondary mb-1">Embeddings</div>
-                        <div class="text-sm font-medium text-dark-text">SiliconFlow</div>
-                    </div>
-                    <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
-                        <div class="text-xs text-dark-text-secondary mb-1">Reranking</div>
-                        <div class="text-sm font-medium text-dark-text">Qwen3</div>
+
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
+                            <div class="text-xs text-dark-text-secondary mb-1">Language Model</div>
+                            <div class="text-sm font-medium text-dark-text">Cerebras GLM</div>
+                        </div>
+                        <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
+                            <div class="text-xs text-dark-text-secondary mb-1">Voice</div>
+                            <div class="text-sm font-medium text-dark-text">Cartesia</div>
+                        </div>
+                        <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
+                            <div class="text-xs text-dark-text-secondary mb-1">Embeddings</div>
+                            <div class="text-sm font-medium text-dark-text">SiliconFlow</div>
+                        </div>
+                        <div class="text-center p-3 bg-dark-elevated rounded-lg border border-dark-border">
+                            <div class="text-xs text-dark-text-secondary mb-1">Reranking</div>
+                            <div class="text-sm font-medium text-dark-text">Qwen3</div>
+                        </div>
                     </div>
                 </div>
 
-                <details class="mt-4">
-                    <summary class="text-sm text-dark-text-secondary cursor-pointer hover:text-brand-teal">
-                        Want to use your own API keys? (Advanced)
-                    </summary>
-                    <div class="mt-3 p-4 bg-dark-elevated rounded-lg border border-dark-border">
-                        <p class="text-sm text-dark-text-secondary mb-3">
-                            You can optionally provide your own API keys to use your own accounts. This bypasses the monthly quota limits.
-                        </p>
-        {% endif %}
+                <!-- BYOK Info (shown when toggle is ON / using own keys) -->
+                <div id="byokInfo" class="{% if uses_platform_keys %}hidden{% endif %}">
+                    <div class="flex items-start p-4 bg-brand-orange/10 border border-brand-orange/30 rounded-lg">
+                        <svg class="h-5 w-5 text-brand-orange mr-3 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                        </svg>
+                        <div>
+                            <p class="text-sm text-brand-orange font-medium">Bring Your Own Keys mode enabled</p>
+                            <p class="text-xs text-dark-text-secondary mt-1">Configure your own API keys below to use your own provider accounts. This bypasses Sidekick Forge quotas.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-        <!-- API Keys -->
-        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6 {% if user.is_adventurer_only %}border-0 shadow-none bg-transparent p-0{% endif %}">
-            {% if not user.is_adventurer_only %}
+        <!-- API Keys Section (shown when BYOK is enabled) -->
+        <div id="apiKeysSection" class="bg-dark-surface rounded-lg border border-dark-border mb-6 {% if uses_platform_keys %}hidden{% endif %}">
             <div class="border-b border-dark-border px-6 py-4">
                 <h5 class="text-lg font-semibold text-dark-text">API Keys</h5>
             </div>
-            {% endif %}
-            <div class="{% if not user.is_adventurer_only %}p-6{% endif %}">
+            <div class="p-6">
                 <!-- LLM Providers -->
                 <h6 class="text-md font-medium text-dark-text mb-4">LLM Providers</h6>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
@@ -553,13 +584,6 @@
             </div>
         </div>
 
-        {% if user.is_adventurer_only %}
-                    </div>
-                </details>
-            </div>
-        </div>
-        {% endif %}
-
         {% if not user.is_adventurer_only %}
         <!-- Embedding Configuration -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
@@ -568,47 +592,50 @@
             </div>
             <div class="p-6">
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {% set embed_provider = client.settings.get('embedding', {}).get('provider', 'siliconflow') %}
                     <div>
                         <label class="block text-sm font-medium text-dark-text mb-2">Embedding Provider</label>
                         <select id="embeddingProvider" name="embedding_provider"
                                 class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
-                            <option value="local" {% if client.settings.get('embedding', {}).get('provider') in ['local', 'on-prem', 'bge-local', 'bge', 'bge-m3'] %}selected{% endif %}>Local (BGE-M3 On-Prem)</option>
-                            <option value="openai" {% if client.settings.get('embedding', {}).get('provider') == 'openai' %}selected{% endif %}>OpenAI</option>
-                            <option value="deepinfra" {% if client.settings.get('embedding', {}).get('provider') == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
-                            <option value="novita" {% if client.settings.get('embedding', {}).get('provider') == 'novita' %}selected{% endif %}>Novita AI</option>
-                            <option value="siliconflow" {% if client.settings.get('embedding', {}).get('provider') == 'siliconflow' %}selected{% endif %}>SiliconFlow</option>
+                            <option value="local" {% if embed_provider in ['local', 'on-prem', 'bge-local', 'bge', 'bge-m3'] %}selected{% endif %}>Local (BGE-M3 On-Prem)</option>
+                            <option value="openai" {% if embed_provider == 'openai' %}selected{% endif %}>OpenAI</option>
+                            <option value="deepinfra" {% if embed_provider == 'deepinfra' %}selected{% endif %}>DeepInfra</option>
+                            <option value="novita" {% if embed_provider == 'novita' %}selected{% endif %}>Novita AI</option>
+                            <option value="siliconflow" {% if embed_provider == 'siliconflow' or not embed_provider %}selected{% endif %}>SiliconFlow</option>
                         </select>
                     </div>
+                    {% set doc_model = client.settings.get('embedding', {}).get('document_model', 'Qwen/Qwen3-Embedding-4B') %}
                     <div>
                         <label class="block text-sm font-medium text-dark-text mb-2">Document Embedding Model</label>
                         <select id="documentEmbeddingModel" name="document_embedding_model"
                                 class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
                             <!-- Local On-Prem Model -->
-                            <option value="bge-m3" {% if client.settings.get('embedding', {}).get('document_model') == 'bge-m3' %}selected{% endif %} data-provider="local">BGE-M3 (1024 dimensions, On-Prem)</option>
+                            <option value="bge-m3" {% if doc_model == 'bge-m3' %}selected{% endif %} data-provider="local">BGE-M3 (1024 dimensions, On-Prem)</option>
                             <!-- OpenAI Models -->
-                            <option value="text-embedding-3-small" {% if client.settings.get('embedding', {}).get('document_model') == 'text-embedding-3-small' %}selected{% endif %} data-provider="openai">text-embedding-3-small (OpenAI)</option>
-                            <option value="text-embedding-3-large" {% if client.settings.get('embedding', {}).get('document_model') == 'text-embedding-3-large' %}selected{% endif %} data-provider="openai">text-embedding-3-large (OpenAI)</option>
+                            <option value="text-embedding-3-small" {% if doc_model == 'text-embedding-3-small' %}selected{% endif %} data-provider="openai">text-embedding-3-small (OpenAI)</option>
+                            <option value="text-embedding-3-large" {% if doc_model == 'text-embedding-3-large' %}selected{% endif %} data-provider="openai">text-embedding-3-large (OpenAI)</option>
                             <!-- DeepInfra/SiliconFlow/Novita Models -->
-                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %} data-provider="deepinfra">Qwen/Qwen2.5-72B-Instruct</option>
-                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-0.6B (Fastest)</option>
-                            <option value="Qwen/Qwen3-Embedding-4B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-4B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-4B (Balanced)</option>
-                            <option value="Qwen/Qwen3-Embedding-8B" {% if client.settings.get('embedding', {}).get('document_model') == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-8B (Highest Quality)</option>
+                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if doc_model == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %} data-provider="deepinfra">Qwen/Qwen2.5-72B-Instruct</option>
+                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if doc_model == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-0.6B (Fastest)</option>
+                            <option value="Qwen/Qwen3-Embedding-4B" {% if doc_model == 'Qwen/Qwen3-Embedding-4B' or not doc_model %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-4B (Balanced)</option>
+                            <option value="Qwen/Qwen3-Embedding-8B" {% if doc_model == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-8B (Highest Quality)</option>
                         </select>
                     </div>
+                    {% set conv_model = client.settings.get('embedding', {}).get('conversation_model', 'Qwen/Qwen3-Embedding-4B') %}
                     <div>
                         <label class="block text-sm font-medium text-dark-text mb-2">Conversation Embedding Model</label>
                         <select id="conversationEmbeddingModel" name="conversation_embedding_model"
                                 class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
                             <!-- Local On-Prem Model -->
-                            <option value="bge-m3" {% if client.settings.get('embedding', {}).get('conversation_model') == 'bge-m3' %}selected{% endif %} data-provider="local">BGE-M3 (1024 dimensions, On-Prem)</option>
+                            <option value="bge-m3" {% if conv_model == 'bge-m3' %}selected{% endif %} data-provider="local">BGE-M3 (1024 dimensions, On-Prem)</option>
                             <!-- OpenAI Models -->
-                            <option value="text-embedding-3-small" {% if client.settings.get('embedding', {}).get('conversation_model') == 'text-embedding-3-small' %}selected{% endif %} data-provider="openai">text-embedding-3-small (OpenAI)</option>
-                            <option value="text-embedding-3-large" {% if client.settings.get('embedding', {}).get('conversation_model') == 'text-embedding-3-large' %}selected{% endif %} data-provider="openai">text-embedding-3-large (OpenAI)</option>
+                            <option value="text-embedding-3-small" {% if conv_model == 'text-embedding-3-small' %}selected{% endif %} data-provider="openai">text-embedding-3-small (OpenAI)</option>
+                            <option value="text-embedding-3-large" {% if conv_model == 'text-embedding-3-large' %}selected{% endif %} data-provider="openai">text-embedding-3-large (OpenAI)</option>
                             <!-- DeepInfra/SiliconFlow/Novita Models -->
-                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %} data-provider="deepinfra">Qwen/Qwen2.5-72B-Instruct</option>
-                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-0.6B (Fastest)</option>
-                            <option value="Qwen/Qwen3-Embedding-4B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-4B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-4B (Balanced)</option>
-                            <option value="Qwen/Qwen3-Embedding-8B" {% if client.settings.get('embedding', {}).get('conversation_model') == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-8B (Highest Quality)</option>
+                            <option value="Qwen/Qwen2.5-72B-Instruct" {% if conv_model == 'Qwen/Qwen2.5-72B-Instruct' %}selected{% endif %} data-provider="deepinfra">Qwen/Qwen2.5-72B-Instruct</option>
+                            <option value="Qwen/Qwen3-Embedding-0.6B" {% if conv_model == 'Qwen/Qwen3-Embedding-0.6B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-0.6B (Fastest)</option>
+                            <option value="Qwen/Qwen3-Embedding-4B" {% if conv_model == 'Qwen/Qwen3-Embedding-4B' or not conv_model %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-4B (Balanced)</option>
+                            <option value="Qwen/Qwen3-Embedding-8B" {% if conv_model == 'Qwen/Qwen3-Embedding-8B' %}selected{% endif %} data-provider="deepinfra,novita,siliconflow">Qwen3-Embedding-8B (Highest Quality)</option>
                         </select>
                     </div>
                 </div>
@@ -647,46 +674,49 @@
                 <h5 class="text-lg font-semibold text-dark-text">Reranking Configuration</h5>
             </div>
             <div class="p-6">
+                {% set rerank_enabled = client.settings.get('rerank', {}).get('enabled', true) %}
                 <div class="mb-4">
                     <label class="flex items-center cursor-pointer">
-                        <input type="checkbox" id="rerankEnabled" name="rerank_enabled" 
-                               {% if client.settings.get('rerank', {}).get('enabled') %}checked{% endif %}
+                        <input type="checkbox" id="rerankEnabled" name="rerank_enabled"
+                               {% if rerank_enabled %}checked{% endif %}
                                class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal mr-2">
                         <span class="text-sm font-medium text-dark-text">Enable Reranking</span>
                     </label>
                     <p class="text-sm text-dark-text-secondary mt-1 ml-6">Improve search relevance by reranking results</p>
                 </div>
-                
-                <div id="rerankingOptions" class="{% if not client.settings.get('rerank', {}).get('enabled') %}opacity-50{% endif %}">
+
+                <div id="rerankingOptions" class="{% if not rerank_enabled %}opacity-50{% endif %}">
+                    {% set rerank_provider = client.settings.get('rerank', {}).get('provider', 'siliconflow') %}
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
                         <div>
                             <label class="block text-sm font-medium text-dark-text mb-2">Reranking Provider</label>
                             <select id="rerankProvider" name="rerank_provider"
-                                    {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
+                                    {% if not rerank_enabled %}disabled{% endif %}
                                     class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
-                                <option value="none" {% if client.settings.get('rerank', {}).get('provider') == 'none' %}selected{% endif %}>None</option>
-                                <option value="local" {% if client.settings.get('rerank', {}).get('provider') in ['local', 'on-prem', 'bge-local', 'bge', 'bge-reranker'] %}selected{% endif %}>Local (BGE-Reranker On-Prem)</option>
-                                <option value="siliconflow" {% if client.settings.get('rerank', {}).get('provider') == 'siliconflow' %}selected{% endif %}>SiliconFlow</option>
-                                <option value="cohere" {% if client.settings.get('rerank', {}).get('provider') == 'cohere' %}selected{% endif %}>Cohere</option>
-                                <option value="jina" {% if client.settings.get('rerank', {}).get('provider') == 'jina' %}selected{% endif %}>Jina</option>
+                                <option value="none" {% if rerank_provider == 'none' %}selected{% endif %}>None</option>
+                                <option value="local" {% if rerank_provider in ['local', 'on-prem', 'bge-local', 'bge', 'bge-reranker'] %}selected{% endif %}>Local (BGE-Reranker On-Prem)</option>
+                                <option value="siliconflow" {% if rerank_provider == 'siliconflow' or not rerank_provider %}selected{% endif %}>SiliconFlow</option>
+                                <option value="cohere" {% if rerank_provider == 'cohere' %}selected{% endif %}>Cohere</option>
+                                <option value="jina" {% if rerank_provider == 'jina' %}selected{% endif %}>Jina</option>
                             </select>
                         </div>
+                        {% set rerank_model = client.settings.get('rerank', {}).get('model', 'Qwen/Qwen3-Reranker-2B') %}
                         <div>
                             <label class="block text-sm font-medium text-dark-text mb-2">Reranking Model</label>
                             <select id="rerankModel" name="rerank_model"
-                                    {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
+                                    {% if not rerank_enabled %}disabled{% endif %}
                                     class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
                                 <!-- Local On-Prem Model -->
-                                <option value="bge-reranker-v2-m3" {% if client.settings.get('rerank', {}).get('model') == 'bge-reranker-v2-m3' %}selected{% endif %} data-provider="local">BGE-Reranker-v2-M3 (On-Prem)</option>
+                                <option value="bge-reranker-v2-m3" {% if rerank_model == 'bge-reranker-v2-m3' %}selected{% endif %} data-provider="local">BGE-Reranker-v2-M3 (On-Prem)</option>
                                 <!-- SiliconFlow Models -->
-                                <option value="Qwen/Qwen3-Reranker-0.6B" {% if client.settings.get('rerank', {}).get('model') == 'Qwen/Qwen3-Reranker-0.6B' %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-0.6B (Fastest)</option>
-                                <option value="Qwen/Qwen3-Reranker-2B" {% if client.settings.get('rerank', {}).get('model') == 'Qwen/Qwen3-Reranker-2B' %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-2B (Balanced)</option>
-                                <option value="BAAI/bge-reranker-base" {% if client.settings.get('rerank', {}).get('model') == 'BAAI/bge-reranker-base' %}selected{% endif %} data-provider="siliconflow">BGE Reranker Base</option>
+                                <option value="Qwen/Qwen3-Reranker-0.6B" {% if rerank_model == 'Qwen/Qwen3-Reranker-0.6B' %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-0.6B (Fastest)</option>
+                                <option value="Qwen/Qwen3-Reranker-2B" {% if rerank_model == 'Qwen/Qwen3-Reranker-2B' or not rerank_model %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-2B (Balanced)</option>
+                                <option value="BAAI/bge-reranker-base" {% if rerank_model == 'BAAI/bge-reranker-base' %}selected{% endif %} data-provider="siliconflow">BGE Reranker Base</option>
                                 <!-- Cohere Models -->
-                                <option value="rerank-english-v3.0" {% if client.settings.get('rerank', {}).get('model') == 'rerank-english-v3.0' %}selected{% endif %} data-provider="cohere">Rerank English v3.0</option>
-                                <option value="rerank-multilingual-v3.0" {% if client.settings.get('rerank', {}).get('model') == 'rerank-multilingual-v3.0' %}selected{% endif %} data-provider="cohere">Rerank Multilingual v3.0</option>
+                                <option value="rerank-english-v3.0" {% if rerank_model == 'rerank-english-v3.0' %}selected{% endif %} data-provider="cohere">Rerank English v3.0</option>
+                                <option value="rerank-multilingual-v3.0" {% if rerank_model == 'rerank-multilingual-v3.0' %}selected{% endif %} data-provider="cohere">Rerank Multilingual v3.0</option>
                                 <!-- Jina Models -->
-                                <option value="jina-reranker-v2-base-multilingual" {% if client.settings.get('rerank', {}).get('model') == 'jina-reranker-v2-base-multilingual' %}selected{% endif %} data-provider="jina">Jina Reranker v2 Multilingual</option>
+                                <option value="jina-reranker-v2-base-multilingual" {% if rerank_model == 'jina-reranker-v2-base-multilingual' %}selected{% endif %} data-provider="jina">Jina Reranker v2 Multilingual</option>
                             </select>
                         </div>
                     </div>
@@ -694,17 +724,17 @@
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                             <label class="block text-sm font-medium text-dark-text mb-2">Top K Results</label>
-                            <input type="number" id="rerankTopK" name="rerank_top_k" 
-                                   value="{{ client.settings.get('rerank', {}).get('top_k') }}" min="1" max="20"
-                                   {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
+                            <input type="number" id="rerankTopK" name="rerank_top_k"
+                                   value="{{ client.settings.get('rerank', {}).get('top_k', 10) }}" min="1" max="20"
+                                   {% if not rerank_enabled %}disabled{% endif %}
                                    class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
                             <p class="text-xs text-dark-text-secondary mt-1">Number of results to return after reranking (1-20)</p>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-dark-text mb-2">Rerank Candidates</label>
-                            <input type="number" id="rerankCandidates" name="rerank_candidates" 
-                                   value="{{ client.settings.get('rerank', {}).get('candidates') }}" min="5" max="50"
-                                   {% if not client.settings.get('rerank', {}).get('enabled') %}disabled{% endif %}
+                            <input type="number" id="rerankCandidates" name="rerank_candidates"
+                                   value="{{ client.settings.get('rerank', {}).get('candidates', 10) }}" min="5" max="50"
+                                   {% if not rerank_enabled %}disabled{% endif %}
                                    class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
                             <p class="text-xs text-dark-text-secondary mt-1">Number of candidates to consider for reranking (5-50)</p>
                         </div>
@@ -893,7 +923,7 @@ function togglePassword(fieldId) {
     const field = document.getElementById(fieldId);
     const button = field.nextElementSibling;
     const icon = button.querySelector('i');
-    
+
     if (field.type === 'password') {
         field.type = 'text';
         icon.classList.remove('bi-eye');
@@ -904,6 +934,70 @@ function togglePassword(fieldId) {
         icon.classList.add('bi-eye');
     }
 }
+
+// Inference Mode Toggle Handler
+document.addEventListener('DOMContentLoaded', function() {
+    const inferenceToggle = document.getElementById('inferenceToggle');
+    const usesPlatformKeysInput = document.getElementById('usesPlatformKeysInput');
+    const platformKeysInfo = document.getElementById('platformKeysInfo');
+    const byokInfo = document.getElementById('byokInfo');
+    const apiKeysSection = document.getElementById('apiKeysSection');
+    const platformKeysLabel = document.getElementById('platformKeysLabel');
+    const byokLabel = document.getElementById('byokLabel');
+
+    if (inferenceToggle) {
+        inferenceToggle.addEventListener('click', function() {
+            // Get current state (true = using platform keys, toggle is OFF)
+            const currentlyUsingPlatformKeys = usesPlatformKeysInput.value === 'true';
+            const newUsingPlatformKeys = !currentlyUsingPlatformKeys;
+
+            // Update hidden input
+            usesPlatformKeysInput.value = newUsingPlatformKeys ? 'true' : 'false';
+
+            // Update toggle visual state
+            const toggleKnob = this.querySelector('span[aria-hidden="true"]');
+            if (newUsingPlatformKeys) {
+                // Switch to Platform Keys (toggle OFF position - knob left)
+                this.classList.remove('bg-brand-teal');
+                this.classList.add('bg-dark-border');
+                toggleKnob.classList.remove('translate-x-5');
+                toggleKnob.classList.add('translate-x-0');
+                this.setAttribute('aria-checked', 'false');
+            } else {
+                // Switch to BYOK (toggle ON position - knob right)
+                this.classList.remove('bg-dark-border');
+                this.classList.add('bg-brand-teal');
+                toggleKnob.classList.remove('translate-x-0');
+                toggleKnob.classList.add('translate-x-5');
+                this.setAttribute('aria-checked', 'true');
+            }
+
+            // Update label colors
+            if (newUsingPlatformKeys) {
+                platformKeysLabel.classList.remove('text-dark-text-secondary');
+                platformKeysLabel.classList.add('text-brand-teal');
+                byokLabel.classList.remove('text-brand-orange');
+                byokLabel.classList.add('text-dark-text-secondary');
+            } else {
+                platformKeysLabel.classList.remove('text-brand-teal');
+                platformKeysLabel.classList.add('text-dark-text-secondary');
+                byokLabel.classList.remove('text-dark-text-secondary');
+                byokLabel.classList.add('text-brand-orange');
+            }
+
+            // Show/hide info sections
+            if (newUsingPlatformKeys) {
+                platformKeysInfo.classList.remove('hidden');
+                byokInfo.classList.add('hidden');
+                if (apiKeysSection) apiKeysSection.classList.add('hidden');
+            } else {
+                platformKeysInfo.classList.add('hidden');
+                byokInfo.classList.remove('hidden');
+                if (apiKeysSection) apiKeysSection.classList.remove('hidden');
+            }
+        });
+    }
+});
 
 // Handle embedding provider change
 document.getElementById('embeddingProvider').addEventListener('change', function() {

@@ -198,6 +198,7 @@ class ClientService:
                 "updated_at": now_iso,
                 "provisioning_started_at": now_iso,
                 "provisioning_error": None,
+                "uses_platform_keys": True,  # Use Sidekick Forge Inference by default
             }
 
             if not auto_provision:

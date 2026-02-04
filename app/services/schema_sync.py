@@ -73,6 +73,8 @@ create table if not exists public.agents (
   voice_chat_enabled boolean default true,
   text_chat_enabled boolean default true,
   video_chat_enabled boolean default false,
+  sound_settings jsonb default '{"thinking_sound": "none", "thinking_volume": 0.3, "ambient_sound": "none", "ambient_volume": 0.15}'::jsonb,
+  wizard_input jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -123,6 +125,45 @@ create table if not exists public.agent_documents (
   updated_at timestamptz not null default now(),
   unique(agent_id, document_id)
 );
+
+-- Enable RLS on all core tables
+ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversation_transcripts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.document_chunks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_documents ENABLE ROW LEVEL SECURITY;
+
+-- RLS policies for service_role access (all tables)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'conversations' AND policyname = 'conversations_service_role_all') THEN
+    CREATE POLICY conversations_service_role_all ON public.conversations FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'conversation_transcripts' AND policyname = 'conversation_transcripts_service_role_all') THEN
+    CREATE POLICY conversation_transcripts_service_role_all ON public.conversation_transcripts FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'agents' AND policyname = 'agents_service_role_all') THEN
+    CREATE POLICY agents_service_role_all ON public.agents FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'documents' AND policyname = 'documents_service_role_all') THEN
+    CREATE POLICY documents_service_role_all ON public.documents FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'document_chunks' AND policyname = 'document_chunks_service_role_all') THEN
+    CREATE POLICY document_chunks_service_role_all ON public.document_chunks FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'agent_documents' AND policyname = 'agent_documents_service_role_all') THEN
+    CREATE POLICY agent_documents_service_role_all ON public.agent_documents FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+  END IF;
+END$$;
+
+-- Allow anon role to read conversation_transcripts (needed for widget embedding)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'conversation_transcripts' AND policyname = 'conversation_transcripts_anon_read') THEN
+    CREATE POLICY conversation_transcripts_anon_read ON public.conversation_transcripts FOR SELECT USING (true);
+  END IF;
+END$$;
 """.strip()
 
 # UserSense / User Overviews schema for persistent user context
@@ -579,6 +620,16 @@ CREATE TABLE IF NOT EXISTS public.conversation_summaries (
 
 CREATE INDEX IF NOT EXISTS idx_conversation_summaries_conversation_id ON public.conversation_summaries (conversation_id);
 CREATE INDEX IF NOT EXISTS idx_conversation_summaries_user_id ON public.conversation_summaries (user_id);
+
+-- Enable RLS on conversation_summaries
+ALTER TABLE public.conversation_summaries ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'conversation_summaries' AND policyname = 'conversation_summaries_service_role_all') THEN
+    CREATE POLICY conversation_summaries_service_role_all ON public.conversation_summaries FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+  END IF;
+END$$;
 """.strip()
 
 # DocumentSense / Document Intelligence schema for extracted document metadata
@@ -920,6 +971,20 @@ create table if not exists public.profiles (
   updated_at timestamptz not null default now()
 );
 create index if not exists profiles_user_id_idx on public.profiles(user_id);
+
+-- Enable RLS on profiles
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_service_role_all') THEN
+    CREATE POLICY profiles_service_role_all ON public.profiles FOR ALL USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+  END IF;
+  -- Allow users to read their own profile
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'profiles' AND policyname = 'profiles_own_read') THEN
+    CREATE POLICY profiles_own_read ON public.profiles FOR SELECT USING (auth.uid() = id OR auth.uid() = user_id);
+  END IF;
+END$$;
 
 -- Ensure conversations has channel column for transcript storage
 alter table if exists public.conversations

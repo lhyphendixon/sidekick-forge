@@ -1,0 +1,279 @@
+/**
+ * Ken Burns Effect CSS
+ *
+ * Provides smooth pan/zoom animations for AI-generated images
+ * displayed during voice conversations.
+ */
+
+/* Main Ken Burns container */
+.kenburns-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    border-radius: 12px;
+}
+
+/* Image layer - holds both current and next images for crossfade */
+.kenburns-image-layer {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Individual image styling */
+.kenburns-image {
+    position: absolute;
+    width: 120%;
+    height: 120%;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 1.5s ease-in-out;
+    will-change: transform, opacity;
+}
+
+.kenburns-image.active {
+    opacity: 1;
+}
+
+.kenburns-image.exiting {
+    opacity: 0;
+}
+
+/* Ken Burns animation variants - randomly applied */
+.kenburns-zoom-in-left {
+    animation: kenburnsZoomInLeft 20s ease-in-out forwards;
+}
+
+.kenburns-zoom-in-right {
+    animation: kenburnsZoomInRight 20s ease-in-out forwards;
+}
+
+.kenburns-zoom-out-left {
+    animation: kenburnsZoomOutLeft 20s ease-in-out forwards;
+}
+
+.kenburns-zoom-out-right {
+    animation: kenburnsZoomOutRight 20s ease-in-out forwards;
+}
+
+.kenburns-pan-left {
+    animation: kenburnsPanLeft 20s ease-in-out forwards;
+}
+
+.kenburns-pan-right {
+    animation: kenburnsPanRight 20s ease-in-out forwards;
+}
+
+/* Keyframe animations */
+@keyframes kenburnsZoomInLeft {
+    0% {
+        transform: scale(1) translate(0, 0);
+    }
+    100% {
+        transform: scale(1.2) translate(-5%, -3%);
+    }
+}
+
+@keyframes kenburnsZoomInRight {
+    0% {
+        transform: scale(1) translate(0, 0);
+    }
+    100% {
+        transform: scale(1.2) translate(5%, -3%);
+    }
+}
+
+@keyframes kenburnsZoomOutLeft {
+    0% {
+        transform: scale(1.2) translate(-5%, -3%);
+    }
+    100% {
+        transform: scale(1) translate(0, 0);
+    }
+}
+
+@keyframes kenburnsZoomOutRight {
+    0% {
+        transform: scale(1.2) translate(5%, 3%);
+    }
+    100% {
+        transform: scale(1) translate(0, 0);
+    }
+}
+
+@keyframes kenburnsPanLeft {
+    0% {
+        transform: scale(1.1) translate(5%, 0);
+    }
+    100% {
+        transform: scale(1.1) translate(-5%, 0);
+    }
+}
+
+@keyframes kenburnsPanRight {
+    0% {
+        transform: scale(1.1) translate(-5%, 0);
+    }
+    100% {
+        transform: scale(1.1) translate(5%, 0);
+    }
+}
+
+/* Transcript overlay on Ken Burns images - elegant subtitle style */
+.kenburns-transcript-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 32px 24px 24px;
+    background: linear-gradient(
+        to top,
+        rgba(0, 0, 0, 0.7) 0%,
+        rgba(0, 0, 0, 0.4) 40%,
+        rgba(0, 0, 0, 0) 100%
+    );
+    pointer-events: none;
+    z-index: 10;
+}
+
+.kenburns-transcript-text {
+    color: #fff;
+    font-size: 17px;
+    line-height: 1.6;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+    text-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.8),
+        0 0 20px rgba(0, 0, 0, 0.6),
+        0 0 40px rgba(0, 0, 0, 0.4);
+    max-height: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* Smooth text transitions */
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    animation: captionFadeIn 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes captionFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.kenburns-transcript-text.agent,
+.kenburns-transcript-text.assistant {
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.kenburns-transcript-text.user {
+    color: rgba(1, 164, 166, 0.9);
+    font-style: italic;
+    font-weight: 300;
+}
+
+/* Loading state for image generation */
+.kenburns-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.8);
+    z-index: 5;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.kenburns-loading.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+.kenburns-loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(1, 164, 166, 0.3);
+    border-top-color: #01a4a6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.kenburns-loading-text {
+    margin-top: 12px;
+    color: #a0a0a0;
+    font-size: 13px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Placeholder when no image is loaded yet */
+.kenburns-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
+}
+
+.kenburns-placeholder-icon {
+    width: 64px;
+    height: 64px;
+    color: #333;
+    margin-bottom: 16px;
+}
+
+.kenburns-placeholder-text {
+    color: #666;
+    font-size: 14px;
+    text-align: center;
+}
+
+/* Image generation notification */
+.kenburns-notification {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    padding: 8px 12px;
+    background: rgba(1, 164, 166, 0.2);
+    border: 1px solid rgba(1, 164, 166, 0.4);
+    border-radius: 8px;
+    color: #01a4a6;
+    font-size: 12px;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    z-index: 15;
+}
+
+.kenburns-notification.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Generation time badge */
+.kenburns-gen-time {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    padding: 4px 8px;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 4px;
+    color: #666;
+    font-size: 10px;
+    z-index: 5;
+}

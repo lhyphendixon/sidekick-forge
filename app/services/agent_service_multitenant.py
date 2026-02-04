@@ -35,7 +35,10 @@ class AgentService:
             voice_settings_dict = voice_settings_raw
         else:
             voice_settings_dict = {}
-        
+
+        # Debug: Log Ken Burns settings
+        logger.debug(f"[_parse_agent_data] voice_settings_dict for {agent_data.get('slug')}: video_provider={voice_settings_dict.get('video_provider')}, kenburns_starting_image={voice_settings_dict.get('kenburns_starting_image')}")
+
         # Create VoiceSettings object with defaults
         try:
             voice_settings = VoiceSettings(**voice_settings_dict)

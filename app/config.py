@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     elevenlabs_api_key: Optional[str] = Field(None)
     cartesia_api_key: Optional[str] = Field(None)
     deepgram_api_key: Optional[str] = Field(None)
+
+    # Image Generation (RunWare.ai)
+    runware_api_key: Optional[str] = Field(None)
+    runware_default_model: str = Field(default="runware:100@1")  # FLUX.2 klein 9B
     
     # Tool Webhooks (n8n integration)
     n8n_text_webhook_url: Optional[str] = Field(None)
@@ -133,6 +137,10 @@ class Settings(BaseSettings):
     helpscout_token_preferred_store: str = Field(default="platform")
     helpscout_token_mirror_stores: bool = Field(default=False)
     helpscout_token_refresh_margin_seconds: int = Field(default=300)
+
+    # Mailchimp audience/newsletter
+    mailchimp_api_key: Optional[str] = Field(default=None)
+    mailchimp_list_id: Optional[str] = Field(default=None)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -211,6 +219,10 @@ class Settings(BaseSettings):
     @property
     def perplexity_mcp_server_url(self) -> str:
         return f"http://{self.perplexity_mcp_host}:{self.perplexity_mcp_port}/mcp/sse"
+
+    @property
+    def mailchimp_is_configured(self) -> bool:
+        return bool(self.mailchimp_api_key and self.mailchimp_list_id)
 
     @property
     def mailjet_is_configured(self) -> bool:

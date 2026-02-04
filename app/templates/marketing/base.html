@@ -125,7 +125,7 @@
         .video-bg-overlay {
             position: absolute;
             inset: 0;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.9);
         }
 
         /* Glass morphism styles - matching platform */
@@ -262,6 +262,20 @@
 </head>
 <body class="bg-brand-dark text-gray-100 antialiased">
 
+    <!-- Auth Redirect Handler: Detect Supabase auth callbacks on any page and redirect to /auth/callback -->
+    <script>
+    (function() {
+        // Check if URL has auth hash parameters (from Supabase email verification)
+        var hash = window.location.hash;
+        if (hash && (hash.includes('access_token=') || hash.includes('error=') || hash.includes('type=signup') || hash.includes('type=recovery'))) {
+            // Don't redirect if already on auth/callback page
+            if (window.location.pathname !== '/auth/callback') {
+                window.location.href = '/auth/callback' + hash;
+            }
+        }
+    })();
+    </script>
+
     <!-- Video Background -->
     <div class="video-bg-container">
         <video autoplay muted loop playsinline>
@@ -334,6 +348,37 @@
     <main class="pt-16 relative">
         {% block content %}{% endblock %}
     </main>
+
+    <!-- Newsletter Signup -->
+    <section class="relative py-16 bg-gradient-to-b from-transparent to-black/30">
+        <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <h2 class="text-2xl md:text-3xl font-bold text-white mb-3">Stay in the loop</h2>
+            <p class="text-gray-400 mb-8 max-w-lg mx-auto">
+                Get product updates, AI tips, and founder insights delivered to your inbox.
+            </p>
+            <div id="newsletter-form-wrapper">
+                <form hx-post="/api/newsletter/subscribe"
+                      hx-target="#newsletter-form-wrapper"
+                      hx-swap="innerHTML"
+                      hx-indicator="#newsletter-spinner"
+                      class="flex flex-col sm:flex-row gap-3 max-w-xl mx-auto">
+                    <input type="text" name="name" required placeholder="Your name"
+                           class="flex-1 bg-white/5 border border-white/10 text-white rounded-lg px-4 py-3 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent">
+                    <input type="email" name="email" required placeholder="you@example.com"
+                           class="flex-1 bg-white/5 border border-white/10 text-white rounded-lg px-4 py-3 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent">
+                    <button type="submit"
+                            class="bg-brand-teal hover:bg-brand-teal/90 text-white px-6 py-3 rounded-lg font-semibold transition btn-glow whitespace-nowrap flex items-center justify-center gap-2">
+                        <span>Subscribe</span>
+                        <svg id="newsletter-spinner" class="htmx-indicator w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+            <p class="text-gray-600 text-xs mt-4">No spam, unsubscribe anytime.</p>
+        </div>
+    </section>
 
     <!-- Footer - White Glass -->
     <footer class="glass-footer-white text-gray-700 relative">

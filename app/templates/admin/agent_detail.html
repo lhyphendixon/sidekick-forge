@@ -69,34 +69,52 @@
                 </div>
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Sidekick Image</label>
-                    <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_200px] md:items-start">
-                        <div class="space-y-3">
-                            <input type="text" id="agentImage" value="{{ agent.agent_image or '' }}"
-                                   placeholder="https://example.com/agent-image.png or /static/images/..."
-                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text"
-                                   onchange="updateImagePreview()" oninput="updateImagePreview()">
-                            <div class="flex flex-col sm:flex-row sm:items-center sm:space-x-3 space-y-3 sm:space-y-0">
-                                <input type="file" id="agentImageFile" accept="image/*"
-                                       class="block w-full text-sm text-dark-text bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal px-3 py-2"
-                                       onchange="uploadAgentImage()">
-                                <span id="imageUploadStatus" class="text-sm text-dark-text-secondary hidden">
-                                    <span class="animate-spin inline-block mr-1">&#9696;</span>Uploading...
-                                </span>
-                            </div>
-                        </div>
-                        <div class="flex flex-col items-center space-y-2">
-                            <img id="agentImagePreview" 
-                                 {% if agent.agent_image %}src="{{ agent.agent_image }}"{% endif %}
-                                 alt="Sidekick Image Preview"
-                                 class="w-48 h-48 rounded-lg border border-gray-300 object-cover {% if not agent.agent_image %}hidden{% endif %}"
-                                 onerror="hideImagePreview()">
-                            <div id="agentImagePlaceholder" class="w-48 h-48 rounded-lg border-2 border-dashed border-dark-border flex items-center justify-center {% if agent.agent_image %}hidden{% endif %}">
-                                <svg class="w-12 h-12 text-dark-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                    <!-- Hidden input to store the URL -->
+                    <input type="hidden" id="agentImage" value="{{ agent.agent_image or '' }}">
+
+                    <!-- Drag and drop upload area -->
+                    <div id="agentImageDropzone"
+                         class="relative w-48 h-48 bg-dark-elevated border-2 border-dashed border-dark-border rounded-lg cursor-pointer hover:border-purple-500 hover:bg-dark-elevated/70 transition-all overflow-hidden"
+                         onclick="document.getElementById('agentImageFile').click()">
+
+                        <!-- Preview or placeholder -->
+                        <div id="agentImagePreview" class="absolute inset-0 flex items-center justify-center">
+                            {% if agent.agent_image %}
+                            <img src="{{ agent.agent_image }}" alt="Sidekick image" class="w-full h-full object-cover">
+                            {% else %}
+                            <div class="text-center p-4">
+                                <svg class="w-10 h-10 mx-auto text-dark-text-secondary mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
                                 </svg>
+                                <p class="text-xs text-dark-text-secondary">Drag & drop</p>
+                                <p class="text-xs text-dark-text-secondary">or click to select</p>
                             </div>
+                            {% endif %}
                         </div>
+
+                        <!-- Loading overlay -->
+                        <div id="agentImageLoading" class="absolute inset-0 bg-dark-surface/80 flex items-center justify-center hidden">
+                            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500"></div>
+                        </div>
+
+                        <!-- Remove button (shown when image exists) -->
+                        {% if agent.agent_image %}
+                        <button type="button" id="agentImageRemove"
+                                onclick="event.stopPropagation(); removeAgentImage();"
+                                class="absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 rounded-full text-white transition-colors">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                        {% endif %}
                     </div>
+
+                    <!-- Hidden file input -->
+                    <input type="file" id="agentImageFile" accept="image/*" class="hidden" onchange="handleAgentImageUpload(this)">
+
+                    <p class="text-xs text-dark-text-secondary mt-2">
+                        Square image recommended (e.g., 256x256). Max 5MB.
+                    </p>
                 </div>
                 <div class="flex items-center">
                     <input type="checkbox" id="agentEnabled" {% if agent.enabled %}checked{% endif %}
@@ -486,115 +504,6 @@
             </div>
         </div>
 
-        <!-- Avatar/Video Settings -->
-        <div id="avatarSettingsSection" class="bg-dark-surface rounded-lg border border-dark-border mb-6 {% if not agent.video_chat_enabled %}hidden{% endif %}">
-            <div class="border-b border-dark-border px-6 py-4">
-                <h5 class="text-lg font-semibold text-dark-text flex items-center">
-                    <svg class="h-5 w-5 text-purple-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    Avatar / Video Settings
-                </h5>
-            </div>
-            <div class="p-6">
-                <div class="space-y-6">
-                    <!-- Avatar Provider Selection -->
-                    <div>
-                        <label class="block text-sm font-medium text-dark-text mb-2">Avatar Provider</label>
-                        <select id="avatarProvider" onchange="toggleAvatarProviderSettings()" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
-                            <option value="bithuman" {% if agent.voice_settings.avatar_provider == 'bithuman' or not agent.voice_settings.avatar_provider %}selected{% endif %}>Bithuman</option>
-                            <option value="beyondpresence" {% if agent.voice_settings.avatar_provider == 'beyondpresence' %}selected{% endif %}>Beyond Presence</option>
-                            <option value="liveavatar" {% if agent.voice_settings.avatar_provider == 'liveavatar' %}selected{% endif %}>HeyGen LiveAvatar</option>
-                        </select>
-                        <p class="text-xs text-dark-text-secondary mt-2">
-                            Choose your video avatar provider. Each requires the appropriate API key in client settings.
-                        </p>
-                    </div>
-
-                    <!-- Bithuman Settings (Local mode only - requires .imx model) -->
-                    <div id="bithumanSettings" {% if agent.voice_settings.avatar_provider and agent.voice_settings.avatar_provider != 'bithuman' %}style="display: none;"{% endif %}>
-                        <!-- IMX Model Path (required) -->
-                        <div class="mb-6">
-                            <label class="block text-sm font-medium text-dark-text mb-2">IMX Model Path <span class="text-red-500">*</span></label>
-                            <input type="text" id="avatarModelPath" value="{{ agent.voice_settings.avatar_model_path or '/app/models/farah_qubit.imx' }}"
-                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
-                                   placeholder="/app/models/your_avatar.imx">
-                            <p class="text-xs text-dark-text-secondary mt-2">
-                                Path to the .imx model file inside the agent container. Models are stored in /app/models/
-                            </p>
-                        </div>
-
-                        <!-- Avatar Model Type -->
-                        <div class="mb-6">
-                            <label class="block text-sm font-medium text-dark-text mb-2">Animation Style</label>
-                            <select id="avatarModelType" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
-                                <option value="expression" {% if agent.voice_settings.avatar_model_type == 'expression' or not agent.voice_settings.avatar_model_type %}selected{% endif %}>Expression (Dynamic emotions)</option>
-                                <option value="essence" {% if agent.voice_settings.avatar_model_type == 'essence' %}selected{% endif %}>Essence (Consistent style)</option>
-                            </select>
-                            <p class="text-xs text-dark-text-secondary mt-2">
-                                <strong>Expression:</strong> Dynamic facial expressions that respond to conversation tone.<br>
-                                <strong>Essence:</strong> More consistent, predefined expressions.
-                            </p>
-                        </div>
-
-                        <!-- Bithuman Link -->
-                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
-                            <p class="text-xs text-dark-text-secondary">
-                                <i class="bi bi-info-circle mr-1"></i>
-                                Video chat is powered by <a href="https://www.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Bithuman</a> (local mode).
-                                Create IMX models at <a href="https://imaginex.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">ImagineX Console</a>.
-                                Ensure the Bithuman API Secret is configured in the client settings.
-                            </p>
-                        </div>
-                    </div>
-
-                    <!-- Beyond Presence Settings -->
-                    <div id="beyondPresenceSettings" {% if agent.voice_settings.avatar_provider != 'beyondpresence' %}style="display: none;"{% endif %}>
-                        <div class="mb-6">
-                            <label class="block text-sm font-medium text-dark-text mb-2">Avatar ID</label>
-                            <input type="text" id="beyondPresenceAvatarId" value="{{ agent.voice_settings.avatar_id or '' }}"
-                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
-                                   placeholder="e.g., anna_professional">
-                            <p class="text-xs text-dark-text-secondary mt-2">
-                                Enter your Beyond Presence avatar ID. Leave empty for the default avatar.
-                            </p>
-                        </div>
-
-                        <!-- Beyond Presence Link -->
-                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
-                            <p class="text-xs text-dark-text-secondary">
-                                <i class="bi bi-info-circle mr-1"></i>
-                                Video chat is powered by <a href="https://www.beyondpresence.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Beyond Presence</a>.
-                                Ensure the Beyond Presence API Key is configured in the client settings.
-                            </p>
-                        </div>
-                    </div>
-
-                    <!-- HeyGen LiveAvatar Settings -->
-                    <div id="liveavatarSettings" {% if agent.voice_settings.avatar_provider != 'liveavatar' %}style="display: none;"{% endif %}>
-                        <div class="mb-6">
-                            <label class="block text-sm font-medium text-dark-text mb-2">Avatar ID</label>
-                            <input type="text" id="liveavatarAvatarId" value="{{ agent.voice_settings.liveavatar_avatar_id or '' }}"
-                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
-                                   placeholder="e.g., avatar_abc123">
-                            <p class="text-xs text-dark-text-secondary mt-2">
-                                Your HeyGen LiveAvatar avatar ID. Choose from public avatars or create custom ones at <a href="https://app.liveavatar.com/home" target="_blank" class="text-purple-400 hover:text-purple-300">app.liveavatar.com</a>.
-                            </p>
-                        </div>
-
-                        <!-- HeyGen LiveAvatar Link -->
-                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
-                            <p class="text-xs text-dark-text-secondary">
-                                <i class="bi bi-info-circle mr-1"></i>
-                                Video chat is powered by <a href="https://www.heygen.com" target="_blank" class="text-purple-400 hover:text-purple-300">HeyGen LiveAvatar</a>.
-                                Ensure the LiveAvatar API Key is configured in the client settings.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- Sound Settings -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
             <div class="border-b border-dark-border px-6 py-4">
@@ -773,6 +682,229 @@
                         <p class="text-xs text-dark-text-secondary">
                             When only one mode is enabled, the embed will show that mode directly without a tab switcher.
                         </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Avatar/Video Settings -->
+        <div id="avatarSettingsSection" class="bg-dark-surface rounded-lg border border-dark-border mb-6 {% if not agent.video_chat_enabled %}hidden{% endif %}">
+            <div class="border-b border-dark-border px-6 py-4">
+                <h5 class="text-lg font-semibold text-dark-text flex items-center">
+                    <svg class="h-5 w-5 text-purple-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    Avatar / Video Settings
+                </h5>
+            </div>
+            <div class="p-6">
+                <div class="space-y-6">
+                    <!-- Avatar Provider Selection -->
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Avatar Provider</label>
+                        <select id="avatarProvider" onchange="toggleAvatarProviderSettings()" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
+                            <option value="bithuman" {% if agent.voice_settings.avatar_provider == 'bithuman' or not agent.voice_settings.avatar_provider %}selected{% endif %}>Bithuman</option>
+                            <option value="beyondpresence" {% if agent.voice_settings.avatar_provider == 'beyondpresence' %}selected{% endif %}>Beyond Presence</option>
+                            <option value="liveavatar" {% if agent.voice_settings.avatar_provider == 'liveavatar' %}selected{% endif %}>HeyGen LiveAvatar</option>
+                            <option value="ken_burns" {% if agent.voice_settings.avatar_provider == 'ken_burns' or agent.voice_settings.video_provider == 'ken_burns' %}selected{% endif %}>Ken Burns (AI Generated Images)</option>
+                        </select>
+                        <p class="text-xs text-dark-text-secondary mt-2">
+                            Choose your video provider. Avatar providers require API keys; Ken Burns uses AI-generated imagery.
+                        </p>
+                    </div>
+
+                    <!-- Bithuman Settings (Local mode only - requires .imx model) -->
+                    <div id="bithumanSettings" {% if agent.voice_settings.avatar_provider and agent.voice_settings.avatar_provider != 'bithuman' %}style="display: none;"{% endif %}>
+                        <!-- IMX Model Path (required) -->
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">IMX Model Path <span class="text-red-500">*</span></label>
+                            <input type="text" id="avatarModelPath" value="{{ agent.voice_settings.avatar_model_path or '/app/models/farah_qubit.imx' }}"
+                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
+                                   placeholder="/app/models/your_avatar.imx">
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                Path to the .imx model file inside the agent container. Models are stored in /app/models/
+                            </p>
+                        </div>
+
+                        <!-- Avatar Model Type -->
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Animation Style</label>
+                            <select id="avatarModelType" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
+                                <option value="expression" {% if agent.voice_settings.avatar_model_type == 'expression' or not agent.voice_settings.avatar_model_type %}selected{% endif %}>Expression (Dynamic emotions)</option>
+                                <option value="essence" {% if agent.voice_settings.avatar_model_type == 'essence' %}selected{% endif %}>Essence (Consistent style)</option>
+                            </select>
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                <strong>Expression:</strong> Dynamic facial expressions that respond to conversation tone.<br>
+                                <strong>Essence:</strong> More consistent, predefined expressions.
+                            </p>
+                        </div>
+
+                        <!-- Bithuman Link -->
+                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
+                            <p class="text-xs text-dark-text-secondary">
+                                <i class="bi bi-info-circle mr-1"></i>
+                                Video chat is powered by <a href="https://www.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Bithuman</a> (local mode).
+                                Create IMX models at <a href="https://imaginex.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">ImagineX Console</a>.
+                                Ensure the Bithuman API Secret is configured in the client settings.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Beyond Presence Settings -->
+                    <div id="beyondPresenceSettings" {% if agent.voice_settings.avatar_provider != 'beyondpresence' %}style="display: none;"{% endif %}>
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Avatar ID</label>
+                            <input type="text" id="beyondPresenceAvatarId" value="{{ agent.voice_settings.avatar_id or '' }}"
+                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
+                                   placeholder="e.g., anna_professional">
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                Enter your Beyond Presence avatar ID. Leave empty for the default avatar.
+                            </p>
+                        </div>
+
+                        <!-- Beyond Presence Link -->
+                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
+                            <p class="text-xs text-dark-text-secondary">
+                                <i class="bi bi-info-circle mr-1"></i>
+                                Video chat is powered by <a href="https://www.beyondpresence.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Beyond Presence</a>.
+                                Ensure the Beyond Presence API Key is configured in the client settings.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- HeyGen LiveAvatar Settings -->
+                    <div id="liveavatarSettings" {% if agent.voice_settings.avatar_provider != 'liveavatar' %}style="display: none;"{% endif %}>
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Avatar ID</label>
+                            <input type="text" id="liveavatarAvatarId" value="{{ agent.voice_settings.liveavatar_avatar_id or '' }}"
+                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
+                                   placeholder="e.g., avatar_abc123">
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                Your HeyGen LiveAvatar avatar ID. Choose from public avatars or create custom ones at <a href="https://app.liveavatar.com/home" target="_blank" class="text-purple-400 hover:text-purple-300">app.liveavatar.com</a>.
+                            </p>
+                        </div>
+
+                        <!-- HeyGen LiveAvatar Link -->
+                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
+                            <p class="text-xs text-dark-text-secondary">
+                                <i class="bi bi-info-circle mr-1"></i>
+                                Video chat is powered by <a href="https://www.heygen.com" target="_blank" class="text-purple-400 hover:text-purple-300">HeyGen LiveAvatar</a>.
+                                Ensure the LiveAvatar API Key is configured in the client settings.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Ken Burns (AI Generated Images) Settings -->
+                    <div id="kenburnsSettings" {% if agent.voice_settings.avatar_provider != 'ken_burns' and agent.voice_settings.video_provider != 'ken_burns' %}style="display: none;"{% endif %}>
+                        <!-- Visual Style Preset -->
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Visual Style</label>
+                            <select id="kenburnsStylePreset" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
+                                <option value="cinematic" {% if agent.voice_settings.kenburns_style == 'cinematic' or not agent.voice_settings.kenburns_style %}selected{% endif %}>Cinematic (dramatic lighting, film-like)</option>
+                                <option value="futuristic" {% if agent.voice_settings.kenburns_style == 'futuristic' %}selected{% endif %}>Futuristic (sci-fi, neon accents)</option>
+                                <option value="realistic" {% if agent.voice_settings.kenburns_style == 'realistic' %}selected{% endif %}>Realistic (photorealistic, natural)</option>
+                                <option value="artistic" {% if agent.voice_settings.kenburns_style == 'artistic' %}selected{% endif %}>Artistic (painterly, vibrant)</option>
+                                <option value="documentary" {% if agent.voice_settings.kenburns_style == 'documentary' %}selected{% endif %}>Documentary (informative, clear)</option>
+                            </select>
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                The visual style applied to AI-generated images during conversation.
+                            </p>
+                        </div>
+
+                        <!-- Animation Duration -->
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Animation Duration</label>
+                            <select id="kenburnsAnimationDuration" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
+                                <option value="5" {% if agent.voice_settings.kenburns_duration == 5 %}selected{% endif %}>5 seconds (very fast)</option>
+                                <option value="10" {% if agent.voice_settings.kenburns_duration == 10 %}selected{% endif %}>10 seconds (fast)</option>
+                                <option value="15" {% if agent.voice_settings.kenburns_duration == 15 %}selected{% endif %}>15 seconds</option>
+                                <option value="20" {% if agent.voice_settings.kenburns_duration == 20 or not agent.voice_settings.kenburns_duration %}selected{% endif %}>20 seconds (default)</option>
+                                <option value="30" {% if agent.voice_settings.kenburns_duration == 30 %}selected{% endif %}>30 seconds (slow)</option>
+                                <option value="45" {% if agent.voice_settings.kenburns_duration == 45 %}selected{% endif %}>45 seconds (very slow)</option>
+                            </select>
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                How long each Ken Burns pan/zoom animation takes before looping or transitioning.
+                            </p>
+                        </div>
+
+                        <!-- Auto Image Generation Interval -->
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">
+                                Image Refresh Interval: <span id="kenburnsAutoIntervalValue">{{ agent.voice_settings.kenburns_auto_interval or 15 }}</span> seconds
+                            </label>
+                            <input type="range" id="kenburnsAutoInterval" min="5" max="60" step="5"
+                                   value="{{ agent.voice_settings.kenburns_auto_interval or 15 }}"
+                                   oninput="document.getElementById('kenburnsAutoIntervalValue').textContent = this.value"
+                                   class="w-full md:w-1/2 h-2 bg-dark-border rounded-lg appearance-none cursor-pointer accent-purple-500">
+                            <div class="flex justify-between text-xs text-dark-text-secondary w-full md:w-1/2 mt-1">
+                                <span>5s (frequent)</span>
+                                <span>60s (rare)</span>
+                            </div>
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                Automatically generate new images at this interval to keep visuals fresh during conversation.
+                            </p>
+                        </div>
+
+                        <!-- Starting Image -->
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-dark-text mb-2">Starting Image (Optional)</label>
+                            <!-- Hidden input to store the URL -->
+                            <input type="hidden" id="kenburnsStartingImage" value="{{ agent.voice_settings.kenburns_starting_image or '' }}">
+
+                            <!-- Drag and drop upload area -->
+                            <div id="kenburnsStartingImageDropzone"
+                                 class="relative w-full md:w-2/3 aspect-video bg-dark-elevated border-2 border-dashed border-dark-border rounded-lg cursor-pointer hover:border-purple-500 hover:bg-dark-elevated/70 transition-all overflow-hidden"
+                                 onclick="document.getElementById('kenburnsStartingImageInput').click()">
+
+                                <!-- Preview or placeholder -->
+                                <div id="kenburnsStartingImagePreview" class="absolute inset-0 flex items-center justify-center">
+                                    {% if agent.voice_settings.kenburns_starting_image %}
+                                    <img src="{{ agent.voice_settings.kenburns_starting_image }}" alt="Starting image" class="w-full h-full object-cover">
+                                    {% else %}
+                                    <div class="text-center p-4">
+                                        <svg class="w-12 h-12 mx-auto text-dark-text-secondary mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                                        </svg>
+                                        <p class="text-sm text-dark-text-secondary">Drag & drop an image here</p>
+                                        <p class="text-xs text-dark-text-secondary mt-1">or click to select</p>
+                                    </div>
+                                    {% endif %}
+                                </div>
+
+                                <!-- Loading overlay -->
+                                <div id="kenburnsStartingImageLoading" class="absolute inset-0 bg-dark-surface/80 flex items-center justify-center hidden">
+                                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500"></div>
+                                </div>
+
+                                <!-- Remove button (shown when image exists) -->
+                                {% if agent.voice_settings.kenburns_starting_image %}
+                                <button type="button" id="kenburnsStartingImageRemove"
+                                        onclick="event.stopPropagation(); removeKenburnsStartingImage();"
+                                        class="absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 rounded-full text-white transition-colors">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                    </svg>
+                                </button>
+                                {% endif %}
+                            </div>
+
+                            <!-- Hidden file input -->
+                            <input type="file" id="kenburnsStartingImageInput" accept="image/*" class="hidden" onchange="handleKenburnsStartingImageUpload(this)">
+
+                            <p class="text-xs text-dark-text-secondary mt-2">
+                                Upload an image to display when the conversation starts, before the first AI-generated image loads.
+                                Recommended: 16:9 aspect ratio (e.g., 1920x1080). Max 5MB.
+                            </p>
+                        </div>
+
+                        <!-- Ken Burns Info -->
+                        <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
+                            <p class="text-xs text-dark-text-secondary">
+                                <i class="bi bi-info-circle mr-1"></i>
+                                Ken Burns mode generates AI images via <a href="https://runware.ai" target="_blank" class="text-purple-400 hover:text-purple-300">RunWare.ai</a> during conversations.
+                                Images are auto-generated at the interval above, plus the AI can generate additional images based on conversation context.
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1153,7 +1285,7 @@
                 </div>
 
                 <p class="text-xs text-dark-text-secondary">
-                    Set the Redirection URL in HelpScout to: <code class="bg-dark-elevated px-1 py-0.5 rounded">{{ request.url.scheme }}://{{ request.url.netloc }}/admin/oauth/helpscout/callback</code>
+                    Set the Redirection URL in HelpScout to: <code class="bg-dark-elevated px-1 py-0.5 rounded">{{ request.headers.get('x-forwarded-proto', request.url.scheme) }}://{{ request.headers.get('x-forwarded-host', request.url.netloc) }}/admin/oauth/helpscout/callback</code>
                 </p>
             </div>
 
@@ -1440,6 +1572,12 @@ async function saveAgent() {
             // Clear other provider settings
             voiceSettings.avatar_id = null;
             voiceSettings.liveavatar_avatar_id = null;
+            // Clear Ken Burns settings
+            voiceSettings.video_provider = null;
+            voiceSettings.kenburns_style = null;
+            voiceSettings.kenburns_duration = null;
+            voiceSettings.kenburns_auto_interval = null;
+            voiceSettings.kenburns_starting_image = null;
         } else if (avatarProvider === 'beyondpresence') {
             voiceSettings.avatar_id = document.getElementById('beyondPresenceAvatarId')?.value || null;
             // Clear Bithuman settings
@@ -1448,6 +1586,12 @@ async function saveAgent() {
             voiceSettings.avatar_model_type = null;
             // Clear LiveAvatar settings
             voiceSettings.liveavatar_avatar_id = null;
+            // Clear Ken Burns settings
+            voiceSettings.video_provider = null;
+            voiceSettings.kenburns_style = null;
+            voiceSettings.kenburns_duration = null;
+            voiceSettings.kenburns_auto_interval = null;
+            voiceSettings.kenburns_starting_image = null;
         } else if (avatarProvider === 'liveavatar') {
             voiceSettings.liveavatar_avatar_id = document.getElementById('liveavatarAvatarId')?.value || null;
             // Clear Bithuman settings
@@ -1456,6 +1600,25 @@ async function saveAgent() {
             voiceSettings.avatar_model_type = null;
             // Clear Beyond Presence settings
             voiceSettings.avatar_id = null;
+            // Clear Ken Burns settings
+            voiceSettings.video_provider = null;
+            voiceSettings.kenburns_style = null;
+            voiceSettings.kenburns_duration = null;
+            voiceSettings.kenburns_auto_interval = null;
+            voiceSettings.kenburns_starting_image = null;
+        } else if (avatarProvider === 'ken_burns') {
+            // Ken Burns (AI Generated Images) settings
+            voiceSettings.video_provider = 'ken_burns';
+            voiceSettings.kenburns_style = document.getElementById('kenburnsStylePreset')?.value || 'cinematic';
+            voiceSettings.kenburns_duration = parseInt(document.getElementById('kenburnsAnimationDuration')?.value || '20', 10);
+            voiceSettings.kenburns_auto_interval = parseInt(document.getElementById('kenburnsAutoInterval')?.value || '15', 10);
+            voiceSettings.kenburns_starting_image = document.getElementById('kenburnsStartingImage')?.value || null;
+            // Clear all avatar provider settings
+            voiceSettings.avatar_model_path = null;
+            voiceSettings.avatar_image_url = null;
+            voiceSettings.avatar_model_type = null;
+            voiceSettings.avatar_id = null;
+            voiceSettings.liveavatar_avatar_id = null;
         }
     }
 
@@ -1998,6 +2161,11 @@ function toggleAvatarSettings() {
     if (avatarSection) {
         if (videoEnabled) {
             avatarSection.classList.remove('hidden');
+            // Smooth scroll to the video settings section after it becomes visible
+            // Use setTimeout to ensure DOM has updated before scrolling
+            setTimeout(() => {
+                avatarSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
         } else {
             avatarSection.classList.add('hidden');
         }
@@ -2009,11 +2177,13 @@ function toggleAvatarProviderSettings() {
     const bithumanSettings = document.getElementById('bithumanSettings');
     const beyondPresenceSettings = document.getElementById('beyondPresenceSettings');
     const liveavatarSettings = document.getElementById('liveavatarSettings');
+    const kenburnsSettings = document.getElementById('kenburnsSettings');
 
     // Hide all provider settings first
     if (bithumanSettings) bithumanSettings.style.display = 'none';
     if (beyondPresenceSettings) beyondPresenceSettings.style.display = 'none';
     if (liveavatarSettings) liveavatarSettings.style.display = 'none';
+    if (kenburnsSettings) kenburnsSettings.style.display = 'none';
 
     // Show the selected provider's settings
     if (provider === 'bithuman') {
@@ -2022,8 +2192,179 @@ function toggleAvatarProviderSettings() {
         if (beyondPresenceSettings) beyondPresenceSettings.style.display = 'block';
     } else if (provider === 'liveavatar') {
         if (liveavatarSettings) liveavatarSettings.style.display = 'block';
+    } else if (provider === 'ken_burns') {
+        if (kenburnsSettings) kenburnsSettings.style.display = 'block';
     }
 }
+
+// Ken Burns Starting Image - Drag and Drop Upload Handlers
+async function handleKenburnsStartingImageUpload(input) {
+    if (!input.files || !input.files[0]) return;
+    await uploadKenburnsStartingImage(input.files[0]);
+}
+
+async function uploadKenburnsStartingImage(file) {
+    const maxSize = 5 * 1024 * 1024; // 5MB
+
+    if (file.size > maxSize) {
+        alert('Image size must be less than 5MB');
+        return;
+    }
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+        alert('Please select an image file');
+        return;
+    }
+
+    const loadingEl = document.getElementById('kenburnsStartingImageLoading');
+    const previewEl = document.getElementById('kenburnsStartingImagePreview');
+    const dropzone = document.getElementById('kenburnsStartingImageDropzone');
+
+    // Show loading state
+    if (loadingEl) loadingEl.classList.remove('hidden');
+
+    try {
+        // Upload to Supabase Storage via API
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('agent_id', '{{ agent.id }}');
+        formData.append('client_id', '{{ client_id }}');
+        formData.append('upload_type', 'kenburns_starting');
+
+        const response = await fetch('/admin/api/upload-avatar', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Upload failed');
+        }
+
+        const data = await response.json();
+
+        // Update hidden input with URL
+        document.getElementById('kenburnsStartingImage').value = data.url;
+
+        // Update preview
+        previewEl.innerHTML = `<img src="${data.url}" alt="Starting image" class="w-full h-full object-cover">`;
+
+        // Add remove button if not present
+        if (!document.getElementById('kenburnsStartingImageRemove')) {
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.id = 'kenburnsStartingImageRemove';
+            removeBtn.className = 'absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 rounded-full text-white transition-colors';
+            removeBtn.onclick = function(e) { e.stopPropagation(); removeKenburnsStartingImage(); };
+            removeBtn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>`;
+            dropzone.appendChild(removeBtn);
+        }
+
+    } catch (error) {
+        console.error('Ken Burns starting image upload error:', error);
+        alert('Failed to upload image: ' + error.message);
+    } finally {
+        // Hide loading state
+        if (loadingEl) loadingEl.classList.add('hidden');
+    }
+}
+
+function removeKenburnsStartingImage() {
+    // Clear the URL
+    document.getElementById('kenburnsStartingImage').value = '';
+
+    // Reset preview to placeholder
+    const previewEl = document.getElementById('kenburnsStartingImagePreview');
+    previewEl.innerHTML = `
+        <div class="text-center p-4">
+            <svg class="w-12 h-12 mx-auto text-dark-text-secondary mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+            </svg>
+            <p class="text-sm text-dark-text-secondary">Drag & drop an image here</p>
+            <p class="text-xs text-dark-text-secondary mt-1">or click to select</p>
+        </div>
+    `;
+
+    // Remove the remove button
+    const removeBtn = document.getElementById('kenburnsStartingImageRemove');
+    if (removeBtn) removeBtn.remove();
+}
+
+// Initialize drag and drop for Ken Burns starting image
+document.addEventListener('DOMContentLoaded', function() {
+    const dropzone = document.getElementById('kenburnsStartingImageDropzone');
+    if (!dropzone) return;
+
+    // Prevent default drag behaviors
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropzone.addEventListener(eventName, preventDefaults, false);
+        document.body.addEventListener(eventName, preventDefaults, false);
+    });
+
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    // Highlight drop zone when dragging over
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropzone.addEventListener(eventName, () => {
+            dropzone.classList.add('border-purple-500', 'bg-purple-500/10');
+        }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropzone.addEventListener(eventName, () => {
+            dropzone.classList.remove('border-purple-500', 'bg-purple-500/10');
+        }, false);
+    });
+
+    // Handle dropped files
+    dropzone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files.length > 0) {
+            uploadKenburnsStartingImage(files[0]);
+        }
+    }, false);
+});
+
+// Initialize drag and drop for Sidekick Image
+document.addEventListener('DOMContentLoaded', function() {
+    const dropzone = document.getElementById('agentImageDropzone');
+    if (!dropzone) return;
+
+    // Prevent default drag behaviors
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        }, false);
+    });
+
+    // Highlight drop zone when dragging over
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropzone.addEventListener(eventName, () => {
+            dropzone.classList.add('border-purple-500', 'bg-purple-500/10');
+        }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropzone.addEventListener(eventName, () => {
+            dropzone.classList.remove('border-purple-500', 'bg-purple-500/10');
+        }, false);
+    });
+
+    // Handle dropped files
+    dropzone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files.length > 0) {
+            uploadAgentImageFile(files[0]);
+        }
+    }, false);
+});
 
 async function handleAvatarUpload(input) {
     if (!input.files || !input.files[0]) return;
@@ -3089,33 +3430,35 @@ function setAgentImageUrl(url) {
     if (input) {
         input.value = url || '';
     }
-    updateImagePreview();
+    updateAgentImagePreview(url);
 }
 
-async function uploadAgentImage() {
-    const fileInput = document.getElementById('agentImageFile');
-    const statusSpan = document.getElementById('imageUploadStatus');
+async function handleAgentImageUpload(input) {
+    if (!input.files || !input.files[0]) return;
+    await uploadAgentImageFile(input.files[0]);
+}
 
-    if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
-        return;
-    }
-
-    const file = fileInput.files[0];
+async function uploadAgentImageFile(file) {
     const maxBytes = 5 * 1024 * 1024;
     if (file.size > maxBytes) {
         showNotification('error', 'Image must be 5 MB or smaller.');
-        fileInput.value = '';
         return;
     }
 
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+        showNotification('error', 'Please select an image file');
+        return;
+    }
+
+    const loadingEl = document.getElementById('agentImageLoading');
+    const dropzone = document.getElementById('agentImageDropzone');
+
+    // Show loading state
+    if (loadingEl) loadingEl.classList.remove('hidden');
+
     const formData = new FormData();
     formData.append('file', file);
-
-    // Show uploading status
-    if (statusSpan) {
-        statusSpan.classList.remove('hidden');
-    }
-    fileInput.disabled = true;
 
     const headers = { 'X-Requested-With': 'XMLHttpRequest' };
     const adminToken = getCookie('admin_token');
@@ -3143,43 +3486,74 @@ async function uploadAgentImage() {
             throw new Error(message);
         }
 
-        setAgentImageUrl(result.url);
+        // Update hidden input with URL
+        document.getElementById('agentImage').value = result.url;
+
+        // Update preview
+        updateAgentImagePreview(result.url);
+
+        // Add remove button if not present
+        if (!document.getElementById('agentImageRemove')) {
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.id = 'agentImageRemove';
+            removeBtn.className = 'absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 rounded-full text-white transition-colors';
+            removeBtn.onclick = function(e) { e.stopPropagation(); removeAgentImage(); };
+            removeBtn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>`;
+            dropzone.appendChild(removeBtn);
+        }
+
         showNotification('success', 'Image uploaded successfully.');
     } catch (error) {
         console.error('Agent image upload failed:', error);
         showNotification('error', `Image upload failed: ${error.message}`);
     } finally {
-        fileInput.value = '';
-        fileInput.disabled = false;
-        if (statusSpan) {
-            statusSpan.classList.add('hidden');
-        }
+        // Reset file input and hide loading
+        const fileInput = document.getElementById('agentImageFile');
+        if (fileInput) fileInput.value = '';
+        if (loadingEl) loadingEl.classList.add('hidden');
     }
 }
 
-function updateImagePreview() {
-    const imageUrl = document.getElementById('agentImage').value.trim();
-    const preview = document.getElementById('agentImagePreview');
-    const placeholder = document.getElementById('agentImagePlaceholder');
+function updateAgentImagePreview(url) {
+    const previewEl = document.getElementById('agentImagePreview');
+    if (!previewEl) return;
 
-    if (imageUrl) {
-        preview.src = imageUrl;
-        preview.classList.remove('hidden');
-        placeholder.classList.add('hidden');
+    if (url) {
+        previewEl.innerHTML = `<img src="${url}" alt="Sidekick image" class="w-full h-full object-cover">`;
     } else {
-        hideImagePreview();
+        previewEl.innerHTML = `
+            <div class="text-center p-4">
+                <svg class="w-10 h-10 mx-auto text-dark-text-secondary mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                </svg>
+                <p class="text-xs text-dark-text-secondary">Drag & drop</p>
+                <p class="text-xs text-dark-text-secondary">or click to select</p>
+            </div>
+        `;
     }
+}
+
+function removeAgentImage() {
+    // Clear the URL
+    document.getElementById('agentImage').value = '';
+
+    // Reset preview to placeholder
+    updateAgentImagePreview(null);
+
+    // Remove the remove button
+    const removeBtn = document.getElementById('agentImageRemove');
+    if (removeBtn) removeBtn.remove();
+}
+
+// Legacy function for backward compatibility
+function updateImagePreview() {
+    const imageUrl = document.getElementById('agentImage')?.value?.trim();
+    updateAgentImagePreview(imageUrl || null);
 }
 
 function hideImagePreview() {
-    const preview = document.getElementById('agentImagePreview');
-    const placeholder = document.getElementById('agentImagePlaceholder');
-
-    if (preview) {
-        // Use removeAttribute instead of setting empty src to avoid browser making request to current page
-        preview.removeAttribute('src');
-    }
-    preview.classList.add('hidden');
+    updateAgentImagePreview(null);
     placeholder.classList.remove('hidden');
 }
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, HTTPException, status
 import logging
 import json
 from datetime import datetime
+from typing import Set
 
 from app.integrations.livekit_client import livekit_manager
 from app.integrations.supabase_client import supabase_manager
@@ -11,28 +12,88 @@ from app.services.usage_tracking import usage_tracking_service
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# In-memory deduplication cache for webhook events
+# Key: (event_type, room_sid) or (event_type, room_sid, participant_sid)
+# This prevents duplicate processing if LiveKit retries delivery
+_processed_events: Set[str] = set()
+_MAX_CACHE_SIZE = 10000  # Prevent unbounded memory growth
+
+
+def _get_event_idempotency_key(event_type: str, event_data: dict) -> str:
+    """Generate a unique key for webhook event deduplication"""
+    room = event_data.get("room", {})
+    room_sid = room.get("sid", "")
+
+    # For participant events, include participant_sid
+    if event_type in ("participant_joined", "participant_left"):
+        participant = event_data.get("participant", {})
+        participant_sid = participant.get("sid", "")
+        return f"{event_type}:{room_sid}:{participant_sid}"
+
+    # For track events, include track_sid
+    if event_type == "track_published":
+        track = event_data.get("track", {})
+        track_sid = track.get("sid", "")
+        return f"{event_type}:{room_sid}:{track_sid}"
+
+    # For room events, just use room_sid
+    return f"{event_type}:{room_sid}"
+
+
+def _is_duplicate_event(idempotency_key: str) -> bool:
+    """Check if we've already processed this event"""
+    global _processed_events
+
+    if idempotency_key in _processed_events:
+        return True
+
+    # Add to cache, with size limit
+    if len(_processed_events) >= _MAX_CACHE_SIZE:
+        # Clear oldest half when full (simple eviction)
+        _processed_events = set(list(_processed_events)[_MAX_CACHE_SIZE // 2:])
+
+    _processed_events.add(idempotency_key)
+    return False
+
+
 @router.post("/livekit/events")
 async def handle_livekit_webhook(request: Request):
     """
-    Handle LiveKit webhook events
+    Handle LiveKit webhook events.
+
+    CRITICAL: This endpoint tracks voice minutes for billing.
+    Events are deduplicated using room_sid to prevent double-counting.
     """
     try:
+        # Initialize livekit_manager to load credentials for webhook verification
+        # This is CRITICAL - without initialization, api_key/api_secret are None
+        await livekit_manager.initialize()
+
         # Get webhook signature
         auth_header = request.headers.get("Authorization", "")
-        
+
         # Get body
         body = await request.body()
-        
+
         # Verify webhook signature
         if not livekit_manager.verify_webhook(auth_header, body):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook signature"
             )
-        
+
         # Parse event
         event_data = await request.json()
         event_type = event_data.get("event")
+
+        # Deduplication: Check if we've already processed this event
+        idempotency_key = _get_event_idempotency_key(event_type, event_data)
+        if _is_duplicate_event(idempotency_key):
+            logger.info(f"Skipping duplicate webhook event: {idempotency_key}")
+            return APIResponse(
+                success=True,
+                data=SuccessResponse(message="Event already processed (duplicate)")
+            )
         
         logger.info(f"LiveKit webhook event: {event_type}", extra={"event_data": event_data})
         

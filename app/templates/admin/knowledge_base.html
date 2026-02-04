@@ -257,14 +257,34 @@
 
 {% block content %}
 <div class="container mx-auto px-4">
-    <!-- Page Header + Upload -->
+    <!-- Page Header -->
     <div class="mb-6 bg-dark-surface rounded-lg border border-dark-border">
-        <div class="border-b border-dark-border px-6 py-4 flex flex-col gap-2">
-            <div class="flex items-center justify-between">
+        <div class="border-b border-dark-border px-6 py-4">
+            <div class="flex items-center justify-between flex-wrap gap-4">
                 <div>
                     <h1 class="text-2xl font-bold text-dark-text">Knowledge Base</h1>
-                    <p class="text-dark-text-secondary">Upload and manage documents for AI agent training</p>
+                    <p class="text-sm text-dark-text-secondary mt-1">
+                        {{ supported_formats }} ({{ max_upload_size_mb }}MB max) ·
+                        <span id="doc-count" class="font-medium text-dark-text">0</span> documents ·
+                        <span id="doc-total-size" class="font-medium text-dark-text">0 Bytes</span>
+                    </p>
                 </div>
+                <div class="flex items-center gap-3">
+                    <div class="flex items-center gap-3 text-sm text-dark-text-secondary">
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-orange"></span><span id="status-processing">0</span></span>
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-teal"></span><span id="status-ready">0</span></span>
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-salmon"></span><span id="status-error">0</span></span>
+                    </div>
+                    <button id="retry-errors-btn" class="btn-secondary px-3 py-1.5 rounded text-xs font-medium transition-all">
+                        <i class="fas fa-redo mr-1"></i>Retry Failed
+                    </button>
+                </div>
+            </div>
+            <div id="retry-progress" class="mt-3" style="display:none;">
+                <div class="progress-bar">
+                    <div id="retry-progress-fill" class="progress-fill"></div>
+                </div>
+                <p id="retry-progress-text" class="text-xs text-dark-text-secondary mt-1">Retrying failed documents...</p>
             </div>
         </div>
         <div id="processing-banner">
@@ -287,36 +307,6 @@
                         <div id="banner-progress-fill" class="progress-fill"></div>
                     </div>
                     <div id="banner-progress-text" class="text-xs text-dark-text-secondary">Progress —</div>
-                </div>
-            </div>
-        </div>
-        <div class="border-b border-dark-border px-6 py-4">
-            <div class="flex items-center justify-between flex-wrap gap-3">
-                <div>
-                    <h2 class="text-lg font-semibold text-dark-text">Upload Documents</h2>
-                    <p class="text-sm text-dark-text-secondary">Supported formats: {{ supported_formats }} ({{ max_upload_size_mb }}MB max per file)</p>
-                    <div id="doc-summary" class="mt-2 flex flex-wrap gap-4 text-sm text-dark-text-secondary">
-                        <div>Documents: <span id="doc-count" class="font-semibold text-dark-text">0</span></div>
-                        <div>Total Size: <span id="doc-total-size" class="font-semibold text-dark-text">0 Bytes</span></div>
-                    </div>
-                </div>
-                <div class="flex flex-col gap-2 items-end w-full md:w-auto">
-                    <div class="flex items-center gap-4 text-sm text-dark-text-secondary">
-                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-orange"></span><span id="status-processing">— processing</span></span>
-                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-teal"></span><span id="status-ready">— ready</span></span>
-                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-salmon"></span><span id="status-error">— failed</span></span>
-                    </div>
-                    <div class="flex items-center gap-3 w-full md:w-auto">
-                        <button id="retry-errors-btn" class="btn-secondary px-4 py-2 rounded text-sm font-medium transition-all">
-                            <i class="fas fa-redo mr-2"></i>Retry Failed
-                        </button>
-                    </div>
-                    <div id="retry-progress" class="w-full md:w-72" style="display:none;">
-                        <div class="progress-bar">
-                            <div id="retry-progress-fill" class="progress-fill"></div>
-                        </div>
-                        <p id="retry-progress-text" class="text-xs text-dark-text-secondary mt-1">Retrying failed documents...</p>
-                    </div>
                 </div>
             </div>
         </div>
@@ -1334,11 +1324,10 @@ class KnowledgeBaseManager {
     }
 
     updateDocumentSummary(documents, totalSizeOverride = null) {
-        const summaryRow = document.getElementById('doc-summary');
         const countEl = document.getElementById('doc-count');
         const sizeEl = document.getElementById('doc-total-size');
 
-        if (!summaryRow || !countEl || !sizeEl) return;
+        if (!countEl || !sizeEl) return;
 
         const docArray = Array.isArray(documents) ? documents : [];
         const totalSizeBytes = docArray.reduce((sum, doc) => {
@@ -1347,15 +1336,13 @@ class KnowledgeBaseManager {
         }, 0) || 0;
 
         if (!this.currentClient) {
-            countEl.textContent = '—';
-            sizeEl.textContent = '—';
+            countEl.textContent = '0';
+            sizeEl.textContent = '0 Bytes';
         } else {
             const effectiveSize = Number.isFinite(totalSizeOverride) ? totalSizeOverride : totalSizeBytes;
             countEl.textContent = this.totalDocuments || docArray.length;
             sizeEl.textContent = this.formatFileSize(effectiveSize);
         }
-
-        summaryRow.style.display = 'flex';
     }
 
     updatePaginationControls(currentPageCount = 0) {

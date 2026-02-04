@@ -130,16 +130,15 @@ class DocumentProcessor:
             if hasattr(client_settings, 'dict'):
                 client_settings = client_settings.dict()
 
-            # Inject fallback embedding config for platform-key clients (Adventurer tier)
+            # Inject fallback embedding config for platform-key clients
             _existing_emb = client_settings.get('embedding') if isinstance(client_settings, dict) else None
             _has_valid_embedding = _existing_emb and _existing_emb.get('provider')
             if isinstance(client_settings, dict) and not _has_valid_embedding:
-                _additional = {}
+                # Check uses_platform_keys from top-level client column (not additional_settings)
                 if isinstance(client, dict):
-                    _additional = client.get('additional_settings') or {}
+                    uses_platform = client.get('uses_platform_keys', False)
                 else:
-                    _additional = getattr(client, 'additional_settings', None) or {}
-                uses_platform = _additional.get('uses_platform_keys', False)
+                    uses_platform = getattr(client, 'uses_platform_keys', False)
                 if uses_platform:
                     client_settings['embedding'] = {
                         "provider": "siliconflow",

@@ -595,22 +595,39 @@ class UsageTrackingService:
         seconds: int,
     ) -> Tuple[bool, VoiceQuotaStatus]:
         """
-        Increment voice usage for a specific agent.
+        Increment voice usage for a specific agent using ATOMIC database operation.
         Returns (is_within_quota, updated_status) where status is the CLIENT-LEVEL
         aggregated quota status (not per-agent).
 
         Usage is tracked per-agent, but quota limits are enforced at the client level.
         """
         self._ensure_initialized()
-        record = await self.get_or_create_agent_usage_record(client_id, agent_id)
 
-        new_agent_used = record.get("voice_seconds_used", 0) + seconds
+        # Use atomic RPC function to prevent race conditions
+        try:
+            result = self.supabase.rpc(
+                'increment_agent_voice_seconds',
+                {
+                    'p_client_id': client_id,
+                    'p_agent_id': agent_id,
+                    'p_seconds': seconds
+                }
+            ).execute()
 
-        # Update the per-agent record
-        self.supabase.table("agent_usage").update({
-            "voice_seconds_used": new_agent_used,
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", record["id"]).execute()
+            if result.data:
+                logger.debug(
+                    "Atomic voice increment: agent=%s, added=%ds, result=%s",
+                    agent_id, seconds, result.data
+                )
+        except Exception as e:
+            # Fallback to non-atomic if RPC doesn't exist yet
+            logger.warning("Atomic increment RPC failed, using fallback: %s", e)
+            record = await self.get_or_create_agent_usage_record(client_id, agent_id)
+            new_agent_used = record.get("voice_seconds_used", 0) + seconds
+            self.supabase.table("agent_usage").update({
+                "voice_seconds_used": new_agent_used,
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", record["id"]).execute()
 
         # Get CLIENT-LEVEL aggregated usage for quota enforcement
         aggregated = await self.get_client_aggregated_usage(client_id)
@@ -644,22 +661,39 @@ class UsageTrackingService:
         count: int = 1,
     ) -> Tuple[bool, QuotaStatus]:
         """
-        Increment text message usage for a specific agent.
+        Increment text message usage for a specific agent using ATOMIC database operation.
         Returns (is_within_quota, updated_status) where status is the CLIENT-LEVEL
         aggregated quota status (not per-agent).
 
         Usage is tracked per-agent, but quota limits are enforced at the client level.
         """
         self._ensure_initialized()
-        record = await self.get_or_create_agent_usage_record(client_id, agent_id)
 
-        new_agent_used = record.get("text_messages_used", 0) + count
+        # Use atomic RPC function to prevent race conditions
+        try:
+            result = self.supabase.rpc(
+                'increment_agent_text_messages',
+                {
+                    'p_client_id': client_id,
+                    'p_agent_id': agent_id,
+                    'p_count': count
+                }
+            ).execute()
 
-        # Update the per-agent record
-        self.supabase.table("agent_usage").update({
-            "text_messages_used": new_agent_used,
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", record["id"]).execute()
+            if result.data:
+                logger.debug(
+                    "Atomic text increment: agent=%s, added=%d, result=%s",
+                    agent_id, count, result.data
+                )
+        except Exception as e:
+            # Fallback to non-atomic if RPC doesn't exist yet
+            logger.warning("Atomic text increment RPC failed, using fallback: %s", e)
+            record = await self.get_or_create_agent_usage_record(client_id, agent_id)
+            new_agent_used = record.get("text_messages_used", 0) + count
+            self.supabase.table("agent_usage").update({
+                "text_messages_used": new_agent_used,
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", record["id"]).execute()
 
         # Get CLIENT-LEVEL aggregated usage for quota enforcement
         aggregated = await self.get_client_aggregated_usage(client_id)
@@ -693,22 +727,39 @@ class UsageTrackingService:
         chunks: int,
     ) -> Tuple[bool, QuotaStatus]:
         """
-        Increment embedding chunk usage for a specific agent.
+        Increment embedding chunk usage for a specific agent using ATOMIC database operation.
         Returns (is_within_quota, updated_status) where status is the CLIENT-LEVEL
         aggregated quota status (not per-agent).
 
         Usage is tracked per-agent, but quota limits are enforced at the client level.
         """
         self._ensure_initialized()
-        record = await self.get_or_create_agent_usage_record(client_id, agent_id)
 
-        new_agent_used = record.get("embedding_chunks_used", 0) + chunks
+        # Use atomic RPC function to prevent race conditions
+        try:
+            result = self.supabase.rpc(
+                'increment_agent_embedding_chunks',
+                {
+                    'p_client_id': client_id,
+                    'p_agent_id': agent_id,
+                    'p_chunks': chunks
+                }
+            ).execute()
 
-        # Update the per-agent record
-        self.supabase.table("agent_usage").update({
-            "embedding_chunks_used": new_agent_used,
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", record["id"]).execute()
+            if result.data:
+                logger.debug(
+                    "Atomic embedding increment: agent=%s, added=%d, result=%s",
+                    agent_id, chunks, result.data
+                )
+        except Exception as e:
+            # Fallback to non-atomic if RPC doesn't exist yet
+            logger.warning("Atomic embedding increment RPC failed, using fallback: %s", e)
+            record = await self.get_or_create_agent_usage_record(client_id, agent_id)
+            new_agent_used = record.get("embedding_chunks_used", 0) + chunks
+            self.supabase.table("agent_usage").update({
+                "embedding_chunks_used": new_agent_used,
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", record["id"]).execute()
 
         # Get CLIENT-LEVEL aggregated usage for quota enforcement
         aggregated = await self.get_client_aggregated_usage(client_id)

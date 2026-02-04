@@ -41,6 +41,10 @@ class WizardCompletionService:
 
         Uses the personality description and Big Five traits to create
         a comprehensive system prompt for the agent.
+
+        IMPORTANT: The user's personality description takes absolute precedence.
+        We do NOT add generic "be helpful and friendly" guidelines as they can
+        directly contradict specific user instructions.
         """
         name = step_data.get("name", "Assistant")
         description = step_data.get("personality_description", "")
@@ -51,23 +55,24 @@ class WizardCompletionService:
             f"You are {name}, an AI assistant.",
         ]
 
-        # Add personality description if provided
+        # Add personality description if provided - this is the PRIMARY directive
         if description:
-            prompt_parts.append(f"Your personality: {description}")
+            prompt_parts.append("")
+            prompt_parts.append(f"PERSONALITY AND BEHAVIOR (follow these instructions precisely):")
+            prompt_parts.append(description)
 
-        # Add trait-based guidance if traits are provided
+        # Add trait-based guidance if traits are provided (secondary to description)
         if traits:
             trait_guidance = self._traits_to_guidance(traits)
             if trait_guidance:
+                prompt_parts.append("")
                 prompt_parts.append(trait_guidance)
 
-        # Add standard behavioral guidelines
+        # Only add minimal operational guidelines that don't conflict with personality
         prompt_parts.extend([
             "",
-            "Guidelines:",
-            "- Be helpful, accurate, and friendly in your responses",
+            "Operational notes:",
             "- If you don't know something, say so honestly",
-            "- Keep responses clear and concise unless more detail is requested",
             "- Respect user privacy and maintain appropriate boundaries",
         ])
 
@@ -480,11 +485,21 @@ class WizardCompletionService:
             agent_id = agent.id
             logger.info(f"Created agent {agent_id} ({slug}) for client {client_id}")
 
+            # Store the raw wizard input on the agent for reference
+            try:
+                client_db = self.connection_manager.get_client_db_client(UUID(client_id))
+                # Store the full step_data so we can see exactly what the user requested
+                client_db.table("agents").update({
+                    "wizard_input": step_data
+                }).eq("id", str(agent_id)).execute()
+                logger.info(f"Stored wizard input for agent {agent_id}")
+            except Exception as exc:
+                logger.warning(f"Failed to store wizard input for agent {agent_id}: {exc}")
+
             # Persist personality traits to agent_personality table
             personality_traits = step_data.get("personality_traits", {})
             if personality_traits:
                 try:
-                    client_db = self.connection_manager.get_client_db_client(UUID(client_id))
                     payload = {
                         "agent_id": str(agent_id),
                         "openness": max(0, min(100, int(personality_traits.get("openness", 50)))),

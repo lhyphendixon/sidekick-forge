@@ -247,12 +247,15 @@ async def handle_voice_trigger(
     client_conversation_id = original_client_id or raw_conversation_id
 
     # Prepare agent context with all necessary configuration
+    voice_settings_dict = agent.voice_settings.dict() if agent.voice_settings else {}
+    logger.info(f"[trigger] Voice settings for agent {agent.slug}: video_provider={voice_settings_dict.get('video_provider')}, kenburns_starting_image={voice_settings_dict.get('kenburns_starting_image')}")
+
     agent_context = {
         "client_id": client_info['id'],
         "agent_slug": agent.slug,
         "agent_name": agent.name,
         "system_prompt": agent.system_prompt,
-        "voice_settings": (agent.voice_settings.dict() if agent.voice_settings else {}),
+        "voice_settings": voice_settings_dict,
         "sound_settings": (agent.sound_settings.dict() if hasattr(agent, 'sound_settings') and agent.sound_settings else {}),
         "webhooks": agent.webhooks.dict() if agent.webhooks else {},
         "user_id": request.user_id,

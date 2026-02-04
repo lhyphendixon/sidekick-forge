@@ -838,6 +838,18 @@ class SidekickAgent(voice.Agent):
             flags=re.IGNORECASE
         )
 
+        # Strip Cartesia emotion tags - these are not supported inline by Cartesia API
+        # Format: <emotion value="excited" /> or <emotion value="excited"/>
+        text = re.sub(
+            r'<emotion\s+value\s*=\s*"[^"]*"\s*/?>',
+            "",
+            text,
+            flags=re.IGNORECASE
+        )
+
+        # Strip [laughter] markers
+        text = re.sub(r'\[laughter\]', "", text, flags=re.IGNORECASE)
+
         # Collapse Markdown emphasis markers while keeping the inner content
         # Note: Use r"\1" (single backslash) for proper backreference, not r"\\1"
         text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)

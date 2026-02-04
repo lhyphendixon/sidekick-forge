@@ -2,6 +2,7 @@
 Hybrid Client management service using both Redis (caching) and Supabase (persistent storage)
 """
 import json
+import os
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 import redis
@@ -382,20 +383,20 @@ class ClientService:
         client = await self.get_client(client_id)
         if not client:
             return False
-        
-        deleted = False
-        
+
         # Try to delete from Supabase
         try:
-            result = self.supabase.table(self.table_name).delete().eq("id", client_id).execute()
-            if result.data:
-                deleted = True
+            self.supabase.table(self.table_name).delete().eq("id", client_id).execute()
+            # Verify deletion succeeded (Supabase delete may return empty result.data)
+            verify = self.supabase.table(self.table_name).select("id").eq("id", client_id).execute()
+            if verify.data:
+                print(f"Warning: Delete failed for client {client_id} - still exists in Supabase")
         except Exception as e:
             print(f"Warning: Could not delete from Supabase ({e})")
-        
+
         # Always remove from Redis
         self._invalidate_client_cache(client_id, client.domain)
-        
+
         # Remove from client list in Redis
         cached_list = self.redis.get(self.client_list_key)
         if cached_list:
@@ -403,9 +404,8 @@ class ClientService:
             if client_id in client_ids:
                 client_ids.remove(client_id)
                 self.redis.setex(self.client_list_key, self.cache_ttl * 100, json.dumps(client_ids))
-                deleted = True
-        
-        return deleted
+
+        return True
     
     async def get_active_clients(self) -> List[ClientInDB]:
         """Get all active clients with caching"""
@@ -518,7 +518,7 @@ class ClientService:
                 "domain": "autonomite.net",
                 "settings": {
                     "supabase": {
-                        "url": "https://yuowazxcxwhczywurmmw.supabase.co",
+                        "url": os.environ.get("SUPABASE_URL", ""),
                         "anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODQ1NzMsImV4cCI6MjA1MTM2MDU3M30.SmqTIWrScKQWkJ2_PICWVJYpRSKfvqkRcjMMt0ApH1U",
                         "service_role_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY"
                     },
@@ -536,7 +536,7 @@ class ClientService:
                 "domain": "livefreeacademy.com",
                 "settings": {
                     "supabase": {
-                        "url": "https://yuowazxcxwhczywurmmw.supabase.co",
+                        "url": os.environ.get("SUPABASE_URL", ""),
                         "anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODQ1NzMsImV4cCI6MjA1MTM2MDU3M30.SmqTIWrScKQWkJ2_PICWVJYpRSKfvqkRcjMMt0ApH1U", 
                         "service_role_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1b3dhenhjeHdoY3p5d3VybW13Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NDU3MywiZXhwIjoyMDUxMzYwNTczfQ.cAnluEEhLdSkAatKyxX_lR-acWOYXW6w2hPZaC1fZxY"
                     },

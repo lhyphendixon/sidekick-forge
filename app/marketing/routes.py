@@ -13,6 +13,7 @@ from typing import Optional
 from supabase import create_client
 from app.config import settings
 from app.services.mailjet_service import mailjet_service
+from app.services.mailchimp_service import mailchimp_service
 from app.services.stripe_service import stripe_service, TIER_PRICES as STRIPE_TIER_PRICES
 from app.utils.helpers import generate_slug
 import stripe
@@ -191,6 +192,65 @@ async def submit_early_access(
             </div>
             """,
             status_code=500
+        )
+
+
+@router.post("/api/newsletter/subscribe")
+async def subscribe_newsletter(
+    request: Request,
+    name: str = Form(...),
+    email: str = Form(...),
+):
+    """Handle newsletter email capture form submission."""
+    try:
+        email = email.lower().strip()
+        name = name.strip()
+
+        # Split name into first/last
+        parts = name.split(None, 1)
+        first_name = parts[0] if parts else name
+        last_name = parts[1] if len(parts) > 1 else ""
+
+        # Subscribe to Mailchimp with "newsletter" tag and double opt-in
+        mailchimp_service.subscribe(
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            tags=["newsletter"],
+            status="pending",  # Double opt-in for newsletter signups
+        )
+
+        logger.info(f"Newsletter signup: {name} <{email}>")
+
+        return HTMLResponse(
+            content="""
+            <div class="flex items-center justify-center gap-3 py-4">
+                <svg class="w-8 h-8 text-green-400 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+                <div class="text-left">
+                    <p class="text-white font-semibold text-lg">You're in!</p>
+                    <p class="text-gray-400 text-sm">Check your email to confirm your subscription.</p>
+                </div>
+            </div>
+            """,
+            status_code=200,
+        )
+    except Exception as e:
+        logger.error(f"Newsletter signup error: {e}")
+        return HTMLResponse(
+            content="""
+            <div class="flex items-center justify-center gap-3 py-4">
+                <svg class="w-8 h-8 text-red-400 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+                </svg>
+                <div class="text-left">
+                    <p class="text-white font-semibold">Something went wrong</p>
+                    <p class="text-gray-400 text-sm">Please try again or contact team@sidekickforge.com</p>
+                </div>
+            </div>
+            """,
+            status_code=500,
         )
 
 
@@ -635,6 +695,7 @@ async def process_free_checkout(
             "owner_user_id": user_id,
             "owner_email": email,
             "provisioning_status": "queued",
+            "uses_platform_keys": True,  # Use Sidekick Forge Inference by default
         }
         supabase.table("clients").insert(client_data).execute()
         logger.info(f"Created client: {client_id} ({client_name})")
@@ -679,6 +740,27 @@ async def process_free_checkout(
         }
         supabase.table("orders").insert(order_data).execute()
         logger.info(f"Created order: {order_number}")
+
+        # 6. Queue provisioning job
+        try:
+            from app.services.onboarding.provisioning_worker import provision_client_by_tier
+            await provision_client_by_tier(client_id, tier, supabase)
+            logger.info(f"Queued provisioning for client: {client_id}")
+        except Exception as prov_error:
+            logger.error(f"Failed to queue provisioning: {prov_error}")
+            # Continue anyway - provisioning can be retried
+
+        # Add to Mailchimp audience
+        try:
+            mailchimp_service.subscribe(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                tags=[tier, "checkout", "coupon"],
+                status="subscribed",
+            )
+        except Exception:
+            pass  # Non-critical
 
         # Build success URL
         base_url = f"https://{settings.domain_name}"
@@ -878,6 +960,7 @@ async def process_checkout(
             "owner_user_id": user_id,
             "owner_email": email,
             "provisioning_status": "queued",
+            "uses_platform_keys": True,  # Use Sidekick Forge Inference by default
         }
         supabase.table("clients").insert(client_data).execute()
         logger.info(f"Created client: {client_id} ({client_name})")
@@ -946,6 +1029,18 @@ async def process_checkout(
         except Exception as prov_error:
             logger.error(f"Failed to queue provisioning: {prov_error}")
             # Continue anyway - provisioning can be retried
+
+        # Add to Mailchimp audience
+        try:
+            mailchimp_service.subscribe(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                tags=[tier, "checkout"],
+                status="subscribed",
+            )
+        except Exception:
+            pass  # Non-critical
 
         # 8. Send verification email
         verification_url = f"https://{settings.domain_name}/verify-email?token={verification_token}"
@@ -1515,6 +1610,7 @@ async def _handle_checkout_session_completed(session: dict):
             "owner_user_id": user_id,
             "owner_email": email,
             "provisioning_status": "queued",
+            "uses_platform_keys": True,  # Use Sidekick Forge Inference by default
             # Stripe subscription data
             "stripe_customer_id": stripe_customer_id,
             "stripe_subscription_id": stripe_subscription_id,
@@ -1573,6 +1669,18 @@ async def _handle_checkout_session_completed(session: dict):
             await provision_client_by_tier(client_id, tier, supabase)
         except Exception as prov_error:
             logger.error(f"Failed to queue provisioning: {prov_error}")
+
+        # Add to Mailchimp audience
+        try:
+            mailchimp_service.subscribe(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                tags=[tier, "checkout", "stripe"],
+                status="subscribed",
+            )
+        except Exception:
+            pass  # Non-critical
 
         # 8. Send verification email
         verification_url = f"https://{settings.domain_name}/verify-email?token={verification_token}"

@@ -1569,14 +1569,24 @@ async def client_detail_page(
 
         # Masked API keys from connection manager
         masked_keys: Dict[str, Any] = {}
+        uses_platform_inference = False
         try:
             connection_manager = get_connection_manager()
             api_keys = connection_manager.get_client_api_keys(uuid.UUID(client_id))
-            for key, value in api_keys.items():
-                if value and isinstance(value, str) and len(value) > 10:
-                    masked_keys[key] = f"{value[:4]}...{value[-4:]}"
-                else:
-                    masked_keys[key] = "Not configured" if not value else value
+
+            # Check if client uses Sidekick Forge Inference (platform keys)
+            if api_keys.get('_uses_platform_keys'):
+                uses_platform_inference = True
+                masked_keys['_uses_platform_keys'] = True
+                masked_keys['_platform_inference_name'] = api_keys.get('_platform_inference_name', 'Sidekick Forge Inference')
+            else:
+                for key, value in api_keys.items():
+                    if key.startswith('_'):  # Skip internal flags
+                        continue
+                    if value and isinstance(value, str) and len(value) > 10:
+                        masked_keys[key] = f"{value[:4]}...{value[-4:]}"
+                    else:
+                        masked_keys[key] = "Not configured" if not value else value
         except Exception as e:
             logger.warning(f"Unable to load API keys for client {client_id}: {e}")
 
@@ -5795,9 +5805,33 @@ async def monitoring_conversation_analytics_partial(
 ):
     """Conversation analytics partial for HTMX auto-refresh"""
     from app.integrations.supabase_client import supabase_manager
+    from app.core.dependencies import get_client_service
+    from app.services.usage_tracking import UsageTrackingService
     from datetime import datetime, timezone, timedelta
 
     scoped_ids = get_scoped_client_ids(admin_user)
+
+    # Build target client list (same as usage cards)
+    client_service = get_client_service()
+    usage_service = UsageTrackingService()
+    await usage_service.initialize()
+
+    target_client_ids = []
+    try:
+        all_clients = await client_service.get_all_clients()
+        if scoped_ids is not None:
+            allowed = {str(cid) for cid in scoped_ids}
+            clients = [c for c in all_clients if str(getattr(c, 'id', '')) in allowed]
+        else:
+            clients = all_clients
+        for c in clients:
+            target_client_ids.append(str(c.id) if hasattr(c, 'id') else str(c.get('id', '')))
+    except Exception as e:
+        logger.warning(f"Failed to fetch clients for analytics: {e}")
+
+    # If specific client requested, filter to just that one
+    if client_id and (scoped_ids is None or client_id in scoped_ids):
+        target_client_ids = [client_id]
 
     # Default stats
     conversation_stats = {
@@ -5836,11 +5870,9 @@ async def monitoring_conversation_analytics_partial(
                     except:
                         metadata = {}
 
-                # Filter by client access if scoped
+                # Filter by target client IDs
                 event_client_id = metadata.get("client_id")
-                if scoped_ids is not None and event_client_id and str(event_client_id) not in scoped_ids:
-                    continue
-                if client_id and event_client_id and str(event_client_id) != client_id:
+                if event_client_id and str(event_client_id) not in target_client_ids:
                     continue
 
                 room_name = event.get("room_name", "")
@@ -5864,25 +5896,16 @@ async def monitoring_conversation_analytics_partial(
             # Channel stats (voice vs text - from room names)
             channel_stats["voice_count"] = total_calls
 
-        # Count text conversations from agent_usage
-        period_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d")
-        usage_result = await supabase_manager.execute_query(
-            supabase_manager.admin_client.table("agent_usage")
-            .select("text_messages_used, client_id")
-            .eq("period_start", period_start)
-        )
+        # Count text conversations using the same approach as usage cards
+        text_total = 0
+        for cid in target_client_ids[:10]:  # Limit to prevent slow queries
+            try:
+                agg = await usage_service.get_client_aggregated_usage(cid)
+                text_total += agg.text.used
+            except Exception as e:
+                logger.debug(f"Failed to get usage for client {cid}: {e}")
 
-        if usage_result and usage_result.data:
-            text_total = 0
-            for usage in usage_result.data:
-                usage_client_id = usage.get("client_id")
-                if scoped_ids is not None and usage_client_id and str(usage_client_id) not in scoped_ids:
-                    continue
-                if client_id and usage_client_id and str(usage_client_id) != client_id:
-                    continue
-                text_total += usage.get("text_messages_used", 0) or 0
-
-            channel_stats["text_count"] = text_total
+        channel_stats["text_count"] = text_total
 
         # Calculate percentages
         total_interactions = channel_stats["voice_count"] + channel_stats["text_count"]
@@ -6097,10 +6120,16 @@ async def admin_update_agent(
             return {"error": "Client not found", "status": 404}
         
         # Validate API keys if voice_settings are provided
-        if "voice_settings" in data:
+        # Skip validation if client uses platform keys (Sidekick Forge Inference)
+        uses_platform_keys = getattr(client, 'uses_platform_keys', None)
+        if uses_platform_keys is None:
+            # Check additional_settings as fallback
+            uses_platform_keys = (client.additional_settings or {}).get('uses_platform_keys', False)
+
+        if "voice_settings" in data and not uses_platform_keys:
             voice_settings = data["voice_settings"]
             missing_keys = []
-            
+
             # Define provider to API key mappings
             llm_provider_keys = {
                 "openai": "openai_api_key",
@@ -6201,8 +6230,10 @@ async def admin_update_agent(
         # Handle voice settings if provided
         if "voice_settings" in data:
             logger.info(f"AVATAR DEBUG - voice_settings from form: avatar_image_url={data['voice_settings'].get('avatar_image_url')}, avatar_model_type={data['voice_settings'].get('avatar_model_type')}")
+            logger.info(f"KENBURNS DEBUG - voice_settings from form: video_provider={data['voice_settings'].get('video_provider')}, kenburns_starting_image={data['voice_settings'].get('kenburns_starting_image')}")
             update_data.voice_settings = VoiceSettings(**data["voice_settings"])
             logger.info(f"AVATAR DEBUG - VoiceSettings object: avatar_image_url={update_data.voice_settings.avatar_image_url}, avatar_model_type={update_data.voice_settings.avatar_model_type}")
+            logger.info(f"KENBURNS DEBUG - VoiceSettings object: video_provider={update_data.voice_settings.video_provider}, kenburns_starting_image={update_data.voice_settings.kenburns_starting_image}")
 
         # Handle sound settings if provided
         if "sound_settings" in data:
@@ -7835,6 +7866,76 @@ async def trigger_client_schema_sync(
         }
 
 
+@router.post("/clients/{client_id}/provision")
+async def trigger_client_provisioning(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """
+    Trigger provisioning for a client that is missing Supabase credentials.
+
+    This is useful when:
+    - A Champion/Paragon tier client was created but provisioning failed
+    - The original provisioning job was never created
+    - Manual re-provisioning is needed after a failure
+    """
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from supabase import create_client as create_supabase_client
+        from app.config import settings as app_settings
+        platform_sb = create_supabase_client(app_settings.supabase_url, app_settings.supabase_service_role_key)
+
+        # Get client info
+        client_result = platform_sb.table("clients").select(
+            "id, name, tier, hosting_type, provisioning_status, supabase_url, supabase_service_role_key"
+        ).eq("id", client_id).single().execute()
+
+        if not client_result.data:
+            return {"success": False, "error": "Client not found"}
+
+        client = client_result.data
+        tier = client.get("tier", "adventurer")
+        current_status = client.get("provisioning_status")
+        has_supabase = bool(client.get("supabase_url") and client.get("supabase_service_role_key"))
+
+        # Check if provisioning is needed
+        if has_supabase and current_status == "ready":
+            return {
+                "success": True,
+                "message": "Client already fully provisioned",
+                "provisioning_status": current_status
+            }
+
+        # Check if already in progress
+        if current_status in ("creating_project", "schema_syncing", "configuring_shared"):
+            return {
+                "success": True,
+                "message": f"Provisioning already in progress (status: {current_status})",
+                "provisioning_status": current_status
+            }
+
+        # Trigger provisioning
+        from app.services.onboarding.provisioning_worker import provision_client_by_tier
+        await provision_client_by_tier(client_id, tier, platform_sb)
+
+        logger.info(f"✅ Triggered provisioning for client {client_id} (tier: {tier})")
+
+        return {
+            "success": True,
+            "message": f"Provisioning queued for {tier} tier client",
+            "provisioning_status": "queued",
+            "tier": tier
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to trigger provisioning for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 # WordPress Sites Management Endpoints
 @router.get("/clients/{client_id}/wordpress-sites")
 async def get_client_wordpress_sites(
@@ -9137,3 +9238,136 @@ async def debug_usage_tracking(
     }
 
     return result
+
+
+# ============================================================================
+# Client Stats API for Clients List Page
+# ============================================================================
+
+@router.get("/api/clients/{client_id}/agents")
+async def get_client_agents_list(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """
+    Get list of agents for a client.
+    Used by the clients list page to show agent count.
+    """
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.core.dependencies import get_agent_service
+        agent_service = get_agent_service()
+
+        agents = await agent_service.get_client_agents(client_id)
+
+        # Return simple list for counting
+        return [
+            {
+                "id": agent.id,
+                "name": agent.name,
+                "slug": agent.slug,
+                "enabled": agent.enabled
+            }
+            for agent in agents
+        ]
+
+    except Exception as e:
+        logger.error(f"Failed to get agents for client {client_id}: {e}")
+        return []
+
+
+@router.get("/api/clients/{client_id}/usage")
+async def get_client_aggregated_usage(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """
+    Get aggregated usage statistics for a client (all agents combined).
+    Used by the clients list page to show usage progress bars.
+    """
+    try:
+        ensure_client_access(client_id, admin_user)
+
+        from app.services.usage_tracking import usage_tracking_service
+        from app.services.client_connection_manager import get_connection_manager
+
+        await usage_tracking_service.initialize()
+
+        # Get client's Supabase connection for agent names
+        client_supabase = None
+        try:
+            conn_manager = get_connection_manager()
+            client_config = await conn_manager.get_client_config(client_id)
+            if client_config and client_config.get("supabase_url") and client_config.get("supabase_service_role_key"):
+                from supabase import create_client
+                client_supabase = create_client(
+                    client_config["supabase_url"],
+                    client_config["supabase_service_role_key"]
+                )
+        except Exception as e:
+            logger.debug(f"Could not get client Supabase for usage lookup: {e}")
+
+        # Get per-agent usage records
+        agent_usage_records = await usage_tracking_service.get_all_agents_usage(client_id, client_supabase)
+
+        # Aggregate totals across all agents
+        total_voice_used = 0
+        total_voice_limit = 0
+        total_text_used = 0
+        total_text_limit = 0
+        total_embedding_used = 0
+        total_embedding_limit = 0
+
+        for record in agent_usage_records:
+            if record.voice:
+                total_voice_used += record.voice.used or 0
+                total_voice_limit += record.voice.limit or 0
+            if record.text:
+                total_text_used += record.text.used or 0
+                total_text_limit += record.text.limit or 0
+            if record.embedding:
+                total_embedding_used += record.embedding.used or 0
+                total_embedding_limit += record.embedding.limit or 0
+
+        # Calculate percentages
+        voice_percent = round((total_voice_used / total_voice_limit * 100), 1) if total_voice_limit > 0 else 0
+        text_percent = round((total_text_used / total_text_limit * 100), 1) if total_text_limit > 0 else 0
+        embedding_percent = round((total_embedding_used / total_embedding_limit * 100), 1) if total_embedding_limit > 0 else 0
+
+        return {
+            "client_id": client_id,
+            "agent_count": len(agent_usage_records),
+            "voice": {
+                "used": total_voice_used,
+                "limit": total_voice_limit,
+                "percent_used": voice_percent,
+                "is_exceeded": total_voice_limit > 0 and total_voice_used >= total_voice_limit,
+                "is_warning": total_voice_limit > 0 and voice_percent >= 80,
+            },
+            "text": {
+                "used": total_text_used,
+                "limit": total_text_limit,
+                "percent_used": text_percent,
+                "is_exceeded": total_text_limit > 0 and total_text_used >= total_text_limit,
+                "is_warning": total_text_limit > 0 and text_percent >= 80,
+            },
+            "embedding": {
+                "used": total_embedding_used,
+                "limit": total_embedding_limit,
+                "percent_used": embedding_percent,
+                "is_exceeded": total_embedding_limit > 0 and total_embedding_used >= total_embedding_limit,
+                "is_warning": total_embedding_limit > 0 and embedding_percent >= 80,
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get aggregated usage for client {client_id}: {e}")
+        # Return zeros instead of error to not break UI
+        return {
+            "client_id": client_id,
+            "agent_count": 0,
+            "voice": {"used": 0, "limit": 0, "percent_used": 0, "is_exceeded": False, "is_warning": False},
+            "text": {"used": 0, "limit": 0, "percent_used": 0, "is_exceeded": False, "is_warning": False},
+            "embedding": {"used": 0, "limit": 0, "percent_used": 0, "is_exceeded": False, "is_warning": False},
+        }

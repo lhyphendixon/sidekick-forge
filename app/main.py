@@ -48,6 +48,14 @@ async def lifespan(app: FastAPI):
         # Redis disabled: do not initialize
         redis_client = None
 
+        # Configure Supabase Auth redirect URLs for the current environment
+        # This ensures email confirmation links work correctly
+        try:
+            from app.services.supabase_auth_config import configure_supabase_auth_urls
+            configure_supabase_auth_urls()
+        except Exception as auth_config_error:
+            logger.warning(f"Failed to configure Supabase auth URLs (non-critical): {auth_config_error}")
+
         # Initialize connections
         await supabase_manager.initialize()
         try:

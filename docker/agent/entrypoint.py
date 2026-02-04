@@ -373,30 +373,12 @@ def _get_cartesia_emotion_instructions(voice_settings: dict) -> str:
         logger.info(f"🎭 Emotions disabled: provider_match={provider == 'cartesia'}, model_match={model.startswith('sonic') if model else False}, enabled={emotions_enabled}")
         return ""
 
-    return """
-
-## Emotional Expression (Cartesia)
-
-You can express emotions using SSML tags. Place the self-closing emotion tag BEFORE the text you want to affect:
-
-**Syntax**: `<emotion value="EMOTION" /> text to speak emotionally`
-
-**Available emotions**: neutral, angry, excited, content, sad, scared, curious, proud, worried, hopeful, surprised, amused, disappointed, grateful, confused, determined, sympathetic, playful, serious, enthusiastic
-
-**Laughter**: Insert `[laughter]` to laugh naturally.
-
-**Guidelines**:
-- Place the emotion tag before the sentence or phrase it should affect
-- Match the emotion to the content (empathy for problems, excitement for good news)
-- Use sparingly for impact - not every sentence needs an emotion tag
-- Use `[laughter]` when something is genuinely funny
-
-**Examples**:
-- `<emotion value="excited" /> I have great news! Your application was approved.`
-- `I understand. <emotion value="sympathetic" /> That sounds really frustrating.`
-- `<emotion value="curious" /> Tell me more about that.`
-- `[laughter] That's hilarious! <emotion value="amused" /> I love that joke.`
-"""
+    # NOTE: Cartesia does NOT support inline emotion tags in transcript text.
+    # Emotion must be set via API parameters, not embedded in text.
+    # Returning empty string to disable this feature until proper API-level
+    # emotion control is implemented.
+    logger.info("🎭 Cartesia emotions: inline tags not supported by API - feature disabled")
+    return ""
 
 
 def _should_skip_user_commit(agent: Any, text: str) -> bool:
@@ -2203,6 +2185,61 @@ async def agent_job_handler(ctx: JobContext):
                 logger.warning(f"Tool building traceback: {traceback.format_exc()}")
 
             # ========================================================================
+            # KEN BURNS MODE: Add AI image generation tools
+            # ========================================================================
+            _voice_settings_for_kb = metadata.get("voice_settings", {})
+            _avatar_provider_kb = _voice_settings_for_kb.get("avatar_provider", "")
+            _video_provider_kb = _voice_settings_for_kb.get("video_provider", "")
+            is_kenburns_mode_tools = _avatar_provider_kb == "ken_burns" or _video_provider_kb == "ken_burns"
+
+            # Store Ken Burns builder for auto-generation (will be set if Ken Burns mode)
+            _kenburns_builder = None
+
+            if is_kenburns_mode_tools and not is_wizard_mode:
+                try:
+                    # Import Ken Burns tools
+                    from app.agent_modules.kenburns_tools import (
+                        build_kenburns_tools,
+                        KENBURNS_SYSTEM_PROMPT_ADDITION
+                    )
+
+                    # Build Ken Burns config from voice_settings
+                    kenburns_config = {
+                        "style_preset": _voice_settings_for_kb.get("kenburns_style", "cinematic"),
+                        "animation_duration": _voice_settings_for_kb.get("kenburns_duration", 20),
+                        "auto_interval": _voice_settings_for_kb.get("kenburns_auto_interval", 15),
+                    }
+
+                    # Build Ken Burns tools (needs room for data channel)
+                    # Get builder instance for auto-generation support
+                    kenburns_tools, _kenburns_builder = build_kenburns_tools(
+                        room=ctx.room,
+                        kenburns_config=kenburns_config,
+                        return_builder=True,
+                    )
+
+                    if kenburns_tools:
+                        built_tools.extend(kenburns_tools)
+                        logger.info(f"🎬 Ken Burns: added {len(kenburns_tools)} image generation tools")
+                        logger.info(f"🎬 Ken Burns: auto-generation interval = {kenburns_config['auto_interval']}s")
+
+                        # Enhance system prompt with Ken Burns instructions
+                        enhanced_prompt = enhanced_prompt + KENBURNS_SYSTEM_PROMPT_ADDITION
+                        logger.info("🎬 Ken Burns: added visual storytelling instructions to system prompt")
+
+                        # Start auto-generation background task
+                        if _kenburns_builder:
+                            _kenburns_builder.start_auto_generation()
+                            logger.info("🎬 Ken Burns: started auto-generation background task")
+                    else:
+                        logger.warning("🎬 Ken Burns: no tools were built")
+
+                except ImportError as ie:
+                    logger.warning(f"🎬 Ken Burns tools import failed: {ie}")
+                except Exception as kb_err:
+                    logger.warning(f"🎬 Ken Burns tools loading failed: {kb_err}")
+
+            # ========================================================================
             # WIZARD MODE: Skip tool building - WizardGuideAgent uses TaskGroup with per-step tools
             # ========================================================================
             if is_wizard_mode:
@@ -2278,6 +2315,20 @@ async def agent_job_handler(ctx: JobContext):
                 agent._supabase_client = client_supabase if 'client_supabase' in locals() else None
             else:
                 # NORMAL MODE: Use SidekickAgent with full RAG/citations support
+                # Log tools being passed to agent for debugging
+                if built_tools:
+                    tool_names = []
+                    for t in built_tools:
+                        try:
+                            # Try to get tool name from various attributes
+                            name = getattr(t, 'name', None) or getattr(getattr(t, 'info', None), 'name', None) or str(type(t).__name__)
+                            tool_names.append(name)
+                        except Exception:
+                            tool_names.append('<unknown>')
+                    logger.info(f"🧰 Passing {len(built_tools)} tools to agent: {', '.join(tool_names)}")
+                else:
+                    logger.info("🧰 No tools to pass to agent")
+
                 agent = SidekickAgent(
                     instructions=enhanced_prompt,
                     stt=stt_plugin,
@@ -2334,6 +2385,21 @@ async def agent_job_handler(ctx: JobContext):
                 agent._supabase_client = client_supabase if 'client_supabase' in locals() else None
                 agent._agent_id = metadata.get("agent_id") or metadata.get("agent_slug")
                 agent._user_id = metadata.get("user_id") or ctx.user_id
+
+                # Store Ken Burns builder reference if in Ken Burns mode
+                if '_kenburns_builder' in dir() and _kenburns_builder is not None:
+                    agent._kenburns_builder = _kenburns_builder
+                    logger.info("🎬 Ken Burns: stored builder reference on agent")
+
+                    # Add cleanup handler for when room disconnects
+                    @ctx.room.on("disconnected")
+                    def _on_room_disconnected():
+                        try:
+                            if hasattr(agent, "_kenburns_builder") and agent._kenburns_builder:
+                                agent._kenburns_builder.stop_auto_generation()
+                                logger.info("🎬 Ken Burns: stopped auto-generation on room disconnect")
+                        except Exception as kb_cleanup_err:
+                            logger.warning(f"Ken Burns cleanup error: {kb_cleanup_err}")
 
                 # Diagnostic logging for transcript storage prerequisites
                 logger.info(
@@ -3251,9 +3317,19 @@ async def agent_job_handler(ctx: JobContext):
             # Configure room options for the session
             # Per LiveKit docs, pass room_options to session.start() instead of manually creating RoomIO
             # This ensures proper audio subscription and STT processing
+
+            # Pre-check for Ken Burns mode (video mode but no avatar - uses AI-generated images)
+            # Ken Burns mode should behave like voice mode for audio (audio_output=True)
+            _voice_settings_early = metadata.get("voice_settings", {})
+            _avatar_provider_early = _voice_settings_early.get("avatar_provider", "")
+            _video_provider_early = _voice_settings_early.get("video_provider", "")
+            _is_kenburns_early = _avatar_provider_early == "ken_burns" or _video_provider_early == "ken_burns"
+
             if not is_text_mode:
-                mode_str = "VIDEO" if is_video_mode else "VOICE"
-                logger.info(f"Configuring RoomOptions for {mode_str} mode (audio_output={not is_video_mode})...")
+                # For Ken Burns mode, treat it like voice mode (audio_output=True since no avatar)
+                use_avatar_audio = is_video_mode and not _is_kenburns_early
+                mode_str = "KEN_BURNS" if _is_kenburns_early else ("VIDEO" if is_video_mode else "VOICE")
+                logger.info(f"Configuring RoomOptions for {mode_str} mode (audio_output={not use_avatar_audio})...")
                 # Use BVC (Background Voice Cancellation) to filter out the agent's own TTS
                 # output being picked up by the microphone - prevents echo/self-hearing issues
                 # where STT transcribes the agent's own speech as user input
@@ -3264,7 +3340,7 @@ async def agent_job_handler(ctx: JobContext):
                     )
                 room_options = room_io.RoomOptions(
                     audio_input=audio_input_opts,
-                    audio_output=not is_video_mode,  # Disable for video mode - avatar handles audio
+                    audio_output=not use_avatar_audio,  # Disable for video mode (avatar handles audio), enable for Ken Burns
                     # Transcription output with sync disabled to prevent segment synchronization issues
                     # When sync_transcription=False, text is sent immediately rather than word-by-word
                     # This fixes the "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done" warning
@@ -3274,18 +3350,31 @@ async def agent_job_handler(ctx: JobContext):
                     close_on_disconnect=False,  # Keep agent running even if user disconnects briefly
                 )
                 nc_status = "with BVC" if noise_cancellation else "without noise cancellation"
-                logger.info(f"✅ RoomOptions configured {nc_status}: audio_input=True, audio_output={not is_video_mode}, text_output=True (sync disabled)")
+                logger.info(f"✅ RoomOptions configured {nc_status}: audio_input=True, audio_output={not use_avatar_audio}, text_output=True (sync disabled)")
             else:
                 logger.info("📝 Text-only mode: no RoomOptions needed")
                 room_options = None
 
             # Initialize avatar for video mode
             avatar_session = None
+            is_kenburns_mode = False
             if is_video_mode:
                 voice_settings = metadata.get("voice_settings", {})
                 avatar_provider = voice_settings.get("avatar_provider", "bithuman")
-                logger.info(f"🎬 Video mode: initializing {avatar_provider} avatar session")
+                video_provider = voice_settings.get("video_provider", "")
 
+                # Check for Ken Burns mode (AI-generated images, not avatar)
+                is_kenburns_mode = avatar_provider == "ken_burns" or video_provider == "ken_burns"
+                if is_kenburns_mode:
+                    logger.info("🎬 Ken Burns mode detected - using voice agent with AI image generation (no avatar)")
+                    # Ken Burns mode doesn't need an avatar session
+                    # The generic_agent.py will handle Ken Burns tools for image generation
+                    avatar_session = None
+                else:
+                    logger.info(f"🎬 Video mode: initializing {avatar_provider} avatar session")
+
+            # Initialize avatar session (skip for Ken Burns mode)
+            if is_video_mode and not is_kenburns_mode:
                 try:
                     # Get LiveKit credentials (needed for both providers)
                     livekit_url = api_keys.get("livekit_url") or os.getenv("LIVEKIT_URL")
@@ -4135,6 +4224,12 @@ async def agent_job_handler(ctx: JobContext):
                                 agent._last_assistant_commit = text_value
                             except Exception:
                                 pass
+                            # Update Ken Burns context for auto-generation
+                            try:
+                                if hasattr(agent, "_kenburns_builder") and agent._kenburns_builder:
+                                    agent._kenburns_builder.update_context(text_value)
+                            except Exception:
+                                pass
                             if hasattr(agent, "store_transcript"):
                                 logger.info("📝 Committing assistant transcript via conversation_item_added")
                                 asyncio.create_task(agent.store_transcript("assistant", text_value))
@@ -4234,10 +4329,11 @@ async def agent_job_handler(ctx: JobContext):
                                 except Exception:
                                     pass
 
-                                # In VIDEO mode, handling depends on avatar provider:
+                                # In VIDEO mode (but not Ken Burns), handling depends on avatar provider:
                                 # - LiveAvatar uses QueueAudioOutput which properly signals completion
                                 # - Bithuman/Beyond Presence use DataStreamAudioOutput which doesn't
-                                if is_video_mode:
+                                # Ken Burns mode uses voice-like audio handling (no avatar)
+                                if is_video_mode and not is_kenburns_mode:
                                     # Check which avatar provider is in use
                                     current_avatar_provider = voice_settings.get("avatar_provider", "bithuman") if 'voice_settings' in locals() else "bithuman"
 

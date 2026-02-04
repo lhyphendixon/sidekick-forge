@@ -563,33 +563,51 @@
       border: 1px solid rgba(255, 255, 255, 0.08);
     }
 
-    /* Video transcript bubbles - compact, less obtrusive */
+    /* Video transcript bubbles - elegant subtitle style */
     .video-transcript-user {
-      background: linear-gradient(135deg, rgba(1, 164, 166, 0.35) 0%, rgba(1, 164, 166, 0.2) 100%);
-      border: 1px solid rgba(1, 164, 166, 0.3);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      background: rgba(1, 164, 166, 0.15);
+      border: none;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 0, 0, 0.5);
     }
     .video-transcript-assistant {
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      background: rgba(0, 0, 0, 0.25);
+      border: none;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 0, 0, 0.5);
     }
-    /* Fade-in animation for new transcripts */
+    /* Smooth fade-in animation for new transcripts */
     .video-transcript-bubble {
-      animation: transcriptFadeIn 0.3s ease-out;
+      animation: transcriptFadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: opacity 0.4s ease, transform 0.4s ease;
     }
     @keyframes transcriptFadeIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
+      from {
+        opacity: 0;
+        transform: translateY(12px) scale(0.98);
+        filter: blur(2px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        filter: blur(0);
+      }
     }
-    /* Fade out old transcripts */
+    /* Fade out old transcripts smoothly */
     .video-transcript-fade {
-      opacity: 0.5;
-      transition: opacity 0.5s ease;
+      opacity: 0.35;
+      transform: scale(0.98);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    /* Exit animation for removing transcripts */
+    .video-transcript-exit {
+      animation: transcriptFadeOut 0.3s ease-out forwards;
+    }
+    @keyframes transcriptFadeOut {
+      from { opacity: 1; transform: translateY(0); }
+      to { opacity: 0; transform: translateY(-8px); }
     }
 
     /* Send button */
@@ -657,10 +675,12 @@
   {% endif %}
   <link rel="stylesheet" href="/static/css/citations.css?v=20260114b">
   <link rel="stylesheet" href="/static/css/widgets.css?v=20260114e">
+  <link rel="stylesheet" href="/static/css/kenburns.css?v=20260202b">
   <script src="/static/js/citations.js?v=20260114c"></script>
   <script src="/static/js/widgets.js?v=20260102c"></script>
   <script src="/static/js/content-catalyst-widget.js?v=20260114c"></script>
   <script src="/static/js/lingua-widget.js?v=20260201"></script>
+  <script src="/static/js/kenburns.js?v=20260202c"></script>
 </head>
 <body style="background: #000000;">
   <div class="w-full p-3 md:p-4 h-full" style="min-height: min(700px, 95vh);">
@@ -835,7 +855,16 @@
                 <span>Start Video Chat</span>
               </button>
             </div>
-            
+
+            <!-- Ken Burns Image Display (for ken_burns video provider) -->
+            <div id="kenburnsContainer" class="hidden absolute inset-0 bg-black">
+              <!-- End Ken Burns button - top right -->
+              <button id="kenburnsEndBtn" class="absolute top-4 right-4 z-20 inline-flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-500 transition-all" onclick="withBtnLoading(this, endVideo)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                <span>End</span>
+              </button>
+            </div>
+
             <!-- Video Container (hidden until video starts) -->
             <div id="videoContainer" class="hidden absolute inset-0 bg-black flex items-center justify-center">
               <video id="remoteVideoElement" autoplay playsinline class="w-full h-full object-contain"></video>
@@ -854,10 +883,6 @@
                 <div id="videoLoaderPercent" class="text-white/40 text-xs mt-2">5%</div>
               </div>
 
-              <!-- Transcript overlay at bottom -->
-              <div id="videoTranscriptOverlay" class="absolute bottom-0 left-0 right-0 p-3 pointer-events-none">
-                <div id="videoTranscriptList" class="max-h-28 overflow-hidden space-y-1.5 flex flex-col justify-end"></div>
-              </div>
               <!-- End Video button - top right -->
               <button id="videoEndBtn" class="absolute top-4 right-4 inline-flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-500 transition-all" onclick="withBtnLoading(this, endVideo)">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -867,6 +892,11 @@
               <button id="videoFullscreenBtn" class="absolute top-4 left-4 p-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-all" onclick="toggleVideoFullscreen()">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5h-4m4 0v-4m0 4l-5-5"/></svg>
               </button>
+            </div>
+
+            <!-- Shared Transcript overlay - works for both video and Ken Burns modes -->
+            <div id="videoTranscriptOverlay" class="hidden absolute bottom-0 left-0 right-0 p-4 pointer-events-none z-30" style="background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.3) 50%, transparent 100%);">
+              <div id="videoTranscriptList" class="max-h-32 overflow-hidden space-y-2 flex flex-col justify-end"></div>
             </div>
             
             <div id="videoStatus" class="text-xs text-dark-text-secondary text-center mt-4"></div>
@@ -3247,6 +3277,26 @@ function clearVoiceTranscriptError(){
         // Ensure transcript list is visible when voice starts (may be hidden if not using Supertab)
         const transcriptList = document.getElementById('voiceTranscriptList');
         if (transcriptList) transcriptList.classList.remove('hidden');
+
+        // Initialize Ken Burns if agent has ken_burns video provider
+        const agentContext = data?.data?.agent_context || {};
+        const voiceSettings = agentContext.voice_settings || agentContext.metadata?.voice_settings || {};
+        const videoProvider = voiceSettings.video_provider || '';
+
+        // Debug: Log voice settings for Ken Burns
+        console.log('[voice] DEBUG - voiceSettings:', JSON.stringify(voiceSettings, null, 2));
+        console.log('[voice] DEBUG - video_provider:', videoProvider);
+
+        if (videoProvider === 'ken_burns') {
+          const kenburnsContainer = document.getElementById('kenburnsContainer');
+          if (kenburnsContainer && window.initKenBurns) {
+            kenburnsContainer.classList.remove('hidden');
+            const startingImage = voiceSettings.kenburns_starting_image || null;
+            console.log('[voice] DEBUG - kenburns_starting_image:', startingImage);
+            window.initKenBurns('kenburnsContainer', { startingImage });
+            console.log('[voice] Ken Burns mode initialized', startingImage ? 'with starting image' : 'without starting image');
+          }
+        }
       }
       storedVoiceSession = { server, token, conversationId, agentId };
       reconnectAttempts = 0;
@@ -3592,8 +3642,20 @@ function clearVoiceTranscriptError(){
               textPayload = decoder.decode(payload.buffer);
             }
             if (!textPayload) { return; }
+            // Skip non-JSON data (e.g., emotion SSML tags, binary data)
+            if (!textPayload.startsWith('{')) { return; }
             let parsed = null;
-            try { parsed = JSON.parse(textPayload); } catch {}
+            try { parsed = JSON.parse(textPayload); } catch { return; }
+
+            // Handle Ken Burns image data
+            if (parsed && parsed.type === 'kenburns_image') {
+              console.log('[voice] Received Ken Burns image data');
+              if (window.handleKenBurnsData) {
+                window.handleKenBurnsData(parsed);
+              }
+              return;
+            }
+
             if (parsed && (parsed.content || parsed.transcript || parsed.text)) {
               parsed.id = parsed.id || `${topic || 'data'}-${Date.now()}`;
               const pIdentity = String(participant?.identity || '').toLowerCase();
@@ -3769,6 +3831,17 @@ function clearVoiceTranscriptError(){
       } catch {}
       try { window.__lk_transcript_seen = {}; __seenTranscriptIds = new Set(); __recentTranscriptTexts = []; } catch {}
       try { delete window.__voicePlaybackPrimed; } catch {}
+      // Clean up Ken Burns provider
+      try {
+        const kenburnsContainer = document.getElementById('kenburnsContainer');
+        if (kenburnsContainer) {
+          kenburnsContainer.classList.add('hidden');
+          if (window.__kenburnsProvider) {
+            window.__kenburnsProvider.destroy();
+            window.__kenburnsProvider = null;
+          }
+        }
+      } catch {}
     }
 
     // =====================================================
@@ -3988,9 +4061,25 @@ function clearVoiceTranscriptError(){
       
       storedVideoSession = { server, token, conversationId, agentId };
       manualVideoEnd = false;
-      
+
+      // Check if Ken Burns mode is enabled
+      const agentContext = data.data.agent_context || {};
+      const voiceSettings = agentContext.voice_settings || agentContext.metadata?.voice_settings || {};
+      const videoProvider = voiceSettings.video_provider || '';
+      const isKenBurnsMode = videoProvider === 'ken_burns';
+      const kenburnsStartingImage = voiceSettings.kenburns_starting_image || null;
+
+      // VERY VISIBLE DEBUG - check browser console
+      console.warn('🟡🟡🟡 [video] TRIGGER RESPONSE - agent_context keys:', Object.keys(agentContext));
+      console.warn('🟡🟡🟡 [video] TRIGGER RESPONSE - voiceSettings:', JSON.stringify(voiceSettings));
+      console.warn('🟡🟡🟡 [video] TRIGGER RESPONSE - kenburns_starting_image:', kenburnsStartingImage || 'NULL/UNDEFINED');
+
+      if (isKenBurnsMode) {
+        console.warn('🟢🟢🟢 [video] Ken Burns mode DETECTED - starting image:', kenburnsStartingImage || 'NONE');
+      }
+
       try {
-        await connectVideoLivekit(storedVideoSession);
+        await connectVideoLivekit(storedVideoSession, isKenBurnsMode, kenburnsStartingImage);
         // Start transcript stream for video mode
         if (conversationId) {
           startVideoTranscriptStream(conversationId, CLIENT_ID, agentId);
@@ -4003,13 +4092,14 @@ function clearVoiceTranscriptError(){
       }
     }
 
-    async function connectVideoLivekit(sessionData) {
+    async function connectVideoLivekit(sessionData, isKenBurnsMode = false, kenburnsStartingImage = null) {
       const { server, token } = sessionData;
       const status = document.getElementById('videoStatus');
       const welcome = document.getElementById('videoWelcome');
       const container = document.getElementById('videoContainer');
       const videoElement = document.getElementById('remoteVideoElement');
-      
+      const kenburnsContainer = document.getElementById('kenburnsContainer');
+
       const LiveKit = window.LivekitClient || window.LiveKit || {};
       const { Room, RoomEvent, VideoPresets, ConnectionState } = LiveKit;
 
@@ -4023,15 +4113,36 @@ function clearVoiceTranscriptError(){
         dynacast: true,
         videoCaptureDefaults: { resolution: VideoPresets?.h720?.resolution },
       });
-      
-      // Hide welcome, show video container with loading overlay
+
+      // Store Ken Burns mode for use in event handlers
+      __videoRoomConn.__isKenBurnsMode = isKenBurnsMode;
+
+      // Hide welcome
       welcome.classList.add('hidden');
-      container.classList.remove('hidden');
-      showVideoModelLoader();  // Show loading overlay while model loads
-      status.textContent = 'Connecting...';
+
+      // Show shared transcript overlay for both modes
+      const transcriptOverlay = document.getElementById('videoTranscriptOverlay');
+      if (transcriptOverlay) transcriptOverlay.classList.remove('hidden');
+
+      if (isKenBurnsMode) {
+        // Ken Burns mode: show Ken Burns container, hide video container
+        container.classList.add('hidden');
+        if (kenburnsContainer && window.initKenBurns) {
+          kenburnsContainer.classList.remove('hidden');
+          window.initKenBurns('kenburnsContainer', { startingImage: kenburnsStartingImage });
+          console.log('[video] Ken Burns container initialized', kenburnsStartingImage ? 'with starting image' : 'without starting image');
+        }
+        status.textContent = 'Connecting to Ken Burns mode...';
+      } else {
+        // Regular video mode: show video container with loading overlay
+        container.classList.remove('hidden');
+        showVideoModelLoader();  // Show loading overlay while model loads
+        status.textContent = 'Connecting...';
+      }
       
       // Handle video track subscription
       __videoRoomConn.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+        const isKenBurns = __videoRoomConn.__isKenBurnsMode;
         try {
           console.log('[video] TrackSubscribed', {
             kind: track?.kind,
@@ -4039,12 +4150,18 @@ function clearVoiceTranscriptError(){
             trackSid: track?.sid,
             participant: participant?.identity,
             isVideoTrack: String(track?.kind || '').toLowerCase() === 'video',
-            isAudioTrack: String(track?.kind || '').toLowerCase() === 'audio'
+            isAudioTrack: String(track?.kind || '').toLowerCase() === 'audio',
+            isKenBurnsMode: isKenBurns
           });
         } catch {}
         // Use string conversion for robust comparison (SDK may return string or enum)
         const trackKind = String(track?.kind || '').toLowerCase();
         if (trackKind === 'video') {
+          // Skip video track handling in Ken Burns mode (no video tracks expected)
+          if (isKenBurns) {
+            console.log('[video] Skipping video track in Ken Burns mode');
+            return;
+          }
           try {
             track.attach(videoElement);
             status.textContent = 'Video connected';
@@ -4070,6 +4187,10 @@ function clearVoiceTranscriptError(){
           try {
             console.log('[video] Audio track received from agent');
             handleVideoRemoteAudioTrack(track, pub, participant);
+            // In Ken Burns mode, update status when audio connects
+            if (isKenBurns) {
+              status.textContent = 'Ken Burns mode ready - listening...';
+            }
           } catch (audioErr) {
             console.error('[video] Failed to handle audio track', audioErr);
           }
@@ -4100,6 +4221,11 @@ function clearVoiceTranscriptError(){
       __videoRoomConn.on(RoomEvent.DataReceived, (payload, participant) => {
         try {
           const text = new TextDecoder().decode(payload);
+          // Skip non-JSON data (e.g., binary audio, emotion SSML tags)
+          if (!text.startsWith('{')) {
+            // Not JSON - ignore silently (could be emotion tags or other non-JSON data)
+            return;
+          }
           const data = JSON.parse(text);
           if (data.type === 'transcript') {
             appendVideoTranscript(data.role, data.text);
@@ -4109,8 +4235,16 @@ function clearVoiceTranscriptError(){
           } else if (data.type === 'model_ready') {
             // Model is ready - hide the loader and show video
             hideVideoModelLoader();
+          } else if (data.type === 'kenburns_image') {
+            // Ken Burns image received - display it
+            console.log('[video] Ken Burns image received:', data.data?.image_url?.substring(0, 60));
+            if (window.handleKenBurnsData) {
+              window.handleKenBurnsData(data);
+            }
           }
-        } catch {}
+        } catch (e) {
+          // Silently ignore parse errors for non-JSON data
+        }
       });
 
       // Handle when participants connect (avatar agent joining)
@@ -4217,9 +4351,14 @@ function clearVoiceTranscriptError(){
       const welcome = document.getElementById('videoWelcome');
       const container = document.getElementById('videoContainer');
       const videoElement = document.getElementById('remoteVideoElement');
+      const kenburnsContainer = document.getElementById('kenburnsContainer');
+      const transcriptOverlay = document.getElementById('videoTranscriptOverlay');
 
       manualVideoEnd = true;
       stopVideoTranscriptStream();
+
+      // Hide transcript overlay
+      if (transcriptOverlay) transcriptOverlay.classList.add('hidden');
 
       try {
         if (__videoRoomConn) {
@@ -4235,6 +4374,15 @@ function clearVoiceTranscriptError(){
 
       // Cleanup audio elements
       cleanupVideoAudioElements();
+
+      // Cleanup Ken Burns if active
+      if (kenburnsContainer) {
+        kenburnsContainer.classList.add('hidden');
+        if (window.__kenburnsProvider) {
+          window.__kenburnsProvider.destroy();
+          window.__kenburnsProvider = null;
+        }
+      }
 
       // Reset UI
       container.classList.add('hidden');
@@ -4273,7 +4421,15 @@ function clearVoiceTranscriptError(){
 
     function appendVideoTranscript(role, text, id) {
       const list = document.getElementById('videoTranscriptList');
-      if (!list || !text) return;
+      if (!text) return;
+
+      // Update Ken Burns transcript overlay if in Ken Burns mode
+      if (window.__kenburnsProvider && window.__videoRoomConn?.__isKenBurnsMode) {
+        window.__kenburnsProvider.updateTranscript(text, role);
+      }
+
+      // If videoTranscriptList doesn't exist (Ken Burns mode), skip DOM updates
+      if (!list) return;
 
       // Deduplication check - skip if already seen (mirrors voice mode)
       if (id && markVideoTranscriptSeen(id)) {
@@ -4310,16 +4466,16 @@ function clearVoiceTranscriptError(){
       wrapper.className = isUser ? 'flex justify-end' : 'flex justify-start';
       if (id) wrapper.setAttribute('data-video-transcript-id', id);
 
-      // Create styled bubble
+      // Create styled bubble - elegant subtitle style
       const bubble = document.createElement('div');
       bubble.className = isUser
-        ? 'video-transcript-bubble video-transcript-user max-w-[75%] px-3 py-1.5 rounded-xl text-white text-sm'
-        : 'video-transcript-bubble video-transcript-assistant max-w-[75%] px-3 py-1.5 rounded-xl text-white/90 text-sm';
+        ? 'video-transcript-bubble video-transcript-user max-w-[85%] px-4 py-2 rounded-2xl text-white text-sm font-medium'
+        : 'video-transcript-bubble video-transcript-assistant max-w-[85%] px-4 py-2 rounded-2xl text-white text-sm';
 
-      // Add role indicator for assistant
+      // Add subtle role indicator for assistant
       if (!isUser) {
         const roleLabel = document.createElement('span');
-        roleLabel.className = 'text-brand-teal text-xs font-medium mr-1.5';
+        roleLabel.className = 'text-brand-teal/80 text-xs mr-1.5';
         roleLabel.textContent = '●';
         bubble.appendChild(roleLabel);
       }
@@ -4370,6 +4526,12 @@ function clearVoiceTranscriptError(){
 
     function updateVideoTranscript(id, text, role) {
       if (!id) return;
+
+      // Update Ken Burns transcript overlay if in Ken Burns mode
+      if (window.__kenburnsProvider && window.__videoRoomConn?.__isKenBurnsMode) {
+        window.__kenburnsProvider.updateTranscript(text, role);
+      }
+
       const existingBubble = __videoTranscriptIds.get(id);
       if (existingBubble) {
         const textSpan = existingBubble.querySelector('.transcript-text');
