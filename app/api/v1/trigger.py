@@ -314,10 +314,30 @@ def _extract_api_keys(client: Any) -> Dict[str, Any]:
     return api_keys
 
 
+def _should_exclude_admin_tools(
+    tools_service: Optional[ToolsService],
+    user_id: Optional[str],
+    client_id,
+) -> bool:
+    """Check if admin-only tools should be excluded for this user.
+    Returns True for subscriber users (or when role can't be determined)."""
+    try:
+        psb = tools_service.client_service.supabase if tools_service else None
+        if not psb or not user_id:
+            return True
+        roles_result = psb.table("roles").select("id, key").in_("key", ["admin", "super_admin"]).execute()
+        admin_role_ids = {r["id"] for r in (roles_result.data or [])}
+        tm_result = psb.table("tenant_memberships").select("role_id").eq("user_id", str(user_id)).eq("client_id", str(client_id)).execute()
+        return not any(r.get("role_id") in admin_role_ids for r in (tm_result.data or []))
+    except Exception:
+        return True  # Default to excluding admin-only tools (safer for subscribers)
+
+
 async def _get_agent_tools(
     tools_service: Optional[ToolsService],
     client_id: str,
     agent_id: str,
+    exclude_admin_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """Fetch and normalize assigned tools for a given agent."""
     if not tools_service:
@@ -332,6 +352,8 @@ async def _get_agent_tools(
     tools_payload: List[Dict[str, Any]] = []
     for tool in assigned_tools:
         tool_dict = tool.dict()
+        if exclude_admin_only and tool_dict.get("admin_only"):
+            continue
         for ts_field in ("created_at", "updated_at"):
             if ts_field in tool_dict and hasattr(tool_dict[ts_field], "isoformat"):
                 tool_dict[ts_field] = tool_dict[ts_field].isoformat()
@@ -1220,7 +1242,10 @@ async def handle_voice_trigger(
         client_conversation_id=client_conversation_id,
     )
 
-    tools_payload = await _get_agent_tools(tools_service, client.id, agent.id)
+    # Check if user has admin access — subscribers get admin_only tools filtered out
+    _exclude_admin_tools = _should_exclude_admin_tools(tools_service, request.user_id, client.id)
+
+    tools_payload = await _get_agent_tools(tools_service, client.id, agent.id, exclude_admin_only=_exclude_admin_tools)
     if tools_payload:
         agent_context["tools"] = tools_payload
     tools_config = _extract_agent_tools_config(agent)
@@ -1497,7 +1522,8 @@ async def handle_text_trigger_via_livekit(
     except Exception:
         pass
 
-    tools_payload = await _get_agent_tools(tools_service, client.id, agent.id)
+    _exclude_admin_tools = _should_exclude_admin_tools(tools_service, request.user_id, client.id)
+    tools_payload = await _get_agent_tools(tools_service, client.id, agent.id, exclude_admin_only=_exclude_admin_tools)
     if tools_payload:
         agent_context["tools"] = tools_payload
     tools_config = _extract_agent_tools_config(agent)
@@ -2229,18 +2255,17 @@ async def dispatch_agent_job(
         metadata_size = len(metadata_json)
 
         if metadata_size > LIVEKIT_METADATA_LIMIT:
-            logger.warning(f"⚠️ Dispatch metadata ({metadata_size} bytes) exceeds limit ({LIVEKIT_METADATA_LIMIT}). Truncating system_prompt...")
-            # Calculate how much we need to trim
-            excess = metadata_size - LIVEKIT_METADATA_LIMIT
-            system_prompt = job_metadata.get("system_prompt", "")
-            if system_prompt and len(system_prompt) > excess + 1000:
-                # Truncate system_prompt, keeping the beginning (persona/instructions)
-                # and marking truncation
-                truncated_prompt = system_prompt[:len(system_prompt) - excess - 100] + "\n\n[... context truncated due to size limits ...]"
-                job_metadata["system_prompt"] = truncated_prompt
-                metadata_json = json.dumps(job_metadata)
-                logger.info(f"   - Truncated system_prompt from {len(system_prompt)} to {len(truncated_prompt)} chars")
-                logger.info(f"   - New metadata size: {len(metadata_json)} bytes")
+            logger.warning(f"⚠️ Dispatch metadata ({metadata_size} bytes) exceeds limit ({LIVEKIT_METADATA_LIMIT}). Progressively trimming...")
+            # Progressive trim: strip large fields until under limit
+            trim_fields = ["tool_prompt_sections", "tools_config", "tools", "system_prompt"]
+            for trim_field in trim_fields:
+                if trim_field in job_metadata and job_metadata[trim_field]:
+                    removed = job_metadata.pop(trim_field)
+                    metadata_json = json.dumps(job_metadata)
+                    logger.info(f"   - Stripped '{trim_field}' ({len(json.dumps(removed))} bytes) from dispatch metadata")
+                    if len(metadata_json) <= LIVEKIT_METADATA_LIMIT:
+                        break
+            logger.info(f"   - Final dispatch metadata size: {len(metadata_json)} bytes")
 
         logger.info(f"📤 Sending dispatch request:")
         logger.info(f"   - Room: {room_name}")
@@ -2595,7 +2620,7 @@ async def ensure_livekit_room_exists(
         
         # Start with the full agent configuration as the base for the metadata
         room_metadata = agent_config if agent_config is not None else {}
-        
+
         # Add or overwrite general room information
         room_metadata.update({
             "agent_name": agent_name,
@@ -2604,24 +2629,33 @@ async def ensure_livekit_room_exists(
             "created_by": "sidekick_backend",
             "created_at": datetime.now().isoformat()
         })
-        
+
+        # Strip large fields that the agent reads from job metadata, not room metadata.
+        # dataset_ids is often 40-80KB alone (thousands of UUIDs) and is the main
+        # cause of metadata overflow. The agent already receives these via its config.
+        _dispatch_only_fields = ["dataset_ids", "supabase_service_role_key"]
+        for _field in _dispatch_only_fields:
+            room_metadata.pop(_field, None)
+
         # Convert metadata to JSON string (LiveKit expects JSON string)
         import json
         metadata_json = json.dumps(room_metadata)
 
-        # LiveKit has a 64KB metadata limit - truncate room metadata if needed
-        LIVEKIT_METADATA_LIMIT = 60000  # Leave headroom below 65536
+        # LiveKit has a 64KB metadata limit - aggressively trim to stay well under
+        LIVEKIT_METADATA_LIMIT = 55000  # Leave headroom for response payload later
         metadata_size = len(metadata_json)
         if metadata_size > LIVEKIT_METADATA_LIMIT:
-            logger.warning(f"⚠️ Room metadata ({metadata_size} bytes) exceeds limit. Truncating system_prompt...")
-            system_prompt = room_metadata.get("system_prompt", "")
-            excess = metadata_size - LIVEKIT_METADATA_LIMIT
-            if system_prompt and len(system_prompt) > excess + 1000:
-                truncated_prompt = system_prompt[:len(system_prompt) - excess - 100] + "\n\n[... context truncated due to size limits ...]"
-                room_metadata["system_prompt"] = truncated_prompt
-                metadata_json = json.dumps(room_metadata)
-                logger.info(f"   - Truncated room system_prompt from {len(system_prompt)} to {len(truncated_prompt)} chars")
-                logger.info(f"   - New room metadata size: {len(metadata_json)} bytes")
+            logger.warning(f"⚠️ Room metadata ({metadata_size} bytes) exceeds limit. Trimming large fields...")
+            # Progressively strip large fields until under limit
+            trim_fields = ["tools_config", "tool_prompt_sections", "api_keys", "tools", "system_prompt"]
+            for trim_field in trim_fields:
+                if trim_field in room_metadata:
+                    removed = room_metadata.pop(trim_field)
+                    metadata_json = json.dumps(room_metadata)
+                    logger.info(f"   - Stripped '{trim_field}' ({len(json.dumps(removed))} bytes) from room metadata")
+                    if len(metadata_json) <= LIVEKIT_METADATA_LIMIT:
+                        break
+            logger.info(f"   - Final room metadata size: {len(metadata_json)} bytes")
 
         create_start = time.time()
         room_info = await livekit_manager.create_room(

@@ -31,13 +31,13 @@ from livekit.agents.llm.tool_context import function_tool as lk_function_tool, T
 logger = logging.getLogger(__name__)
 
 
-# Scene prompts for auto-generation when no specific context is available
-AUTO_SCENE_TEMPLATES = [
-    "An abstract visualization of {topic} with flowing colors and dynamic shapes",
-    "A creative interpretation of {topic} in a dreamlike setting",
-    "A modern digital art piece representing {topic}",
-    "An atmospheric scene capturing the essence of {topic}",
-    "A symbolic representation of {topic} with light and shadow",
+# Conversational filler phrases to strip from context before generating image prompts
+CONVERSATIONAL_FILLER = [
+    "well ", "so ", "you know ", "i mean ", "actually ", "basically ",
+    "that's a great question", "great question", "good question",
+    "let me tell you", "let me explain", "i'd say ", "i think ",
+    "you see ", "the thing is ", "here's the thing ", "to be honest ",
+    "absolutely ", "definitely ", "of course ", "sure ", "right ",
 ]
 
 
@@ -94,8 +94,8 @@ class KenBurnsToolBuilder:
         # Configuration
         self.default_style = kenburns_config.get("style_preset", "cinematic")
         self.animation_duration = kenburns_config.get("animation_duration", 20)
-        self.image_width = kenburns_config.get("width", 1024)
-        self.image_height = kenburns_config.get("height", 576)  # 16:9 aspect ratio
+        self.image_width = kenburns_config.get("width", 576)
+        self.image_height = kenburns_config.get("height", 1024)  # 9:16 portrait aspect ratio
 
         # Auto-generation settings
         self.auto_interval = kenburns_config.get("auto_interval", 15)  # seconds
@@ -109,7 +109,8 @@ class KenBurnsToolBuilder:
         self._last_generation_time: float = 0
 
         # Context tracking for auto-generation
-        self._recent_context: List[str] = []  # Recent speech/topics
+        self._recent_context: List[str] = []  # Recent assistant speech
+        self._recent_user_context: List[str] = []  # Recent user speech/questions
         self._max_context_items = 5
 
         logger.info(
@@ -175,44 +176,110 @@ class KenBurnsToolBuilder:
 
     def update_context(self, text: str) -> None:
         """
-        Update the recent context with new speech/text.
-        Called by the agent when it speaks to track conversation topics.
+        Update the recent context with new assistant speech/text.
 
         Args:
             text: Recent speech text from the agent
         """
         if text and len(text.strip()) > 10:
-            # Keep only meaningful chunks
             self._recent_context.append(text.strip())
-            # Limit context size
             if len(self._recent_context) > self._max_context_items:
                 self._recent_context.pop(0)
 
+    def update_user_context(self, text: str) -> None:
+        """
+        Update context with user speech. User questions/topics are critical
+        for generating relevant images since they define the conversation subject.
+
+        Args:
+            text: Recent speech text from the user
+        """
+        if text and len(text.strip()) > 5:
+            self._recent_user_context.append(text.strip())
+            if len(self._recent_user_context) > self._max_context_items:
+                self._recent_user_context.pop(0)
+
+    @staticmethod
+    def _strip_filler(text: str) -> str:
+        """Strip conversational filler from text to extract the core subject."""
+        cleaned = text.lower().strip()
+        for filler in CONVERSATIONAL_FILLER:
+            if cleaned.startswith(filler):
+                cleaned = cleaned[len(filler):].strip()
+        # Remove leading punctuation/connectors after stripping
+        cleaned = cleaned.lstrip(",;:-– ")
+        # Restore original casing by finding the cleaned portion in original
+        if cleaned and len(cleaned) > 5:
+            return cleaned
+        return text.strip()
+
+    def _extract_topic(self, text: str) -> str:
+        """
+        Extract the core visual topic from speech text.
+        Strips filler, takes the most substantive sentences.
+        """
+        cleaned = self._strip_filler(text)
+
+        # Split into sentences and pick the most substantive ones
+        sentences = [s.strip() for s in cleaned.replace("!", ".").replace("?", ".").split(".") if s.strip()]
+        if not sentences:
+            return cleaned
+
+        # Filter out very short/filler sentences (< 15 chars)
+        substantive = [s for s in sentences if len(s) >= 15]
+        if not substantive:
+            substantive = sentences
+
+        # Use last 1-2 substantive sentences
+        topic = ". ".join(substantive[-2:]) if len(substantive) > 1 else substantive[-1]
+
+        # Truncate on word boundary
+        if len(topic) > 250:
+            topic = topic[:250].rsplit(" ", 1)[0]
+
+        return topic
+
     def _generate_auto_prompt(self) -> str:
         """
-        Generate a prompt for auto-generation based on recent context.
+        Generate an image prompt based on recent conversation context.
+        Prioritizes the combination of user question + agent response
+        for maximum topic relevance.
 
         Returns:
-            A scene description prompt
+            A scene description prompt for image generation
         """
+        # Best case: we have both user question and agent response
+        if self._recent_user_context and self._recent_context:
+            user_topic = self._extract_topic(self._recent_user_context[-1])
+            agent_topic = self._extract_topic(self._recent_context[-1])
+
+            # Combine both for a richer prompt — user defines the subject,
+            # agent provides the detail
+            combined = f"{user_topic}. {agent_topic}"
+            if len(combined) > 300:
+                combined = combined[:300].rsplit(" ", 1)[0]
+
+            return f"A photorealistic scene showing: {combined}"
+
+        # Have agent speech only
         if self._recent_context:
-            # Use recent context to generate a relevant prompt
-            recent_text = " ".join(self._recent_context[-3:])  # Last 3 items
-            # Extract key themes (simple approach - just use the text)
-            # Truncate to reasonable length
-            topic = recent_text[:200] if len(recent_text) > 200 else recent_text
-            template = random.choice(AUTO_SCENE_TEMPLATES)
-            return template.format(topic=topic)
-        else:
-            # Fallback to generic creative prompts
-            fallback_prompts = [
-                "An abstract digital landscape with flowing energy and light",
-                "A serene moment captured in vibrant colors and soft light",
-                "A creative visualization of ideas and connections",
-                "An atmospheric scene with depth and movement",
-                "A modern artistic interpretation of technology and nature",
-            ]
-            return random.choice(fallback_prompts)
+            topic = self._extract_topic(self._recent_context[-1])
+            return f"A photorealistic scene showing: {topic}"
+
+        # Have user speech only — use their question as the topic
+        if self._recent_user_context:
+            topic = self._extract_topic(self._recent_user_context[-1])
+            return f"A photorealistic scene related to: {topic}"
+
+        # No context at all — generic fallback
+        fallback_prompts = [
+            "An abstract digital landscape with flowing energy and light",
+            "A serene moment captured in vibrant colors and soft light",
+            "A creative visualization of ideas and connections",
+            "An atmospheric scene with depth and movement",
+            "A modern artistic interpretation of technology and nature",
+        ]
+        return random.choice(fallback_prompts)
 
     async def _auto_generate_image(self) -> None:
         """
@@ -460,17 +527,26 @@ This is a visual conversation mode - every significant topic needs an accompanyi
 1. At the START of the conversation - generate a welcoming scene related to your persona
 2. When you BEGIN discussing any new topic or concept
 3. When describing anything visual: places, scenarios, technology, nature, future visions
-4. When explaining abstract concepts - visualize them as a scene
+4. When explaining abstract concepts - visualize them as a concrete scene
 
 **How to call the tool:**
-Call generate_scene_image with a vivid scene description. Example:
-- "A futuristic city skyline at sunset with flying vehicles and vertical gardens"
-- "A cozy home office with holographic displays showing data visualizations"
+Call generate_scene_image with a specific, literal scene description that directly illustrates what you are currently talking about. The image MUST match the actual subject matter of the conversation.
 
-**Image prompt tips:**
-- Be specific: lighting, colors, atmosphere, perspective
-- Focus on the main visual elements
-- Make it relevant to what you're discussing
+Good examples (specific, literal, matches the conversation):
+- Discussing real estate: "A modern two-story suburban home with a manicured lawn, white exterior, and a sold sign in the front yard"
+- Discussing cooking: "A chef's kitchen counter with fresh vegetables, a cutting board, and a simmering pot on a gas stove"
+- Discussing fitness: "A person doing a morning jog on a tree-lined park path at sunrise"
+
+Bad examples (too abstract, doesn't match conversation):
+- "An abstract visualization of concepts with flowing colors"
+- "A dreamlike interpretation of ideas"
+- "A symbolic representation with light and shadow"
+
+**Image prompt rules:**
+- ALWAYS describe a concrete, literal scene that directly relates to the current topic
+- Include specific objects, people, settings, and actions relevant to what you're discussing
+- Never use abstract or symbolic descriptions - be literal and specific
+- The user should look at the image and immediately understand how it connects to the conversation
 
 **IMPORTANT:**
 - Generate your first image immediately when you start speaking

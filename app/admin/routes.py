@@ -1503,11 +1503,11 @@ async def clients_list(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Client management page"""
-    # Adventurer users should go to their settings page instead
-    if admin_user.get("is_adventurer_only"):
+    # Non-superadmin users should go to their own client settings page
+    if not admin_is_super(admin_user):
         client_id = admin_user.get("primary_client_id")
         if client_id:
-            return RedirectResponse(url=f"/admin/client-settings/{client_id}", status_code=302)
+            return RedirectResponse(url=f"/admin/clients/{client_id}", status_code=302)
         return RedirectResponse(url="/admin/agents", status_code=302)
 
     try:
@@ -1731,6 +1731,22 @@ async def agents_page(
     current_sidekick_count = len(agents)
     can_create_sidekick = max_sidekicks is None or current_sidekick_count < max_sidekicks
 
+    # Check if any visible client is still provisioning
+    provisioning_in_progress = False
+    if visible_client_ids and not admin_is_super(admin_user):
+        try:
+            from app.integrations.supabase_client import supabase_manager
+            _sb = supabase_manager.admin_client
+            if _sb:
+                _prov = _sb.table('clients').select('provisioning_status').in_('id', visible_client_ids).execute()
+                for row in (_prov.data or []):
+                    _ps = (row.get('provisioning_status') or 'ready').lower()
+                    if _ps not in ('ready', 'failed'):
+                        provisioning_in_progress = True
+                        break
+        except Exception:
+            pass
+
     return templates.TemplateResponse("admin/agents.html", {
         "request": request,
         "agents": agents,
@@ -1740,6 +1756,7 @@ async def agents_page(
         "max_sidekicks": max_sidekicks,
         "current_sidekick_count": current_sidekick_count,
         "can_create_sidekick": can_create_sidekick,
+        "provisioning_in_progress": provisioning_in_progress,
     })
 
 
@@ -5108,6 +5125,10 @@ async def monitoring_dashboard(
         if scoped_ids is None or client_id in scoped_ids:
             selected_client_id = client_id
 
+    # Auto-select primary client for non-superadmin users
+    if not selected_client_id and not admin_is_super(admin_user):
+        selected_client_id = admin_user.get("primary_client_id")
+
     # Get sidekicks using the same approach as agents_page
     sidekicks = []
     try:
@@ -7277,8 +7298,8 @@ async def admin_update_client(
             ),
             rerank=RerankSettings(
                 enabled=form.get("rerank_enabled", "off") == "on",
-                provider=form.get("rerank_provider", current_rerank.provider if hasattr(current_rerank, 'provider') else current_rerank.get('provider', 'siliconflow') if current_rerank else 'siliconflow'),
-                model=form.get("rerank_model", current_rerank.model if hasattr(current_rerank, 'model') else current_rerank.get('model', 'BAAI/bge-reranker-base') if current_rerank else 'BAAI/bge-reranker-base'),
+                provider=form.get("rerank_provider", current_rerank.provider if hasattr(current_rerank, 'provider') else current_rerank.get('provider') if current_rerank else None),
+                model=form.get("rerank_model", current_rerank.model if hasattr(current_rerank, 'model') else current_rerank.get('model') if current_rerank else None),
                 top_k=int(form.get("rerank_top_k", current_rerank.top_k if hasattr(current_rerank, 'top_k') else current_rerank.get('top_k', 5) if current_rerank else 5)),
                 candidates=int(form.get("rerank_candidates", current_rerank.candidates if hasattr(current_rerank, 'candidates') else current_rerank.get('candidates', 20) if current_rerank else 20))
             ),

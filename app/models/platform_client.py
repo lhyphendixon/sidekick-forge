@@ -36,6 +36,11 @@ class APIKeys(BaseModel):
     bithuman_api_secret: Optional[str] = None
     bey_api_key: Optional[str] = None
 
+    # Prediction Market Providers
+    polymarket_api_key: Optional[str] = None
+    polymarket_api_secret: Optional[str] = None
+    polymarket_passphrase: Optional[str] = None
+
 
 class PlatformSupabaseConfig(BaseModel):
     """Minimal Supabase config for platform clients"""

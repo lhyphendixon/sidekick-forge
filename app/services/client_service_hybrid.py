@@ -640,8 +640,8 @@ class ClientService:
                     },
                     "rerank": {
                         "enabled": False,
-                        "provider": "siliconflow",
-                        "model": "BAAI/bge-reranker-base",
+                        "provider": None,
+                        "model": None,
                         "top_k": 3,
                         "candidates": 20
                     },

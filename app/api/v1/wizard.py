@@ -824,6 +824,13 @@ async def list_abilities(
             icon_url="/static/images/abilities/content-catalyst.svg",
             requires_api_key=False
         ),
+        AbilityOption(
+            slug="image_catalyst",
+            name="Image Catalyst",
+            description="Generate AI images. Thumbnail mode for polished marketing images, General mode for creative imagery. Supports reference images.",
+            icon_url="/static/images/abilities/image-catalyst.svg",
+            requires_api_key=False
+        ),
     ]
 
     return AbilitiesResponse(abilities=abilities)

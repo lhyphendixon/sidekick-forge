@@ -12,6 +12,7 @@
           colors: {
             'brand-teal': '#01a4a6',
             'brand-orange': '#fc7244',
+            'brand-salmon': '#f56453',
             'dark-bg': '#000000',
             'dark-surface': 'rgb(20, 20, 20)',
             'dark-elevated': '#252525',
@@ -129,7 +130,7 @@
       opacity: 0;
       visibility: hidden;
       transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-      z-index: 60;
+      z-index: 9990;
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
@@ -201,6 +202,13 @@
       -webkit-backdrop-filter: blur(20px);
       border: 1px solid rgba(255, 255, 255, 0.08);
     }
+    .glass-container:fullscreen {
+      background: #000;
+      border-radius: 0 !important;
+      border: none;
+      width: 100vw;
+      height: 100vh;
+    }
     .glass-surface {
       background: rgba(255, 255, 255, 0.03);
       backdrop-filter: blur(10px);
@@ -236,7 +244,7 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 12px;
+      padding: 6px 10px;
       font-size: 13px;
       font-weight: 500;
       border-radius: 6px;
@@ -246,6 +254,8 @@
       border: none;
       cursor: pointer;
     }
+    /* Icon-only mode toggle — no labels */
+    .mode-toggle-btn span { display: none; }
     .mode-toggle-btn:hover {
       color: rgba(255, 255, 255, 0.8);
       background: rgba(255, 255, 255, 0.05);
@@ -256,8 +266,8 @@
       box-shadow: 0 2px 8px rgba(1, 164, 166, 0.3);
     }
     .mode-toggle-btn svg {
-      width: 16px;
-      height: 16px;
+      width: 20px;
+      height: 20px;
     }
     /* Disabled mode styling */
     .mode-toggle-btn.disabled-mode {
@@ -314,6 +324,12 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    /* Hide agent name on small screens, show avatar only */
+    @media (max-width: 480px) {
+      .agent-profile-name { display: none; }
+      .agent-profile { gap: 6px; }
+      .agent-profile-image, .agent-profile-placeholder { width: 28px; height: 28px; }
     }
 
     /* Make agent profile clickable */
@@ -624,6 +640,7 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      flex-shrink: 0;
     }
     .send-btn:hover {
       transform: translateY(-1px);
@@ -631,6 +648,11 @@
     }
     .send-btn:active {
       transform: translateY(0);
+    }
+    /* Compact send button on small screens */
+    @media (max-width: 480px) {
+      .chat-send-btn span { display: none; }
+      .chat-send-btn { padding: 10px 12px; }
     }
 
     /* History button */
@@ -673,18 +695,19 @@
     })();
   </script>
   {% endif %}
-  <link rel="stylesheet" href="/static/css/citations.css?v=20260114b">
-  <link rel="stylesheet" href="/static/css/widgets.css?v=20260114e">
-  <link rel="stylesheet" href="/static/css/kenburns.css?v=20260202b">
-  <script src="/static/js/citations.js?v=20260114c"></script>
+  <link rel="stylesheet" href="/static/css/citations.css?v=20260210a">
+  <link rel="stylesheet" href="/static/css/widgets.css?v=20260204c">
+  <link rel="stylesheet" href="/static/css/kenburns.css?v=20260206d">
+  <script src="/static/js/citations.js?v=20260210a"></script>
   <script src="/static/js/widgets.js?v=20260102c"></script>
-  <script src="/static/js/content-catalyst-widget.js?v=20260114c"></script>
+  <script src="/static/js/content-catalyst-widget.js?v=20260204c"></script>
   <script src="/static/js/lingua-widget.js?v=20260201"></script>
+  <script src="/static/js/image-catalyst-widget.js?v=20260204d"></script>
   <script src="/static/js/kenburns.js?v=20260202c"></script>
 </head>
 <body style="background: #000000;">
-  <div class="w-full p-3 md:p-4 h-full" style="min-height: min(700px, 95vh);">
-    <div class="glass-container rounded-2xl h-full flex flex-col overflow-hidden relative" style="min-height: min(650px, 90vh);">
+  <div class="w-full p-1.5 sm:p-3 md:p-4 h-full" style="min-height: min(700px, 95vh);">
+    <div class="glass-container rounded-xl sm:rounded-2xl h-full flex flex-col overflow-hidden relative" style="min-height: min(650px, 90vh);">
       <!-- Initial loading overlay - shown while checking auth -->
       <div id="initialLoader">
         <div class="orbital-loader">
@@ -715,29 +738,36 @@
       </div>
       <div id="chat" class="hidden flex-1 flex flex-col min-h-0">
         <!-- Header with mode toggle and new conversation button - all in one row -->
-        <div class="px-4 py-3 flex items-center justify-between relative border-b border-white/5">
+        <div class="px-2 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2 border-b border-white/5 relative">
           <!-- Mode toggle - left side -->
-          <div class="mode-toggle">
-            <button id="tab-text" class="mode-toggle-btn active" onclick="switchTab('text')">
-              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
-              <span>Text</span>
-            </button>
-            <button id="tab-voice" class="mode-toggle-btn" onclick="switchTab('voice')">
-              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
-              <span>Voice</span>
-            </button>
-            <button id="tab-video" class="mode-toggle-btn" onclick="switchTab('video')">
-              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-              <span>Video</span>
+          <div class="flex items-center gap-2 flex-shrink-0 relative z-10">
+            <div class="mode-toggle">
+              <button id="tab-text" class="mode-toggle-btn active" onclick="switchTab('text')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                <span>Text</span>
+              </button>
+              <button id="tab-voice" class="mode-toggle-btn" onclick="switchTab('voice')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                <span>Voice</span>
+              </button>
+              <button id="tab-video" class="mode-toggle-btn" onclick="switchTab('video')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                <span>Video</span>
+              </button>
+            </div>
+            <!-- Fullscreen toggle -->
+            <button id="fullscreenBtn" class="p-1.5 text-white/40 hover:text-white hover:bg-white/10 rounded-lg transition-all" onclick="toggleEmbedFullscreen()" title="Toggle fullscreen">
+              <svg id="fullscreenExpandIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5h-4m4 0v-4m0 4l-5-5"/></svg>
+              <svg id="fullscreenShrinkIcon" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9L4 4m0 0v4m0-4h4m7 5l5-5m0 0v4m0-4h-4M9 15l-5 5m0 0v-4m0 4h4m7-5l5 5m0 0v-4m0 4h-4"/></svg>
             </button>
           </div>
-          <!-- New Conversation button - absolutely centered -->
-          <button id="newConversationBtn" onclick="startNewConversation()" class="absolute left-1/2 -translate-x-1/2 inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-all border border-white/10 hover:border-white/20">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            <span>New Conversation</span>
+          <!-- New Conversation button - absolutely centered in the header -->
+          <button id="newConversationBtn" onclick="startNewConversation()" class="absolute left-1/2 -translate-x-1/2 inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-all border border-white/10 hover:border-white/20" title="New Conversation">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            <span class="hidden sm:inline">New Conversation</span>
           </button>
           <!-- Right side: Agent profile + End Call button -->
-          <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2 sm:gap-3 flex-shrink-0">
             <!-- Agent profile - right aligned, clickable to show info -->
             <div class="agent-profile agent-profile-clickable" id="agentProfileHeader" onclick="openAgentInfoModal()" title="Click to view sidekick info">
               <span class="agent-profile-name">{{ agent_name }}</span>
@@ -757,16 +787,16 @@
         </div>
         <div id="panel-text" class="flex-1 flex flex-col min-h-0">
           <div class="flex-1 flex flex-col min-h-0">
-            <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
+            <div id="chatMessages" class="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 min-h-0">
               <div id="welcomeMessage" class="text-center text-white/40 text-sm py-12">
                 <svg class="w-12 h-12 mx-auto mb-3 text-white/20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
                 <p>Start a conversation with your sidekick</p>
               </div>
             </div>
-            <div class="glass-surface border-t-0 border-x-0 rounded-none p-4">
-              <form onsubmit="return sendMsg(event)" class="flex gap-3">
-                <input id="msg" name="message" placeholder="Type a message..." class="flex-1 glass-input text-white rounded-xl px-4 py-3" autocomplete="off" required />
-                <button type="submit" class="send-btn">
+            <div class="glass-surface border-t-0 border-x-0 rounded-none p-3 sm:p-4">
+              <form onsubmit="return sendMsg(event)" class="flex gap-2 sm:gap-3">
+                <input id="msg" name="message" placeholder="Type a message..." class="flex-1 min-w-0 glass-input text-white rounded-xl px-3 sm:px-4 py-3" autocomplete="off" required />
+                <button type="submit" class="send-btn chat-send-btn">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
                   <span>Send</span>
                 </button>
@@ -809,6 +839,14 @@
                 <p>Single-use, tied to your device</p>
                 <p>Reloading restarts the session</p>
                 <p>Pricing may change</p>
+              </div>
+
+              <!-- Admin Bypass (visible only to authenticated admins) -->
+              <div id="adminBypassSection" class="hidden mt-6 border-t border-white/10 pt-4">
+                <p class="text-xs text-white/50 mb-2">Admin access detected</p>
+                <button id="adminBypassBtn" onclick="handleAdminBypass()" class="send-btn px-5 py-2 text-sm">
+                  Admin Bypass
+                </button>
               </div>
             </div>
             {% endif %}
@@ -910,41 +948,39 @@
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Conversation History Overlay -->
-    <div id="historyOverlay" class="hidden fixed inset-0 bg-black/75 z-50 flex items-end justify-center" style="backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);">
-      <div class="glass-container rounded-t-2xl w-full max-w-[900px] max-h-[85vh] flex flex-col animate-slide-up">
-        <div class="p-4 border-b border-white/5 flex items-center justify-between">
-          <h3 class="text-lg font-medium text-white">Conversation History</h3>
-          <button onclick="closeConversationHistory()" class="text-white/50 hover:text-white p-1 transition-colors">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
-        </div>
-        <div class="p-4 border-b border-white/5">
-          <button onclick="startNewConversation()" class="send-btn w-full py-3 justify-center">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            <span>Start New Conversation</span>
-          </button>
-        </div>
-        <div id="historyList" class="flex-1 overflow-y-auto p-4 space-y-2">
-          <div id="historyLoading" class="text-center text-white/40 py-8">
-            <div class="flex justify-center space-x-2 mb-2">
-              <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
-              <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
-              <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
-            </div>
-            <p>Loading conversations...</p>
+      <!-- Conversation History Overlay (inside glass-container so it works in fullscreen) -->
+      <div id="historyOverlay" class="hidden absolute inset-0 bg-black/75 z-50 flex items-end justify-center" style="backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);">
+        <div class="bg-dark-surface rounded-t-2xl w-full max-w-[900px] max-h-[90vh] sm:max-h-[85vh] flex flex-col animate-slide-up border border-white/8">
+          <div class="p-4 border-b border-white/5 flex items-center justify-between">
+            <h3 class="text-lg font-medium text-white">Conversation History</h3>
+            <button onclick="closeConversationHistory()" class="text-white/50 hover:text-white p-1 transition-colors">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
           </div>
-          <div id="historyEmpty" class="hidden text-center text-white/40 py-8">
-            <p>No previous conversations found.</p>
-            <p class="text-xs mt-2">Start a new conversation to begin!</p>
+          <div class="p-4 border-b border-white/5">
+            <button onclick="startNewConversation()" class="send-btn w-full py-3 justify-center">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              <span>Start New Conversation</span>
+            </button>
+          </div>
+          <div id="historyList" class="flex-1 overflow-y-auto p-4 space-y-2">
+            <div id="historyLoading" class="text-center text-white/40 py-8">
+              <div class="flex justify-center space-x-2 mb-2">
+                <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
+                <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
+                <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
+              </div>
+              <p>Loading conversations...</p>
+            </div>
+            <div id="historyEmpty" class="hidden text-center text-white/40 py-8">
+              <p>No previous conversations found.</p>
+              <p class="text-xs mt-2">Start a new conversation to begin!</p>
+            </div>
           </div>
         </div>
       </div>
     </div>
-
-    <!-- Supertab Purchase Overlay - DEPRECATED: Now using inline paywall in voice panel -->
   </div>
 
   <style>
@@ -1214,6 +1250,35 @@
         window.supertabInitError = err;
         if (loadingEl) loadingEl.innerHTML = '<span class="text-red-400">Failed to load payment options</span>';
       }
+    }
+
+    // Check if the current user is an admin for this client (for Supertab bypass)
+    async function checkAdminBypass() {
+      if (!SUPERTAB_CONFIG.enabled) return;
+      try {
+        const resp = await fetch('/admin/auth/check', { credentials: 'same-origin' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data.authenticated) return;
+        const user = data.user;
+        // Superadmins bypass all, admins only for their own clients
+        const isAuthorized = user.is_super_admin ||
+          (user.visible_client_ids && user.visible_client_ids.includes(CLIENT_ID));
+        if (isAuthorized) {
+          const section = document.getElementById('adminBypassSection');
+          if (section) section.classList.remove('hidden');
+        }
+      } catch (err) {
+        // Silent fail — non-admins just never see the button
+        console.log('[admin-bypass] Check failed (expected for non-admins):', err.message);
+      }
+    }
+
+    // Handle admin clicking the bypass button
+    function handleAdminBypass() {
+      console.log('[admin-bypass] Admin bypassing Supertab paywall');
+      hasVoiceEntitlement = true;
+      showVoiceReadyUI();
     }
 
     // Show the voice-ready UI (hide paywall, show start button)
@@ -2518,15 +2583,36 @@ function clearVoiceTranscriptError(){
     }
 
     // Content-based deduplication for transcripts (catches duplicates from different sources)
+    // LiveKit delivers raw STT text; Supabase delivers enhanced/markdown text — need fuzzy matching
     let __recentTranscriptTexts = [];
+    function _normalizeForDedup(text) {
+      // Strip markdown, extra whitespace, punctuation to get comparable core text
+      return (text || '').trim().toLowerCase()
+        .replace(/[*_~`#>\-\[\]()!|]/g, '')  // strip markdown chars
+        .replace(/\n+/g, ' ')                  // collapse newlines
+        .replace(/\s+/g, ' ')                  // collapse whitespace
+        .trim()
+        .slice(0, 60);                          // compare first 60 chars of core text
+    }
     function isRecentDuplicateText(role, text) {
       if (!text || text.length < 5) return false;
-      const normalizedText = text.trim().toLowerCase().slice(0, 100);
-      const key = `${role}:${normalizedText}`;
-      if (__recentTranscriptTexts.includes(key)) return true;
+      const normalized = _normalizeForDedup(text);
+      if (!normalized || normalized.length < 4) return false;
+      const key = `${role}:${normalized}`;
+      // Check if any recent entry matches (exact or prefix overlap)
+      for (const recent of __recentTranscriptTexts) {
+        if (recent === key) return true;
+        // Fuzzy: check if one is a prefix of the other (handles partial vs full text)
+        const [rRole, rText] = recent.split(':', 2);
+        if (rRole === role && rText && normalized) {
+          if (rText.startsWith(normalized.slice(0, 30)) || normalized.startsWith(rText.slice(0, 30))) {
+            return true;
+          }
+        }
+      }
       __recentTranscriptTexts.push(key);
-      // Keep only last 10 entries to avoid memory bloat
-      if (__recentTranscriptTexts.length > 10) __recentTranscriptTexts.shift();
+      // Keep only last 15 entries to avoid memory bloat
+      if (__recentTranscriptTexts.length > 15) __recentTranscriptTexts.shift();
       return false;
     }
 
@@ -2694,43 +2780,6 @@ function clearVoiceTranscriptError(){
         try { console.log('[voice] Creating realtime channel:', channelName); } catch {}
         transcriptRealtimeChannel = supabaseClient
           .channel(channelName)
-          .on(
-            'postgres_changes',
-            {
-              event: '*',  // Listen to ALL events (INSERT, UPDATE, DELETE) for debugging
-              schema: 'public',
-              table: 'conversation_transcripts',
-              filter: `conversation_id=eq.${conversationId}`
-            },
-            (payload) => {
-              // This wildcard handler receives all event types
-              try { console.log('[voice] WILDCARD postgres_changes event:', payload?.eventType, JSON.stringify(payload).slice(0, 300)); } catch {}
-              // Handle based on event type
-              const eventType = payload?.eventType;
-              const row = payload?.new;
-              if (!row) { return; }
-              const txt = row.content || row.transcript || '';
-              if (!txt) { return; }
-
-              if (eventType === 'INSERT') {
-                const alreadySeen = __seenTranscriptIds?.has(row.id) || window.__lk_transcript_seen?.[row.id];
-                console.log('[voice] INSERT event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'seen:', alreadySeen, 'citations:', row.citations?.length || 0);
-                if (!alreadySeen) {
-                  appendVoiceTranscript(row.role, txt, row.created_at, row.citations, row.id);
-                } else if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
-                  console.log('[voice] Adding citations to existing transcript:', row.id?.slice(0,8), row.citations.length);
-                  addCitationsToTranscript(row.id, row.citations, txt);
-                }
-              } else if (eventType === 'UPDATE') {
-                console.log('[voice] UPDATE event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'citations:', row.citations?.length || 0);
-                updateVoiceTranscript(row.id, txt, row.role);
-                if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
-                  console.log('[voice] UPDATE adding citations:', row.id?.slice(0,8), row.citations.length);
-                  addCitationsToTranscript(row.id, row.citations, txt);
-                }
-              }
-            }
-          )
           .on(
             'postgres_changes',
             {
@@ -4396,13 +4445,27 @@ function clearVoiceTranscriptError(){
       __videoSeenTranscriptIds.clear();
     }
 
-    function toggleVideoFullscreen() {
-      const container = document.getElementById('videoContainer');
+    function toggleEmbedFullscreen() {
+      const container = document.querySelector('.glass-container');
       if (!document.fullscreenElement) {
-        container.requestFullscreen?.() || container.webkitRequestFullscreen?.();
+        (container.requestFullscreen?.() || container.webkitRequestFullscreen?.());
       } else {
-        document.exitFullscreen?.() || document.webkitExitFullscreen?.();
+        (document.exitFullscreen?.() || document.webkitExitFullscreen?.());
       }
+    }
+
+    // Update fullscreen button icon on change
+    document.addEventListener('fullscreenchange', () => {
+      const expand = document.getElementById('fullscreenExpandIcon');
+      const shrink = document.getElementById('fullscreenShrinkIcon');
+      if (expand && shrink) {
+        expand.classList.toggle('hidden', !!document.fullscreenElement);
+        shrink.classList.toggle('hidden', !document.fullscreenElement);
+      }
+    });
+
+    function toggleVideoFullscreen() {
+      toggleEmbedFullscreen();
     }
 
     // Video transcript handling
@@ -4810,6 +4873,9 @@ function clearVoiceTranscriptError(){
       if (SUPERTAB_CONFIG.enabled) {
         initSupertab().catch(err => {
           console.warn('[supertab] Background init failed:', err);
+        });
+        checkAdminBypass().catch(err => {
+          console.log('[admin-bypass] Check skipped:', err.message);
         });
       }
 

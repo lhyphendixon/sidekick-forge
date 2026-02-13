@@ -123,10 +123,10 @@ async def embed_sidekick(
                         tool_ids = [r["tool_id"] for r in (agent_tools_result.data or [])]
 
                         if tool_ids:
-                            # Get tool details from tools table (platform DB) - only active phase tools
-                            tools_result = platform_sb.table("tools").select("name, slug, description, icon_url, execution_phase").in_("id", tool_ids).eq("enabled", True).execute()
+                            # Get tool details from tools table (platform DB) - only active phase, non-admin-only tools
+                            tools_result = platform_sb.table("tools").select("name, slug, description, icon_url, execution_phase, admin_only").in_("id", tool_ids).eq("enabled", True).execute()
                             if tools_result.data:
-                                # Filter to only show active (conversation) abilities, not ambient
+                                # Filter to only show active (conversation) abilities, not ambient or admin-only
                                 agent_tools = [
                                     {
                                         "name": t.get("name", ""),
@@ -135,7 +135,7 @@ async def embed_sidekick(
                                         "icon_url": t.get("icon_url", "")
                                     }
                                     for t in tools_result.data
-                                    if t.get("execution_phase") == "active"
+                                    if t.get("execution_phase") == "active" and not t.get("admin_only")
                                 ]
                     except Exception as tools_err:
                         logger.warning(f"[embed] Failed to fetch agent tools: {tools_err}")

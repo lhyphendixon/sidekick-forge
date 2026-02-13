@@ -34,7 +34,7 @@ class APIKeyLoader:
         "rerank": {
             "enabled": True,
             "provider": "siliconflow",
-            "model": "Qwen/Qwen3-Reranker-2B",
+            "model": "Qwen/Qwen3-Reranker-4B",
         }
     }
 
@@ -79,6 +79,19 @@ class APIKeyLoader:
                 else:
                     logger.warning(f"Failed to load API keys from Supabase for client {client_id}")
 
+                # Supplement missing keys with platform defaults
+                # This allows Champion clients to use platform-managed keys
+                # (e.g., Polymarket) when they haven't set their own
+                platform_keys = APIKeyLoader._load_platform_keys()
+                if platform_keys:
+                    supplemented = []
+                    for key, value in platform_keys.items():
+                        if key not in api_keys or not api_keys.get(key):
+                            api_keys[key] = value
+                            supplemented.append(key)
+                    if supplemented:
+                        logger.info(f"Supplemented {len(supplemented)} missing keys from platform defaults: {supplemented}")
+
         # Log if we only have metadata keys
         if not client_id and api_keys:
             logger.info("Using API keys from metadata only (no client_id)")
@@ -102,8 +115,11 @@ class APIKeyLoader:
         available_keys = []
         test_keys = []
         missing_keys = []
-        
+
         for key, value in api_keys.items():
+            # Skip internal metadata flags (e.g. _uses_platform_keys, _platform_inference_name)
+            if key.startswith('_'):
+                continue
             if not value:
                 missing_keys.append(key)
             elif APIKeyLoader.validate_api_key(key, value):
@@ -158,7 +174,11 @@ class APIKeyLoader:
                 'jina_api_key',
                 'perplexity_api_key',
                 # Additional
-                'anthropic_api_key'
+                'anthropic_api_key',
+                # Prediction markets
+                'polymarket_api_key',
+                'polymarket_api_secret',
+                'polymarket_passphrase'
             ]
             
             # Also fetch additional_settings for keys stored there (like bithuman_api_secret)
@@ -305,11 +325,11 @@ class APIKeyLoader:
         return APIKeyLoader.PLATFORM_DEFAULT_CONFIG.copy()
 
     @staticmethod
-    def validate_api_key(key: str, value: str) -> bool:
+    def validate_api_key(key: str, value: Any) -> bool:
         """Validate that an API key looks real (not a test key)"""
-        if not value:
+        if not value or not isinstance(value, str):
             return False
-        
+
         test_patterns = ['test', 'dummy', 'placeholder', 'example']
         value_lower = value.lower()
         

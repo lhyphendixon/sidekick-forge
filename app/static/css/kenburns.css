@@ -74,7 +74,7 @@
         transform: scale(1) translate(0, 0);
     }
     100% {
-        transform: scale(1.2) translate(-5%, -3%);
+        transform: scale(1.08) translate(-3%, -2%);
     }
 }
 
@@ -83,13 +83,13 @@
         transform: scale(1) translate(0, 0);
     }
     100% {
-        transform: scale(1.2) translate(5%, -3%);
+        transform: scale(1.08) translate(3%, -2%);
     }
 }
 
 @keyframes kenburnsZoomOutLeft {
     0% {
-        transform: scale(1.2) translate(-5%, -3%);
+        transform: scale(1.08) translate(-3%, -2%);
     }
     100% {
         transform: scale(1) translate(0, 0);
@@ -98,7 +98,7 @@
 
 @keyframes kenburnsZoomOutRight {
     0% {
-        transform: scale(1.2) translate(5%, 3%);
+        transform: scale(1.08) translate(3%, 2%);
     }
     100% {
         transform: scale(1) translate(0, 0);
@@ -107,19 +107,19 @@
 
 @keyframes kenburnsPanLeft {
     0% {
-        transform: scale(1.1) translate(5%, 0);
+        transform: scale(1.04) translate(3%, 0);
     }
     100% {
-        transform: scale(1.1) translate(-5%, 0);
+        transform: scale(1.04) translate(-3%, 0);
     }
 }
 
 @keyframes kenburnsPanRight {
     0% {
-        transform: scale(1.1) translate(-5%, 0);
+        transform: scale(1.04) translate(-3%, 0);
     }
     100% {
-        transform: scale(1.1) translate(5%, 0);
+        transform: scale(1.04) translate(3%, 0);
     }
 }
 

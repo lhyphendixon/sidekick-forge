@@ -23,17 +23,23 @@ class CitationsComponent {
         // Group citations by document
         const docGroups = this.groupCitationsByDocument(citations);
 
-        // Sort: DocumentSense citations first, then by similarity
+        // Sort: Prediction Market first, then DocumentSense, then by similarity
         const sortedDocGroups = this.sortDocGroups(docGroups);
 
-        // Check if we have a DocumentSense citation
+        // Check for special citation types to adjust how many to show
+        const hasPredictionMarket = sortedDocGroups.some(doc =>
+            doc.source === 'prediction_market' || doc.source_type === 'prediction_market'
+        );
         const hasDocumentSense = sortedDocGroups.some(doc =>
             doc.source === 'documentsense' || (doc.title && doc.title.startsWith('DocumentSense:'))
         );
 
-        // If DocumentSense is present, show 2 documents (DocumentSense + top RAG)
-        // Otherwise, show the default maxDocumentsShown (1)
-        const docsToShow = hasDocumentSense ? Math.min(2, sortedDocGroups.length) : this.maxDocumentsShown;
+        // Determine how many docs to show by default
+        let docsToShow = this.maxDocumentsShown;
+        if (hasPredictionMarket) docsToShow++;
+        if (hasDocumentSense) docsToShow++;
+        docsToShow = Math.min(docsToShow, sortedDocGroups.length);
+
         const topDocuments = sortedDocGroups.slice(0, docsToShow);
 
         // Create container
@@ -108,12 +114,24 @@ class CitationsComponent {
     }
 
     /**
+     * Check if a doc group is a prediction market citation
+     */
+    isPredictionMarket(docGroup) {
+        return docGroup.source === 'prediction_market' || docGroup.source_type === 'prediction_market';
+    }
+
+    /**
      * Create a single citation item
      * @param {Object} docGroup - Document group object
      * @param {number} index - Citation index for display
      * @returns {HTMLElement} Citation item element
      */
     createCitationItem(docGroup, index) {
+        // Prediction market gets its own special rendering
+        if (this.isPredictionMarket(docGroup)) {
+            return this.createPredictionMarketItem(docGroup);
+        }
+
         const item = document.createElement('div');
 
         // Check if this is a DocumentSense citation
@@ -161,6 +179,131 @@ class CitationsComponent {
     }
 
     /**
+     * Create prediction market insight item with expandable market data
+     * @param {Object} docGroup - Document group with prediction market data
+     * @returns {HTMLElement} Prediction market citation element
+     */
+    createPredictionMarketItem(docGroup) {
+        const item = document.createElement('div');
+        item.className = 'citation-item citation-prediction-market';
+
+        // Parse market data from the first chunk's content
+        let marketData = {};
+        try {
+            const chunk = docGroup.chunks[0];
+            if (chunk && chunk.content) {
+                marketData = typeof chunk.content === 'string'
+                    ? JSON.parse(chunk.content)
+                    : chunk.content;
+            }
+        } catch (e) {
+            console.warn('Failed to parse prediction market data:', e);
+        }
+
+        const markets = marketData.markets || [];
+        const query = marketData.query || '';
+        const source = marketData.source || 'Polymarket';
+
+        // Build the collapsed header
+        item.innerHTML = `
+            <div class="citation-content pm-header" role="button" tabindex="0" aria-expanded="false">
+                <svg class="pm-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="22,12 18,12 15,21 9,3 6,12 2,12"></polyline>
+                </svg>
+                <span class="citation-link">Prediction Market Insight</span>
+                <span class="citation-domain">${source}</span>
+                <svg class="pm-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6,9 12,15 18,9"></polyline>
+                </svg>
+            </div>
+            <div class="pm-panel" style="display:none;">
+                ${this.renderMarketPanel(markets, query, source)}
+            </div>
+        `;
+
+        // Toggle expand/collapse on click
+        const header = item.querySelector('.pm-header');
+        const panel = item.querySelector('.pm-panel');
+        const chevron = item.querySelector('.pm-chevron');
+
+        header.addEventListener('click', () => {
+            const expanded = panel.style.display !== 'none';
+            panel.style.display = expanded ? 'none' : 'block';
+            chevron.style.transform = expanded ? '' : 'rotate(180deg)';
+            header.setAttribute('aria-expanded', !expanded);
+        });
+        header.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                header.click();
+            }
+        });
+
+        return item;
+    }
+
+    /**
+     * Render the expandable market data panel
+     * @param {Array} markets - Array of market objects
+     * @param {string} query - Original search query
+     * @param {string} source - Data source name
+     * @returns {string} HTML string for the panel
+     */
+    renderMarketPanel(markets, query, source) {
+        if (!markets || markets.length === 0) {
+            return '<div class="pm-empty">No market data available</div>';
+        }
+
+        const rows = markets.map(market => {
+            const question = market.question || '';
+            const probs = market.probabilities || {};
+            const volume = market.volume_usd || 0;
+
+            // Find the "Yes" probability or the first probability
+            let yesProb = probs['Yes'];
+            if (yesProb === undefined) {
+                const values = Object.values(probs);
+                yesProb = values.length > 0 ? values[0] : null;
+            }
+
+            const probDisplay = yesProb !== null && yesProb !== undefined
+                ? `${yesProb}%`
+                : 'N/A';
+
+            const volumeDisplay = volume >= 1000000
+                ? `$${(volume / 1000000).toFixed(1)}M`
+                : volume >= 1000
+                    ? `$${(volume / 1000).toFixed(0)}K`
+                    : `$${Math.round(volume)}`;
+
+            // Short question — strip "Will ... win the ..." prefix for cleaner display
+            const shortQ = question
+                .replace(/^Will\s+/i, '')
+                .replace(/\s+win the .+$/i, '');
+
+            return `
+                <div class="pm-row">
+                    <div class="pm-row-label">${shortQ}</div>
+                    <div class="pm-row-bar-wrap">
+                        <div class="pm-row-bar" style="width:${Math.min(yesProb || 0, 100)}%"></div>
+                    </div>
+                    <div class="pm-row-prob">${probDisplay}</div>
+                    <div class="pm-row-vol">${volumeDisplay}</div>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="pm-markets">
+                ${rows}
+            </div>
+            <div class="pm-footer">
+                <span>Data from ${source} &middot; reflects crowd sentiment, not certainty</span>
+            </div>
+        `;
+    }
+
+    /**
      * Add tooltip showing chunk details
      * @param {HTMLElement} element - Element to add tooltip to
      * @param {Object} docGroup - Document group with chunks
@@ -194,17 +337,17 @@ class CitationsComponent {
     createTooltip(docGroup) {
         const tooltip = document.createElement('div');
         tooltip.className = 'citation-tooltip';
-        
+
         const chunksToShow = docGroup.chunks
             .sort((a, b) => b.similarity - a.similarity)
             .slice(0, this.maxChunksPerDoc);
 
         const content = chunksToShow.map(chunk => {
             const preview = this.truncateText(chunk.content || '', 100);
-            const location = chunk.page_number 
-                ? `Page ${chunk.page_number}` 
+            const location = chunk.page_number
+                ? `Page ${chunk.page_number}`
                 : `Section ${chunk.chunk_index + 1}`;
-            
+
             return `
                 <div class="tooltip-chunk">
                     <div class="tooltip-chunk-location">${location}</div>
@@ -217,8 +360,8 @@ class CitationsComponent {
         tooltip.innerHTML = `
             <div class="tooltip-header">${docGroup.title}</div>
             <div class="tooltip-chunks">${content}</div>
-            ${docGroup.chunks.length > this.maxChunksPerDoc ? 
-                `<div class="tooltip-footer">+${docGroup.chunks.length - this.maxChunksPerDoc} more sections</div>` : 
+            ${docGroup.chunks.length > this.maxChunksPerDoc ?
+                `<div class="tooltip-footer">+${docGroup.chunks.length - this.maxChunksPerDoc} more sections</div>` :
                 ''}
         `;
 
@@ -233,7 +376,7 @@ class CitationsComponent {
     positionTooltip(tooltip, target) {
         const targetRect = target.getBoundingClientRect();
         const tooltipRect = tooltip.getBoundingClientRect();
-        
+
         let top = targetRect.bottom + 10;
         let left = targetRect.left;
 
@@ -241,7 +384,7 @@ class CitationsComponent {
         if (left + tooltipRect.width > window.innerWidth) {
             left = window.innerWidth - tooltipRect.width - 10;
         }
-        
+
         if (top + tooltipRect.height > window.innerHeight) {
             top = targetRect.top - tooltipRect.height - 10;
         }
@@ -286,12 +429,16 @@ class CitationsComponent {
     }
 
     /**
-     * Sort document groups: DocumentSense first, then by similarity
+     * Sort document groups: Prediction Market first, then DocumentSense, then by similarity
      * @param {Array} docGroups - Array of document groups
      * @returns {Array} Sorted document groups
      */
     sortDocGroups(docGroups) {
         return docGroups.sort((a, b) => {
+            const aIsPM = this.isPredictionMarket(a);
+            const bIsPM = this.isPredictionMarket(b);
+            if (aIsPM && !bIsPM) return -1;
+            if (!aIsPM && bIsPM) return 1;
             const aIsDS = a.source === 'documentsense' || (a.title && a.title.startsWith('DocumentSense:'));
             const bIsDS = b.source === 'documentsense' || (b.title && b.title.startsWith('DocumentSense:'));
             if (aIsDS && !bIsDS) return -1;

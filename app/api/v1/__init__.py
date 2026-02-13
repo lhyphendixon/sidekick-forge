@@ -27,6 +27,7 @@ from .diagnostics import router as diagnostics_router
 from .content_catalyst import router as content_catalyst_router
 from .lingua import router as lingua_router
 from .documentsense import router as documentsense_router
+from .image_catalyst import router as image_catalyst_router
 from .wizard import router as wizard_router
 
 # Create main API router
@@ -56,6 +57,7 @@ api_router.include_router(diagnostics_router)
 api_router.include_router(content_catalyst_router)
 api_router.include_router(lingua_router)
 api_router.include_router(documentsense_router)
+api_router.include_router(image_catalyst_router)
 api_router.include_router(wizard_router)
 
 __all__ = ["api_router"]

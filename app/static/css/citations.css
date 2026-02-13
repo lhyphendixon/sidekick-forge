@@ -208,6 +208,155 @@
     color: rgba(255, 255, 255, 0.8);
 }
 
+/* Prediction Market Citation Styling - Purple/indigo theme */
+.citation-item.citation-prediction-market {
+    background: linear-gradient(135deg, #6366f1, #7c3aed);
+    border-color: #6366f1;
+    cursor: pointer;
+}
+
+.dark .citation-item.citation-prediction-market,
+[data-theme="dark"] .citation-item.citation-prediction-market {
+    background: linear-gradient(135deg, #6366f1, #7c3aed);
+    border-color: #6366f1;
+}
+
+.citation-item.citation-prediction-market:hover {
+    background: linear-gradient(135deg, #5558e6, #7031d8);
+    border-color: #5558e6;
+    transform: translateY(-1px);
+}
+
+.dark .citation-item.citation-prediction-market:hover,
+[data-theme="dark"] .citation-item.citation-prediction-market:hover {
+    background: linear-gradient(135deg, #5558e6, #7031d8);
+}
+
+/* PM Header */
+.citation-item.citation-prediction-market .pm-header {
+    cursor: pointer;
+    user-select: none;
+}
+
+.citation-item.citation-prediction-market .pm-icon {
+    color: rgba(255, 255, 255, 0.9);
+    flex-shrink: 0;
+}
+
+.citation-item.citation-prediction-market .citation-link {
+    color: white;
+    font-weight: 600;
+}
+
+.citation-item.citation-prediction-market .citation-link:hover {
+    color: white;
+    opacity: 0.9;
+    text-decoration: none;
+}
+
+.dark .citation-item.citation-prediction-market .citation-link,
+[data-theme="dark"] .citation-item.citation-prediction-market .citation-link {
+    color: white;
+}
+
+.citation-item.citation-prediction-market .citation-domain {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.75rem;
+}
+
+.dark .citation-item.citation-prediction-market .citation-domain,
+[data-theme="dark"] .citation-item.citation-prediction-market .citation-domain {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.citation-item.citation-prediction-market .pm-chevron {
+    color: rgba(255, 255, 255, 0.7);
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+/* PM Expandable Panel */
+.pm-panel {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.pm-markets {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pm-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+}
+
+.pm-row-label {
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 0.8rem;
+    font-weight: 500;
+    min-width: 100px;
+    max-width: 140px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+}
+
+.pm-row-bar-wrap {
+    flex: 1;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+    overflow: hidden;
+    min-width: 40px;
+}
+
+.pm-row-bar {
+    height: 100%;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 3px;
+    transition: width 0.4s ease;
+}
+
+.pm-row-prob {
+    color: white;
+    font-size: 0.8rem;
+    font-weight: 700;
+    min-width: 40px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.pm-row-vol {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.7rem;
+    min-width: 45px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.pm-footer {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.7rem;
+    font-style: italic;
+}
+
+.pm-empty {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.8rem;
+    padding: 8px 0;
+    font-style: italic;
+}
+
 /* Expand Button - compact inline style */
 .citations-expand-btn {
     margin-top: 4px;
@@ -360,6 +509,16 @@
     .citation-tooltip {
         max-width: calc(100vw - 32px);
         font-size: 0.8rem;
+    }
+
+    .pm-row-label {
+        min-width: 70px;
+        max-width: 100px;
+        font-size: 0.75rem;
+    }
+
+    .pm-row-vol {
+        display: none;
     }
 }
 

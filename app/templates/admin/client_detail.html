@@ -686,7 +686,7 @@
                 </div>
 
                 <div id="rerankingOptions" class="{% if not rerank_enabled %}opacity-50{% endif %}">
-                    {% set rerank_provider = client.settings.get('rerank', {}).get('provider', 'siliconflow') %}
+                    {% set rerank_provider = client.settings.get('rerank', {}).get('provider') %}
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
                         <div>
                             <label class="block text-sm font-medium text-dark-text mb-2">Reranking Provider</label>
@@ -700,7 +700,7 @@
                                 <option value="jina" {% if rerank_provider == 'jina' %}selected{% endif %}>Jina</option>
                             </select>
                         </div>
-                        {% set rerank_model = client.settings.get('rerank', {}).get('model', 'Qwen/Qwen3-Reranker-2B') %}
+                        {% set rerank_model = client.settings.get('rerank', {}).get('model') %}
                         <div>
                             <label class="block text-sm font-medium text-dark-text mb-2">Reranking Model</label>
                             <select id="rerankModel" name="rerank_model"
@@ -710,8 +710,8 @@
                                 <option value="bge-reranker-v2-m3" {% if rerank_model == 'bge-reranker-v2-m3' %}selected{% endif %} data-provider="local">BGE-Reranker-v2-M3 (On-Prem)</option>
                                 <!-- SiliconFlow Models -->
                                 <option value="Qwen/Qwen3-Reranker-0.6B" {% if rerank_model == 'Qwen/Qwen3-Reranker-0.6B' %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-0.6B (Fastest)</option>
-                                <option value="Qwen/Qwen3-Reranker-2B" {% if rerank_model == 'Qwen/Qwen3-Reranker-2B' or not rerank_model %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-2B (Balanced)</option>
-                                <option value="BAAI/bge-reranker-base" {% if rerank_model == 'BAAI/bge-reranker-base' %}selected{% endif %} data-provider="siliconflow">BGE Reranker Base</option>
+                                <option value="Qwen/Qwen3-Reranker-4B" {% if rerank_model == 'Qwen/Qwen3-Reranker-4B' or not rerank_model %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-4B (Balanced)</option>
+                                <option value="Qwen/Qwen3-Reranker-8B" {% if rerank_model == 'Qwen/Qwen3-Reranker-8B' %}selected{% endif %} data-provider="siliconflow">Qwen3-Reranker-8B (Most Accurate)</option>
                                 <!-- Cohere Models -->
                                 <option value="rerank-english-v3.0" {% if rerank_model == 'rerank-english-v3.0' %}selected{% endif %} data-provider="cohere">Rerank English v3.0</option>
                                 <option value="rerank-multilingual-v3.0" {% if rerank_model == 'rerank-multilingual-v3.0' %}selected{% endif %} data-provider="cohere">Rerank Multilingual v3.0</option>
@@ -1161,7 +1161,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function showNotification(type, message) {
     const notification = document.createElement('div');
-    notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg transition-all duration-300 transform translate-x-0 ${
+    notification.className = `fixed top-4 right-4 z-50 px-6 py-3 rounded-lg shadow-lg transition-all duration-300 transform translate-x-0 ${
         type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
     }`;
     notification.innerHTML = `

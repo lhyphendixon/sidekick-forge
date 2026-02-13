@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import unicodedata
@@ -1005,6 +1006,9 @@ class SidekickAgent(voice.Agent):
                         if self._client_id:
                             row["client_id"] = self._client_id
 
+                        # Inject tool insight citations (e.g. prediction market)
+                        self._inject_tool_insight_citations()
+
                         # Add citations if available
                         if self._current_citations:
                             row["citations"] = self._current_citations
@@ -1126,6 +1130,47 @@ class SidekickAgent(voice.Agent):
         # are already set directly by entrypoint.py before this method is called,
         # so we don't need to extract them here
     
+    def _inject_tool_insight_citations(self) -> None:
+        """Inject synthetic citations from tool results (e.g. prediction market data)."""
+        tool_results = getattr(self, "_latest_tool_results", None)
+        if not tool_results:
+            return
+        for result in tool_results:
+            if not isinstance(result, dict):
+                continue
+            tool_name = result.get("tool") or result.get("slug") or result.get("name") or ""
+            if tool_name != "prediction_market":
+                continue
+            # Extract structured market data from the tool result
+            market_data = result.get("structured_output") or {}
+            if not market_data:
+                raw = result.get("output") or result.get("raw_call_output")
+                if isinstance(raw, str):
+                    try:
+                        market_data = json.loads(raw)
+                    except Exception:
+                        continue
+                elif isinstance(raw, dict):
+                    market_data = raw
+            markets = market_data.get("markets")
+            if not markets:
+                continue
+            self._current_citations.append({
+                "doc_id": "prediction_market",
+                "title": "Prediction Market Insight",
+                "source_url": "https://polymarket.com",
+                "source_type": "prediction_market",
+                "source": "prediction_market",
+                "chunk_index": 0,
+                "content": json.dumps({
+                    "query": market_data.get("query", ""),
+                    "markets": markets,
+                    "source": market_data.get("source", "Polymarket"),
+                }),
+                "similarity": 1.0,
+            })
+            logger.info(f"📊 Injected prediction market insight citation ({len(markets)} markets)")
+
     async def _handle_assistant_transcript(self, text: str) -> None:
         """Store assistant transcript with citations if available."""
         try:
@@ -1136,9 +1181,12 @@ class SidekickAgent(voice.Agent):
                 logger.debug("Skipping duplicate assistant transcript (already streamed)")
                 return
             
+            # Inject tool insight citations (e.g. prediction market)
+            self._inject_tool_insight_citations()
+
             # Include citations if available
             citations = self._current_citations if self._citations_enabled else None
-            
+
             if self._supabase_client and self._conversation_id:
                 turn_id = self._current_turn_id or str(uuid.uuid4())
                 tool_results = getattr(self, "_latest_tool_results", None) or None

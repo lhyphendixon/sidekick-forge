@@ -62,6 +62,78 @@ class ToolsService:
                 },
                 "enabled": False,
             },
+            {
+                "name": "IMAGE CATALYST",
+                "slug": "image-catalyst",
+                "description": "Generate images using AI. Choose Thumbnail/Promotional mode for polished marketing images (GPT Image 1.5) or General mode for creative imagery (FLUX.2 Dev). Upload reference images for guided generation.",
+                "type": "image_catalyst",
+                "scope": "global",
+                "client_id": None,
+                "icon_url": "/static/images/abilities/image-catalyst.svg",
+                "config": {
+                    "system_prompt_instructions": (
+                        "IMPORTANT: You have access to the Image Catalyst tool for generating AI images.\n\n"
+                        "WHEN TO USE THIS TOOL (use it immediately when ANY of these apply):\n"
+                        "1. User asks to \"create\", \"generate\", \"make\", or \"design\" an image, picture, graphic, or visual\n"
+                        "2. User wants a thumbnail, banner, logo, promotional image, or marketing graphic\n"
+                        "3. User wants artwork, illustrations, concept art, or creative imagery\n"
+                        "4. User asks for any kind of image generation or visual creation\n\n"
+                        "DO NOT ask clarifying questions - call the tool immediately. The widget UI will collect details from the user.\n\n"
+                        "TWO MODES:\n"
+                        "- 'thumbnail': For polished marketing/promotional images (logos, banners, thumbnails)\n"
+                        "- 'general': For creative artwork, illustrations, concept art, general imagery\n\n"
+                        "CRITICAL: When you want to generate an image, call the image-catalyst function tool immediately. "
+                        "Do not describe what you would do - actually call the tool."
+                    ),
+                    "modes": {
+                        "thumbnail": {
+                            "model_air": "openai:4@1",
+                            "label": "Thumbnail / Promotional",
+                            "description": "Polished marketing images using GPT Image 1.5",
+                            "dimensions": ["1024x1024", "1536x1024", "1024x1536"],
+                            "quality_tiers": ["low", "medium", "high"],
+                            "supports_reference_images": True,
+                        },
+                        "general": {
+                            "model_air": "runware:400@1",
+                            "label": "General Images",
+                            "description": "Creative and general imagery using FLUX.2 Dev",
+                            "default_steps": 28,
+                            "default_cfg_scale": 3.5,
+                            "supports_seed_image": True,
+                        },
+                    },
+                    "max_reference_image_size_mb": 10,
+                    "supported_reference_formats": ["png", "jpg", "jpeg", "webp"],
+                },
+                "enabled": True,
+            },
+            {
+                "name": "Prediction Market Insights",
+                "slug": "prediction_market",
+                "description": "Search Polymarket prediction markets for real-time probability data on future events, elections, policy changes, and more. Provides current market probabilities backed by real trading volume.",
+                "type": "prediction_market",
+                "scope": "global",
+                "client_id": None,
+                "icon_url": "/static/images/abilities/prediction-market.svg",
+                "config": {
+                    "system_prompt_instructions": (
+                        "You have access to the Prediction Market Insights tool which queries real-money prediction markets on Polymarket.\n\n"
+                        "WHEN TO USE THIS TOOL:\n"
+                        "- When the user asks about the likelihood or probability of future events\n"
+                        "- When discussing predictions about elections, policy, technology, markets, or world events\n"
+                        "- When the user wants data-backed forecasts rather than speculation\n"
+                        "- When the conversation touches on uncertain future outcomes\n\n"
+                        "HOW TO USE RESULTS:\n"
+                        "- Present probabilities naturally (e.g., 'prediction markets currently give this a 72% chance')\n"
+                        "- Note that probabilities reflect the wisdom of traders with real money at stake\n"
+                        "- Higher trading volume indicates stronger consensus\n"
+                        "- Always mention this data comes from Polymarket prediction markets\n"
+                    ),
+                    "default_limit": 5,
+                },
+                "enabled": False,
+            },
         ]
 
         try:
@@ -91,6 +163,8 @@ class ToolsService:
         "asana_tasks": "/static/images/abilities/asana.svg",
         "helpscout_tickets": "/static/images/abilities/helpscout.svg",
         "lingua": "/static/images/abilities/lingua.svg",
+        "image-catalyst": "/static/images/abilities/image-catalyst.svg",
+        "prediction_market": "/static/images/abilities/prediction-market.svg",
     }
 
     @staticmethod

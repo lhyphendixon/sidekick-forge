@@ -13,7 +13,13 @@
             </div>
             {% if user.role in ['superadmin','admin'] %}
             <div class="flex gap-2">
-                {% if can_create_sidekick %}
+                {% if provisioning_in_progress %}
+                <button disabled
+                        class="btn-primary px-4 py-2 rounded text-sm font-medium transition-all opacity-50 cursor-not-allowed"
+                        title="Please wait while your account is being set up">
+                    Create Sidekick
+                </button>
+                {% elif can_create_sidekick %}
                 <button hx-get="/admin/wizard/modal"
                         hx-target="#modal-container"
                         hx-swap="innerHTML"
@@ -34,12 +40,37 @@
         </div>
     </div>
 
+    <!-- Provisioning In Progress Banner -->
+    {% if provisioning_in_progress %}
+    <div id="provisioning-banner" class="mb-6 bg-dark-surface rounded-lg border border-brand-orange/40 p-5">
+        <div class="flex items-center gap-4">
+            <div class="flex-shrink-0">
+                <svg class="w-8 h-8 text-brand-orange animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+            <div>
+                <h3 class="text-lg font-semibold text-dark-text">Setting up your account</h3>
+                <p class="text-dark-text-secondary text-sm mt-1">
+                    We're creating your dedicated environment. This usually takes 1-2 minutes.
+                    This page will automatically refresh when ready.
+                </p>
+            </div>
+        </div>
+    </div>
+    <script>
+        // Auto-refresh every 10 seconds while provisioning
+        setTimeout(function() { window.location.reload(); }, 10000);
+    </script>
+    {% endif %}
+
     <!-- Client Filter and Agent Stats -->
-    {% if user.role in ['superadmin','admin'] %}
+    {% if user.is_super_admin %}
     <div class="mb-6 bg-dark-surface rounded-lg border border-dark-border p-4">
         <div class="flex items-center justify-between">
             <div class="flex items-center space-x-4">
-                <select id="clientFilter" onchange="filterByClient()" 
+                <select id="clientFilter" onchange="filterByClient()"
                         class="bg-dark-elevated border-dark-border text-dark-text rounded-md shadow-sm px-3 py-2 border focus:ring-brand-teal focus:border-brand-teal">
                     <option value="">All Clients</option>
                     {% for client in clients %}

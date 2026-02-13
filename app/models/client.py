@@ -65,6 +65,11 @@ class APIKeys(BaseModel):
     # Transcription Providers
     assemblyai_api_key: Optional[str] = None
 
+    # Prediction Market Providers
+    polymarket_api_key: Optional[str] = None
+    polymarket_api_secret: Optional[str] = None
+    polymarket_passphrase: Optional[str] = None
+
 
 class EmbeddingSettings(BaseModel):
     """Embedding configuration - NO DEFAULTS to enforce explicit configuration"""
@@ -77,8 +82,8 @@ class EmbeddingSettings(BaseModel):
 class RerankSettings(BaseModel):
     """Reranking configuration"""
     enabled: bool = Field(default=False, description="Enable reranking")
-    provider: Optional[str] = Field(default="siliconflow", description="Rerank provider")
-    model: Optional[str] = Field(default="BAAI/bge-reranker-base", description="Rerank model")
+    provider: Optional[str] = Field(default=None, description="Rerank provider (must be explicitly configured)")
+    model: Optional[str] = Field(default=None, description="Rerank model (must be explicitly configured)")
     top_k: int = Field(default=3, description="Top K results to return")
     candidates: int = Field(default=20, description="Number of candidates to rerank")
 

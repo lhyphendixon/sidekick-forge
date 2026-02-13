@@ -135,10 +135,27 @@ class DocumentProcessor:
             _has_valid_embedding = _existing_emb and _existing_emb.get('provider')
             if isinstance(client_settings, dict) and not _has_valid_embedding:
                 # Check uses_platform_keys from top-level client column (not additional_settings)
+                # Note: uses_platform_keys is not on the ClientInDB model, so we query the DB directly
                 if isinstance(client, dict):
                     uses_platform = client.get('uses_platform_keys', False)
                 else:
-                    uses_platform = getattr(client, 'uses_platform_keys', False)
+                    uses_platform = getattr(client, 'uses_platform_keys', None)
+                if uses_platform is None:
+                    # Field not on model — query the raw DB column
+                    try:
+                        _platform_sb = self._ensure_supabase()
+                        if _platform_sb is None:
+                            # Fallback: create a fresh client for this query
+                            from app.config import settings as _app_settings
+                            from supabase import create_client as _create_client
+                            _platform_sb = _create_client(_app_settings.supabase_url, _app_settings.supabase_service_role_key)
+                        _upk_result = _platform_sb.table('clients').select(
+                            'uses_platform_keys'
+                        ).eq('id', client_id).single().execute()
+                        uses_platform = (_upk_result.data or {}).get('uses_platform_keys', False)
+                    except Exception as _exc:
+                        logger.warning(f"Failed to check uses_platform_keys for client {client_id}: {_exc}")
+                        uses_platform = False
                 if uses_platform:
                     client_settings['embedding'] = {
                         "provider": "siliconflow",
@@ -146,11 +163,34 @@ class DocumentProcessor:
                         "conversation_model": "Qwen/Qwen3-Embedding-4B",
                         "dimension": 1024,
                     }
+                    # Also inject platform API keys so the embedding provider has credentials
+                    try:
+                        _pk_sb = self._ensure_supabase() or _platform_sb
+                        platform_keys_result = _pk_sb.table(
+                            'platform_api_keys'
+                        ).select('key_name, key_value').eq('is_active', True).execute()
+                        if platform_keys_result.data:
+                            if 'api_keys' not in client_settings:
+                                client_settings['api_keys'] = {}
+                            for row in platform_keys_result.data:
+                                k, v = row.get('key_name'), row.get('key_value')
+                                if k and v and not client_settings['api_keys'].get(k):
+                                    client_settings['api_keys'][k] = v
+                            logger.info(f"Injected platform API keys for client {client_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to load platform API keys for document embedding: {e}")
                     logger.info(f"Injected fallback embedding config for platform-key client {client_id}")
 
             if not supabase_config:
-                logger.warning(f"Client {client_id} missing Supabase credentials")
-                return None, client_settings or {}
+                logger.warning(
+                    f"Client {client_id} missing Supabase credentials — "
+                    "falling back to platform Supabase for document storage"
+                )
+                supabase_config = {
+                    "url": app_settings.supabase_url,
+                    "service_role_key": app_settings.supabase_service_role_key,
+                    "_fallback": True,
+                }
 
             # Re-use cached connection if credentials match
             supabase_url = supabase_config["url"]

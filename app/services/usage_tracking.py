@@ -23,6 +23,7 @@ class QuotaType(Enum):
     VOICE = "voice"
     TEXT = "text"
     EMBEDDING = "embedding"
+    IMAGE = "image"
 
 
 @dataclass
@@ -71,6 +72,17 @@ class VoiceQuotaStatus(QuotaStatus):
 
 
 @dataclass
+class ImageCostStatus:
+    """Image generation cost tracking (dollar-based, not integer quota)."""
+    cost_used: float
+    generation_count: int
+
+    @property
+    def display_cost(self) -> str:
+        return f"${self.cost_used:.4f}"
+
+
+@dataclass
 class AgentUsageRecord:
     """Per-agent usage record with all quota types"""
     agent_id: str
@@ -79,6 +91,7 @@ class AgentUsageRecord:
     voice: Optional[VoiceQuotaStatus] = None
     text: Optional[QuotaStatus] = None
     embedding: Optional[QuotaStatus] = None
+    image: Optional[ImageCostStatus] = None
 
 
 @dataclass
@@ -90,6 +103,7 @@ class ClientAggregatedUsage:
     voice: VoiceQuotaStatus
     text: QuotaStatus
     embedding: QuotaStatus
+    image: Optional[ImageCostStatus] = None
 
 
 class UsageTrackingService:
@@ -786,6 +800,55 @@ class UsageTrackingService:
         is_within = not client_status.is_exceeded
         return (is_within, client_status)
 
+    async def increment_agent_image_cost(
+        self,
+        client_id: str,
+        agent_id: str,
+        cost: float,
+    ) -> ImageCostStatus:
+        """
+        Increment image generation cost for a specific agent using ATOMIC database operation.
+        Unlike other usage types, image costs are dollar amounts (not integer quotas).
+        No quota enforcement -- costs are tracked for visibility only.
+        """
+        self._ensure_initialized()
+
+        try:
+            result = self.supabase.rpc(
+                'increment_agent_image_cost',
+                {
+                    'p_client_id': client_id,
+                    'p_agent_id': agent_id,
+                    'p_cost': float(cost),
+                    'p_count': 1,
+                }
+            ).execute()
+
+            if result.data:
+                data = result.data[0]
+                logger.info(
+                    "Image cost tracked: agent=%s, cost=$%.4f, total=$%.4f, count=%d",
+                    agent_id, cost,
+                    float(data.get("new_cost", 0)),
+                    int(data.get("new_count", 0)),
+                )
+                return ImageCostStatus(
+                    cost_used=float(data.get("new_cost", 0)),
+                    generation_count=int(data.get("new_count", 0)),
+                )
+        except Exception as e:
+            logger.warning("Atomic image cost increment RPC failed, using fallback: %s", e)
+            record = await self.get_or_create_agent_usage_record(client_id, agent_id)
+            new_cost = float(record.get("image_generation_cost", 0) or 0) + cost
+            new_count = int(record.get("image_generation_count", 0) or 0) + 1
+            self.supabase.table("agent_usage").update({
+                "image_generation_cost": new_cost,
+                "image_generation_count": new_count,
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", record["id"]).execute()
+
+            return ImageCostStatus(cost_used=new_cost, generation_count=new_count)
+
     async def get_all_agents_usage(
         self,
         client_id: str,
@@ -835,6 +898,9 @@ class UsageTrackingService:
             embed_remaining = max(0, embed_limit - embed_used) if embed_limit > 0 else 0
             embed_percent = (embed_used / embed_limit * 100) if embed_limit > 0 else 0
 
+            image_cost = float(usage.get("image_generation_cost", 0) or 0)
+            image_count = int(usage.get("image_generation_count", 0) or 0)
+
             records.append(AgentUsageRecord(
                 agent_id=agent_id,
                 agent_name=agent_info.get("name", ""),
@@ -863,6 +929,10 @@ class UsageTrackingService:
                     is_exceeded=embed_limit > 0 and embed_used >= embed_limit,
                     is_warning=embed_limit > 0 and embed_percent >= 80,
                 ),
+                image=ImageCostStatus(
+                    cost_used=image_cost,
+                    generation_count=image_count,
+                ) if image_count > 0 else None,
             ))
 
         return records
@@ -891,7 +961,7 @@ class PlatformKeyService:
         "rerank": {
             "enabled": True,
             "provider": "siliconflow",
-            "model": "Qwen/Qwen3-Reranker-2B",
+            "model": "Qwen/Qwen3-Reranker-4B",
         }
     }
 

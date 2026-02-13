@@ -344,6 +344,7 @@ class WizardCompletionService:
             "usersense": "usersense",
             "documentsense": "documentsense",
             "content_catalyst": "content_catalyst",
+            "image_catalyst": "image-catalyst",
         }
 
         # Filter to only enabled abilities

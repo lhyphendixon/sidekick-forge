@@ -65,6 +65,20 @@ except Exception as exc:  # pragma: no cover
     HelpScoutOAuthService = None  # type: ignore
 
 
+# Prediction Market ability module
+try:
+    from app.agent_modules.abilities.prediction_market import (  # type: ignore
+        PredictionMarketConfigError,
+        build_prediction_market_tool,
+    )
+except Exception as exc:  # pragma: no cover - agent runtime runs standalone
+    logging.getLogger(__name__).warning(
+        "Failed to import Prediction Market ability module: %s", exc,
+    )
+    build_prediction_market_tool = None
+    PredictionMarketConfigError = None  # type: ignore
+
+
 def _is_glm_reasoning_model(model_name: str) -> bool:
     """
     Check if the model is a GLM model that supports the reasoning toggle.
@@ -161,6 +175,10 @@ class ToolRegistry:
                     ft = self._build_content_catalyst_tool(t)
                 elif ttype == "lingua":
                     ft = self._build_lingua_tool(t)
+                elif ttype == "image_catalyst":
+                    ft = self._build_image_catalyst_tool(t)
+                elif ttype == "prediction_market":
+                    ft = self._build_prediction_market_tool(t)
                 elif ttype == "scrape_url":
                     ft = self._build_scrape_url_tool(t)
                 elif ttype == "builtin":
@@ -1803,11 +1821,13 @@ Do NOT use this for general knowledge questions - only for document-specific que
         cfg = dict(t.get("config") or {})
         description = t.get("description") or (
             "Trigger the Content Catalyst article generation widget. "
-            "When the user asks you to write an article, blog post, or generate content, "
-            "use this tool to open the Content Catalyst configuration widget. "
+            "When the user wants to write an article, blog post, or generate content, use this tool. "
+            "Also use this tool when the user mentions 'Content Catalyst' by name. "
             "The user will configure their preferences (topic, source type, word count, style) "
-            "directly in the widget interface and submit from there. "
-            "Call this tool with trigger_widget=true and an optional suggested_topic from the conversation."
+            "directly in the widget interface. "
+            "Call this tool when the user mentions writing content, creating articles, "
+            "generating blog posts, Content Catalyst, or any content creation request. "
+            "Do not ask clarifying questions — call the tool immediately."
         )
 
         # Get client_id from runtime context or config
@@ -1952,6 +1972,114 @@ Do NOT use this for general knowledge questions - only for document-specific que
             return f"WIDGET_TRIGGER:lingua:{suggested_context}"
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_image_catalyst_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Image Catalyst tool for AI image generation."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "image-catalyst"
+        cfg = dict(t.get("config") or {})
+        description = t.get("description") or (
+            "Trigger the Image Catalyst AI image generation widget. "
+            "When the user wants to create, generate, or design an image, use this tool. "
+            "Two modes are available: "
+            "1) Thumbnail/Promotional - for polished marketing images, logos, banners, thumbnails "
+            "2) General - for creative artwork, illustrations, concept art, and general imagery. "
+            "The user can upload reference images and describe what they need "
+            "directly in the widget interface. "
+            "Call this tool when the user mentions creating images, generating visuals, "
+            "designing graphics, making thumbnails, or any image creation request."
+        )
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_widget": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Set to true to trigger the Image Catalyst widget UI",
+                    },
+                    "suggested_mode": {
+                        "type": "string",
+                        "enum": ["thumbnail", "general"],
+                        "description": "Suggested generation mode based on conversation context. Use 'thumbnail' for marketing/promotional images, 'general' for creative/artistic images.",
+                    },
+                    "suggested_prompt": {
+                        "type": "string",
+                        "description": "Optional image description suggestion based on the conversation",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            """Trigger the Image Catalyst widget UI for image generation."""
+            try:
+                self._logger.info("🖼️ Image Catalyst widget trigger invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+
+            suggested_mode = kwargs.get("suggested_mode", "general")
+            suggested_prompt = kwargs.get("suggested_prompt", "")
+
+            widget_trigger = {
+                "widget_type": "image_catalyst",
+                "suggested_mode": suggested_mode,
+                "suggested_prompt": suggested_prompt,
+                "message": "Opening Image Catalyst...",
+            }
+
+            self._emit_tool_result(
+                slug=slug,
+                tool_type="image_catalyst",
+                success=True,
+                output="Widget triggered",
+                raw_output=widget_trigger,
+            )
+
+            return f"WIDGET_TRIGGER:image_catalyst:{suggested_mode}:{suggested_prompt}"
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_prediction_market_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Prediction Market tool for querying Polymarket."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "prediction_market"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            for key in (slug, t.get("id"), t.get("name")):
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        # Resolve CLOB API credentials (api_key, secret, passphrase)
+        for cred_key in ("polymarket_api_key", "polymarket_api_secret", "polymarket_passphrase"):
+            value = merged_cfg.get(cred_key)
+            if not value:
+                value = self._api_keys.get(cred_key)
+            if not value:
+                value = os.getenv(cred_key.upper())
+            if value:
+                merged_cfg[cred_key] = value
+
+        if build_prediction_market_tool is None:
+            self._logger.warning("Prediction Market ability module not available; skipping")
+            return None
+
+        return build_prediction_market_tool(t, merged_cfg)
 
     def _build_scrape_url_tool(self, t: Dict[str, Any]) -> Any:
         """

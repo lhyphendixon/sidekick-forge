@@ -13,7 +13,7 @@
   </div>
 
   <div class="mb-4 flex gap-2 items-center flex-wrap">
-    {% if not user.get('is_adventurer_only') %}
+    {% if user.is_super_admin %}
     <select id="clientFilter" data-default="{{ default_client_id or '' }}" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="onClientFilterChange()">
       <option value="">All clients</option>
       {% for client in clients or [] %}
@@ -166,9 +166,14 @@
       <div id="ct_perplexity_client_panel" class="hidden text-sm text-dark-text-secondary">
         Client-specific Perplexity API keys can be managed from the Clients page after assigning this ability.
       </div>
-      <div class="flex justify-end gap-2">
-        <button class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="closeCreateToolModal()">Cancel</button>
-        <button class="btn-primary px-4 py-2 rounded" onclick="createTool()">Create</button>
+      <div class="flex items-center justify-between">
+        <label class="flex items-center gap-2 text-sm text-dark-text">
+          <input type="checkbox" id="ct_admin_only" class="w-4 h-4" /> Admin Only
+        </label>
+        <div class="flex gap-2">
+          <button class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="closeCreateToolModal()">Cancel</button>
+          <button class="btn-primary px-4 py-2 rounded" onclick="createTool()">Create</button>
+        </div>
       </div>
     </div>
   </div>
@@ -286,9 +291,14 @@
         <div id="et_perplexity_client_notice" class="text-xs text-brand-salmon hidden">Select a client using the page filter or the dropdown above to manage this Perplexity API key.</div>
       </div>
       <div class="flex items-center justify-between">
-        <label class="flex items-center gap-2 text-sm text-dark-text">
-          <input type="checkbox" id="et_enabled" class="w-4 h-4" /> Enabled
-        </label>
+        <div class="flex items-center gap-4">
+          <label class="flex items-center gap-2 text-sm text-dark-text">
+            <input type="checkbox" id="et_enabled" class="w-4 h-4" /> Enabled
+          </label>
+          <label class="flex items-center gap-2 text-sm text-dark-text">
+            <input type="checkbox" id="et_admin_only" class="w-4 h-4" /> Admin Only
+          </label>
+        </div>
         <div class="flex gap-2">
           <button class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="closeEditToolModal()">Cancel</button>
           <button class="btn-primary px-4 py-2 rounded" onclick="updateTool()">Save Changes</button>
@@ -1221,11 +1231,13 @@ function createToolCard(t){
     triggerBadge = `<span class="text-xs px-2 py-0.5 rounded bg-brand-salmon/20 text-brand-salmon">${trigger === 'post_session' ? 'Post-Session' : 'Scheduled'}</span>`;
   }
 
+  const adminOnlyBadge = t.admin_only ? `<span class="text-xs px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400">Admin Only</span>` : '';
   body.innerHTML = `
     <div class="flex items-center gap-2 flex-wrap">
       <span class="text-dark-text font-semibold">${escapeHtml(t.name)}</span>
       <span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.type}</span>
       <span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.scope}</span>
+      ${adminOnlyBadge}
       ${triggerBadge}
     </div>
     <div class="text-sm text-dark-text-secondary mt-1">${escapeHtml(t.description||'')}</div>`;
@@ -1342,7 +1354,8 @@ async function createTool(){
     alert('Select a client for client-scoped abilities.');
     return;
   }
-  const body = { name, slug, description, type, scope, icon_url, config, enabled: true, execution_phase };
+  const admin_only = document.getElementById('ct_admin_only').checked;
+  const body = { name, slug, description, type, scope, icon_url, config, enabled: true, admin_only, execution_phase };
   if(scope === 'client'){
     body.client_id = clientId;
   }
@@ -1429,6 +1442,7 @@ function openEditToolModal(id){
   document.getElementById('et_scope').value = tool.scope || 'client';
   document.getElementById('et_execution_phase').value = tool.execution_phase || 'active';
   document.getElementById('et_enabled').checked = tool.enabled !== false;
+  document.getElementById('et_admin_only').checked = !!tool.admin_only;
   const clientSelect = document.getElementById('et_client_id');
   if(clientSelect){ clientSelect.value = tool.client_id || ''; }
   handleScopeChange('et');
@@ -1457,6 +1471,7 @@ async function updateTool(){
   const description = document.getElementById('et_desc').value.trim();
   const icon_url = document.getElementById('et_icon').value.trim();
   const enabled = document.getElementById('et_enabled').checked;
+  const admin_only = document.getElementById('et_admin_only').checked;
   const execution_phase = document.getElementById('et_execution_phase').value;
   let config = {};
   try{
@@ -1465,7 +1480,7 @@ async function updateTool(){
     alert(err.message);
     return;
   }
-  const payload = { name, description, icon_url, config, enabled, execution_phase };
+  const payload = { name, description, icon_url, config, enabled, admin_only, execution_phase };
   // Add trigger_config for ambient abilities
   if(execution_phase === 'ambient'){
     const triggerConfig = getTriggerConfig('et');

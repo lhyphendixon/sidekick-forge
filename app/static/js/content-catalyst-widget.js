@@ -49,7 +49,7 @@ class ContentCatalystWidget extends BaseWidget {
         this.element.innerHTML = `
             <div class="cc-header p-4 border-b border-white/10">
                 <div class="flex items-center gap-3">
-                    <div class="cc-icon w-10 h-10 rounded-xl bg-gradient-to-br from-brand-teal to-brand-orange flex items-center justify-center text-xl">
+                    <div class="cc-icon w-10 h-10 rounded-xl bg-gradient-to-br from-brand-teal to-brand-salmon flex items-center justify-center text-xl">
                         📝
                     </div>
                     <div>
@@ -178,7 +178,7 @@ class ContentCatalystWidget extends BaseWidget {
             </div>
 
             <div class="cc-footer p-4 border-t border-white/10">
-                <button type="button" id="cc-submit-btn" class="w-full py-3 px-6 rounded-xl bg-gradient-to-r from-brand-teal to-brand-orange text-white font-semibold hover:opacity-90 transition-opacity flex items-center justify-center gap-2">
+                <button type="button" id="cc-submit-btn" class="w-full py-3 px-6 rounded-xl bg-gradient-to-r from-brand-teal to-brand-salmon text-white font-semibold hover:opacity-90 transition-opacity flex items-center justify-center gap-2">
                     <span>Generate Articles</span>
                     <span class="cc-submit-arrow">→</span>
                 </button>
@@ -691,7 +691,7 @@ class ContentCatalystWidget extends BaseWidget {
         this.element.innerHTML = `
             <div class="cc-header p-4 border-b border-white/10">
                 <div class="flex items-center gap-3">
-                    <div class="cc-icon w-10 h-10 rounded-xl bg-gradient-to-br from-brand-teal to-brand-orange flex items-center justify-center text-xl animate-pulse">
+                    <div class="cc-icon w-10 h-10 rounded-xl bg-gradient-to-br from-brand-teal to-brand-salmon flex items-center justify-center text-xl animate-pulse">
                         ⚡
                     </div>
                     <div>

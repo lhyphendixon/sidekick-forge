@@ -624,8 +624,19 @@ class KnowledgeBaseManager {
                 this.clients = Array.isArray(clients) ? clients : [];
                 
                 const isAdventurer = {{ 'true' if user.get('is_adventurer_only') else 'false' }};
+                const isSuperAdmin = {{ 'true' if user.is_super_admin else 'false' }};
+                const primaryClientId = '{{ user.primary_client_id or "" }}';
 
-                if (isAdventurer && this.clients.length >= 1) {
+                if (!isSuperAdmin && primaryClientId) {
+                    // Non-superadmin: auto-select primary client, no dropdown
+                    const match = this.clients.find(c => c.id === primaryClientId);
+                    if (match) {
+                        console.log('Auto-selecting primary client for non-superadmin:', match);
+                        this.currentClient = primaryClientId;
+                        await this.loadAgents();
+                        await this.loadDocuments();
+                    }
+                } else if (isAdventurer && this.clients.length >= 1) {
                     // Adventurer tier: auto-select their single client, no dropdown
                     console.log('Adventurer detected, auto-selecting client:', this.clients[0]);
                     this.currentClient = this.clients[0].id;
@@ -634,17 +645,27 @@ class KnowledgeBaseManager {
                 } else if (this.clients.length > 1) {
                     console.log('Multiple clients detected, showing client selection');
                     this.isMultiClient = true;
+                    // Auto-select primary client if available
+                    const primaryMatch = primaryClientId && this.clients.find(c => c.id === primaryClientId);
+                    if (primaryMatch) {
+                        console.log('Auto-selecting primary client:', primaryMatch);
+                        this.currentClient = primaryClientId;
+                    }
                     this.showClientSelection();
-                    // No default - user must select from dropdown
-                    this.currentClient = null;
-                    this.showNotification('Please select a client from the dropdown', 'info');
+                    if (primaryMatch) {
+                        await this.loadAgents();
+                        await this.loadDocuments();
+                    } else {
+                        this.currentClient = null;
+                        this.showNotification('Please select a client from the dropdown', 'info');
+                    }
                 } else if (this.clients.length === 1) {
                     console.log('Single client detected:', this.clients[0]);
-                    // Even with single client, require explicit selection
-                    this.currentClient = null;
-                    this.showNotification('Please select the client from the dropdown', 'info');
-                    // Show client selection even for single client to make it clear which client is being used
+                    // Auto-select the single client
+                    this.currentClient = this.clients[0].id;
                     this.showClientSelection();
+                    await this.loadAgents();
+                    await this.loadDocuments();
                 } else {
                     console.log('No clients found');
                     this.showNotification('No clients available. Please contact administrator.', 'error');

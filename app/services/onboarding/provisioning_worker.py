@@ -366,7 +366,7 @@ class ProvisioningWorker:
             "rerank": {
                 "enabled": True,
                 "provider": "siliconflow",
-                "model": "Qwen/Qwen3-Reranker-2B",
+                "model": "Qwen/Qwen3-Reranker-4B",
             }
         }
 
@@ -400,7 +400,7 @@ class ProvisioningWorker:
             "supabase_service_role_key": pool_service_key,
             "supabase_anon_key": pool_anon_key,
             "supabase_project_ref": pool_project_ref,
-            "provisioning_status": "completed",
+            "provisioning_status": "ready",
             "provisioning_completed_at": datetime.utcnow().isoformat(),
             "provisioning_error": None,
         })

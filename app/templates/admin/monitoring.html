@@ -122,8 +122,8 @@
             <option value="30d" {% if period == '30d' %}selected{% endif %}>Last 30 Days</option>
         </select>
 
-        {% if user.role in ['superadmin', 'admin'] and clients|length > 1 %}
-        <!-- Client Filter (Admin Only) -->
+        {% if user.is_super_admin and clients|length > 1 %}
+        <!-- Client Filter (Superadmin Only) -->
         <select id="client-filter"
                 class="bg-dark-elevated border border-dark-border rounded-lg px-3 py-2 text-sm text-dark-text"
                 onchange="updateClientFilter(this.value)">

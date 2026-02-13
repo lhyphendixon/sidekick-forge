@@ -469,7 +469,7 @@
                         <select id="config_cartesia_model" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
                             <option value="sonic-english" {% if (agent.voice_settings.model or latest_config.tts_model) == 'sonic-english' %}selected{% endif %}>sonic-english</option>
                             <option value="sonic-2" {% if (agent.voice_settings.model or latest_config.tts_model) == 'sonic-2' %}selected{% endif %}>sonic-2</option>
-                            <option value="sonic-3" {% if (agent.voice_settings.model or latest_config.tts_model) == 'sonic-3' %}selected{% endif %}>sonic-3</option>
+                            <option value="sonic-3" {% if (agent.voice_settings.model or latest_config.tts_model or 'sonic-3') == 'sonic-3' %}selected{% endif %}>sonic-3</option>
                         </select>
                         <p class="text-xs text-dark-text-secondary mt-2">Cartesia requires an explicit model. Choose one to enable voice.</p>
                     </div>
@@ -552,6 +552,7 @@
                             <option value="forest" {% if sound_settings.ambient_sound == 'forest' %}selected{% endif %}>Forest / Nature</option>
                             <option value="city" {% if sound_settings.ambient_sound == 'city' %}selected{% endif %}>City Ambience</option>
                             <option value="crowded_room" {% if sound_settings.ambient_sound == 'crowded_room' %}selected{% endif %}>Crowded Room</option>
+                            <option value="skyline_soft_reset" {% if sound_settings.ambient_sound == 'skyline_soft_reset' %}selected{% endif %}>Skyline Soft Reset</option>
                         </select>
                         <p class="mt-1 text-xs text-dark-text-secondary">Background ambience that plays continuously during voice/video chat</p>
                     </div>
@@ -1070,6 +1071,15 @@
                         class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text placeholder-dark-text-secondary/50 font-mono text-sm"></textarea>
                     <p class="text-xs text-dark-text-secondary mt-1">The AI will analyze this sample and match its sentence structure, vocabulary, and overall voice.</p>
                 </div>
+
+                <!-- Admin Only Toggle -->
+                <label class="flex items-center gap-3 cursor-pointer border-t border-dark-border pt-4">
+                    <input type="checkbox" id="ccAdminOnly" class="w-5 h-5 rounded border-dark-border text-yellow-500 focus:ring-yellow-500 bg-dark-elevated">
+                    <div>
+                        <span class="text-sm font-medium text-dark-text">Admin Only</span>
+                        <p class="text-xs text-dark-text-secondary">Hidden from subscribers, only available to admin users.</p>
+                    </div>
+                </label>
             </div>
 
             <!-- Footer -->
@@ -1080,6 +1090,83 @@
                 <button onclick="saveContentCatalystConfig()" class="btn-primary px-4 py-2 rounded-lg flex items-center">
                     <i class="bi bi-check-lg mr-2"></i>
                     Save Settings
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Image Catalyst Brand Style Guide Modal -->
+<div id="imageCatalystBrandModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+    <!-- Backdrop -->
+    <div class="fixed inset-0 bg-black/60 backdrop-blur-sm modal-backdrop cursor-pointer" onclick="closeImageCatalystBrandModal()"></div>
+
+    <!-- Modal Content -->
+    <div class="relative min-h-screen flex items-center justify-center p-4 pointer-events-none">
+        <div class="relative bg-dark-surface border border-dark-border rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden pointer-events-auto" onclick="event.stopPropagation()">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-teal to-brand-salmon flex items-center justify-center">
+                        <i class="bi bi-palette text-white"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-dark-text">Image Catalyst Brand Style</h2>
+                        <p class="text-xs text-dark-text-secondary">Configure brand colors and image style for this sidekick</p>
+                    </div>
+                </div>
+                <button onclick="closeImageCatalystBrandModal()" class="text-dark-text-secondary hover:text-dark-text p-2 rounded-lg hover:bg-dark-elevated transition-colors">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            <!-- Content -->
+            <div class="p-6 overflow-y-auto max-h-[calc(90vh-140px)] space-y-6">
+                <!-- Brand Colors -->
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-2">
+                        Brand Colors
+                        <span class="text-dark-text-secondary font-normal ml-2">(up to 5)</span>
+                    </label>
+                    <p class="text-xs text-dark-text-secondary mb-3">Colors will be suggested to the image generation model to match your brand palette.</p>
+                    <div id="icBrandColorsContainer" class="space-y-2">
+                        <!-- Color rows injected by JS -->
+                    </div>
+                    <button type="button" id="icAddColorBtn" onclick="addBrandColorInput()" class="mt-2 text-sm text-brand-teal hover:text-brand-teal/80 flex items-center gap-1 transition-colors">
+                        <i class="bi bi-plus-circle"></i> Add Color
+                    </button>
+                </div>
+
+                <!-- Image Style Description -->
+                <div>
+                    <label class="block text-sm font-medium text-dark-text mb-2">
+                        Image Style Description
+                        <span class="text-dark-text-secondary font-normal ml-2">(optional)</span>
+                    </label>
+                    <textarea id="icBrandStyleDescription" rows="4"
+                        placeholder="e.g., Clean minimalist photography, modern flat design, dark moody cinematic aesthetic, bold geometric shapes with high contrast"
+                        class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text placeholder-dark-text-secondary/50"></textarea>
+                    <p class="text-xs text-dark-text-secondary mt-1">Describe the visual style you want for generated images. This will be appended to every image prompt.</p>
+                </div>
+
+                <!-- Admin Only Toggle -->
+                <label class="flex items-center gap-3 cursor-pointer border-t border-dark-border pt-4">
+                    <input type="checkbox" id="icAdminOnly" class="w-5 h-5 rounded border-dark-border text-yellow-500 focus:ring-yellow-500 bg-dark-elevated">
+                    <div>
+                        <span class="text-sm font-medium text-dark-text">Admin Only</span>
+                        <p class="text-xs text-dark-text-secondary">Hidden from subscribers, only available to admin users.</p>
+                    </div>
+                </label>
+            </div>
+
+            <!-- Footer -->
+            <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border bg-dark-elevated/50">
+                <button onclick="closeImageCatalystBrandModal()" class="px-4 py-2 text-dark-text-secondary hover:text-dark-text transition-colors">
+                    Cancel
+                </button>
+                <button onclick="saveImageCatalystBrandConfig()" class="btn-primary px-4 py-2 rounded-lg flex items-center">
+                    <i class="bi bi-check-lg mr-2"></i>
+                    Save Brand Style
                 </button>
             </div>
         </div>
@@ -1138,6 +1225,15 @@
                         <li>• Describe how to handle different ticket types (billing, technical, general)</li>
                     </ul>
                 </div>
+
+                <!-- Admin Only Toggle -->
+                <label class="flex items-center gap-3 cursor-pointer border-t border-dark-border pt-4">
+                    <input type="checkbox" id="hsAdminOnly" class="w-5 h-5 rounded border-dark-border text-yellow-500 focus:ring-yellow-500 bg-dark-elevated">
+                    <div>
+                        <span class="text-sm font-medium text-dark-text">Admin Only</span>
+                        <p class="text-xs text-dark-text-secondary">Hidden from subscribers, only available to admin users.</p>
+                    </div>
+                </label>
             </div>
 
             <!-- Footer -->
@@ -1148,6 +1244,44 @@
                 <button onclick="saveHelpScoutConfig()" class="btn-primary px-4 py-2 rounded-lg flex items-center">
                     <i class="bi bi-check-lg mr-2"></i>
                     Save Settings
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tool Settings Modal (Admin Only toggle + basic settings) -->
+<div id="toolSettingsModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+    <div class="fixed inset-0 bg-black/60 backdrop-blur-sm modal-backdrop cursor-pointer" onclick="closeToolSettingsModal()"></div>
+    <div class="relative min-h-screen flex items-center justify-center p-4 pointer-events-none">
+        <div class="relative bg-dark-surface border border-dark-border rounded-xl shadow-2xl w-full max-w-md overflow-hidden pointer-events-auto" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-500 to-orange-500 flex items-center justify-center">
+                        <i class="bi bi-gear text-white"></i>
+                    </div>
+                    <div>
+                        <h2 id="toolSettingsModalTitle" class="text-lg font-semibold text-dark-text">Ability Settings</h2>
+                        <p class="text-xs text-dark-text-secondary">Configure visibility and access</p>
+                    </div>
+                </div>
+                <button onclick="closeToolSettingsModal()" class="text-dark-text-secondary hover:text-dark-text p-2 rounded-lg hover:bg-dark-elevated transition-colors">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="p-6 space-y-4">
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" id="toolSettingsAdminOnly" class="w-5 h-5 rounded border-dark-border text-yellow-500 focus:ring-yellow-500 bg-dark-elevated">
+                    <div>
+                        <span class="text-sm font-medium text-dark-text">Admin Only</span>
+                        <p class="text-xs text-dark-text-secondary">When enabled, this ability is hidden from subscribers and only available to admin users.</p>
+                    </div>
+                </label>
+            </div>
+            <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border bg-dark-elevated/50">
+                <button onclick="closeToolSettingsModal()" class="px-4 py-2 text-dark-text-secondary hover:text-dark-text transition-colors">Cancel</button>
+                <button onclick="saveToolSettings()" class="btn-primary px-4 py-2 rounded-lg flex items-center">
+                    <i class="bi bi-check-lg mr-2"></i> Save
                 </button>
             </div>
         </div>
@@ -1450,7 +1584,7 @@ async function saveAgent() {
         voice_id: '', // Will be set below based on TTS provider
         temperature: 0.7, // Default temperature
         provider_config: providerConfig,
-        cartesia_emotions_enabled: false
+        cartesia_emotions_enabled: true
     };
     
     // Set voice_id based on TTS provider selection
@@ -1827,6 +1961,7 @@ async function loadAssignedTools(){
             const isDocumentSense = tool.name.toLowerCase().includes('documentsense') || tool.slug === 'documentsense' || tool.tool_type === 'documentsense';
             const isContentCatalyst = tool.name.toLowerCase().includes('content catalyst') || tool.tool_type === 'content_catalyst';
             const isHelpScout = tool.name.toLowerCase().includes('helpscout') || tool.slug === 'helpscout_tickets' || tool.tool_type === 'helpscout';
+            const isImageCatalyst = tool.name.toLowerCase().includes('image catalyst') || tool.tool_type === 'image_catalyst' || tool.slug === 'image-catalyst';
             const userSenseAttr = isUserSense ? 'data-usersense="true"' : '';
             const documentSenseAttr = isDocumentSense ? 'data-documentsense="true"' : '';
             const contentCatalystAttr = isContentCatalyst ? 'data-content-catalyst="true"' : '';
@@ -1838,6 +1973,16 @@ async function loadAssignedTools(){
                 actionButtons = `
                     <div class="flex flex-col gap-1 ml-2">
                         <button type="button" onclick="openContentCatalystModal()" class="text-brand-teal hover:text-brand-teal/80 text-sm">
+                            <i class="bi bi-gear"></i> Edit
+                        </button>
+                        <button type="button" onclick="unassignTool('${tool.id}', this)" class="text-red-400 hover:text-red-300 text-sm">
+                            <i class="bi bi-x-circle"></i> Remove
+                        </button>
+                    </div>`;
+            } else if (isImageCatalyst) {
+                actionButtons = `
+                    <div class="flex flex-col gap-1 ml-2">
+                        <button type="button" onclick="openImageCatalystBrandModal()" class="text-brand-teal hover:text-brand-teal/80 text-sm">
                             <i class="bi bi-gear"></i> Edit
                         </button>
                         <button type="button" onclick="unassignTool('${tool.id}', this)" class="text-red-400 hover:text-red-300 text-sm">
@@ -1862,9 +2007,14 @@ async function loadAssignedTools(){
                     </div>`;
             } else {
                 actionButtons = `
-                    <button type="button" onclick="unassignTool('${tool.id}', this)" class="ml-2 text-red-400 hover:text-red-300 text-sm">
-                        <i class="bi bi-x-circle"></i> Remove
-                    </button>`;
+                    <div class="flex flex-col gap-1 ml-2">
+                        <button type="button" onclick="openToolSettingsModal('${tool.id}')" class="text-brand-teal hover:text-brand-teal/80 text-sm">
+                            <i class="bi bi-gear"></i> Edit
+                        </button>
+                        <button type="button" onclick="unassignTool('${tool.id}', this)" class="text-red-400 hover:text-red-300 text-sm">
+                            <i class="bi bi-x-circle"></i> Remove
+                        </button>
+                    </div>`;
             }
 
             // Build status banners
@@ -1887,6 +2037,7 @@ async function loadAssignedTools(){
                             <div class="flex gap-2 mt-2">
                                 <span class="px-2 py-0.5 text-xs rounded ${tool.scope === 'global' ? 'bg-brand-teal/20 text-brand-teal' : 'bg-brand-coral/20 text-brand-coral'}">${tool.scope}</span>
                                 <span class="px-2 py-0.5 text-xs rounded ${phaseClass}">${phaseLabel}</span>
+                                ${tool.admin_only ? '<span class="px-2 py-0.5 text-xs rounded bg-yellow-500/20 text-yellow-400">Admin Only</span>' : ''}
                             </div>
                         </div>
                         ${actionButtons}
@@ -2013,6 +2164,7 @@ function renderToolCard(tool, phase) {
                         <div class="flex gap-2 mt-2">
                             <span class="px-2 py-0.5 text-xs rounded ${tool.scope === 'global' ? 'bg-brand-teal/20 text-brand-teal' : 'bg-brand-coral/20 text-brand-coral'}">${tool.scope}</span>
                             <span class="px-2 py-0.5 text-xs rounded ${phaseClass}">${phaseLabel}</span>
+                            ${tool.admin_only ? '<span class="px-2 py-0.5 text-xs rounded bg-yellow-500/20 text-yellow-400">Admin Only</span>' : ''}
                         </div>
                     </div>
                     <button type="button" onclick="assignTool('${tool.id}', this)" class="ml-2 text-brand-teal hover:text-brand-teal/80 text-sm">
@@ -3317,7 +3469,7 @@ function syncFromConfig() {
 
 function showNotification(type, message) {
     const notification = document.createElement('div');
-    notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg transition-all duration-300 transform translate-x-0 border ${
+    notification.className = `fixed top-4 right-4 z-50 px-6 py-3 rounded-lg shadow-lg transition-all duration-300 transform translate-x-0 border ${
         type === 'success' ? 'bg-brand-teal/20 text-brand-teal border-brand-teal' : 'bg-brand-salmon/20 text-brand-salmon border-brand-salmon'
     }`;
     notification.innerHTML = `
@@ -3558,17 +3710,87 @@ function hideImagePreview() {
 }
 
 // ============================================
+// Tool Settings Modal (Admin Only toggle)
+// ============================================
+let _toolSettingsId = null;
+
+function openToolSettingsModal(toolId) {
+    _toolSettingsId = toolId;
+    // Find tool in allToolsCache
+    const tool = allToolsCache.find(t => t.id === toolId);
+    if (tool) {
+        document.getElementById('toolSettingsModalTitle').textContent = tool.name + ' Settings';
+        document.getElementById('toolSettingsAdminOnly').checked = !!tool.admin_only;
+    }
+    document.getElementById('toolSettingsModal').classList.remove('hidden');
+}
+
+function closeToolSettingsModal() {
+    document.getElementById('toolSettingsModal').classList.add('hidden');
+    _toolSettingsId = null;
+}
+
+async function saveToolSettings() {
+    if (!_toolSettingsId) return;
+    const adminOnly = document.getElementById('toolSettingsAdminOnly').checked;
+    const tool = allToolsCache.find(t => t.id === _toolSettingsId);
+    const clientId = tool && tool.client_id ? tool.client_id : {{ agent.client_id|tojson }};
+    const qs = clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
+    try {
+        const res = await fetch(`${ADMIN_TOOLS_API}/${_toolSettingsId}${qs}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ admin_only: adminOnly })
+        });
+        if (res.ok) {
+            // Update local cache
+            if (tool) tool.admin_only = adminOnly;
+            closeToolSettingsModal();
+            await loadAssignedTools();
+        } else {
+            const errText = await res.text();
+            alert(errText || 'Failed to update ability settings');
+        }
+    } catch (err) {
+        alert('Failed to save: ' + err.message);
+    }
+}
+
+// ============================================
 // Content Catalyst Configuration
 // ============================================
 
 // Store the current tools_config from page load
 let currentToolsConfig = {{ agent.tools_config | tojson | safe if agent.tools_config else '{}' }};
 
+function _findToolByType(typeName) {
+    return allToolsCache.find(t =>
+        t.name.toLowerCase().includes(typeName) || t.tool_type === typeName || t.type === typeName
+    );
+}
+
+async function _saveAdminOnly(toolId, adminOnly) {
+    if (!toolId) return;
+    const tool = allToolsCache.find(t => t.id === toolId);
+    const clientId = tool && tool.client_id ? tool.client_id : {{ agent.client_id|tojson }};
+    const qs = clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
+    await fetch(`${ADMIN_TOOLS_API}/${toolId}${qs}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ admin_only: adminOnly })
+    });
+    if (tool) tool.admin_only = adminOnly;
+}
+
 function openContentCatalystModal() {
     // Load current config from stored tools_config
     const ccConfig = currentToolsConfig.content_catalyst || {};
     document.getElementById('ccDefaultStylePrompt').value = ccConfig.default_style_prompt || '';
     document.getElementById('ccExampleWriting').value = ccConfig.example_writing || '';
+    const ccTool = _findToolByType('content_catalyst') || _findToolByType('content catalyst');
+    document.getElementById('ccAdminOnly').checked = ccTool ? !!ccTool.admin_only : false;
     document.getElementById('contentCatalystModal').classList.remove('hidden');
 }
 
@@ -3605,10 +3827,135 @@ async function saveContentCatalystConfig() {
             throw new Error(result.error || result.detail || 'Failed to save config');
         }
 
+        // Save admin_only toggle
+        const ccTool = _findToolByType('content_catalyst') || _findToolByType('content catalyst');
+        if (ccTool) await _saveAdminOnly(ccTool.id, document.getElementById('ccAdminOnly').checked);
+
         showNotification('success', 'Content Catalyst settings saved successfully!');
         closeContentCatalystModal();
+        await loadAssignedTools();
     } catch (err) {
         console.error('Failed to save Content Catalyst config:', err);
+        showNotification('error', 'Failed to save settings: ' + err.message);
+    }
+}
+
+// ============================================
+// Image Catalyst Brand Style Guide
+// ============================================
+
+function openImageCatalystBrandModal() {
+    const icConfig = currentToolsConfig['image-catalyst'] || {};
+    const brandColors = icConfig.brand_colors || [];
+    const brandStyleDescription = icConfig.brand_style_description || '';
+
+    // Populate color inputs
+    renderBrandColorInputs(brandColors);
+    document.getElementById('icBrandStyleDescription').value = brandStyleDescription;
+    const icTool = _findToolByType('image_catalyst') || _findToolByType('image catalyst');
+    document.getElementById('icAdminOnly').checked = icTool ? !!icTool.admin_only : false;
+    document.getElementById('imageCatalystBrandModal').classList.remove('hidden');
+}
+
+function closeImageCatalystBrandModal() {
+    document.getElementById('imageCatalystBrandModal').classList.add('hidden');
+}
+
+function renderBrandColorInputs(colors) {
+    const container = document.getElementById('icBrandColorsContainer');
+    container.innerHTML = '';
+
+    if (colors.length === 0) {
+        // Start with one empty slot
+        addBrandColorInput('#000000');
+    } else {
+        colors.forEach(color => addBrandColorInput(color));
+    }
+    updateAddColorButton();
+}
+
+function addBrandColorInput(color) {
+    color = color || '#000000';
+    const container = document.getElementById('icBrandColorsContainer');
+    const count = container.querySelectorAll('.ic-brand-color-row').length;
+    if (count >= 5) return;
+
+    const row = document.createElement('div');
+    row.className = 'ic-brand-color-row flex items-center gap-3';
+    row.innerHTML = `
+        <input type="color" value="${color}" class="ic-color-picker w-10 h-10 rounded-lg border border-dark-border cursor-pointer bg-transparent"
+               onchange="this.nextElementSibling.value = this.value">
+        <input type="text" value="${color}" class="ic-color-hex flex-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md text-dark-text text-sm font-mono"
+               placeholder="#000000" maxlength="7"
+               oninput="this.value = this.value.replace(/[^#0-9a-fA-F]/g, '').slice(0, 7); if (/^#[0-9a-fA-F]{6}$/.test(this.value)) this.previousElementSibling.value = this.value">
+        <button type="button" onclick="removeBrandColor(this)" class="text-dark-text-secondary hover:text-red-400 transition-colors p-1">
+            <i class="bi bi-trash"></i>
+        </button>
+    `;
+    container.appendChild(row);
+    updateAddColorButton();
+}
+
+function removeBrandColor(btn) {
+    const row = btn.closest('.ic-brand-color-row');
+    row.remove();
+    updateAddColorButton();
+}
+
+function updateAddColorButton() {
+    const count = document.querySelectorAll('.ic-brand-color-row').length;
+    const addBtn = document.getElementById('icAddColorBtn');
+    if (addBtn) addBtn.style.display = count >= 5 ? 'none' : '';
+}
+
+async function saveImageCatalystBrandConfig() {
+    // Collect brand colors
+    const colorRows = document.querySelectorAll('.ic-brand-color-row');
+    const brandColors = [];
+    colorRows.forEach(row => {
+        const hex = row.querySelector('.ic-color-hex').value.trim();
+        if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+            brandColors.push(hex);
+        }
+    });
+
+    const brandStyleDescription = document.getElementById('icBrandStyleDescription').value.trim();
+
+    try {
+        // Update the image-catalyst section in the stored config
+        currentToolsConfig['image-catalyst'] = {
+            ...(currentToolsConfig['image-catalyst'] || {}),
+            brand_colors: brandColors,
+            brand_style_description: brandStyleDescription
+        };
+
+        // Save updated tools_config using the same endpoint as the main save
+        const saveResponse = await fetch(`/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/update`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                tools_config: currentToolsConfig
+            })
+        });
+
+        const result = await saveResponse.json();
+
+        if (!saveResponse.ok || result.error) {
+            throw new Error(result.error || result.detail || 'Failed to save config');
+        }
+
+        // Save admin_only toggle
+        const icTool = _findToolByType('image_catalyst') || _findToolByType('image catalyst');
+        if (icTool) await _saveAdminOnly(icTool.id, document.getElementById('icAdminOnly').checked);
+
+        showNotification('success', 'Image Catalyst brand style saved successfully!');
+        closeImageCatalystBrandModal();
+        await loadAssignedTools();
+    } catch (err) {
+        console.error('Failed to save Image Catalyst brand config:', err);
         showNotification('error', 'Failed to save settings: ' + err.message);
     }
 }
@@ -3621,6 +3968,9 @@ function openHelpScoutModal() {
     // Load current config from stored tools_config
     const hsConfig = currentToolsConfig.helpscout || {};
     document.getElementById('hsSystemPromptInstructions').value = hsConfig.system_prompt_instructions || '';
+    // Load admin_only state
+    const hsTool = _findToolByType('helpscout');
+    document.getElementById('hsAdminOnly').checked = hsTool ? !!hsTool.admin_only : false;
     document.getElementById('helpScoutModal').classList.remove('hidden');
 }
 
@@ -3657,7 +4007,14 @@ async function saveHelpScoutConfig() {
             throw new Error(result.error || result.detail || 'Failed to save config');
         }
 
+        // Save admin_only
+        const hsTool = _findToolByType('helpscout');
+        if (hsTool) {
+            await _saveAdminOnly(hsTool.id, document.getElementById('hsAdminOnly').checked);
+        }
+
         showNotification('success', 'HelpScout settings saved successfully!');
+        await loadAssignedTools();
         closeHelpScoutModal();
     } catch (err) {
         console.error('Failed to save HelpScout config:', err);

@@ -462,8 +462,8 @@ class ClientService:
                     },
                     "rerank": {
                         "enabled": False,
-                        "provider": "siliconflow",
-                        "model": "BAAI/bge-reranker-base",
+                        "provider": None,
+                        "model": None,
                         "top_k": 3,
                         "candidates": 20
                     }
@@ -494,8 +494,8 @@ class ClientService:
                     },
                     "rerank": {
                         "enabled": False,
-                        "provider": "siliconflow",
-                        "model": "BAAI/bge-reranker-base",
+                        "provider": None,
+                        "model": None,
                         "top_k": 3,
                         "candidates": 20
                     }
@@ -674,8 +674,8 @@ class ClientService:
                     # Extract rerank settings
                     settings["rerank"] = {
                         "enabled": global_settings_dict.get('rerank_enabled', 'false').lower() == 'true',
-                        "provider": global_settings_dict.get('rerank_provider', 'siliconflow'),
-                        "model": global_settings_dict.get('rerank_model', 'BAAI/bge-reranker-base'),
+                        "provider": global_settings_dict.get('rerank_provider'),
+                        "model": global_settings_dict.get('rerank_model'),
                         "top_k": int(global_settings_dict.get('rerank_top_k', '3')),
                         "candidates": int(global_settings_dict.get('rerank_candidates', '20'))
                     }
@@ -691,8 +691,8 @@ class ClientService:
                     }
                     settings["rerank"] = {
                         "enabled": False,
-                        "provider": "siliconflow",
-                        "model": "BAAI/bge-reranker-base",
+                        "provider": None,
+                        "model": None,
                         "top_k": 3,
                         "candidates": 20
                     }

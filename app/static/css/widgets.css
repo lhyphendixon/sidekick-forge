@@ -40,7 +40,7 @@
 }
 
 .cc-tab.active {
-    background: linear-gradient(135deg, rgba(1, 164, 166, 0.2), rgba(252, 114, 68, 0.1));
+    background: linear-gradient(135deg, rgba(1, 164, 166, 0.2), rgba(245, 100, 83, 0.1));
     border-color: rgba(1, 164, 166, 0.5);
     color: #01a4a6;
 }
@@ -95,7 +95,7 @@
 }
 
 .cc-checkbox:checked {
-    background: linear-gradient(135deg, #01a4a6, #fc7244);
+    background: linear-gradient(135deg, #01a4a6, #f56453);
     border-color: transparent;
 }
 
@@ -616,7 +616,7 @@
 }
 
 .lingua-lang-checkbox:checked {
-    background: linear-gradient(135deg, #01a4a6, #fc7244);
+    background: linear-gradient(135deg, #01a4a6, #f56453);
     border-color: transparent;
 }
 
@@ -656,7 +656,7 @@
 }
 
 .lingua-format-checkbox:checked {
-    background: linear-gradient(135deg, #01a4a6, #fc7244);
+    background: linear-gradient(135deg, #01a4a6, #f56453);
     border-color: transparent;
 }
 
@@ -706,4 +706,106 @@
     .lingua-lang-grid {
         grid-template-columns: repeat(2, 1fr);
     }
+}
+
+/* ========================================
+   Image Catalyst Widget
+   ======================================== */
+
+.ic-widget {
+    background: rgba(15, 15, 15, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+/* Mode Selection Buttons */
+.ic-mode-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.ic-mode-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.ic-mode-btn.ic-mode-active {
+    background: linear-gradient(135deg, rgba(147, 51, 234, 0.35), rgba(236, 72, 153, 0.2));
+    border-color: rgba(147, 51, 234, 0.7);
+    box-shadow: 0 0 12px rgba(147, 51, 234, 0.3), inset 0 0 8px rgba(147, 51, 234, 0.1);
+}
+
+/* Dimension / Quality Buttons */
+.ic-dim-btn,
+.ic-qual-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.ic-dim-btn:hover,
+.ic-qual-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.ic-dim-btn.ic-dim-active,
+.ic-qual-btn.ic-qual-active {
+    background: linear-gradient(135deg, rgba(147, 51, 234, 0.35), rgba(236, 72, 153, 0.2));
+    border-color: rgba(147, 51, 234, 0.7);
+    box-shadow: 0 0 8px rgba(147, 51, 234, 0.25);
+}
+
+/* Textarea */
+.ic-textarea {
+    font-family: inherit;
+    line-height: 1.5;
+}
+
+.ic-textarea::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+/* Dropzone */
+.ic-dropzone {
+    transition: all 0.2s ease;
+}
+
+/* Spinner */
+.ic-spinner {
+    width: 48px;
+    height: 48px;
+    border: 3px solid rgba(255, 255, 255, 0.1);
+    border-top-color: rgba(147, 51, 234, 0.8);
+    border-radius: 50%;
+    animation: ic-spin 0.8s linear infinite;
+}
+
+@keyframes ic-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Result Image */
+.ic-result-image img {
+    display: block;
+    max-height: 400px;
+    object-fit: contain;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* Line clamp utility */
+.line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }

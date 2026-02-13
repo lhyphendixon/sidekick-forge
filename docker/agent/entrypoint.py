@@ -20,8 +20,8 @@ from datetime import datetime
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2026-01-20T16:45:00Z"
-AGENT_BUILD_HASH = "error-notification-to-user"
+AGENT_BUILD_VERSION = "2026-02-10T23:39:24Z"
+AGENT_BUILD_HASH = "sonic3-emotions-default"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
@@ -365,20 +365,22 @@ def _get_cartesia_emotion_instructions(voice_settings: dict) -> str:
     model = voice_settings.get("model") or voice_settings.get("tts_model") or ""
     emotions_enabled = voice_settings.get("cartesia_emotions_enabled")
 
-    # Debug log to verify values
-    logger.info(f"🎭 Emotion check: provider={provider}, model={model}, emotions_enabled={emotions_enabled}")
-
     # Only enable for Cartesia sonic models with emotions toggle on
     if provider != "cartesia" or not model.startswith("sonic") or not emotions_enabled:
-        logger.info(f"🎭 Emotions disabled: provider_match={provider == 'cartesia'}, model_match={model.startswith('sonic') if model else False}, enabled={emotions_enabled}")
         return ""
 
-    # NOTE: Cartesia does NOT support inline emotion tags in transcript text.
-    # Emotion must be set via API parameters, not embedded in text.
-    # Returning empty string to disable this feature until proper API-level
-    # emotion control is implemented.
-    logger.info("🎭 Cartesia emotions: inline tags not supported by API - feature disabled")
-    return ""
+    logger.info("🎭 Cartesia dynamic emotion expression enabled")
+    return (
+        "\n\n## Emotional Expression\n"
+        "You have expressive voice capabilities. Convey genuine emotion through your word choice, "
+        "phrasing, and conversational energy:\n"
+        "- Show warmth and enthusiasm when greeting or celebrating successes\n"
+        "- Express empathy and concern when the user shares difficulties\n"
+        "- Convey curiosity and interest when exploring new topics\n"
+        "- Use natural exclamations and varied pacing to sound authentic\n"
+        "- Match your emotional tone to the context — don't be monotone or overly flat\n"
+        "Let your personality come through naturally in how you speak."
+    )
 
 
 def _should_skip_user_commit(agent: Any, text: str) -> bool:
@@ -471,13 +473,8 @@ def _initialize_tts_plugin(
             voice_settings.get("model")
             or voice_settings.get("tts_model")
             or voice_settings.get("provider_model")
-            or None
+            or "sonic-3"
         )
-        if not tts_model:
-            raise ConfigurationError(
-                "Cartesia TTS requires an explicit 'model'. "
-                "Set voice_settings.model or metadata.tts_model."
-            )
 
         cartesia_voice_id = (
             voice_settings.get("voice_id")
@@ -504,13 +501,23 @@ def _initialize_tts_plugin(
                 tts_speed = speed_map.get(str(raw_speed).lower(), 1.0)
         else:
             tts_speed = raw_speed or "fast"
+        # Pronunciation dictionary (sonic-3 only) - configurable per agent or platform default
+        pronunciation_dict_id = None
+        if tts_model and "sonic-3" in str(tts_model):
+            pronunciation_dict_id = (
+                voice_settings.get("pronunciation_dict_id")
+                or provider_config.get("pronunciation_dict_id")
+                or "pdict_CDN5JYDfYTVGCZbNKePCfc"  # Platform default: Litebridge→Light Bridge etc.
+            )
+
         tts_plugin = cartesia.TTS(
             voice=cartesia_voice_id,
             model=tts_model,
             api_key=cartesia_key,
             speed=tts_speed,
+            pronunciation_dict_id=pronunciation_dict_id,
         )
-        logger.info("✅ Cartesia TTS configured with voice_id=%s model=%s speed=%s", cartesia_voice_id, tts_model, tts_speed)
+        logger.info("✅ Cartesia TTS configured with voice_id=%s model=%s speed=%s pronunciation_dict=%s", cartesia_voice_id, tts_model, tts_speed, pronunciation_dict_id or "none")
 
     ConfigValidator.validate_provider_initialization(f"{tts_provider} TTS", tts_plugin)
     return tts_plugin
@@ -628,14 +635,26 @@ async def _merge_and_update_room_metadata(
             # Remove keys that are explicitly set to None (cleanup of streaming data)
             merged = {k: v for k, v in merged.items() if v is not None}
 
-            # Final size check - truncate response if still too large
+            # Final size check - progressively trim until under 55KB
+            METADATA_LIMIT = 55000
             merged_json = json.dumps(merged)
-            if len(merged_json) > 60000:
-                logger.warning(f"⚠️ Merged metadata still too large ({len(merged_json)} bytes), truncating text_response")
+            if len(merged_json) > METADATA_LIMIT:
+                logger.warning(f"⚠️ Merged metadata too large ({len(merged_json)} bytes), trimming...")
+                # First: truncate text_response
                 text_response = merged.get("text_response", "")
                 if text_response and len(text_response) > 2000:
                     merged["text_response"] = text_response[:2000] + "\n\n[... response truncated ...]"
                     merged_json = json.dumps(merged)
+                # Second: progressively strip remaining large fields
+                if len(merged_json) > METADATA_LIMIT:
+                    extra_trim = ["rerank", "voice_settings", "hosting_type", "webhooks"]
+                    for field in extra_trim:
+                        if field in merged:
+                            merged.pop(field)
+                            merged_json = json.dumps(merged)
+                            if len(merged_json) <= METADATA_LIMIT:
+                                break
+                logger.info(f"   - Final merged metadata size: {len(merged_json)} bytes")
 
             await lk_client.room.update_room_metadata(
                 livekit_api.UpdateRoomMetadataRequest(
@@ -988,7 +1007,7 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
         tool_args = tc.get("arguments", {})
 
         # Skip widget triggers - these trigger frontend widgets, not backend execution
-        if tool_name in ("content_catalyst", "lingua"):
+        if tool_name in ("content_catalyst", "lingua", "image-catalyst"):
             continue
 
         # Find the tool function
@@ -1127,6 +1146,31 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
                 logger.info(f"🌐 TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
                 break
 
+    # Check for image-catalyst tool call from native function calling
+    if not widget_trigger:
+        for tc in detected_tool_calls:
+            if tc["name"] == "image-catalyst":
+                logger.info(f"🖼️ TEXT-MODE: Processing Image Catalyst tool call: {tc['arguments']}")
+                args = tc["arguments"]
+                suggested_mode = args.get("suggested_mode", "general")
+                suggested_prompt = args.get("suggested_prompt", "")
+
+                widget_trigger = {
+                    "type": "image_catalyst",
+                    "config": {
+                        "suggested_mode": suggested_mode,
+                        "suggested_prompt": suggested_prompt,
+                    },
+                    "message": "Opening Image Catalyst..."
+                }
+
+                # Set a helpful response if none was generated
+                if not response_text:
+                    response_text = "I'll help you create an image. Please configure your preferences in the Image Catalyst widget below."
+
+                logger.info(f"🖼️ TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
+                break
+
     # Fallback: Also check for JSON tool call in LLM text response (for models that don't support native function calling)
     if not widget_trigger:
         import re
@@ -1170,6 +1214,36 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
             except json.JSONDecodeError as e:
                 logger.debug(f"🔧 TEXT-MODE: JSON parse failed for potential tool call: {e}")
 
+    # Inject prediction market insight citations from text-mode tool results
+    for tr in tool_results:
+        if not isinstance(tr, dict) or tr.get("tool") != "prediction_market" or not tr.get("success"):
+            continue
+        raw = tr.get("output", "")
+        try:
+            market_data = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, dict) else {})
+        except Exception:
+            continue
+        markets = market_data.get("markets")
+        if not markets:
+            continue
+        existing = getattr(agent, "_current_citations", []) or []
+        existing.insert(0, {
+            "doc_id": "prediction_market",
+            "title": "Prediction Market Insight",
+            "source_url": "https://polymarket.com",
+            "source_type": "prediction_market",
+            "source": "prediction_market",
+            "chunk_index": 0,
+            "content": json.dumps({
+                "query": market_data.get("query", ""),
+                "markets": markets,
+                "source": market_data.get("source", "Polymarket"),
+            }),
+            "similarity": 1.0,
+        })
+        agent._current_citations = existing
+        logger.info(f"📊 TEXT-MODE: Injected prediction market insight citation ({len(markets)} markets)")
+
     citations = list(getattr(agent, "_current_citations", []) or [])
     logger.info(f"📚 DEBUG: Found {len(citations)} citations on agent for response payload")
     if citations:
@@ -1194,7 +1268,9 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
         if isinstance(citation, dict):
             citation_copy = dict(citation)
             content = citation_copy.get("content", "")
-            if len(content) > 500:
+            # Skip truncation for prediction market — content IS the structured data
+            is_pm = citation_copy.get("source") == "prediction_market" or citation_copy.get("source_type") == "prediction_market"
+            if not is_pm and len(content) > 500:
                 citation_copy["content"] = content[:500] + "... [truncated]"
             metadata_citations.append(citation_copy)
         else:
@@ -1734,7 +1810,38 @@ async def agent_job_handler(ctx: JobContext):
         # Load API keys using the loader (follows dynamic loading policy)
         api_keys = APIKeyLoader.load_api_keys(metadata)
         metadata['api_keys'] = api_keys
-        
+
+        # When using platform keys, override voice_settings providers to match
+        # platform-supported providers (the platform may not have keys for all providers)
+        if api_keys.get('_uses_platform_keys'):
+            platform_cfg = APIKeyLoader.get_platform_config()
+            voice_settings = metadata.get('voice_settings', {})
+            overrides = []
+            if 'stt' in platform_cfg and voice_settings.get('stt_provider') != platform_cfg['stt'].get('provider'):
+                old_stt = voice_settings.get('stt_provider')
+                voice_settings['stt_provider'] = platform_cfg['stt']['provider']
+                overrides.append(f"stt_provider: {old_stt} -> {voice_settings['stt_provider']}")
+            if 'tts' in platform_cfg and voice_settings.get('tts_provider') != platform_cfg['tts'].get('provider'):
+                old_tts = voice_settings.get('tts_provider')
+                voice_settings['tts_provider'] = platform_cfg['tts']['provider']
+                if voice_settings.get('provider'):
+                    voice_settings['provider'] = platform_cfg['tts']['provider']
+                overrides.append(f"tts_provider: {old_tts} -> {voice_settings['tts_provider']}")
+            if 'llm' in platform_cfg:
+                plat_llm = platform_cfg['llm'].get('provider')
+                if plat_llm and voice_settings.get('llm_provider') != plat_llm:
+                    old_llm = voice_settings.get('llm_provider')
+                    voice_settings['llm_provider'] = plat_llm
+                    overrides.append(f"llm_provider: {old_llm} -> {plat_llm}")
+                plat_model = platform_cfg['llm'].get('model')
+                if plat_model and voice_settings.get('llm_model') != plat_model:
+                    old_model = voice_settings.get('llm_model')
+                    voice_settings['llm_model'] = plat_model
+                    overrides.append(f"llm_model: {old_model} -> {plat_model}")
+            if overrides:
+                logger.info(f"Platform keys active — overrode providers: {', '.join(overrides)}")
+            metadata['voice_settings'] = voice_settings
+
         # CRITICAL: Validate configuration before proceeding
         start_config = time.perf_counter()
         try:
@@ -1827,7 +1934,7 @@ async def agent_job_handler(ctx: JobContext):
             
             # Validate LLM initialization
             ConfigValidator.validate_provider_initialization(f"{llm_provider} LLM", llm_plugin)
-            
+
             stt_plugin = None
             tts_plugin = None
             vad = None
@@ -2195,7 +2302,7 @@ async def agent_job_handler(ctx: JobContext):
             # Store Ken Burns builder for auto-generation (will be set if Ken Burns mode)
             _kenburns_builder = None
 
-            if is_kenburns_mode_tools and not is_wizard_mode:
+            if is_kenburns_mode_tools and not is_wizard_mode and not is_text_mode:
                 try:
                     # Import Ken Burns tools
                     from app.agent_modules.kenburns_tools import (
@@ -2786,6 +2893,12 @@ async def agent_job_handler(ctx: JobContext):
                 logger.info(f"⏱️ Watchdog commit task scheduled (timeout={watchdog_timeout}s)")
 
             def _commit_user_transcript_text(user_text: str) -> None:
+                # Update Ken Burns context with user speech (defines conversation topic)
+                try:
+                    if hasattr(agent, "_kenburns_builder") and agent._kenburns_builder:
+                        agent._kenburns_builder.update_user_context(user_text)
+                except Exception:
+                    pass
                 if not hasattr(agent, "store_transcript"):
                     return
                 try:
@@ -3440,10 +3553,10 @@ async def agent_job_handler(ctx: JobContext):
 
                         avatar_model_path = voice_settings.get("avatar_model_path")
                         avatar_model_type = voice_settings.get("avatar_model_type", "expression")
-                        bithuman_api_secret = api_keys.get("bithuman_api_secret")
+                        bithuman_api_secret = api_keys.get("bithuman_api_secret") or os.getenv("BITHUMAN_API_SECRET")
 
                         if not bithuman_api_secret:
-                            raise ValueError("Video chat with Bithuman requires API secret in client settings")
+                            logger.warning("No bithuman_api_secret in client keys or BITHUMAN_API_SECRET env - plugin will attempt its own resolution")
 
                         if not avatar_model_path:
                             raise ValueError("Video chat with Bithuman requires avatar_model_path - upload an .imx model file in agent settings")
@@ -3478,11 +3591,13 @@ async def agent_job_handler(ctx: JobContext):
                             raise ValueError(f"IMX model file not found: {avatar_model_path}")
 
                         await send_model_loading_progress(ctx.room, 20, "Creating avatar session...")
-                        avatar_session = bithuman.AvatarSession(
-                            model_path=avatar_model_path,
-                            model=avatar_model_type,
-                            api_secret=bithuman_api_secret,
-                        )
+                        bh_kwargs = {
+                            "model_path": avatar_model_path,
+                            "model": avatar_model_type,
+                        }
+                        if bithuman_api_secret:
+                            bh_kwargs["api_secret"] = bithuman_api_secret
+                        avatar_session = bithuman.AvatarSession(**bh_kwargs)
                         logger.info(f"✅ Bithuman AvatarSession created with local IMX model")
                         await send_model_loading_progress(ctx.room, 30, "Avatar session created...")
 
@@ -3619,6 +3734,8 @@ async def agent_job_handler(ctx: JobContext):
                         ambient_sound = AudioConfig(BuiltinAudioClip.CITY_AMBIENCE, volume=ambient_volume)
                     elif ambient_sound_type == "crowded_room":
                         ambient_sound = AudioConfig(BuiltinAudioClip.CROWDED_ROOM, volume=ambient_volume)
+                    elif ambient_sound_type == "skyline_soft_reset":
+                        ambient_sound = AudioConfig("/app/sounds/skyline_soft_reset.mp3", volume=ambient_volume)
                     # If ambient_sound_type == "none", leave ambient_sound as None
 
                     # Initialize BackgroundAudioPlayer for ambient sound only

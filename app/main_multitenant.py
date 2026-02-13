@@ -204,6 +204,7 @@ from app.api.v1 import (
     documentsense,
     wizard,
     lingua,
+    image_catalyst,
 )
 from app.api import embed as embed_router
 from app.api import admin_preview_standalone
@@ -236,6 +237,7 @@ app.include_router(content_catalyst.router, prefix="/api/v1", tags=["content-cat
 app.include_router(documentsense.router, prefix="/api/v1", tags=["documentsense"])
 app.include_router(wizard.router, prefix="/api/v1", tags=["wizard"])
 app.include_router(lingua.router, prefix="/api/v1", tags=["lingua"])
+app.include_router(image_catalyst.router, prefix="/api/v1", tags=["image-catalyst"])
 app.include_router(embed_router.router)
 # Expose admin preview helper endpoints (used by preview modal)
 app.include_router(admin_preview_standalone.router)

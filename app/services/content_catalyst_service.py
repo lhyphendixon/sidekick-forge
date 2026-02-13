@@ -415,6 +415,84 @@ class ContentCatalystService:
         messages = [{"role": "user", "content": prompt}]
         return await self.llm.chat(messages, max_tokens)
 
+    @staticmethod
+    def _clean_llm_json(raw: str) -> str:
+        """Clean common LLM JSON formatting issues before parsing.
+
+        Handles: trailing commas, control chars, JavaScript-style comments,
+        unescaped newlines in strings, and other common LLM quirks.
+        """
+        s = raw
+
+        # Remove JavaScript-style single-line comments (// ...)
+        s = re.sub(r'(?<!:)//[^\n]*', '', s)
+
+        # Remove control characters except \n, \r, \t
+        s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', s)
+
+        # Fix trailing commas before } or ] (with optional whitespace)
+        s = re.sub(r',(\s*[}\]])', r'\1', s)
+
+        # Fix missing commas between array elements like "..." "..."
+        # (common when LLM forgets comma between strings in arrays)
+        s = re.sub(r'"\s*\n\s*"', '",\n"', s)
+
+        return s
+
+    @staticmethod
+    def _repair_truncated_json(raw: str) -> Optional[str]:
+        """Attempt to repair truncated JSON by closing open brackets and braces."""
+        try:
+            s = raw.rstrip()
+            in_string = False
+            escape = False
+            stack = []
+            last_good = 0
+            for i, ch in enumerate(s):
+                if escape:
+                    escape = False
+                    continue
+                if ch == '\\':
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch in ('{', '['):
+                    stack.append(ch)
+                    last_good = i
+                elif ch == '}':
+                    if stack and stack[-1] == '{':
+                        stack.pop()
+                    last_good = i
+                elif ch == ']':
+                    if stack and stack[-1] == '[':
+                        stack.pop()
+                    last_good = i
+
+            if not stack:
+                return None  # JSON isn't truncated, parse error is something else
+
+            # If we're in a string, close it
+            repaired = s
+            if in_string:
+                repaired += '"'
+
+            # Remove trailing comma if present
+            repaired = repaired.rstrip()
+            if repaired.endswith(','):
+                repaired = repaired[:-1]
+
+            # Close remaining open brackets/braces
+            for opener in reversed(stack):
+                repaired += ']' if opener == '[' else '}'
+
+            return repaired
+        except Exception:
+            return None
+
     async def _transcribe_audio(self, audio_url: str) -> str:
         """Transcribe audio file using Deepgram API.
 
@@ -984,12 +1062,22 @@ Respond in JSON format:
 }}"""
 
         try:
-            content = await self._llm_chat(prompt, max_tokens=1500)
+            content = await self._llm_chat(prompt, max_tokens=4000)
 
-            # Extract JSON from response
-            json_match = re.search(r'\{[\s\S]*\}', content)
+            # Clean and extract JSON from response
+            cleaned = self._clean_llm_json(content)
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
             if json_match:
-                return json.loads(json_match.group())
+                try:
+                    return json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    # Try truncation repair
+                    repaired = self._repair_truncated_json(json_match.group())
+                    if repaired:
+                        try:
+                            return json.loads(repaired)
+                        except json.JSONDecodeError:
+                            pass
 
             return {"summary": content, "key_themes": []}
 
@@ -1111,7 +1199,7 @@ Design two article architectures in JSON format:
 
         try:
             logger.info(f"Architecture phase prompt length: {len(prompt)} chars")
-            content = await self._llm_chat(prompt, max_tokens=2000)
+            content = await self._llm_chat(prompt, max_tokens=8000)
             logger.info(f"Architecture phase LLM response length: {len(content) if content else 0} chars")
 
             if not content or len(content.strip()) == 0:
@@ -1121,26 +1209,48 @@ Design two article architectures in JSON format:
             # Try to extract JSON - handle markdown code blocks
             json_content = content
 
-            # Strip markdown code blocks if present
+            # Strip markdown code blocks if present (handle missing closing fence)
             if "```json" in content:
                 json_match = re.search(r'```json\s*([\s\S]*?)\s*```', content)
                 if json_match:
                     json_content = json_match.group(1)
+                else:
+                    # No closing fence - take everything after ```json
+                    json_content = content.split("```json", 1)[1]
             elif "```" in content:
                 json_match = re.search(r'```\s*([\s\S]*?)\s*```', content)
                 if json_match:
                     json_content = json_match.group(1)
 
+            # Clean common LLM JSON issues before parsing
+            json_content = self._clean_llm_json(json_content)
+
             # Find the JSON object
             json_match = re.search(r'\{[\s\S]*\}', json_content)
 
             if json_match:
+                raw = json_match.group()
                 try:
-                    arch_data = json.loads(json_match.group())
+                    arch_data = json.loads(raw)
                 except json.JSONDecodeError as je:
-                    logger.error(f"JSON decode error: {je}")
-                    logger.error(f"Raw content (first 1000 chars): {content[:1000]}")
-                    raise ValueError(f"Failed to parse architecture JSON: {je}")
+                    logger.warning(f"JSON decode error at position {je.pos}, attempting repair: {je}")
+                    # Log context around the error position for debugging
+                    err_start = max(0, je.pos - 80)
+                    err_end = min(len(raw), je.pos + 80)
+                    logger.warning(f"JSON context around error: ...{raw[err_start:err_end]}...")
+
+                    # Try truncation repair (closing brackets/braces)
+                    repaired = self._repair_truncated_json(raw)
+                    if repaired:
+                        try:
+                            arch_data = json.loads(repaired)
+                            logger.info("Architecture JSON repaired successfully")
+                        except json.JSONDecodeError as je2:
+                            logger.error(f"JSON repair also failed: {je2}")
+                            raise ValueError(f"Failed to parse architecture JSON: {je}")
+                    else:
+                        logger.error(f"JSON not truncated, repair skipped. Full raw ({len(raw)} chars): {raw[:2500]}")
+                        raise ValueError(f"Failed to parse architecture JSON: {je}")
 
                 duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
                 logger.info(f"Architecture phase completed in {duration_ms:.1f}ms")
@@ -1292,7 +1402,7 @@ Format: H1 title, then flowing prose with blank lines between short paragraphs. 
 Write the article now, matching the example voice:"""
 
         try:
-            content = await self._llm_chat(prompt, max_tokens=4000)
+            content = await self._llm_chat(prompt, max_tokens=16000)
 
             word_count = len(content.split())
 
@@ -1371,12 +1481,32 @@ Respond in JSON format:
 }}"""
 
         try:
-            content = await self._llm_chat(prompt, max_tokens=2000)
+            content = await self._llm_chat(prompt, max_tokens=8000)
 
-            json_match = re.search(r'\{[\s\S]*\}', content)
+            # Clean common LLM JSON issues
+            cleaned = self._clean_llm_json(content)
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
 
             if json_match:
-                report_data = json.loads(json_match.group())
+                raw = json_match.group()
+                try:
+                    report_data = json.loads(raw)
+                except json.JSONDecodeError as je:
+                    logger.warning(f"Integrity JSON decode error at position {je.pos}, attempting repair: {je}")
+                    err_start = max(0, je.pos - 80)
+                    err_end = min(len(raw), je.pos + 80)
+                    logger.warning(f"Integrity JSON context around error: ...{raw[err_start:err_end]}...")
+
+                    repaired = self._repair_truncated_json(raw)
+                    if repaired:
+                        try:
+                            report_data = json.loads(repaired)
+                            logger.info("Integrity JSON repaired successfully")
+                        except json.JSONDecodeError:
+                            logger.error(f"Integrity JSON repair also failed")
+                            raise ValueError(f"Failed to parse integrity report JSON: {je}")
+                    else:
+                        raise ValueError(f"Failed to parse integrity report JSON: {je}")
 
                 duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
                 logger.info(f"Integrity phase completed in {duration_ms:.1f}ms")
@@ -1390,7 +1520,7 @@ Respond in JSON format:
                     recommendations=report_data.get("recommendations", []),
                 )
 
-            raise ValueError("Failed to parse integrity report JSON")
+            raise ValueError("Failed to parse integrity report JSON - no JSON found")
 
         except Exception as e:
             logger.error(f"Integrity phase failed: {e}")
@@ -1503,7 +1633,7 @@ Preserve all markdown links exactly.
 Output the polished article matching the example voice:"""
 
             try:
-                current_content = await self._llm_chat(prompt, max_tokens=4000)
+                current_content = await self._llm_chat(prompt, max_tokens=16000)
 
                 current_word_count = len(current_content.split())
 

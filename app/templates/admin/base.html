@@ -528,7 +528,7 @@
                 <span class="sidebar-tooltip">Dashboard</span>
             </a>
             {% endif %}
-            {% if user.role in ['superadmin','admin'] %}
+            {% if user.is_super_admin %}
             <!-- Clients -->
             <a href="/admin/clients"
                class="sidebar-nav-item relative flex items-center gap-3 px-3 py-2.5 rounded-lg {% if '/admin/clients' in request.url.path %}active{% endif %}">
@@ -669,29 +669,39 @@
     </aside>
 
     <!-- Mobile Header (shows only on small screens) -->
-    <header class="lg:hidden fixed top-0 left-0 right-0 z-20 bg-black/80 backdrop-blur-xl border-b border-white/10 h-14 flex items-center px-4">
+    <header class="lg:hidden fixed top-0 left-0 right-0 z-20 bg-white border-b border-gray-200 h-14 flex items-center px-4">
         <button type="button" onclick="toggleMobileMenu()"
-                class="p-2 text-gray-400 hover:text-white rounded-lg"
+                class="p-2 text-gray-600 hover:text-gray-900 rounded-lg"
                 id="mobile-nav-toggle">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 12h16M4 18h16"/>
             </svg>
         </button>
-        <img src="/static/images/SidekickForge%20Logo.png" alt="Sidekick Forge" class="h-8 w-8 ml-3" />
-        <span class="ml-2 text-white font-semibold text-sm">Sidekick Forge</span>
+        <div class="flex-1 flex items-center justify-center gap-2">
+            <div class="logo-container" style="width:36px;height:36px;">
+                <img src="/static/images/Logos/SF-Symbol-Medium-bg.jpg" alt="" class="logo-bg" />
+                <img src="/static/images/Logos/SF-Symbol-Medium-Gem.png" alt="Sidekick Forge" class="logo-gem" />
+            </div>
+            <span class="text-gray-900 font-semibold text-base">Sidekick Forge</span>
+        </div>
+        <!-- Spacer to balance the hamburger button for true centering -->
+        <div class="w-10"></div>
     </header>
 
     <!-- Mobile Navigation Overlay -->
     <div id="mobile-nav-overlay" class="lg:hidden hidden fixed inset-0 bg-black/50 z-40" onclick="closeMobileMenu()"></div>
 
     <!-- Mobile Navigation Menu -->
-    <div id="mobile-nav-menu" class="lg:hidden hidden fixed left-0 top-0 bottom-0 w-64 bg-black/95 backdrop-blur-xl border-r border-white/10 z-50 transform -translate-x-full transition-transform">
-        <div class="h-14 flex items-center justify-between px-4 border-b border-white/10">
+    <div id="mobile-nav-menu" class="lg:hidden hidden fixed left-0 top-0 bottom-0 w-64 bg-white border-r border-gray-200 z-50 transform -translate-x-full transition-transform">
+        <div class="h-14 flex items-center justify-between px-4 border-b border-gray-200">
             <div class="flex items-center gap-2">
-                <img src="/static/images/SidekickForge%20Logo.png" alt="Sidekick Forge" class="h-8 w-8" />
-                <span class="text-white font-semibold text-sm">Sidekick Forge</span>
+                <div class="logo-container" style="width:36px;height:36px;">
+                    <img src="/static/images/Logos/SF-Symbol-Medium-bg.jpg" alt="" class="logo-bg" />
+                    <img src="/static/images/Logos/SF-Symbol-Medium-Gem.png" alt="Sidekick Forge" class="logo-gem" />
+                </div>
+                <span class="text-gray-900 font-semibold text-base">Sidekick Forge</span>
             </div>
-            <button onclick="closeMobileMenu()" class="p-2 text-gray-400 hover:text-white">
+            <button onclick="closeMobileMenu()" class="p-2 text-gray-400 hover:text-gray-900">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
                 </svg>
@@ -701,105 +711,105 @@
         <nav class="p-4 space-y-2">
             {# Mobile navigation items - same structure as sidebar #}
             {% if user.is_adventurer_only %}
-            <a href="/admin/agents" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/agents' in request.url.path and '/admin/wizard' not in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/agents" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/agents' in request.url.path and '/admin/wizard' not in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                 <span>My Sidekick</span>
             </a>
             {% if user.can_create_sidekick %}
-            <a href="/admin/wizard" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/wizard' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/wizard" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/wizard' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4v16m8-8H4"/></svg>
                 <span>Create Sidekick</span>
             </a>
             {% else %}
-            <a href="/admin/agents?upgrade=1" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-amber-500 hover:bg-white/5">
+            <a href="/admin/agents?upgrade=1" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-amber-500 hover:bg-gray-50">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
                 <span>Create Sidekick</span>
             </a>
             {% endif %}
-            <a href="/admin/users" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/users' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/users" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/users' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
                 <span>Users</span>
             </a>
-            <a href="/admin/knowledge-base" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/knowledge-base' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/knowledge-base" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/knowledge-base' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
                 <span>Knowledge Base</span>
             </a>
-            <a href="/admin/tools" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/tools' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/tools" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/tools' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 <span>Abilities</span>
             </a>
-            <a href="/admin/monitoring" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/monitoring' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/monitoring" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/monitoring' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                 <span>Monitoring</span>
             </a>
-            <a href="/admin/clients/{{ user.primary_client_id }}" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/clients/' in request.url.path and user.primary_client_id in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/clients/{{ user.primary_client_id }}" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/clients/' in request.url.path and user.primary_client_id in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                 <span>Settings</span>
             </a>
             {% else %}
             {% if user.role == 'superadmin' %}
-            <a href="/admin/" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if request.url.path == '/admin/' %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if request.url.path == '/admin/' %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
                 <span>Dashboard</span>
             </a>
             {% endif %}
-            {% if user.role in ['superadmin','admin'] %}
-            <a href="/admin/clients" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/clients' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            {% if user.is_super_admin %}
+            <a href="/admin/clients" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/clients' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
                 <span>Clients</span>
             </a>
             {% endif %}
-            <a href="/admin/agents" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/agents' in request.url.path and '/admin/wizard' not in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/agents" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/agents' in request.url.path and '/admin/wizard' not in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                 <span>Sidekicks</span>
             </a>
             {% if user.can_create_sidekick %}
-            <a href="/admin/wizard" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/wizard' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/wizard" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/wizard' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4v16m8-8H4"/></svg>
                 <span>Create Sidekick</span>
             </a>
             {% else %}
-            <a href="/admin/agents?upgrade=1" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-amber-500 hover:bg-white/5">
+            <a href="/admin/agents?upgrade=1" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-amber-500 hover:bg-gray-50">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
                 <span>Create Sidekick</span>
             </a>
             {% endif %}
             {% if user.role in ['superadmin','admin'] %}
-            <a href="/admin/users" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/users' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/users" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/users' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
                 <span>Users</span>
             </a>
             {% endif %}
             {% if user.role in ['superadmin','admin'] %}
-            <a href="/admin/knowledge-base" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/knowledge-base' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/knowledge-base" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/knowledge-base' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
                 <span>Knowledge Base</span>
             </a>
             {% endif %}
             {% if user.role in ['superadmin','admin'] %}
-            <a href="/admin/tools" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/tools' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/tools" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/tools' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 <span>Abilities</span>
             </a>
             {% endif %}
             {% if user.role in ['superadmin','admin'] %}
-            <a href="/admin/monitoring" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/monitoring' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/monitoring" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/monitoring' in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                 <span>Monitoring</span>
             </a>
             {% endif %}
             <!-- Settings (for non-superadmin users with primary_client_id) -->
             {% if user.role != 'superadmin' and user.primary_client_id %}
-            <a href="/admin/clients/{{ user.primary_client_id }}" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5 {% if '/admin/clients/' in request.url.path and user.primary_client_id|string in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
+            <a href="/admin/clients/{{ user.primary_client_id }}" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50 {% if '/admin/clients/' in request.url.path and user.primary_client_id|string in request.url.path %}bg-brand-teal/10 text-brand-teal{% endif %}">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                 <span>Settings</span>
             </a>
             {% endif %}
             {% endif %}
 
-            <div class="border-t border-white/10 my-4"></div>
+            <div class="border-t border-gray-200 my-4"></div>
 
-            <a href="/admin/user-settings" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-300 hover:bg-white/5">
+            <a href="/admin/user-settings" onclick="closeMobileMenu()" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-700 hover:bg-gray-50">
                 {% if avatar_url %}
                 <span class="w-5 h-5 rounded-full bg-center bg-cover border border-brand-teal/50" style="background-image: url('{{ avatar_url }}');"></span>
                 {% else %}

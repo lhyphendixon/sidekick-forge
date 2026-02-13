@@ -4,7 +4,7 @@ from typing import Optional, Literal, Any, Dict, List
 from pydantic import BaseModel, Field
 
 
-ToolType = Literal["mcp", "n8n", "sidekick", "code", "asana", "helpscout", "builtin", "content_catalyst", "documentsense", "lingua"]
+ToolType = Literal["mcp", "n8n", "sidekick", "code", "asana", "helpscout", "builtin", "content_catalyst", "documentsense", "lingua", "image_catalyst", "prediction_market"]
 ToolScope = Literal["global", "client"]
 ExecutionPhase = Literal["active", "ambient"]
 
@@ -28,6 +28,7 @@ class ToolBase(BaseModel):
     icon_url: Optional[str] = None
     config: Dict[str, Any] = Field(default_factory=dict, description="Type-specific configuration")
     enabled: bool = True
+    admin_only: bool = Field(False, description="When true, ability is hidden from subscribers and only available to admin users")
     execution_phase: ExecutionPhase = Field("active", description="When ability runs: active (conversation) or ambient (background)")
     trigger_config: Optional[TriggerConfig] = Field(None, description="Trigger configuration for ambient abilities")
 
@@ -42,6 +43,7 @@ class ToolUpdate(BaseModel):
     icon_url: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
+    admin_only: Optional[bool] = None
     scope: Optional[ToolScope] = None
     execution_phase: Optional[ExecutionPhase] = None
     trigger_config: Optional[TriggerConfig] = None

@@ -17,6 +17,7 @@ from livekit.agents.llm.tool_context import function_tool as lk_function_tool, T
 
 from app.agent_modules.abilities.asana import AsanaAbilityConfigError, build_asana_tool
 from app.agent_modules.abilities.helpscout import HelpScoutAbilityConfigError, build_helpscout_tool
+from app.agent_modules.abilities.prediction_market import build_prediction_market_tool
 from app.services.asana_oauth_service import AsanaOAuthService
 from app.services.helpscout_oauth_service import HelpScoutOAuthService
 from app.agent_modules.tool_status_wrapper import with_status_updates, get_tool_friendly_name
@@ -64,6 +65,10 @@ class ToolRegistry:
                     ft = self._build_helpscout_tool(t)
                 elif ttype == "content_catalyst":
                     ft = self._build_content_catalyst_tool(t)
+                elif ttype == "image_catalyst":
+                    ft = self._build_image_catalyst_tool(t)
+                elif ttype == "prediction_market":
+                    ft = self._build_prediction_market_tool(t)
                 else:
                     self._logger.warning(f"Unsupported tool type '{ttype}' for slug={slug}; skipping")
                     continue
@@ -1064,3 +1069,92 @@ class ToolRegistry:
         _invoke_raw._transcribe_mp3 = _transcribe_mp3
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_image_catalyst_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Image Catalyst tool for AI image generation."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "image-catalyst"
+        cfg = dict(t.get("config") or {})
+        description = t.get("description") or (
+            "Trigger the Image Catalyst AI image generation widget. "
+            "When the user wants to create, generate, or design an image, use this tool. "
+            "Two modes are available: "
+            "1) Thumbnail/Promotional - for polished marketing images, logos, banners, thumbnails "
+            "2) General - for creative artwork, illustrations, concept art, and general imagery. "
+            "The user can upload reference images and describe what they need "
+            "directly in the widget interface. "
+            "Call this tool when the user mentions creating images, generating visuals, "
+            "designing graphics, making thumbnails, or any image creation request."
+        )
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_widget": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Set to true to trigger the Image Catalyst widget UI",
+                    },
+                    "suggested_mode": {
+                        "type": "string",
+                        "enum": ["thumbnail", "general"],
+                        "description": "Suggested generation mode based on conversation context. Use 'thumbnail' for marketing/promotional images, 'general' for creative/artistic images.",
+                    },
+                    "suggested_prompt": {
+                        "type": "string",
+                        "description": "Optional image description suggestion based on the conversation",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            """Trigger the Image Catalyst widget UI for image generation."""
+            try:
+                self._logger.info("🖼️ Image Catalyst widget trigger invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+
+            suggested_mode = kwargs.get("suggested_mode", "general")
+            suggested_prompt = kwargs.get("suggested_prompt", "")
+
+            return f"WIDGET_TRIGGER:image_catalyst:{suggested_mode}:{suggested_prompt}"
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_prediction_market_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Prediction Market tool for querying Polymarket."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "prediction_market"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            for key in (slug, t.get("id"), t.get("name")):
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        # Resolve CLOB API credentials (api_key, secret, passphrase)
+        for cred_key in ("polymarket_api_key", "polymarket_api_secret", "polymarket_passphrase"):
+            value = merged_cfg.get(cred_key)
+            if not value:
+                value = self._api_keys.get(cred_key)
+            if not value:
+                value = os.getenv(cred_key.upper())
+            if value:
+                merged_cfg[cred_key] = value
+
+        return build_prediction_market_tool(t, merged_cfg)

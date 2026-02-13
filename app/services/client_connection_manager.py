@@ -275,7 +275,9 @@ class ClientConnectionManager:
             else:
                 # User-facing - don't expose platform keys, just indicate they're using them
                 logger.info(f"Client {client_id_str} uses Sidekick Forge Inference (platform keys)")
-                return {
+                # Still include client-specific keys (avatar providers, etc.) from additional_settings
+                additional_api_keys = (client_config.get('additional_settings') or {}).get('api_keys', {}) or {}
+                result = {
                     '_uses_platform_keys': True,
                     '_platform_inference_name': 'Sidekick Forge Inference',
                     # Still include LiveKit credentials as those are client-specific
@@ -283,6 +285,12 @@ class ClientConnectionManager:
                     'livekit_api_key': client_config.get('livekit_api_key'),
                     'livekit_api_secret': client_config.get('livekit_api_secret'),
                 }
+                # Include client-specific non-platform keys (avatar providers, etc.)
+                for key in ('bithuman_api_secret', 'bey_api_key', 'liveavatar_api_key'):
+                    val = client_config.get(key) or additional_api_keys.get(key)
+                    if val:
+                        result[key] = val
+                return result
 
         # Check additional_settings.api_keys for any stored keys
         additional_api_keys = (client_config.get('additional_settings') or {}).get('api_keys', {}) or {}

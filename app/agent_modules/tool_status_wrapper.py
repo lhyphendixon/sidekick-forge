@@ -105,6 +105,7 @@ def get_tool_friendly_name(tool_def: dict) -> str:
         "Knowledge Base": "searching the knowledge base",
         "Rag Search": "searching for relevant information",
         "Content Catalyst": "generating your articles",
+        "Prediction Market": "checking prediction markets",
     }
     
     return name_map.get(friendly_name, f"working on {friendly_name}")

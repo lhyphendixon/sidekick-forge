@@ -50,7 +50,7 @@ class VoiceSettings(BaseModel):
     # Provider-specific settings
     provider_config: Dict[str, Any] = Field(default_factory=dict)
     cartesia_emotions_enabled: Optional[bool] = Field(
-        default=False, description="Enable Cartesia dynamic emotion expression - agent chooses emotions based on context"
+        default=True, description="Enable Cartesia dynamic emotion expression - agent chooses emotions based on context"
     )
 
     # Video avatar settings
@@ -100,7 +100,7 @@ class SoundSettings(BaseModel):
         default=0.3, ge=0.0, le=1.0, description="Volume for thinking sound (0.0-1.0)"
     )
     ambient_sound: Optional[str] = Field(
-        default="none", description="Background ambient sound: 'none', 'office', 'forest', 'city', 'crowded_room'"
+        default="none", description="Background ambient sound: 'none', 'office', 'forest', 'city', 'crowded_room', 'skyline_soft_reset'"
     )
     ambient_volume: Optional[float] = Field(
         default=0.15, ge=0.0, le=1.0, description="Volume for ambient sound (0.0-1.0)"
