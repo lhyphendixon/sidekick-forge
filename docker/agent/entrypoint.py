@@ -20,8 +20,8 @@ from datetime import datetime
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2026-02-10T23:39:24Z"
-AGENT_BUILD_HASH = "sonic3-emotions-default"
+AGENT_BUILD_VERSION = "2026-02-15T16:58:42Z"
+AGENT_BUILD_HASH = "yield-before-dbwrite"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
@@ -2158,14 +2158,35 @@ async def agent_job_handler(ctx: JobContext):
                     user_profile = initial_context.get("raw_context_data", {}).get("user_profile")
                     logger.info(f"📊 DIAGNOSTIC: Extracted user_profile: {user_profile}")
             
-            # Extract names for later use in proactive greeting (prefer profile)
-            user_name = (
-                metadata.get("user_name")
+            # Extract names for later use in proactive greeting
+            # Prefer user_overview identity name over profile (which may be a username)
+            user_overview_name = None
+            if 'initial_context' in locals() and initial_context and isinstance(initial_context, dict):
+                raw = initial_context.get("raw_context_data", {})
+                if isinstance(raw, dict):
+                    uo = raw.get("user_overview")
+                    if isinstance(uo, dict):
+                        identity = uo.get("identity", {})
+                        if isinstance(identity, dict):
+                            user_overview_name = identity.get("name") or identity.get("preferred_name") or identity.get("first_name")
+                        if not user_overview_name:
+                            bio = uo.get("biography", {})
+                            if isinstance(bio, dict):
+                                user_overview_name = bio.get("name")
+            def _looks_like_real_name(n: str) -> bool:
+                """Heuristic: real names contain spaces or mixed case, usernames don't."""
+                if not n or len(n) < 2:
+                    return False
+                return ' ' in n or n != n.lower()
+
+            _raw_name = (
+                user_overview_name
+                or metadata.get("user_name")
                 or metadata.get("display_name")
                 or (user_profile.get("full_name") if isinstance(user_profile, dict) and user_profile.get("full_name") else None)
                 or (user_profile.get("name") if isinstance(user_profile, dict) and user_profile.get("name") else None)
-                or "there"
             )
+            user_name = _raw_name if (_raw_name and _looks_like_real_name(_raw_name)) else "there"
             agent_name = metadata.get("name", metadata.get("agent_name", "your AI assistant"))
             
             logger.info(f"📢 Agent will greet user '{user_name}' as '{agent_name}' after session starts")
@@ -3367,25 +3388,22 @@ async def agent_job_handler(ctx: JobContext):
                             session._watchdog_commit_task = None
                             logger.debug("Cancelled watchdog timer - agent started speaking")
                         # Stop thinking sound inline (can't call _stop_thinking_sound_loop as it's defined later)
+                        # Always unconditionally stop handle + task regardless of flag state
                         try:
-                            # Always try to stop the PlayHandle if it exists, regardless of _thinking_sound_playing flag
+                            session._thinking_sound_playing = False
+
                             play_handle = getattr(session, "_thinking_sound_handle", None)
                             if play_handle:
                                 try:
                                     play_handle.stop()
-                                    logger.info("🎵 Stopped PlayHandle (agent speaking)")
-                                except Exception as handle_err:
-                                    logger.warning(f"🎵 PlayHandle stop error: {handle_err}")
+                                except Exception:
+                                    pass
                                 session._thinking_sound_handle = None
 
-                            # Also cancel the task and reset the flag
-                            if getattr(session, "_thinking_sound_playing", False):
-                                session._thinking_sound_playing = False
-                                task = getattr(session, "_thinking_sound_task", None)
-                                if task and not task.done():
-                                    task.cancel()
-                                session._thinking_sound_task = None
-                                logger.info("🎵 Cancelled thinking sound task")
+                            task = getattr(session, "_thinking_sound_task", None)
+                            if task and not task.done():
+                                task.cancel()
+                            session._thinking_sound_task = None
                         except Exception as stop_err:
                             logger.warning(f"🎵 Failed to stop thinking sound: {stop_err}")
 
@@ -3930,9 +3948,21 @@ async def agent_job_handler(ctx: JobContext):
                     thinking_config = getattr(session, "_thinking_sound_config", None)
                     if not thinking_config:
                         return
-                    if getattr(session, "_thinking_sound_playing", False):
-                        logger.debug("🎵 Thinking sound already playing, skipping start")
-                        return
+
+                    # Always force-stop any existing thinking sound before starting a new one.
+                    # This prevents overlapping audio when user interjects rapidly
+                    # (stop sets flag to False, then start fires before old handle fully stops).
+                    existing_task = getattr(session, "_thinking_sound_task", None)
+                    if existing_task and not existing_task.done():
+                        existing_task.cancel()
+                        session._thinking_sound_task = None
+                    existing_handle = getattr(session, "_thinking_sound_handle", None)
+                    if existing_handle:
+                        try:
+                            existing_handle.stop()
+                        except Exception:
+                            pass
+                        session._thinking_sound_handle = None
 
                     # Get the BackgroundAudioPlayer instance
                     bg_player = getattr(session, "_background_audio_player", None)

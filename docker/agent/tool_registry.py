@@ -1460,7 +1460,7 @@ Note: Reasoning mode increases response quality but takes longer. Only enable it
 All sidekicks for this client share this overview, so updates help maintain consistent context.
 
 Use this when the user shares ENDURING, IMPORTANT information about:
-- Who they are (identity, role, background, team)
+- Who they are (name, identity, role, background, team) - ALWAYS store the user's name when they share it
 - What they're trying to achieve (goals, priorities, blockers)
 - How they work best (communication preferences, decision style, notes)
 - Critical context (sensitivities, relationships, constraints)
@@ -1480,7 +1480,7 @@ Do NOT update for:
                     "section": {
                         "type": "string",
                         "enum": ["identity", "goals", "working_style", "important_context", "relationship_history"],
-                        "description": "Which section of the overview to update: identity (role, background), goals (objectives, priorities), working_style (preferences, communication), important_context (sensitivities, constraints), relationship_history (milestones, wins)."
+                        "description": "Which section of the overview to update: identity (name, role, background), goals (objectives, priorities), working_style (preferences, communication), important_context (sensitivities, constraints), relationship_history (milestones, wins)."
                     },
                     "action": {
                         "type": "string",
@@ -1489,7 +1489,7 @@ Do NOT update for:
                     },
                     "key": {
                         "type": "string",
-                        "description": "The field within the section to update. For identity: role, background, team. For goals: primary, secondary, blockers. For working_style: communication, decision_making, notes. For relationship_history: key_wins, ongoing_threads. For important_context: omit key to append to the list."
+                        "description": "The field within the section to update. For identity: name, role, background, team. For goals: primary, secondary, blockers. For working_style: communication, decision_making, notes. For relationship_history: key_wins, ongoing_threads. For important_context: omit key to append to the list."
                     },
                     "value": {
                         "type": "string",

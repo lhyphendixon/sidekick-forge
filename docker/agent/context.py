@@ -1006,10 +1006,23 @@ class AgentContextManager:
         # User Profile Section
         if profile:
             sections.append("## User Profile")
-            
+
             # Format profile fields
-            # Check for various name fields
-            name = profile.get("name") or profile.get("full_name") or profile.get("display_name") or profile.get("username")
+            # Prefer user_overview identity name over profile username
+            name = None
+            if user_overview and isinstance(user_overview, dict):
+                identity = user_overview.get("identity", {})
+                if isinstance(identity, dict):
+                    name = identity.get("name") or identity.get("preferred_name") or identity.get("first_name")
+                if not name:
+                    bio = user_overview.get("biography", {})
+                    if isinstance(bio, dict):
+                        name = bio.get("name")
+            if not name:
+                _profile_name = profile.get("name") or profile.get("full_name") or profile.get("display_name") or profile.get("username")
+                # Only use profile name if it looks like a real name (has spaces or mixed case)
+                if _profile_name and (' ' in _profile_name or _profile_name != _profile_name.lower()):
+                    name = _profile_name
             if name:
                 sections.append(f"**Name:** {self._truncate_text(name, MAX_PROFILE_FIELD_CHARS)}  ")
             
@@ -1163,7 +1176,7 @@ These notes are shared across all sidekicks for this client - they're your colle
 
 **Use this tool when the user shares ENDURING information about:**
 - **Biography:** Life story, background, personal journey, ventures, projects, origin story
-- **Identity:** Career/role changes ("I just got promoted", "I'm switching teams"), who they are
+- **Identity:** Their name (ALWAYS store under identity.name when shared), career/role changes, who they are
 - **Goals:** Priority shifts ("My priority is now X instead of Y"), aspirations, missions
 - **Working Style:** Communication preferences, decision-making patterns, neurodivergence
 - **Important Context:** Personal factors affecting interactions, constraints, circumstances

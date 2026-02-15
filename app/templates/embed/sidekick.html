@@ -34,10 +34,10 @@
     .htmx-indicator { opacity: 0; transition: opacity 300ms ease; }
     .htmx-request .htmx-indicator { opacity: 1; }
     /* Button inline loading */
-    .btn-loading { position: relative; opacity: 0.9; pointer-events: none; }
+    .btn-loading { position: relative; opacity: 0.9; pointer-events: none; transition: none !important; }
     .btn-loading > * { visibility: hidden; }
-    .btn-loading::after { content:""; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:16px; height:16px; border:2px solid #01a4a6; border-top-color:#fc7244; border-radius:9999px; animation: spin 0.9s linear infinite; }
-    @keyframes spin { 0%{transform:translate(-50%,-50%) rotate(0deg);} 100%{transform:translate(-50%,-50%) rotate(360deg);} }
+    .btn-loading::after { content:""; position:absolute; left:50%; top:50%; width:16px; height:16px; border:2px solid #01a4a6; border-top-color:#fc7244; border-radius:9999px; animation: btn-spin 0.7s linear infinite; }
+    @keyframes btn-spin { from{transform:translate(-50%,-50%) rotate(0deg);} to{transform:translate(-50%,-50%) rotate(360deg);} }
 
     /* Initial loading overlay */
     #initialLoader {
@@ -594,6 +594,19 @@
       -webkit-backdrop-filter: blur(8px);
       text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 0, 0, 0.5);
     }
+    /* Keep prose compact inside video subtitle bubbles */
+    .video-transcript-assistant .prose {
+      font-size: inherit;
+      line-height: 1.4;
+    }
+    .video-transcript-assistant .prose p { margin: 0.15em 0; }
+    .video-transcript-assistant .prose ul,
+    .video-transcript-assistant .prose ol { margin: 0.15em 0; padding-left: 1.2em; }
+    .video-transcript-assistant .prose li { margin: 0; }
+    .video-transcript-assistant .prose h1,
+    .video-transcript-assistant .prose h2,
+    .video-transcript-assistant .prose h3,
+    .video-transcript-assistant .prose h4 { font-size: inherit; margin: 0.2em 0; }
     /* Smooth fade-in animation for new transcripts */
     .video-transcript-bubble {
       animation: transcriptFadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
@@ -2795,18 +2808,14 @@ function clearVoiceTranscriptError(){
                 if (!row) { console.log('[voice] INSERT: no row in payload'); return; }
                 const txt = row.content || row.transcript || '';
                 if (!txt) { console.log('[voice] INSERT: no content in row'); return; }
-                const alreadySeen = __seenTranscriptIds?.has(row.id) || window.__lk_transcript_seen?.[row.id];
-                console.log('[voice] INSERT event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'seen:', alreadySeen, 'citations:', row.citations?.length || 0);
-                if (!alreadySeen) {
-                  appendVoiceTranscript(row.role, txt, row.created_at, row.citations, row.id);
-                } else {
-                  // Already displayed via LiveKit, but check if we now have citations to add
-                  if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
-                    console.log('[voice] Adding citations to existing transcript:', row.id?.slice(0,8), row.citations.length);
-                    addCitationsToTranscript(row.id, row.citations, txt);
-                  } else {
-                    console.log('[voice] INSERT SKIPPED (pre-check seen, no new citations):', row.id?.slice(0,8));
-                  }
+                console.log('[voice] INSERT event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'citations:', row.citations?.length || 0);
+                // In voice mode, TranscriptionReceived is the sole source for new transcript bubbles.
+                // Supabase Realtime INSERT only handles citations and content updates on existing bubbles.
+                // This prevents duplicate bubbles since Supabase row IDs differ from LiveKit segment IDs.
+                markTranscriptSeen(row.id); // Mark Supabase ID as seen for UPDATE handler
+                if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
+                  console.log('[voice] INSERT: adding citations from DB:', row.id?.slice(0,8), row.citations.length);
+                  addCitationsToTranscript(row.id, row.citations, txt);
                 }
               } catch (cbErr) {
                 console.error('[voice] INSERT callback error:', cbErr);
@@ -3705,11 +3714,15 @@ function clearVoiceTranscriptError(){
               return;
             }
 
-            if (parsed && (parsed.content || parsed.transcript || parsed.text)) {
-              parsed.id = parsed.id || `${topic || 'data'}-${Date.now()}`;
-              const pIdentity = String(participant?.identity || '').toLowerCase();
-              const fallbackRole = parsed.role || (pIdentity.includes('agent') ? 'assistant' : 'user');
-              ingestLivekitTranscript(parsed, fallbackRole);
+            // Skip transcription-like messages in DataReceived — these are already
+            // handled by the TranscriptionReceived handler. The LiveKit SDK delivers
+            // transcriptions via both text streams (DataReceived) and the transcription
+            // protocol (TranscriptionReceived), causing duplicates if both are ingested.
+            // Only process explicit non-transcription data here (typed events like
+            // model_loading, model_ready, kenburns_image are handled above).
+            if (parsed && parsed.type && !['kenburns_image','model_loading','model_ready'].includes(parsed.type)) {
+              // Custom typed events from agent — handle as needed
+              console.log('[voice] DataReceived custom event:', parsed.type);
             }
           } catch (err) {
             try { console.warn('[voice] failed to process LiveKit data payload', err); } catch {}
@@ -3735,6 +3748,10 @@ function clearVoiceTranscriptError(){
                 const text = segments.map(s => s.text || '').join(' ').trim();
                 const isFinal = segments.some(s => s.final);
                 const segmentId = segments[0]?.id || `lk-${Date.now()}`;
+                // Use first segment ID as a per-speech key for interim bubble IDs.
+                // This prevents consecutive same-role speeches from colliding:
+                // each speech gets its own unique interim ID based on its segment ID.
+                const speechKey = segments[0]?.id || _voiceTurnCounter;
                 if (text) {
                   // Determine role from participant identity
                   const isAgent = participant && (
@@ -3744,20 +3761,48 @@ function clearVoiceTranscriptError(){
                   const role = isAgent ? 'assistant' : 'user';
 
                   // Increment turn counter when switching between user and assistant
-                  // This ensures each assistant response gets a new bubble below user's message
+                  // (kept as fallback for when segment IDs are unavailable)
                   if (_lastInterimRole && _lastInterimRole !== role) {
                     _voiceTurnCounter++;
                   }
                   _lastInterimRole = role;
 
                   if (isFinal) {
-                    // Final transcript - display it
-                    ingestLivekitTranscript({
-                      text,
-                      role,
-                      id: segmentId,
-                      createdAt: new Date().toISOString()
-                    }, role);
+                    // Check if this speech's final bubble already exists (subsequent
+                    // events for the same speech add more final segments)
+                    const existingFinal = document.querySelector(`[data-transcript-id="${segmentId}"]`);
+                    if (existingFinal) {
+                      // Same speech — just update the growing text
+                      updateVoiceTranscript(segmentId, text, role);
+                    } else {
+                      // Promote the interim bubble to final instead of creating a new one.
+                      // This prevents any flash of duplicate transcription.
+                      const interimId = `interim-${role}-${speechKey}`;
+                      const interimEl = document.querySelector(`[data-transcript-id="${interimId}"]`);
+                      if (interimEl) {
+                        // Re-tag the interim bubble with the final segment ID
+                        interimEl.setAttribute('data-transcript-id', segmentId);
+                        // Update content to the final text
+                        updateVoiceTranscript(segmentId, text, role);
+                        // Mark both IDs as seen so no other source can duplicate
+                        markTranscriptSeen(segmentId);
+                        markTranscriptSeen(interimId);
+                      } else {
+                        // No interim existed (e.g. very fast response) — add normally
+                        ingestLivekitTranscript({
+                          text,
+                          role,
+                          id: segmentId,
+                          createdAt: new Date().toISOString()
+                        }, role);
+                      }
+                    }
+
+                    // Register text in content-based dedup so Supabase Realtime
+                    // INSERT of the same content is also suppressed
+                    if (text && text.length >= 5) {
+                      isRecentDuplicateText(role, text);
+                    }
 
                     // Start citation polling for assistant messages
                     // Since Realtime isn't reliably delivering events, we poll for citations
@@ -3766,8 +3811,9 @@ function clearVoiceTranscriptError(){
                       startCitationPolling(transcriptConversationId);
                     }
                   } else {
-                    // Interim transcript - use turn-specific ID so responses don't overwrite greetings
-                    const tempId = `interim-${role}-${_voiceTurnCounter}`;
+                    // Interim transcript - use per-speech key so consecutive
+                    // same-role responses each get their own bubble
+                    const tempId = `interim-${role}-${speechKey}`;
                     if (!updateVoiceTranscript(tempId, text, role)) {
                       appendVoiceTranscript(role, text, new Date().toISOString(), [], tempId);
                     }
@@ -3780,6 +3826,74 @@ function clearVoiceTranscriptError(){
           });
         }
       } catch {}
+
+      // ── Modern text-stream handler for lk.transcription ──
+      // The LiveKit Agents SDK publishes transcriptions via BOTH:
+      //   1. Legacy publish_transcription → TranscriptionReceived (handled above)
+      //   2. Modern stream_text → registerTextStreamHandler (handled here)
+      // The legacy path silently drops text if the audio track isn't published
+      // yet (track_id race), so this handler serves as a robust fallback.
+      try {
+        if (typeof roomConn.registerTextStreamHandler === 'function') {
+          roomConn.registerTextStreamHandler('lk.transcription', async (reader, participantInfo) => {
+            try {
+              const isFinal = reader.info?.attributes?.['lk.transcription_final'] === 'true';
+              const segmentId = reader.info?.attributes?.['lk.segment_id'];
+              const identity = participantInfo?.identity || '';
+              const isAgent = identity.toLowerCase().includes('agent') ||
+                participantInfo?.kind === (ParticipantKind?.AGENT || 1);
+              const role = isAgent ? 'assistant' : 'user';
+
+              // readAll waits for the stream to close, then returns full text
+              const text = await reader.readAll();
+              if (!text || !text.trim()) return;
+
+              console.log('[voice] TextStream lk.transcription', {
+                role, isFinal, segmentId: segmentId?.slice(0, 8), len: text.length
+              });
+
+              // Dedup: if the TranscriptionReceived handler already rendered this
+              // segment, skip to avoid duplicates.
+              if (segmentId && document.querySelector(`[data-transcript-id="${segmentId}"]`)) {
+                // Already rendered by legacy handler — just update text
+                updateVoiceTranscript(segmentId, text, role);
+                return;
+              }
+
+              if (isFinal) {
+                const speechKey = segmentId || _voiceTurnCounter;
+                const interimId = `interim-${role}-${speechKey}`;
+                const interimEl = document.querySelector(`[data-transcript-id="${interimId}"]`);
+                if (interimEl) {
+                  interimEl.setAttribute('data-transcript-id', segmentId);
+                  updateVoiceTranscript(segmentId, text, role);
+                  markTranscriptSeen(segmentId);
+                  markTranscriptSeen(interimId);
+                } else {
+                  ingestLivekitTranscript({
+                    text, role, id: segmentId, createdAt: new Date().toISOString()
+                  }, role);
+                }
+                if (text.length >= 5) isRecentDuplicateText(role, text);
+                if (role === 'assistant' && transcriptConversationId) {
+                  startCitationPolling(transcriptConversationId);
+                }
+              } else {
+                // Interim — create or update bubble
+                const tempId = `interim-${role}-${segmentId || _voiceTurnCounter}`;
+                if (!updateVoiceTranscript(tempId, text, role)) {
+                  appendVoiceTranscript(role, text, new Date().toISOString(), [], tempId);
+                }
+              }
+            } catch (err) {
+              console.warn('[voice] TextStream lk.transcription handler error', err);
+            }
+          });
+          console.log('[voice] Registered lk.transcription text stream handler');
+        }
+      } catch (err) {
+        console.warn('[voice] Failed to register text stream handler', err);
+      }
 
       roomConn.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
         try {
@@ -4053,8 +4167,8 @@ function clearVoiceTranscriptError(){
       status.textContent = 'Connecting to video...';
       
       try { console.log('[video] ensuring session'); } catch {}
-      const {ok, session, manualToken} = await ensureSession();
-      
+      const ok = await ensureSession();
+
       const hasSupabaseUser = !!(session?.user?.id);
       const hasManualToken = !!manualToken;
       const injectedUserId = window.__client_user_id;
@@ -4512,10 +4626,13 @@ function clearVoiceTranscriptError(){
             if (isUser) {
               // For user: only update if new text is longer (handles out-of-order STT chunks)
               if (text.length >= (textSpan.textContent || '').length) {
-                textSpan.textContent = text;
+                textSpan.innerHTML = escapeAndLinkify(text);
               }
             } else {
-              textSpan.textContent = text;
+              const rawText = (text || '').replace(/\\n/g, '\n');
+              textSpan.innerHTML = (window.marked && window.DOMPurify)
+                ? DOMPurify.sanitize(marked.parse(rawText))
+                : rawText.replace(/\n/g, '<br>');
             }
           }
           return;
@@ -4533,7 +4650,7 @@ function clearVoiceTranscriptError(){
       const bubble = document.createElement('div');
       bubble.className = isUser
         ? 'video-transcript-bubble video-transcript-user max-w-[85%] px-4 py-2 rounded-2xl text-white text-sm font-medium'
-        : 'video-transcript-bubble video-transcript-assistant max-w-[85%] px-4 py-2 rounded-2xl text-white text-sm';
+        : 'video-transcript-bubble video-transcript-assistant max-w-[85%] px-4 py-2 rounded-2xl text-white text-sm prose prose-invert prose-sm max-w-none';
 
       // Add subtle role indicator for assistant
       if (!isUser) {
@@ -4543,13 +4660,16 @@ function clearVoiceTranscriptError(){
         bubble.appendChild(roleLabel);
       }
 
-      // Add text content (linkify URLs for user messages)
+      // Add text content (linkify URLs for user, markdown for assistant)
       const textSpan = document.createElement('span');
       textSpan.className = 'transcript-text';
       if (isUser) {
         textSpan.innerHTML = escapeAndLinkify(text);
       } else {
-        textSpan.textContent = text;
+        const rawText = (text || '').replace(/\\n/g, '\n');
+        textSpan.innerHTML = (window.marked && window.DOMPurify)
+          ? DOMPurify.sanitize(marked.parse(rawText))
+          : rawText.replace(/\n/g, '<br>');
       }
       bubble.appendChild(textSpan);
 
@@ -4609,8 +4729,11 @@ function clearVoiceTranscriptError(){
             }
             // else: skip update - probably an out-of-order interim result
           } else {
-            // For assistant messages: always update
-            textSpan.textContent = text;
+            // For assistant messages: always update with markdown rendering
+            const rawText = (text || '').replace(/\\n/g, '\n');
+            textSpan.innerHTML = (window.marked && window.DOMPurify)
+              ? DOMPurify.sanitize(marked.parse(rawText))
+              : rawText.replace(/\n/g, '<br>');
           }
         }
       }

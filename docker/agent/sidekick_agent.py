@@ -910,6 +910,9 @@ class SidekickAgent(voice.Agent):
                        self._current_turn_id[:8] if self._current_turn_id else None)
 
         accumulated_text = ""
+        # Lock serialises background DB writes so INSERT completes before any UPDATE
+        _db_lock = asyncio.Lock()
+        _db_tasks: list[asyncio.Task] = []
 
         async for chunk in text:
             # Extract text from chunk (TimedString or plain str)
@@ -917,153 +920,30 @@ class SidekickAgent(voice.Agent):
                 chunk_text = str(chunk)
             else:
                 chunk_text = chunk
-            
+
             # Accumulate text
             accumulated_text += chunk_text
 
-            # Apply formatting incrementally for better UX
-            # This formats the text as it streams rather than waiting for the end
-            formatted_text = self._enhance_text_for_display(accumulated_text)
-
-            # Write to database incrementally with formatted text
-            # DEBUG: Log the condition check
-            logger.debug(f"📝 DB write check: supabase={bool(self._supabase_client)}, conv_id={bool(self._conversation_id)}, agent_id={bool(self._agent_id)}")
-            if self._supabase_client and self._conversation_id and self._agent_id:
-                try:
-                    timestamp = datetime.utcnow().isoformat()
-
-                    if not self._streaming_transcript_row_id:
-                        # First chunk: INSERT a new row
-                        # Use _user_turn_id to link assistant response to user utterance
-                        # This ensures the UI can group user + assistant in the same turn
-                        if not self._current_turn_id:
-                            self._current_turn_id = self._user_turn_id or str(uuid.uuid4())
-
-                        # Ensure conversation record exists before first INSERT (FK constraint)
-                        try:
-                            existing = await asyncio.to_thread(
-                                lambda: self._supabase_client
-                                    .table("conversations")
-                                    .select("id")
-                                    .eq("id", self._conversation_id)
-                                    .limit(1)
-                                    .execute()
-                            )
-                            if not existing or not getattr(existing, "data", None):
-                                conv_payload = {
-                                    "id": self._conversation_id,
-                                    "agent_id": self._agent_id,
-                                    "user_id": self._user_id,
-                                    "channel": "voice",
-                                    "created_at": timestamp,
-                                    "updated_at": timestamp,
-                                }
-                                if self._client_id:
-                                    conv_payload["client_id"] = self._client_id
-                                # Try INSERT with fallback for dedicated tenant schemas (no client_id column)
-                                try:
-                                    await asyncio.to_thread(
-                                        lambda: self._supabase_client
-                                            .table("conversations")
-                                            .insert(conv_payload)
-                                            .execute()
-                                    )
-                                except Exception as conv_insert_exc:
-                                    # If insert failed due to client_id column, retry without it
-                                    if self._client_id and ("client_id" in str(conv_insert_exc).lower() or "column" in str(conv_insert_exc).lower()):
-                                        logger.info(f"📝 Retrying conversation insert without client_id (dedicated tenant schema)")
-                                        conv_payload.pop("client_id", None)
-                                        await asyncio.to_thread(
-                                            lambda: self._supabase_client
-                                                .table("conversations")
-                                                .insert(conv_payload)
-                                                .execute()
-                                        )
-                                    else:
-                                        raise
-                                logger.info(f"📝 Created conversation record: {self._conversation_id[:8]}")
-                        except Exception as conv_err:
-                            logger.warning(f"📝 Failed to ensure conversation exists: {conv_err}")
-
-                        # DIAGNOSTIC: Log INSERT operation
-                        logger.info(f"📝 INSERT transcript: call_id={call_id}, turn_id={self._current_turn_id[:8]}, text='{formatted_text[:50]}...'")
-
-                        row = {
-                            "conversation_id": self._conversation_id,
-                            "session_id": self._conversation_id,
-                            "agent_id": self._agent_id,
-                            "user_id": self._user_id,
-                            "role": "assistant",
-                            "content": formatted_text,
-                            "transcript": formatted_text,
-                            "turn_id": self._current_turn_id,
-                            "created_at": timestamp,
-                            "source": "voice",
-                            "metadata": {}
-                        }
-
-                        # Add client_id for multi-tenant schemas
-                        if self._client_id:
-                            row["client_id"] = self._client_id
-
-                        # Inject tool insight citations (e.g. prediction market)
-                        self._inject_tool_insight_citations()
-
-                        # Add citations if available
-                        if self._current_citations:
-                            row["citations"] = self._current_citations
-                            logger.info(f"📚 [CITATION-INSERT] Adding {len(self._current_citations)} citations to streaming INSERT")
-                        else:
-                            logger.info(f"📚 [CITATION-INSERT] No citations available for streaming INSERT (citations_enabled={self._citations_enabled})")
-
-                        # Try INSERT with fallback for dedicated tenant schemas (no client_id column)
-                        try:
-                            result = await asyncio.to_thread(
-                                lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
-                            )
-                        except Exception as insert_exc:
-                            # If insert failed due to client_id column, retry without it (dedicated tenant schema)
-                            if self._client_id and ("client_id" in str(insert_exc).lower() or "column" in str(insert_exc).lower()):
-                                logger.info(f"📝 Retrying streaming transcript insert without client_id (dedicated tenant schema)")
-                                row.pop("client_id", None)
-                                result = await asyncio.to_thread(
-                                    lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
-                                )
-                            else:
-                                raise
-
-                        if result.data and len(result.data) > 0:
-                            self._streaming_transcript_row_id = result.data[0].get("id")
-                            logger.info(f"📝 INSERT SUCCESS: row_id={self._streaming_transcript_row_id}, call_id={call_id}")
-                    else:
-                        # Subsequent chunks: UPDATE the existing row with formatted text
-                        # DEBUG: Check if newlines are present in the text we're writing
-                        has_newlines = '\n\n' in formatted_text
-                        logger.info(f"📝 UPDATE transcript: row_id={self._streaming_transcript_row_id}, has_newlines={has_newlines}, len={len(formatted_text)}")
-                        if has_newlines:
-                            # Log first occurrence of newline to verify
-                            nl_pos = formatted_text.find('\n\n')
-                            logger.info(f"📝 UPDATE newline context: ...{repr(formatted_text[max(0,nl_pos-20):nl_pos+20])}...")
-
-                        await asyncio.to_thread(
-                            lambda: self._supabase_client.table("conversation_transcripts")
-                            .update({
-                                "content": formatted_text,
-                                "transcript": formatted_text
-                            })
-                            .eq("id", self._streaming_transcript_row_id)
-                            .execute()
-                        )
-                        logger.debug(f"📝 Updated streaming transcript ({len(formatted_text)} chars)")
-
-                except Exception as e:
-                    logger.warning(f"Failed to write streaming transcript: {e}")
-            else:
-                # Log why we're not writing to database
-                logger.warning(f"📝 DB write SKIPPED: supabase={bool(self._supabase_client)}, conv_id={self._conversation_id}, agent_id={self._agent_id}")
-
-            # Yield the chunk back to continue the pipeline
+            # CRITICAL: Yield the chunk IMMEDIATELY so perform_text_forwarding can
+            # publish it to the room (TranscriptionReceived) without waiting for DB writes.
+            # Previously, the yield was AFTER the Supabase write, causing 10-20s delays
+            # before any transcript appeared on the frontend.
             yield chunk
+
+            # Schedule DB write as a background task (non-blocking).
+            # The lock ensures the first INSERT completes before any UPDATEs run.
+            formatted_text = self._enhance_text_for_display(accumulated_text)
+            is_first = not self._streaming_transcript_row_id
+            task = asyncio.create_task(
+                self._write_streaming_transcript_chunk(
+                    _db_lock, call_id, formatted_text, is_first
+                )
+            )
+            _db_tasks.append(task)
+
+        # Wait for all pending DB writes to finish before exiting
+        if _db_tasks:
+            await asyncio.gather(*_db_tasks, return_exceptions=True)
 
         # At end of stream, ensure final content is formatted
         # (formatting is already applied incrementally, this is a safety net)
@@ -1079,7 +959,150 @@ class SidekickAgent(voice.Agent):
             self._last_assistant_commit = final_content
         except Exception:
             pass
-        logger.info(f"📝 transcription_node FINISHED, accumulated: {len(accumulated_text)} chars, enhanced: {len(final_content)} chars")
+
+    async def _write_streaming_transcript_chunk(
+        self,
+        lock: asyncio.Lock,
+        call_id: str,
+        formatted_text: str,
+        is_first: bool,
+    ) -> None:
+        """Write a streaming transcript chunk to Supabase in the background.
+
+        Uses *lock* to serialise writes so the initial INSERT always finishes
+        before any UPDATE runs.
+        """
+        async with lock:
+            if not (self._supabase_client and self._conversation_id and self._agent_id):
+                logger.warning(
+                    "📝 DB write SKIPPED: supabase=%s, conv_id=%s, agent_id=%s",
+                    bool(self._supabase_client), self._conversation_id, self._agent_id,
+                )
+                return
+
+            try:
+                timestamp = datetime.utcnow().isoformat()
+
+                if is_first and not self._streaming_transcript_row_id:
+                    # First chunk: INSERT a new row
+                    if not self._current_turn_id:
+                        self._current_turn_id = self._user_turn_id or str(uuid.uuid4())
+
+                    # Ensure conversation record exists before first INSERT (FK constraint)
+                    try:
+                        existing = await asyncio.to_thread(
+                            lambda: self._supabase_client
+                                .table("conversations")
+                                .select("id")
+                                .eq("id", self._conversation_id)
+                                .limit(1)
+                                .execute()
+                        )
+                        if not existing or not getattr(existing, "data", None):
+                            conv_payload = {
+                                "id": self._conversation_id,
+                                "agent_id": self._agent_id,
+                                "user_id": self._user_id,
+                                "channel": "voice",
+                                "created_at": timestamp,
+                                "updated_at": timestamp,
+                            }
+                            if self._client_id:
+                                conv_payload["client_id"] = self._client_id
+                            try:
+                                await asyncio.to_thread(
+                                    lambda: self._supabase_client
+                                        .table("conversations")
+                                        .insert(conv_payload)
+                                        .execute()
+                                )
+                            except Exception as conv_insert_exc:
+                                if self._client_id and ("client_id" in str(conv_insert_exc).lower() or "column" in str(conv_insert_exc).lower()):
+                                    logger.info("📝 Retrying conversation insert without client_id (dedicated tenant schema)")
+                                    conv_payload.pop("client_id", None)
+                                    await asyncio.to_thread(
+                                        lambda: self._supabase_client
+                                            .table("conversations")
+                                            .insert(conv_payload)
+                                            .execute()
+                                    )
+                                else:
+                                    raise
+                            logger.info("📝 Created conversation record: %s", self._conversation_id[:8])
+                    except Exception as conv_err:
+                        logger.warning("📝 Failed to ensure conversation exists: %s", conv_err)
+
+                    logger.info("📝 INSERT transcript: call_id=%s, turn_id=%s, text='%s...'",
+                               call_id, self._current_turn_id[:8] if self._current_turn_id else None,
+                               formatted_text[:50])
+
+                    row = {
+                        "conversation_id": self._conversation_id,
+                        "session_id": self._conversation_id,
+                        "agent_id": self._agent_id,
+                        "user_id": self._user_id,
+                        "role": "assistant",
+                        "content": formatted_text,
+                        "transcript": formatted_text,
+                        "turn_id": self._current_turn_id,
+                        "created_at": timestamp,
+                        "source": "voice",
+                        "metadata": {}
+                    }
+
+                    if self._client_id:
+                        row["client_id"] = self._client_id
+
+                    self._inject_tool_insight_citations()
+
+                    if self._current_citations:
+                        row["citations"] = self._current_citations
+                        logger.info("📚 [CITATION-INSERT] Adding %d citations to streaming INSERT", len(self._current_citations))
+                    else:
+                        logger.info("📚 [CITATION-INSERT] No citations available for streaming INSERT (citations_enabled=%s)", self._citations_enabled)
+
+                    try:
+                        result = await asyncio.to_thread(
+                            lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
+                        )
+                    except Exception as insert_exc:
+                        if self._client_id and ("client_id" in str(insert_exc).lower() or "column" in str(insert_exc).lower()):
+                            logger.info("📝 Retrying streaming transcript insert without client_id (dedicated tenant schema)")
+                            row.pop("client_id", None)
+                            result = await asyncio.to_thread(
+                                lambda: self._supabase_client.table("conversation_transcripts").insert(row).execute()
+                            )
+                        else:
+                            raise
+
+                    if result.data and len(result.data) > 0:
+                        self._streaming_transcript_row_id = result.data[0].get("id")
+                        logger.info("📝 INSERT SUCCESS: row_id=%s, call_id=%s", self._streaming_transcript_row_id, call_id)
+                else:
+                    # Subsequent chunks: UPDATE the existing row with formatted text
+                    if not self._streaming_transcript_row_id:
+                        logger.warning("📝 UPDATE skipped - no row_id yet (INSERT may have failed)")
+                        return
+                    has_newlines = '\n\n' in formatted_text
+                    logger.info("📝 UPDATE transcript: row_id=%s, has_newlines=%s, len=%d",
+                               self._streaming_transcript_row_id, has_newlines, len(formatted_text))
+                    if has_newlines:
+                        nl_pos = formatted_text.find('\n\n')
+                        logger.info("📝 UPDATE newline context: ...%s...", repr(formatted_text[max(0, nl_pos-20):nl_pos+20]))
+
+                    await asyncio.to_thread(
+                        lambda: self._supabase_client.table("conversation_transcripts")
+                        .update({
+                            "content": formatted_text,
+                            "transcript": formatted_text
+                        })
+                        .eq("id", self._streaming_transcript_row_id)
+                        .execute()
+                    )
+                    logger.debug("📝 Updated streaming transcript (%d chars)", len(formatted_text))
+
+            except Exception as e:
+                logger.warning("Failed to write streaming transcript: %s", e)
 
     @staticmethod
     def _normalize_spelled_words(text: str) -> str:
