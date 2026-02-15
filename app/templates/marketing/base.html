@@ -445,5 +445,67 @@
     </footer>
 
     {% block extra_scripts %}{% endblock %}
+
+    <!-- First-visit email capture popup -->
+    <div id="emailPopup" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4" style="background:rgba(0,0,0,0.6);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);">
+        <div class="relative w-full max-w-md rounded-2xl overflow-hidden shadow-2xl" style="background:linear-gradient(135deg,#0a0a0a 0%,#141414 100%);border:1px solid rgba(255,255,255,0.08);">
+            <!-- Close button -->
+            <button onclick="closeEmailPopup()" class="absolute top-3 right-3 text-gray-500 hover:text-white p-1 transition z-10">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+            <!-- Top accent bar -->
+            <div class="h-1" style="background:linear-gradient(90deg,#01a4a6,#fc7244);"></div>
+            <div class="p-6 sm:p-8">
+                <!-- Logo -->
+                <div class="flex justify-center mb-5">
+                    <div class="logo-container" style="width:48px;height:48px;">
+                        <img src="/static/images/Logos/SF-Symbol-Medium-bg.jpg" alt="" class="logo-bg" />
+                        <img src="/static/images/Logos/SF-Symbol-Medium-Gem.png" alt="Sidekick Forge" class="logo-gem" />
+                    </div>
+                </div>
+                <h2 class="text-xl sm:text-2xl font-bold text-white text-center mb-2">Stay connected</h2>
+                <p class="text-gray-400 text-sm text-center mb-6">Get product updates, AI tips, and founder insights delivered to your inbox.</p>
+                <div id="popup-form-wrapper">
+                    <form hx-post="/api/newsletter/subscribe"
+                          hx-target="#popup-form-wrapper"
+                          hx-swap="innerHTML"
+                          hx-indicator="#popup-spinner"
+                          hx-on::after-request="if(event.detail.successful) setTimeout(closeEmailPopup, 2500)"
+                          class="flex flex-col gap-3">
+                        <input type="text" name="name" required placeholder="Your name"
+                               class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-4 py-3 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent text-sm">
+                        <input type="email" name="email" required placeholder="you@example.com"
+                               class="w-full bg-white/5 border border-white/10 text-white rounded-lg px-4 py-3 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent text-sm">
+                        <button type="submit"
+                                class="w-full bg-brand-teal hover:bg-brand-teal/90 text-white py-3 rounded-lg font-semibold transition btn-glow flex items-center justify-center gap-2 text-sm">
+                            <span>Subscribe</span>
+                            <svg id="popup-spinner" class="htmx-indicator w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        </button>
+                    </form>
+                </div>
+                <p class="text-gray-600 text-xs text-center mt-4">No spam, unsubscribe anytime.</p>
+            </div>
+        </div>
+    </div>
+    <script>
+        function closeEmailPopup() {
+            var el = document.getElementById('emailPopup');
+            if (el) el.classList.add('hidden');
+            try { localStorage.setItem('sf_email_popup_dismissed', '1'); } catch(e) {}
+        }
+        (function() {
+            try {
+                if (localStorage.getItem('sf_email_popup_dismissed')) return;
+            } catch(e) {}
+            // Show popup after a short delay so the page loads first
+            setTimeout(function() {
+                var el = document.getElementById('emailPopup');
+                if (el) el.classList.remove('hidden');
+            }, 3000);
+        })();
+    </script>
 </body>
 </html>
