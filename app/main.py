@@ -307,6 +307,31 @@ async def auth_exception_handler(request: Request, exc):
             content={"detail": str(exc.detail) if hasattr(exc, 'detail') else "Unauthorized"}
         )
 
+# Plugin download endpoint — bypasses CDN static-file blocking
+from fastapi.responses import FileResponse
+import pathlib
+
+@app.get("/downloads/{filename}", tags=["wordpress"])
+async def download_plugin(filename: str):
+    """Serve plugin zip files from the downloads directory."""
+    if not filename.endswith(".zip"):
+        return JSONResponse(status_code=404, content={"error": "Not found"})
+    # Sanitise: strip path separators to prevent traversal
+    safe_name = pathlib.PurePosixPath(filename).name
+    candidates = [
+        pathlib.Path("/app/static/downloads") / safe_name,
+        pathlib.Path(os.path.join(os.path.dirname(__file__), "static", "downloads")) / safe_name,
+    ]
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return FileResponse(
+                path=str(path),
+                media_type="application/zip",
+                filename=safe_name,
+                headers={"Cache-Control": "no-cache"},
+            )
+    return JSONResponse(status_code=404, content={"error": "File not found"})
+
 # Include webhook routers
 from app.api.webhooks import livekit_router, supabase_router
 from app.api.webhooks.telegram import router as telegram_router

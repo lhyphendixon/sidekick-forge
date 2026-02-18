@@ -541,21 +541,67 @@ async def issue_wordpress_session(request: Request):
 
     # Try to find existing user or create new one
     user_id = None
-    try:
-        # Look up by shadow email first
-        users = client_admin.auth.admin.list_users()
-        for u in users:
-            u_email = u.email if hasattr(u, 'email') else u.get('email')
-            u_metadata = (u.user_metadata if hasattr(u, 'user_metadata') else u.get('user_metadata')) or {}
-            if u_email == shadow_email or (isinstance(u_metadata, dict) and u_metadata.get("wp_user_id") == str(payload.get("wp_user_id")) and u_metadata.get("wp_site") == payload.get("site")):
-                user_id = u.id if hasattr(u, 'id') else u.get('id')
-                logger.info(f"WordPress session: Found existing user {user_id} for {shadow_email}")
-                break
-    except Exception as e:
-        logger.warning(f"WordPress session: Error looking up user: {e}")
 
+    # 1. Direct lookup via the auth admin REST endpoint (avoids pagination issues)
+    try:
+        import httpx
+        admin_headers = {
+            "apikey": client_supabase_service_key,
+            "Authorization": f"Bearer {client_supabase_service_key}",
+        }
+        lookup_url = f"{client_supabase_url}/auth/v1/admin/users"
+        # Supabase GoTrue doesn't support email filter param, so query the
+        # DB directly through PostgREST for a reliable lookup.
+        db_url = f"{client_supabase_url}/rest/v1/rpc/get_user_id_by_email"
+        # Fallback: iterate list_users with pagination
+        page = 1
+        per_page = 50
+        while not user_id:
+            users_resp = httpx.get(
+                lookup_url,
+                params={"page": page, "per_page": per_page},
+                headers=admin_headers,
+                timeout=10,
+            )
+            if users_resp.status_code != 200:
+                logger.warning(f"WordPress session: list_users returned {users_resp.status_code}")
+                break
+            users_data = users_resp.json()
+            users_list = users_data.get("users", users_data) if isinstance(users_data, dict) else users_data
+            if not users_list:
+                break
+            for u in users_list:
+                u_email = u.get("email", "")
+                u_metadata = u.get("user_metadata") or {}
+                if u_email == shadow_email or (
+                    isinstance(u_metadata, dict)
+                    and u_metadata.get("wp_user_id") == str(payload.get("wp_user_id"))
+                    and u_metadata.get("wp_site") == payload.get("site")
+                ):
+                    user_id = u.get("id")
+                    logger.info(f"WordPress session: Found existing user {user_id} for {shadow_email}")
+                    break
+            if user_id or len(users_list) < per_page:
+                break
+            page += 1
+    except Exception as e:
+        logger.warning(f"WordPress session: Error looking up user via REST: {e}")
+
+    # 2. Fallback: try the SDK list_users (single page) in case httpx failed
     if not user_id:
-        # Create new user
+        try:
+            users = client_admin.auth.admin.list_users()
+            for u in users:
+                u_email = u.email if hasattr(u, 'email') else u.get('email')
+                if u_email == shadow_email:
+                    user_id = u.id if hasattr(u, 'id') else u.get('id')
+                    logger.info(f"WordPress session: Found existing user {user_id} via SDK fallback")
+                    break
+        except Exception as e:
+            logger.warning(f"WordPress session: SDK list_users fallback error: {e}")
+
+    # 3. Create user if not found
+    if not user_id:
         try:
             create_response = client_admin.auth.admin.create_user({
                 "email": shadow_email,
@@ -572,12 +618,27 @@ async def issue_wordpress_session(request: Request):
             if create_response and getattr(create_response, "user", None):
                 user_id = create_response.user.id
                 logger.info(f"WordPress session: Created new user {user_id}")
-        except Exception as e:
-            logger.error(f"WordPress session: Error creating user: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to create user in client Supabase: {str(e)}",
-            )
+        except Exception as create_err:
+            # Handle "already registered" — race condition or lookup miss
+            err_msg = str(create_err)
+            if "already been registered" in err_msg or "already exists" in err_msg:
+                logger.warning(f"WordPress session: User exists but lookup missed, retrying...")
+                try:
+                    users = client_admin.auth.admin.list_users()
+                    for u in users:
+                        u_email = u.email if hasattr(u, 'email') else u.get('email')
+                        if u_email == shadow_email:
+                            user_id = u.id if hasattr(u, 'id') else u.get('id')
+                            logger.info(f"WordPress session: Found user {user_id} on retry after create conflict")
+                            break
+                except Exception as retry_err:
+                    logger.error(f"WordPress session: Retry lookup also failed: {retry_err}")
+            if not user_id:
+                logger.error(f"WordPress session: Error creating user: {create_err}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to create user in client Supabase: {err_msg}",
+                )
 
     if not user_id:
         raise HTTPException(

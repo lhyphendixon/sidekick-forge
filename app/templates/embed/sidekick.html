@@ -4863,11 +4863,12 @@ function clearVoiceTranscriptError(){
         try {
           console.log('[wordpress-bridge] Embed loaded in iframe, requesting token from parent');
 
-          // Set a timeout in case parent doesn't respond (e.g., not a WordPress site)
+          // Set a timeout in case parent doesn't respond (e.g., not a WordPress site).
+          // Allow 15s so the user has time to interact with the invitation modal.
           const timeout = setTimeout(() => {
             console.log('[wordpress-bridge] No response from parent, proceeding without bridge auth');
             resolve(false);
-          }, 3000);
+          }, 15000);
 
           // Listen for token response from parent
           window.addEventListener('message', async (event) => {
@@ -4942,6 +4943,21 @@ function clearVoiceTranscriptError(){
                       await ensureTranscriptSupabaseAuth();
                     }
                   }
+
+                  // Update UI — covers both the happy path (resolve still pending)
+                  // and the late-token path (init already timed out).
+                  setAuthVisible(false);
+                  setChatVisible(true);
+                  try { document.getElementById('voiceStartBtn').disabled = false; } catch {}
+                  hideInitialLoader();
+                  initChatModeUI();
+
+                  // Restore the most recent conversation (safe to call even if
+                  // the main init already ran — it's idempotent).
+                  autoRestoreConversation().catch(function(e){
+                    console.warn('[wordpress-bridge] autoRestore error:', e);
+                  });
+
                   resolve(true);
                 }
               } else {
