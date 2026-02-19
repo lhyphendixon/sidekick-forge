@@ -1,0 +1,202 @@
+{% extends "admin/docs/base_docs.html" %}
+
+{% set doc_title = "Knowledge Base Guide" %}
+
+{% block docs_content %}
+
+<div class="docs-breadcrumb">
+    <a href="/admin/docs">Docs</a>
+    <span>/</span>
+    <span>Knowledge Base</span>
+</div>
+
+<div class="docs-hero">
+    <h1>Knowledge Base Guide</h1>
+    <p>Your sidekick is only as smart as the information you give it. This guide covers best practices for building a knowledge base that delivers accurate, relevant answers.</p>
+</div>
+
+<div class="docs-toc">
+    <h4>On this page</h4>
+    <a href="#how-rag-works">How the Knowledge Base Works</a>
+    <a href="#what-to-upload">What to Upload</a>
+    <a href="#best-practices">Best Practices for Better Answers</a>
+    <a href="#citations">Understanding Citations</a>
+    <a href="#managing-documents">Managing Documents</a>
+    <a href="#wordpress-sync">WordPress Content Sync</a>
+    <a href="#troubleshooting">Improving Answer Quality</a>
+</div>
+
+<!-- Section: How RAG Works -->
+<div class="docs-section" id="how-rag-works">
+    <h2>How the Knowledge Base Works</h2>
+    <p>When you upload a document, Sidekick Forge processes it through a pipeline called <strong>RAG (Retrieval-Augmented Generation)</strong>. Here's what happens behind the scenes:</p>
+
+    <div class="docs-step">
+        <div class="docs-step-number">1</div>
+        <div class="docs-step-content">
+            <h3>Chunking</h3>
+            <p>Your document is split into small, meaningful pieces called "chunks." Each chunk typically contains a paragraph or section of content.</p>
+        </div>
+    </div>
+
+    <div class="docs-step">
+        <div class="docs-step-number">2</div>
+        <div class="docs-step-content">
+            <h3>Embedding</h3>
+            <p>Each chunk is converted into a mathematical representation (a "vector") that captures its meaning. This allows the system to find content by meaning, not just keywords.</p>
+        </div>
+    </div>
+
+    <div class="docs-step">
+        <div class="docs-step-number">3</div>
+        <div class="docs-step-content">
+            <h3>Retrieval</h3>
+            <p>When a user asks a question, the system finds the most relevant chunks and passes them to your sidekick as context. Your sidekick then uses this context to craft an accurate answer.</p>
+        </div>
+    </div>
+
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Knowledge Base &mdash; Document Upload</span>
+        </div>
+        <img src="/static/images/docs/knowledge-base.png" alt="Knowledge Base" style="width:100%;display:block;">
+    </div>
+</div>
+
+<!-- Section: What to Upload -->
+<div class="docs-section" id="what-to-upload">
+    <h2>What to Upload</h2>
+
+    <h3>Supported Formats</h3>
+    <ul>
+        <li><strong>PDF</strong> &mdash; Product guides, reports, manuals, whitepapers</li>
+        <li><strong>Text files (.txt)</strong> &mdash; Plain text content, FAQs, scripts</li>
+        <li><strong>Markdown (.md)</strong> &mdash; Structured documentation, help articles</li>
+        <li><strong>Web URLs</strong> &mdash; Paste a link and the page will be automatically crawled and indexed</li>
+        <li><strong>WordPress content</strong> &mdash; Automatically synced via the Sidekick Forge Connect plugin</li>
+    </ul>
+
+    <h3>Great content to upload</h3>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin: 16px 0;">
+        <div style="background: rgba(1,164,166,0.06); border: 1px solid rgba(1,164,166,0.15); border-radius: 8px; padding: 16px;">
+            <div style="color: #01a4a6; font-weight: 600; font-size: 13px; margin-bottom: 6px;">Product & Service Info</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Product descriptions, pricing pages, feature lists, comparison sheets</div>
+        </div>
+        <div style="background: rgba(1,164,166,0.06); border: 1px solid rgba(1,164,166,0.15); border-radius: 8px; padding: 16px;">
+            <div style="color: #01a4a6; font-weight: 600; font-size: 13px; margin-bottom: 6px;">Support Content</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">FAQs, help articles, troubleshooting guides, how-tos</div>
+        </div>
+        <div style="background: rgba(1,164,166,0.06); border: 1px solid rgba(1,164,166,0.15); border-radius: 8px; padding: 16px;">
+            <div style="color: #01a4a6; font-weight: 600; font-size: 13px; margin-bottom: 6px;">Company Information</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">About us, team bios, policies, terms, press releases</div>
+        </div>
+        <div style="background: rgba(1,164,166,0.06); border: 1px solid rgba(1,164,166,0.15); border-radius: 8px; padding: 16px;">
+            <div style="color: #01a4a6; font-weight: 600; font-size: 13px; margin-bottom: 6px;">Domain Expertise</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Industry reports, research papers, training materials, brand guidelines</div>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Best Practices -->
+<div class="docs-section" id="best-practices">
+    <h2>Best Practices for Better Answers</h2>
+
+    <h3>Write clear, self-contained content</h3>
+    <p>Each document should make sense on its own. Avoid content that relies heavily on other documents for context. Instead of a document titled "Updates" with notes like "Changed the policy from last week," write the complete updated policy in full.</p>
+
+    <h3>Use descriptive headings</h3>
+    <p>Clear headings help the chunking process create meaningful pieces. A heading like <em>"Return Policy for Online Orders"</em> produces better chunks than <em>"Section 4.2"</em>.</p>
+
+    <h3>Keep documents focused</h3>
+    <p>A 5-page document about your return policy will produce better answers than a 200-page employee handbook that happens to mention returns on page 147. Focused documents lead to more relevant retrieval.</p>
+
+    <h3>Update regularly</h3>
+    <p>Remove outdated documents and replace them with current versions. If your sidekick is pulling from an old pricing page, it will give users incorrect information.</p>
+
+    <div class="docs-callout docs-callout-warning">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <div><strong>Avoid uploading:</strong> Scanned images without OCR text, spreadsheets with raw data and no context, internal memos with jargon that users won't use in questions, or duplicate versions of the same content.</div>
+    </div>
+</div>
+
+<!-- Section: Citations -->
+<div class="docs-section" id="citations">
+    <h2>Understanding Citations</h2>
+    <p>When your sidekick uses knowledge base content to answer a question, it includes <strong>citations</strong> in the conversation UI. Citations let users verify the source of information and build trust in the answers.</p>
+
+    <p>Citations appear as clickable references below the sidekick's response. Each citation shows:</p>
+    <ul>
+        <li>The document title (e.g., <em>"product-guide.pdf"</em>)</li>
+        <li>The relevant text excerpt that was used</li>
+        <li>A link to the source (if the document was a URL)</li>
+    </ul>
+
+    <div class="docs-callout docs-callout-tip">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+        <div><strong>Tip:</strong> Name your documents descriptively. A file called <em>"Q4-2025-pricing-update.pdf"</em> is much more helpful in a citation than <em>"doc-final-v3.pdf"</em>.</div>
+    </div>
+</div>
+
+<!-- Section: Managing Documents -->
+<div class="docs-section" id="managing-documents">
+    <h2>Managing Documents</h2>
+
+    <h3>Uploading</h3>
+    <p>Navigate to <strong>Knowledge Base</strong> in the admin panel. Drag and drop files into the upload area or click to browse. You can also paste a URL to index a web page. Documents are processed automatically &mdash; you'll see the status change from "Processing" to "Indexed" once complete.</p>
+
+    <h3>Document Access</h3>
+    <p>By default, uploaded documents are available to all your sidekicks. You can restrict a document to specific sidekicks from the Knowledge Base page. This is useful when you have multiple sidekicks serving different purposes &mdash; for example, a sales sidekick shouldn't reference internal HR policies.</p>
+
+    <h3>Reprocessing</h3>
+    <p>If you update a document and re-upload it, the system will automatically reprocess and re-index the content. You can also manually trigger reprocessing from the document detail view.</p>
+</div>
+
+<!-- Section: WordPress Sync -->
+<div class="docs-section" id="wordpress-sync">
+    <h2>WordPress Content Sync</h2>
+    <p>If you use the <a href="/admin/docs/wordpress">Sidekick Forge Connect</a> WordPress plugin, your published posts and pages can be automatically synced to your knowledge base. This keeps your sidekick up-to-date with your latest content without manual uploads.</p>
+
+    <p>Synced content is treated just like any other document &mdash; it's chunked, embedded, and searchable. When content changes on WordPress, the sync process updates the knowledge base automatically.</p>
+</div>
+
+<!-- Section: Troubleshooting -->
+<div class="docs-section" id="troubleshooting">
+    <h2>Improving Answer Quality</h2>
+
+    <p>If your sidekick isn't giving the answers you expect, try these steps:</p>
+
+    <div style="margin: 16px 0;">
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 8px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 4px;">"My sidekick doesn't use my documents"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Make sure the documents are fully indexed (status shows "Indexed," not "Processing"). Also check that the document is assigned to the correct sidekick. Try asking the question using the same language that appears in your document.</div>
+        </div>
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 8px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 4px;">"The answers are too generic"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Your documents may be too broad. Break large documents into focused topics. A 2-page FAQ about refunds will produce better answers than a 50-page operational manual.</div>
+        </div>
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 8px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 4px;">"My sidekick gives outdated information"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Check for old versions of documents in your knowledge base. Remove outdated files and upload the current versions. The sidekick will always use whatever is in the knowledge base.</div>
+        </div>
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 4px;">"Wrong documents are being cited"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">This usually means multiple documents cover similar topics. Consolidate overlapping content into a single authoritative document, or restrict document access so each sidekick only sees what's relevant to its purpose.</div>
+        </div>
+    </div>
+</div>
+
+<div class="docs-nav-footer">
+    <a href="/admin/docs/abilities" class="docs-nav-link">
+        <span class="label">Previous</span>
+        <span class="title">&larr; Abilities & Tools</span>
+    </a>
+    <a href="/admin/docs/embedding" class="docs-nav-link next">
+        <span class="label">Next</span>
+        <span class="title">Embedding Your Sidekick &rarr;</span>
+    </a>
+</div>
+
+{% endblock %}

@@ -9392,3 +9392,47 @@ async def get_client_aggregated_usage(
             "text": {"used": 0, "limit": 0, "percent_used": 0, "is_exceeded": False, "is_warning": False},
             "embedding": {"used": 0, "limit": 0, "percent_used": 0, "is_exceeded": False, "is_warning": False},
         }
+
+
+# ── Documentation pages (not linked from sidebar) ──────────────────────
+
+@router.get("/docs", response_class=HTMLResponse)
+async def docs_index(request: Request):
+    """Docs landing – redirects to Getting Started."""
+    return RedirectResponse(url="/admin/docs/getting-started", status_code=302)
+
+@router.get("/docs/getting-started", response_class=HTMLResponse)
+async def docs_getting_started(request: Request):
+    return templates.TemplateResponse("admin/docs/getting_started.html", {"request": request})
+
+@router.get("/docs/embedding", response_class=HTMLResponse)
+async def docs_embedding(request: Request):
+    return templates.TemplateResponse("admin/docs/embedding.html", {"request": request})
+
+@router.get("/docs/managing", response_class=HTMLResponse)
+async def docs_managing(request: Request):
+    return templates.TemplateResponse("admin/docs/managing.html", {"request": request})
+
+@router.get("/docs/abilities", response_class=HTMLResponse)
+async def docs_abilities(request: Request):
+    return templates.TemplateResponse("admin/docs/abilities.html", {"request": request})
+
+@router.get("/docs/knowledge-base", response_class=HTMLResponse)
+async def docs_knowledge_base(request: Request):
+    return templates.TemplateResponse("admin/docs/knowledge_base_guide.html", {"request": request})
+
+@router.get("/docs/wordpress", response_class=HTMLResponse)
+async def docs_wordpress(request: Request):
+    return templates.TemplateResponse("admin/docs/wordpress.html", {"request": request})
+
+@router.get("/docs/monitoring", response_class=HTMLResponse)
+async def docs_monitoring(request: Request):
+    return templates.TemplateResponse("admin/docs/monitoring_guide.html", {"request": request})
+
+@router.get("/docs/billing", response_class=HTMLResponse)
+async def docs_billing(request: Request):
+    return templates.TemplateResponse("admin/docs/billing.html", {"request": request})
+
+@router.get("/docs/troubleshooting", response_class=HTMLResponse)
+async def docs_troubleshooting(request: Request):
+    return templates.TemplateResponse("admin/docs/troubleshooting.html", {"request": request})

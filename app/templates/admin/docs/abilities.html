@@ -1,0 +1,313 @@
+{% extends "admin/docs/base_docs.html" %}
+
+{% set doc_title = "Abilities & Tools" %}
+
+{% block docs_content %}
+
+<div class="docs-breadcrumb">
+    <a href="/admin/docs">Docs</a>
+    <span>/</span>
+    <span>Abilities & Tools</span>
+</div>
+
+<div class="docs-hero">
+    <h1>Abilities & Tools</h1>
+    <p>Abilities are superpowers you can give your sidekick. Each one connects your AI to a real-world service, letting it take action &mdash; not just talk.</p>
+</div>
+
+<div class="docs-toc">
+    <h4>On this page</h4>
+    <a href="#how-abilities-work">How Abilities Work</a>
+    <a href="#content-catalyst">Content Catalyst</a>
+    <a href="#image-catalyst">Image Catalyst</a>
+    <a href="#prediction-market">Prediction Market Insights</a>
+    <a href="#web-search">Web Search</a>
+    <a href="#lingua">Lingua</a>
+    <a href="#asana">Asana Task Manager</a>
+    <a href="#helpscout">HelpScout Connect</a>
+    <a href="#enabling">Enabling & Configuring Abilities</a>
+</div>
+
+<!-- Section: How Abilities Work -->
+<div class="docs-section" id="how-abilities-work">
+    <h2>How Abilities Work</h2>
+    <p>When a user asks your sidekick something that requires an ability, the sidekick automatically decides which tool to use. You don't need to configure triggers or workflows &mdash; the AI understands when to use each ability based on the conversation.</p>
+
+    <p>For example, if a user says <em>"Create a blog post about AI trends"</em> and you have Content Catalyst enabled, your sidekick will recognize the intent and use that ability. If the user asks <em>"What's the chance of a rate cut?"</em> and Prediction Markets is enabled, it will pull live market data.</p>
+
+    <div class="docs-callout docs-callout-tip">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+        <div><strong>Tip:</strong> You can enable or disable abilities at any time from the <strong>Abilities</strong> page or from within the sidekick wizard. Only enable the abilities your sidekick actually needs &mdash; fewer abilities means faster, more focused responses.</div>
+    </div>
+
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Abilities &mdash; Available Tools</span>
+        </div>
+        <img src="/static/images/docs/wizard-abilities.png" alt="Abilities Page" style="width:100%;display:block;">
+    </div>
+</div>
+
+<!-- Section: Content Catalyst -->
+<div class="docs-section" id="content-catalyst">
+    <h2>Content Catalyst</h2>
+
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(252,114,68,0.12);display:flex;align-items:center;justify-content:center;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fc7244" stroke-width="1.5"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        </div>
+        <div>
+            <div style="color:#e0e0e0;font-weight:600;">Content Catalyst</div>
+            <div style="color:#888;font-size:13px;">Research-backed article generation</div>
+        </div>
+    </div>
+
+    <p>Content Catalyst generates two high-quality, research-backed article variations from a single topic or source. It uses a multi-phase pipeline that mirrors a professional editorial workflow:</p>
+
+    <ol>
+        <li><strong>Research</strong> &mdash; Gathers relevant sources from your knowledge base, the web (via Perplexity), and the conversation context</li>
+        <li><strong>Architecture</strong> &mdash; Designs the article structure and creates two different angles on the topic</li>
+        <li><strong>Drafting</strong> &mdash; Writes two full article variations with distinct perspectives</li>
+        <li><strong>Fact-checking</strong> &mdash; Verifies accuracy and validates sources</li>
+        <li><strong>Polishing</strong> &mdash; Refines prose, enforces word count, and ensures consistent tone</li>
+    </ol>
+
+    <h3>Accepted Input Types</h3>
+    <ul>
+        <li><strong>Text</strong> &mdash; Describe a topic, paste notes, or provide a rough outline</li>
+        <li><strong>Web URL</strong> &mdash; Provide a link and the tool will scrape and use it as source material</li>
+        <li><strong>Audio (MP3)</strong> &mdash; Upload a podcast or recording to transcribe and turn into articles</li>
+    </ul>
+
+    <h3>What users will see</h3>
+    <p>When a user asks your sidekick to write an article, the sidekick will process the request through all five phases and deliver two complete article variations. Users can choose the version they prefer or blend elements from both.</p>
+
+    <div class="docs-callout docs-callout-info">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <div>Content Catalyst works best when your sidekick also has access to your <strong>Knowledge Base</strong>. The research phase will incorporate your uploaded documents for more relevant, on-brand content.</div>
+    </div>
+</div>
+
+<!-- Section: Image Catalyst -->
+<div class="docs-section" id="image-catalyst">
+    <h2>Image Catalyst</h2>
+
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(139,92,246,0.12);display:flex;align-items:center;justify-content:center;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+        </div>
+        <div>
+            <div style="color:#e0e0e0;font-weight:600;">Image Catalyst</div>
+            <div style="color:#888;font-size:13px;">AI-powered image generation</div>
+        </div>
+    </div>
+
+    <p>Image Catalyst lets your sidekick generate images on demand. It supports two modes optimized for different use cases:</p>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin: 20px 0;">
+        <div style="background: rgba(252,114,68,0.06); border: 1px solid rgba(252,114,68,0.15); border-radius: 10px; padding: 20px;">
+            <div style="color: #fc7244; font-weight: 600; margin-bottom: 8px;">Thumbnail / Promotional</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Polished marketing images using GPT Image. Ideal for thumbnails, banners, logos, and promotional graphics. Supports reference images for style guidance.</div>
+        </div>
+        <div style="background: rgba(139,92,246,0.06); border: 1px solid rgba(139,92,246,0.15); border-radius: 10px; padding: 20px;">
+            <div style="color: #8b5cf6; font-weight: 600; margin-bottom: 8px;">General / Creative</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Creative and artistic imagery using FLUX. Great for concept art, illustrations, and general creative visuals. Supports seed images for guided generation.</div>
+        </div>
+    </div>
+
+    <h3>What users will see</h3>
+    <p>When a user asks your sidekick to create an image, a widget opens in the chat where they can choose the mode, refine the prompt, and optionally upload a reference image. The generated image appears directly in the conversation.</p>
+</div>
+
+<!-- Section: Prediction Market -->
+<div class="docs-section" id="prediction-market">
+    <h2>Prediction Market Insights</h2>
+
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(1,164,166,0.12);display:flex;align-items:center;justify-content:center;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#01a4a6" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <div>
+            <div style="color:#e0e0e0;font-weight:600;">Prediction Market Insights</div>
+            <div style="color:#888;font-size:13px;">Real-time probability data from Polymarket</div>
+        </div>
+    </div>
+
+    <p>This ability connects your sidekick to <strong>Polymarket</strong>, the world's largest prediction market. When users ask about the likelihood of future events, your sidekick returns real-time probability data backed by actual trading volume &mdash; not speculation.</p>
+
+    <h3>What it covers</h3>
+    <ul>
+        <li>Elections and politics</li>
+        <li>Economic events (rate cuts, recessions, GDP)</li>
+        <li>Technology and AI milestones</li>
+        <li>Sports and entertainment</li>
+        <li>World events and geopolitics</li>
+    </ul>
+
+    <h3>What users will see</h3>
+    <p>When a user asks something like <em>"What's the probability of a government shutdown?"</em>, the sidekick searches Polymarket and returns the top matching markets with their current probabilities, trading volume, and resolution dates. Higher trading volume indicates stronger consensus among traders.</p>
+
+    <div class="docs-callout docs-callout-info">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <div>Your sidekick will automatically note that prediction market data reflects the wisdom of traders with real money at stake, but is not a guarantee of outcomes.</div>
+    </div>
+</div>
+
+<!-- Section: Web Search -->
+<div class="docs-section" id="web-search">
+    <h2>Web Search</h2>
+
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(1,164,166,0.12);display:flex;align-items:center;justify-content:center;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#01a4a6" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </div>
+        <div>
+            <div style="color:#e0e0e0;font-weight:600;">Web Search</div>
+            <div style="color:#888;font-size:13px;">Real-time web information with citations</div>
+        </div>
+    </div>
+
+    <p>Web Search lets your sidekick query the internet in real-time to answer questions about current events, recent data, or anything not covered by your knowledge base. Powered by Perplexity AI, it returns comprehensive answers with source citations.</p>
+
+    <h3>What users will see</h3>
+    <p>When a user asks a question that requires current information, the sidekick searches the web, synthesizes the results, and presents the answer with inline citations. This is especially useful for questions about recent news, prices, schedules, or anything that changes frequently.</p>
+</div>
+
+<!-- Section: Lingua -->
+<div class="docs-section" id="lingua">
+    <h2>Lingua</h2>
+
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(252,114,68,0.12);display:flex;align-items:center;justify-content:center;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fc7244" stroke-width="1.5"><path d="M5 8l6 6"/><path d="M4 14l6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
+        </div>
+        <div>
+            <div style="color:#e0e0e0;font-weight:600;">Lingua</div>
+            <div style="color:#888;font-size:13px;">Audio transcription and multilingual subtitles</div>
+        </div>
+    </div>
+
+    <p>Lingua transcribes audio files and translates subtitles into 12+ languages with professional formatting. It's ideal for podcasts, webinars, interviews, and any audio content that needs to reach a multilingual audience.</p>
+
+    <h3>Supported Languages</h3>
+    <p>Spanish, French, German, Italian, Portuguese, Dutch, Russian, Japanese, Chinese, Korean, Arabic, Hindi, and more.</p>
+
+    <h3>Output Formats</h3>
+    <ul>
+        <li><strong>SRT</strong> &mdash; Standard subtitle format for video editors</li>
+        <li><strong>WebVTT</strong> &mdash; Web-native subtitle format for HTML5 video</li>
+        <li><strong>Plain Text</strong> &mdash; Full transcript without timing codes</li>
+    </ul>
+
+    <h3>What users will see</h3>
+    <p>Users provide an audio file or URL, and the sidekick returns downloadable subtitle files in each requested language, along with the full text transcript and a confidence score.</p>
+</div>
+
+<!-- Section: Asana -->
+<div class="docs-section" id="asana">
+    <h2>Asana Task Manager</h2>
+
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(252,114,68,0.12);display:flex;align-items:center;justify-content:center;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fc7244" stroke-width="1.5"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="17" r="3"/><circle cx="19" cy="17" r="3"/></svg>
+        </div>
+        <div>
+            <div style="color:#e0e0e0;font-weight:600;">Asana Task Manager</div>
+            <div style="color:#888;font-size:13px;">Project and task management via voice or text</div>
+        </div>
+    </div>
+
+    <p>Connect your sidekick to Asana to manage projects and tasks through natural conversation. Your sidekick can create, update, complete, and list tasks &mdash; all hands-free.</p>
+
+    <h3>What your sidekick can do</h3>
+    <ul>
+        <li>List tasks in a project (filtered by status)</li>
+        <li>Create new tasks with due dates and descriptions</li>
+        <li>Update or rename existing tasks</li>
+        <li>Mark tasks as complete</li>
+        <li>Create and manage subtasks</li>
+        <li>Assign tasks to team members</li>
+    </ul>
+
+    <h3>Setup</h3>
+    <p>Asana requires an OAuth connection. Go to <strong>Abilities</strong>, find Asana Task Manager, and click <strong>Connect</strong> to authorize your Asana workspace. Once connected, configure which project(s) your sidekick should manage.</p>
+
+    <div class="docs-callout docs-callout-warning">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <div><strong>Important:</strong> The Asana connection uses OAuth, so your sidekick will only have access to the workspaces and projects you explicitly authorize.</div>
+    </div>
+</div>
+
+<!-- Section: HelpScout -->
+<div class="docs-section" id="helpscout">
+    <h2>HelpScout Connect</h2>
+
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+        <div style="width:40px;height:40px;border-radius:10px;background:rgba(1,164,166,0.12);display:flex;align-items:center;justify-content:center;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#01a4a6" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div>
+            <div style="color:#e0e0e0;font-weight:600;">HelpScout Connect</div>
+            <div style="color:#888;font-size:13px;">Customer support ticket management</div>
+        </div>
+    </div>
+
+    <p>Connect your sidekick to HelpScout to manage support tickets through conversation. Your sidekick can read, respond to, and manage customer support conversations directly.</p>
+
+    <h3>What your sidekick can do</h3>
+    <ul>
+        <li>List support tickets (filtered by active, pending, or closed)</li>
+        <li>View full ticket details and conversation history</li>
+        <li>Reply to customers with messages</li>
+        <li>Add internal notes visible only to your team</li>
+        <li>Close or reopen tickets</li>
+        <li>Assign tickets to specific team members</li>
+        <li>Create new support tickets</li>
+    </ul>
+
+    <h3>Setup</h3>
+    <p>HelpScout requires an OAuth connection. Go to <strong>Abilities</strong>, find HelpScout Connect, and click <strong>Connect</strong> to authorize your HelpScout account. Configure which mailbox(es) your sidekick should monitor.</p>
+</div>
+
+<!-- Section: Enabling -->
+<div class="docs-section" id="enabling">
+    <h2>Enabling & Configuring Abilities</h2>
+    <p>You can manage abilities from two places:</p>
+
+    <div class="docs-step">
+        <div class="docs-step-number">1</div>
+        <div class="docs-step-content">
+            <h3>During Sidekick Creation</h3>
+            <p>Step 4 of the Creation Wizard lets you toggle abilities on or off. The wizard pre-selects commonly used abilities for you.</p>
+        </div>
+    </div>
+
+    <div class="docs-step">
+        <div class="docs-step-number">2</div>
+        <div class="docs-step-content">
+            <h3>From the Abilities Page</h3>
+            <p>Navigate to <strong>Abilities</strong> in the admin panel to see all available tools. From here you can enable, disable, and configure each ability &mdash; including connecting OAuth accounts for Asana and HelpScout.</p>
+        </div>
+    </div>
+
+    <div class="docs-callout docs-callout-tip">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+        <div><strong>Pro Tip:</strong> Some abilities like Content Catalyst and Lingua work best when paired with a Knowledge Base. The more context your sidekick has, the better the output.</div>
+    </div>
+</div>
+
+<div class="docs-nav-footer">
+    <a href="/admin/docs/managing" class="docs-nav-link">
+        <span class="label">Previous</span>
+        <span class="title">&larr; Managing Your Sidekick</span>
+    </a>
+    <a href="/admin/docs/knowledge-base" class="docs-nav-link next">
+        <span class="label">Next</span>
+        <span class="title">Knowledge Base Guide &rarr;</span>
+    </a>
+</div>
+
+{% endblock %}

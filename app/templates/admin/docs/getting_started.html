@@ -1,0 +1,339 @@
+{% extends "admin/docs/base_docs.html" %}
+
+{% set doc_title = "Getting Started" %}
+
+{% block docs_content %}
+
+<div class="docs-breadcrumb">
+    <a href="/admin/docs">Docs</a>
+    <span>/</span>
+    <span>Getting Started</span>
+</div>
+
+<div class="docs-hero">
+    <h1>Getting Started with Sidekick Forge</h1>
+    <p>Create your first AI sidekick in under 5 minutes. This guide walks you through account setup, sidekick creation, and your first conversation.</p>
+</div>
+
+<div class="docs-toc">
+    <h4>On this page</h4>
+    <a href="#overview">Platform Overview</a>
+    <a href="#create-sidekick">Creating Your First Sidekick</a>
+    <a href="#optimized-stack">The Optimized AI Stack</a>
+    <a href="#inference">Sidekick Forge Inference vs. Bring Your Own Keys</a>
+    <a href="#knowledge-base">Adding Knowledge</a>
+    <a href="#test-sidekick">Testing Your Sidekick</a>
+    <a href="#next-steps">Next Steps</a>
+</div>
+
+<!-- Section: Overview -->
+<div class="docs-section" id="overview">
+    <h2>Platform Overview</h2>
+    <p>Sidekick Forge is an AI agent platform that lets you create, customize, and deploy intelligent voice and text assistants. Each sidekick can be configured with its own personality, knowledge base, voice, and set of abilities (tools).</p>
+
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Sidekick Forge &mdash; Sidekick Management</span>
+        </div>
+        <img src="/static/images/docs/dashboard-overview.png" alt="Admin Dashboard Overview" style="width:100%;display:block;">
+    </div>
+
+    <p>The admin panel gives you access to:</p>
+    <ul>
+        <li><strong>Sidekicks</strong> &mdash; Create and manage your AI assistants</li>
+        <li><strong>Knowledge Base</strong> &mdash; Upload documents that your sidekick can reference</li>
+        <li><strong>Abilities</strong> &mdash; Enable tools like web search, prediction markets, and content generation</li>
+        <li><strong>Monitoring</strong> &mdash; Track conversations, usage, and performance in real-time</li>
+        <li><strong>Settings</strong> &mdash; Configure API keys, voice models, and LLM providers</li>
+    </ul>
+</div>
+
+<!-- Section: Create Sidekick -->
+<div class="docs-section" id="create-sidekick">
+    <h2>Creating Your First Sidekick</h2>
+    <p>The fastest way to get started is to create your sidekick using the <strong>Creation Wizard</strong> and accept the recommended settings. We've carefully selected the default voice, LLM, and ability configuration to give you an intelligent, capable sidekick that performs well right out of the box &mdash; no tuning required.</p>
+
+    <div class="docs-callout docs-callout-tip">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+        <div><strong>Recommended:</strong> Just click through the wizard and accept the defaults. The recommended settings use our optimized AI stack &mdash; purpose-built for fast, natural voice conversations and intelligent text chat. You can always customize later.</div>
+    </div>
+
+    <p>Here's what to expect at each step:</p>
+
+    <div class="docs-step">
+        <div class="docs-step-number">1</div>
+        <div class="docs-step-content">
+            <h3>Name & Identity</h3>
+            <p>Choose a name and write a short description for your sidekick. This description appears in the embed and helps users understand what the sidekick does.</p>
+        </div>
+    </div>
+
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Step 1 &mdash; Create Your Sidekick</span>
+        </div>
+        <img src="/static/images/docs/wizard-step1.png" alt="Sidekick Creation Wizard - Step 1" style="width:100%;display:block;">
+    </div>
+
+    <div class="docs-step">
+        <div class="docs-step-number">2</div>
+        <div class="docs-step-content">
+            <h3>System Prompt</h3>
+            <p>Define your sidekick's personality, tone, and behavioral instructions. This is the core directive that shapes how your sidekick responds to users. You can use the AI-assisted prompt generator or write your own.</p>
+        </div>
+    </div>
+
+    <div class="docs-callout docs-callout-tip">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+        <div><strong>Pro Tip:</strong> Be specific about tone and boundaries. Instead of "Be helpful," try "You are a friendly, concise financial advisor. Always disclaim that you're an AI and not a licensed professional. Keep responses under 3 sentences when possible."</div>
+    </div>
+
+    <div class="docs-step">
+        <div class="docs-step-number">3</div>
+        <div class="docs-step-content">
+            <h3>Choose a Voice</h3>
+            <p>Select a text-to-speech voice from providers like Cartesia, ElevenLabs, or Speechify. You can preview voices before selecting. Each voice has unique characteristics suited to different use cases.</p>
+        </div>
+    </div>
+
+    <div class="docs-step">
+        <div class="docs-step-number">4</div>
+        <div class="docs-step-content">
+            <h3>Enable Abilities</h3>
+            <p>Choose which tools your sidekick can use during conversations. Available abilities include web search, prediction markets, content generation, image creation, and more.</p>
+        </div>
+    </div>
+
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Abilities &mdash; Available Tools</span>
+        </div>
+        <img src="/static/images/docs/wizard-abilities.png" alt="Abilities Page - Tool Selection" style="width:100%;display:block;">
+    </div>
+
+    <div class="docs-step">
+        <div class="docs-step-number">5</div>
+        <div class="docs-step-content">
+            <h3>Launch</h3>
+            <p>Review your configuration and launch your sidekick. It will be immediately available for testing in the admin preview and ready to embed on your website.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Optimized Stack -->
+<div class="docs-section" id="optimized-stack">
+    <h2>The Optimized AI Stack</h2>
+    <p>Sidekick Forge ships with a <strong>carefully crafted, optimized stack of AI models</strong> designed to deliver an intelligent, capable, and fast-performing sidekick. Rather than leaving you to research and piece together models on your own, we've done the hard work of testing dozens of combinations across LLMs, voice synthesis, and speech-to-text to find the ideal balance of speed, quality, and cost.</p>
+
+    <p>The recommended defaults include:</p>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 20px 0;">
+        <div style="background: rgba(1,164,166,0.06); border: 1px solid rgba(1,164,166,0.15); border-radius: 10px; padding: 20px;">
+            <div style="font-size: 28px; margin-bottom: 12px;">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#01a4a6" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+            </div>
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">Language Model (LLM)</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Ultra-fast inference models tuned for real-time conversation &mdash; smart enough for complex reasoning, fast enough for natural voice flow.</div>
+        </div>
+        <div style="background: rgba(252,114,68,0.06); border: 1px solid rgba(252,114,68,0.15); border-radius: 10px; padding: 20px;">
+            <div style="font-size: 28px; margin-bottom: 12px;">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fc7244" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+            </div>
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">Voice Synthesis (TTS)</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Low-latency, natural-sounding text-to-speech that makes your sidekick feel like a real conversation partner, not a robot.</div>
+        </div>
+        <div style="background: rgba(139,92,246,0.06); border: 1px solid rgba(139,92,246,0.15); border-radius: 10px; padding: 20px;">
+            <div style="font-size: 28px; margin-bottom: 12px;">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+            </div>
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">Speech Recognition (STT)</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">High-accuracy, real-time transcription with intelligent turn detection &mdash; so your sidekick knows when you're done speaking.</div>
+        </div>
+    </div>
+
+    <p>This stack is what powers sidekicks out of the box when you accept the wizard's recommended settings. Every component has been selected to minimize latency while maximizing intelligence &mdash; your sidekick responds quickly without sacrificing depth or accuracy.</p>
+
+    <h3>Available Providers</h3>
+    <p>While the defaults are optimized for the best experience, advanced users can swap any component. Sidekick Forge supports multiple providers for each layer:</p>
+    <ul>
+        <li><strong>LLMs:</strong> Cerebras, Groq, OpenAI (GPT-4o), Anthropic (Claude), DeepInfra (Llama, Qwen)</li>
+        <li><strong>Voice (TTS):</strong> Cartesia Sonic, ElevenLabs, Speechify</li>
+        <li><strong>Speech (STT):</strong> Deepgram, AssemblyAI</li>
+    </ul>
+</div>
+
+<!-- Section: Inference -->
+<div class="docs-section" id="inference">
+    <h2>Sidekick Forge Inference vs. Bring Your Own Keys</h2>
+    <p>Sidekick Forge offers two ways to power your sidekick's AI models:</p>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 20px 0;">
+        <div style="background: rgba(1,164,166,0.06); border: 1px solid rgba(1,164,166,0.25); border-radius: 10px; padding: 24px;">
+            <div style="color: #01a4a6; font-size: 15px; font-weight: 600; margin-bottom: 12px;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+                Sidekick Forge Inference
+            </div>
+            <div style="color: #b0b0b0; font-size: 13px; line-height: 1.7; margin-bottom: 16px;">
+                Use our managed infrastructure &mdash; no API keys needed. Your sidekick's LLM, voice, and speech-to-text usage is covered by your Sidekick Forge subscription. This is the <strong>easiest way to get started</strong> and what the wizard configures by default.
+            </div>
+            <ul style="color: #888; font-size: 13px; line-height: 1.8; margin: 0; padding-left: 18px;">
+                <li>Zero configuration &mdash; works immediately</li>
+                <li>Optimized model routing for lowest latency</li>
+                <li>Usage included in your subscription plan</li>
+                <li>We handle provider outages and failover</li>
+            </ul>
+        </div>
+        <div style="background: rgba(252,114,68,0.06); border: 1px solid rgba(252,114,68,0.25); border-radius: 10px; padding: 24px;">
+            <div style="color: #fc7244; font-size: 15px; font-weight: 600; margin-bottom: 12px;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                Bring Your Own Keys (BYOK)
+            </div>
+            <div style="color: #b0b0b0; font-size: 13px; line-height: 1.7; margin-bottom: 16px;">
+                Prefer to use your own provider accounts? Enter your API keys in <strong>Settings</strong> and your sidekick will call those providers directly. You pay the providers at their rates, giving you full control over cost and model selection.
+            </div>
+            <ul style="color: #888; font-size: 13px; line-height: 1.8; margin: 0; padding-left: 18px;">
+                <li>Full control over provider and model choice</li>
+                <li>Use your own negotiated pricing tiers</li>
+                <li>Access to your custom or cloned voices</li>
+                <li>Keys stored securely, never shared</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="docs-callout docs-callout-info">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <div><strong>Recommendation:</strong> Start with Sidekick Forge Inference. It uses the same optimized AI stack described above and requires no setup. If you later need a specific model or want to use your own provider accounts, you can switch to BYOK at any time from <strong>Settings &rarr; API Keys</strong> without rebuilding your sidekick.</div>
+    </div>
+</div>
+
+<!-- Section: Knowledge Base -->
+<div class="docs-section" id="knowledge-base">
+    <h2>Adding Knowledge</h2>
+    <p>The knowledge base uses RAG (Retrieval-Augmented Generation) to give your sidekick access to specific information. Upload documents and your sidekick will automatically reference them when answering questions.</p>
+
+    <h3>Supported Formats</h3>
+    <ul>
+        <li>PDF documents</li>
+        <li>Text files (.txt)</li>
+        <li>Markdown (.md)</li>
+        <li>URLs (web pages are automatically crawled)</li>
+        <li>WordPress content (via the Sidekick Forge Connect plugin)</li>
+    </ul>
+
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Knowledge Base &mdash; Document Upload</span>
+        </div>
+        <img src="/static/images/docs/knowledge-base.png" alt="Knowledge Base - Document Upload" style="width:100%;display:block;">
+    </div>
+
+    <p>Documents are automatically chunked, embedded, and indexed. When a user asks a question, the system retrieves the most relevant chunks and includes them in the sidekick's context. Citations appear in the conversation UI so users can verify sources.</p>
+</div>
+
+<!-- Section: Test -->
+<div class="docs-section" id="test-sidekick">
+    <h2>Testing Your Sidekick</h2>
+    <p>After creating your sidekick, you can test it directly from the admin panel:</p>
+
+    <ol>
+        <li>Navigate to <strong>Sidekicks</strong> and click on your sidekick</li>
+        <li>Click the <strong>Preview</strong> button in the top right</li>
+        <li>Switch between <strong>Text</strong>, <strong>Voice</strong>, and <strong>Video</strong> modes using the toggle</li>
+        <li>For voice, click <strong>Start Conversation</strong> and begin speaking</li>
+    </ol>
+
+    <!-- Voice preview mockup -->
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Sidekick Preview &mdash; Voice Mode</span>
+        </div>
+        <div class="docs-screenshot-body" style="text-align:center; padding:32px 24px;">
+            <!-- Mode toggle -->
+            <div style="display:inline-flex;gap:2px;background:#1a1a1a;border-radius:8px;padding:3px;margin-bottom:24px;">
+                <div style="padding:6px 14px;border-radius:6px;font-size:11px;color:#777;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Text
+                </div>
+                <div style="padding:6px 14px;border-radius:6px;font-size:11px;background:#01a4a6;color:#fff;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>Voice
+                </div>
+                <div style="padding:6px 14px;border-radius:6px;font-size:11px;color:#777;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>Video
+                </div>
+            </div>
+            <!-- Audio visualizer bars -->
+            <div style="display:flex;align-items:center;justify-content:center;gap:3px;height:60px;margin-bottom:16px;">
+                <div style="width:4px;height:20px;background:#01a4a6;border-radius:2px;opacity:0.6;"></div>
+                <div style="width:4px;height:35px;background:#01a4a6;border-radius:2px;opacity:0.8;"></div>
+                <div style="width:4px;height:50px;background:#01a4a6;border-radius:2px;"></div>
+                <div style="width:4px;height:40px;background:#01a4a6;border-radius:2px;opacity:0.9;"></div>
+                <div style="width:4px;height:55px;background:#01a4a6;border-radius:2px;"></div>
+                <div style="width:4px;height:30px;background:#01a4a6;border-radius:2px;opacity:0.7;"></div>
+                <div style="width:4px;height:45px;background:#01a4a6;border-radius:2px;opacity:0.9;"></div>
+                <div style="width:4px;height:25px;background:#01a4a6;border-radius:2px;opacity:0.6;"></div>
+                <div style="width:4px;height:38px;background:#01a4a6;border-radius:2px;opacity:0.8;"></div>
+                <div style="width:4px;height:15px;background:#01a4a6;border-radius:2px;opacity:0.5;"></div>
+            </div>
+            <div style="color:#e0e0e0;font-size:14px;margin-bottom:4px;">Litebridge is speaking...</div>
+            <div style="color:#666;font-size:12px;max-width:400px;margin:0 auto;">
+                "I'd be happy to help you with that. Based on your product guide, the premium plan includes..."
+            </div>
+            <!-- Transcript badge -->
+            <div style="margin-top:20px;">
+                <span style="display:inline-block;background:rgba(1,164,166,0.1);border:1px solid rgba(1,164,166,0.2);border-radius:6px;padding:6px 14px;font-size:11px;color:#888;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#01a4a6" stroke-width="2" style="vertical-align:middle;margin-right:4px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    View transcript &bull; 2 citations
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Next Steps -->
+<div class="docs-section" id="next-steps">
+    <h2>Next Steps</h2>
+    <p>Now that your sidekick is up and running, explore these guides to take it further:</p>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-top: 20px;">
+        <a href="/admin/docs/managing" style="text-decoration: none; display: block; background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 12px; padding: 24px; transition: border-color 0.2s;">
+            <div style="color: #01a4a6; font-size: 14px; font-weight: 600; margin-bottom: 8px;">Managing Your Sidekick</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Edit your sidekick's personality, voice, abilities, and more from the detail page.</div>
+        </a>
+        <a href="/admin/docs/abilities" style="text-decoration: none; display: block; background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 12px; padding: 24px; transition: border-color 0.2s;">
+            <div style="color: #01a4a6; font-size: 14px; font-weight: 600; margin-bottom: 8px;">Abilities & Tools</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Explore the full set of abilities your sidekick can use &mdash; from content generation to project management.</div>
+        </a>
+        <a href="/admin/docs/knowledge-base" style="text-decoration: none; display: block; background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 12px; padding: 24px; transition: border-color 0.2s;">
+            <div style="color: #01a4a6; font-size: 14px; font-weight: 600; margin-bottom: 8px;">Knowledge Base Guide</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Best practices for uploading documents and getting accurate, relevant answers.</div>
+        </a>
+        <a href="/admin/docs/embedding" style="text-decoration: none; display: block; background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 12px; padding: 24px; transition: border-color 0.2s;">
+            <div style="color: #01a4a6; font-size: 14px; font-weight: 600; margin-bottom: 8px;">Embedding Your Sidekick</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.6;">Add your sidekick to any website with a simple iframe embed or React component.</div>
+        </a>
+    </div>
+</div>
+
+<div class="docs-nav-footer">
+    <div></div>
+    <a href="/admin/docs/managing" class="docs-nav-link next">
+        <span class="label">Next</span>
+        <span class="title">Managing Your Sidekick &rarr;</span>
+    </a>
+</div>
+
+{% endblock %}
