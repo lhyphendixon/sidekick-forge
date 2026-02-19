@@ -30,8 +30,11 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         "/openapi.json",
         "/embed",
         "/api/embed/",
-        # TEMP: allow admin paths for debugging template routing
-        "/admin",
+        # Public admin pages (login, signup, docs)
+        "/admin/login",
+        "/admin/signup",
+        "/admin/reset-password",
+        "/admin/docs",
         "/api/v1/auth/signup",
         "/api/v1/auth/login",
         "/api/v1/wordpress/register",
