@@ -69,6 +69,8 @@ class ToolRegistry:
                     ft = self._build_image_catalyst_tool(t)
                 elif ttype == "prediction_market":
                     ft = self._build_prediction_market_tool(t)
+                elif ttype == "print_ready":
+                    ft = self._build_print_ready_tool(t)
                 else:
                     self._logger.warning(f"Unsupported tool type '{ttype}' for slug={slug}; skipping")
                     continue
@@ -1123,6 +1125,45 @@ class ToolRegistry:
             suggested_prompt = kwargs.get("suggested_prompt", "")
 
             return f"WIDGET_TRIGGER:image_catalyst:{suggested_mode}:{suggested_prompt}"
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_print_ready_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the PrintReady tool for transcript printing/export."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "print-ready"
+        description = t.get("description") or (
+            "Trigger the PrintReady widget to prepare a print-ready conversation transcript. "
+            "Use when users ask to print, export, or download conversation history."
+        )
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_widget": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Set to true to trigger the PrintReady widget UI",
+                    },
+                    "suggested_context": {
+                        "type": "string",
+                        "description": "Optional context for the transcript request",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            try:
+                self._logger.info("🖨️ PrintReady widget trigger invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+            suggested_context = kwargs.get("suggested_context", "")
+            return f"WIDGET_TRIGGER:print_ready:{suggested_context}"
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
 

@@ -927,33 +927,103 @@
                         <input type="checkbox" id="supertabEnabled" {% if agent.supertab_enabled %}checked{% endif %}
                                class="w-4 h-4 text-emerald-500 border-dark-border rounded focus:ring-emerald-500 bg-dark-elevated">
                         <label for="supertabEnabled" class="ml-2 text-sm text-dark-text">
-                            Enable Supertab Paywall for Voice Chat
+                            Enable Supertab Integration
                         </label>
                     </div>
 
                     <div id="supertabSettings" class="{% if not agent.supertab_enabled %}opacity-50{% endif %} space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-dark-text mb-2">
-                                Experience ID
-                            </label>
-                            <input type="text" id="supertabExperienceId" value="{{ agent.supertab_experience_id or '' }}"
-                                   placeholder="experience.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 text-dark-text">
-                            <p class="mt-1 text-xs text-dark-text-secondary">
-                                Create a <strong>Purchase Button</strong> experience in the <a href="https://business.supertab.co" target="_blank" class="text-emerald-500 hover:underline">Supertab Business Portal</a> and paste the Experience ID here.
-                            </p>
+                        <!-- Mode-specific paywall controls -->
+                        <div class="rounded-md bg-dark-elevated/30 border border-dark-border p-4 space-y-3">
+                            <h4 class="text-sm font-semibold text-dark-text">Apply Supertab paywall to:</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <label class="flex items-center gap-2 text-sm text-dark-text">
+                                    <input
+                                        type="checkbox"
+                                        id="supertabTextEnabled"
+                                        {% if agent.supertab_text_enabled %}checked{% endif %}
+                                        class="w-4 h-4 text-emerald-500 border-dark-border rounded focus:ring-emerald-500 bg-dark-elevated"
+                                    >
+                                    Text chat
+                                </label>
+                                <label class="flex items-center gap-2 text-sm text-dark-text">
+                                    <input
+                                        type="checkbox"
+                                        id="supertabVoiceEnabled"
+                                        {% if agent.supertab_voice_enabled is sameas true or (agent.supertab_voice_enabled is none and agent.supertab_enabled) %}checked{% endif %}
+                                        class="w-4 h-4 text-emerald-500 border-dark-border rounded focus:ring-emerald-500 bg-dark-elevated"
+                                    >
+                                    Voice chat
+                                </label>
+                                <label class="flex items-center gap-2 text-sm text-dark-text">
+                                    <input
+                                        type="checkbox"
+                                        id="supertabVideoEnabled"
+                                        {% if agent.supertab_video_enabled %}checked{% endif %}
+                                        class="w-4 h-4 text-emerald-500 border-dark-border rounded focus:ring-emerald-500 bg-dark-elevated"
+                                    >
+                                    Video chat
+                                </label>
+                            </div>
                         </div>
 
-                        <div>
-                            <label class="block text-sm font-medium text-dark-text mb-2">
-                                Price Display
-                            </label>
-                            <input type="text" id="supertabPrice" value="{{ agent.supertab_price or '' }}"
-                                   placeholder="50¢ per session"
-                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 text-dark-text">
-                            <p class="mt-1 text-xs text-dark-text-secondary">
-                                The price shown to users (e.g., "50¢ per session", "$0.50", "Free trial")
-                            </p>
+                        <!-- Per-Session Settings -->
+                        <div class="rounded-md bg-dark-elevated/30 border border-dark-border p-4 space-y-4">
+                            <h4 class="text-sm font-semibold text-dark-text flex items-center gap-2">
+                                <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                Per-Session Purchase
+                            </h4>
+                            <div>
+                                <label class="block text-sm font-medium text-dark-text mb-2">
+                                    Experience ID
+                                </label>
+                                <input type="text" id="supertabExperienceId" value="{{ agent.supertab_experience_id or '' }}"
+                                       placeholder="experience.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                                       class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 text-dark-text">
+                                <p class="mt-1 text-xs text-dark-text-secondary">
+                                    Create a <strong>Purchase Button</strong> experience in the <a href="https://business.supertab.co" target="_blank" class="text-emerald-500 hover:underline">Supertab Business Portal</a> and paste the Experience ID here.
+                                </p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-dark-text mb-2">
+                                    Price Display
+                                </label>
+                                <input type="text" id="supertabPrice" value="{{ agent.supertab_price or '' }}"
+                                       placeholder="50¢ per session"
+                                       class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 text-dark-text">
+                                <p class="mt-1 text-xs text-dark-text-secondary">
+                                    The price shown to users (e.g., "50¢ per session", "$0.50")
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Subscription Settings -->
+                        <div class="rounded-md bg-dark-elevated/30 border border-dark-border p-4 space-y-4">
+                            <h4 class="text-sm font-semibold text-dark-text flex items-center gap-2">
+                                <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                                Monthly Subscription
+                            </h4>
+                            <div>
+                                <label class="block text-sm font-medium text-dark-text mb-2">
+                                    Subscription Experience ID
+                                </label>
+                                <input type="text" id="supertabSubscriptionExperienceId" value="{{ agent.supertab_subscription_experience_id or '' }}"
+                                       placeholder="experience.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                                       class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
+                                <p class="mt-1 text-xs text-dark-text-secondary">
+                                    Create a <strong>recurring</strong> Purchase Button experience in the Supertab Business Portal for subscription access.
+                                </p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-dark-text mb-2">
+                                    Subscription Price Display
+                                </label>
+                                <input type="text" id="supertabSubscriptionPrice" value="{{ agent.supertab_subscription_price or '' }}"
+                                       placeholder="$20/mo"
+                                       class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
+                                <p class="mt-1 text-xs text-dark-text-secondary">
+                                    The subscription price shown to users (e.g., "$20/mo", "$20 per month")
+                                </p>
+                            </div>
                         </div>
 
                         <div>
@@ -964,7 +1034,7 @@
                                       placeholder="Experience an interactive voice conversation with AI"
                                       class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 text-dark-text">{{ agent.supertab_cta or '' }}</textarea>
                             <p class="mt-1 text-xs text-dark-text-secondary">
-                                A brief message displayed above the purchase button to entice users
+                                A brief message displayed above the purchase buttons to entice users
                             </p>
                         </div>
                     </div>
@@ -1677,9 +1747,14 @@ async function saveAgent() {
 
     // Supertab settings
     const supertabEnabled = document.getElementById('supertabEnabled')?.checked || false;
+    const supertabVoiceEnabled = document.getElementById('supertabVoiceEnabled')?.checked || false;
+    const supertabTextEnabled = document.getElementById('supertabTextEnabled')?.checked || false;
+    const supertabVideoEnabled = document.getElementById('supertabVideoEnabled')?.checked || false;
     const supertabExperienceId = document.getElementById('supertabExperienceId')?.value?.trim() || null;
     const supertabPrice = document.getElementById('supertabPrice')?.value?.trim() || null;
     const supertabCta = document.getElementById('supertabCta')?.value?.trim() || null;
+    const supertabSubscriptionExperienceId = document.getElementById('supertabSubscriptionExperienceId')?.value?.trim() || null;
+    const supertabSubscriptionPrice = document.getElementById('supertabSubscriptionPrice')?.value?.trim() || null;
 
     // Chat mode settings
     const voiceChatEnabled = document.getElementById('voiceChatEnabled')?.checked ?? true;
@@ -1777,9 +1852,14 @@ async function saveAgent() {
         tools_config: toolsConfig,
         personality_engine: personalityEngine,
         supertab_enabled: supertabEnabled,
+        supertab_voice_enabled: supertabVoiceEnabled,
+        supertab_text_enabled: supertabTextEnabled,
+        supertab_video_enabled: supertabVideoEnabled,
         supertab_experience_id: supertabExperienceId,
         supertab_price: supertabPrice,
         supertab_cta: supertabCta,
+        supertab_subscription_experience_id: supertabSubscriptionExperienceId,
+        supertab_subscription_price: supertabSubscriptionPrice,
         voice_chat_enabled: voiceChatEnabled,
         text_chat_enabled: textChatEnabled,
         video_chat_enabled: videoChatEnabled,

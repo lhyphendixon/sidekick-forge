@@ -147,6 +147,9 @@ class AgentService:
             channels=channels,
             rag_results_limit=agent_data.get("rag_results_limit", 5),
             supertab_enabled=agent_data.get("supertab_enabled", False),
+            supertab_voice_enabled=agent_data.get("supertab_voice_enabled"),
+            supertab_text_enabled=agent_data.get("supertab_text_enabled", False),
+            supertab_video_enabled=agent_data.get("supertab_video_enabled", False),
             supertab_experience_id=agent_data.get("supertab_experience_id"),
             voice_chat_enabled=agent_data.get("voice_chat_enabled", True),
             text_chat_enabled=agent_data.get("text_chat_enabled", True),
@@ -475,6 +478,7 @@ class AgentService:
                     'id', 'slug', 'name', 'description', 'client_id', 'agent_image',
                     'system_prompt', 'voice_settings', 'sound_settings', 'enabled', 'show_citations',
                     'rag_results_limit', 'supertab_enabled', 'supertab_experience_id',
+                    'supertab_voice_enabled', 'supertab_text_enabled', 'supertab_video_enabled',
                     'voice_chat_enabled', 'text_chat_enabled', 'video_chat_enabled',
                     'tools_config', 'rag_config',
                     'created_at', 'updated_at'
@@ -547,6 +551,7 @@ class AgentService:
                 optional_columns = [
                     'voice_chat_enabled', 'text_chat_enabled', 'video_chat_enabled',
                     'show_citations', 'rag_results_limit', 'supertab_enabled',
+                    'supertab_voice_enabled', 'supertab_text_enabled', 'supertab_video_enabled',
                     'supertab_experience_id', 'tools_config', 'rag_config',
                     'sound_settings'
                 ]

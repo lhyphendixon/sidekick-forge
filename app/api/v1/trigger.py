@@ -29,6 +29,7 @@ from app.services.tools_service_supabase import ToolsService
 from app.services.document_processor import document_processor
 from app.utils.tool_prompts import apply_tool_prompt_instructions
 from app.services.usage_tracking import usage_tracking_service, QuotaType
+from app.services.tier_features import get_tier_features
 from livekit.agents.llm.tool_context import ToolContext
 from app.agent_modules.tool_registry import ToolRegistry
 # Redis dedupe removed
@@ -37,6 +38,8 @@ DATASET_ID_FALLBACKS: Dict[str, List[int]] = {
     "clarence-coherence": [561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571],
     "able": list(range(7, 36)),
 }
+
+ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
 
 
 def _normalize_conversation_id_value(raw_value: str) -> Tuple[str, Optional[str]]:
@@ -1041,6 +1044,38 @@ async def trigger_agent(
             raise HTTPException(
                 status_code=404, 
                 detail=f"Client '{client_id}' not found"
+            )
+
+        # Enforce product/subscription feature gates in backend path (defense in depth).
+        client_data = (
+            client.model_dump()
+            if hasattr(client, "model_dump")
+            else (client.dict() if hasattr(client, "dict") else {})
+        )
+        tier = str(client_data.get("tier") or "adventurer").lower()
+        if tier not in {"adventurer", "champion", "paragon"}:
+            tier = "adventurer"
+        subscription_id = client_data.get("stripe_subscription_id")
+        subscription_status = str(client_data.get("subscription_status") or "").lower()
+        if tier in {"champion", "paragon"} and subscription_id:
+            if subscription_status and subscription_status not in ACTIVE_SUBSCRIPTION_STATUSES:
+                tier = "adventurer"
+        tier_features = get_tier_features(tier)
+
+        if request.mode == TriggerMode.VOICE and not bool(tier_features.get("voice_chat_enabled", True)):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Voice chat is not included for client tier '{tier}'"
+            )
+        if request.mode == TriggerMode.TEXT and not bool(tier_features.get("text_chat_enabled", True)):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Text chat is not included for client tier '{tier}'"
+            )
+        if request.mode == TriggerMode.VIDEO and not bool(tier_features.get("video_chat_enabled", False)):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Video chat is not included for client tier '{tier}'"
             )
         
         tools_service = ToolsService(agent_service.client_service)

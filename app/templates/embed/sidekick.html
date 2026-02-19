@@ -716,6 +716,7 @@
   <script src="/static/js/content-catalyst-widget.js?v=20260204c"></script>
   <script src="/static/js/lingua-widget.js?v=20260201"></script>
   <script src="/static/js/image-catalyst-widget.js?v=20260204d"></script>
+  <script src="/static/js/print-ready-widget.js?v=20260219b"></script>
   <script src="/static/js/kenburns.js?v=20260202c"></script>
 </head>
 <body style="background: #000000;">
@@ -826,31 +827,51 @@
             <!-- Supertab Paywall Section (shown when Supertab is enabled and user has no entitlement) -->
             {% if supertab_config and supertab_config.enabled %}
             <div id="supertabPaywallSection" class="text-center max-w-sm mx-auto">
-              <!-- Price Badge -->
-              <div class="mb-4">
-                <span class="inline-flex items-center px-4 py-2 rounded-full bg-gradient-to-r from-emerald-500/20 to-teal-500/20 border border-emerald-500/30">
-                  <span class="text-2xl font-bold text-white" id="supertabPriceDisplay">{{ supertab_config.price if supertab_config else 'per session' }}</span>
-                </span>
-              </div>
-
               <!-- Call to Action -->
-              <p class="text-white/80 text-base mb-6" id="supertabCtaDisplay">{{ supertab_config.cta if supertab_config else 'Start a voice conversation' }}</p>
+              <p class="text-white/80 text-base mb-5" id="supertabCtaDisplay">{{ supertab_config.cta if supertab_config else 'Start a voice conversation' }}</p>
 
-              <!-- Supertab Purchase Button Container -->
-              <div id="supertabButtonContainer" class="flex justify-center mb-4">
-                <!-- Supertab SDK will inject the purchase button here -->
-                <div id="supertabButtonLoading" class="flex items-center gap-2 text-white/50">
-                  <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
-                  <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
-                  <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
+              <!-- Pricing Options -->
+              <div class="flex gap-3 mb-4 {% if not supertab_config.subscription_experience_id %}justify-center{% endif %}">
+                <!-- Per-Session Option -->
+                {% if supertab_config.experience_id %}
+                <div class="flex-1 rounded-xl border border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 to-transparent p-4">
+                  <div class="text-xs text-emerald-400 font-semibold uppercase tracking-wider mb-2">Per Session</div>
+                  <div class="text-xl font-bold text-white mb-3" id="supertabPriceDisplay">{{ supertab_config.price if supertab_config else 'per session' }}</div>
+                  <div id="supertabButtonContainer" class="flex justify-center">
+                    <div id="supertabButtonLoading" class="flex items-center gap-2 text-white/50">
+                      <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
+                      <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
+                      <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
+                    </div>
+                  </div>
+                  <div class="text-xs text-white/30 mt-2">One conversation</div>
                 </div>
+                {% endif %}
+
+                <!-- Subscription Option -->
+                {% if supertab_config.subscription_experience_id %}
+                <div class="flex-1 rounded-xl border border-purple-500/30 bg-gradient-to-b from-purple-500/10 to-transparent p-4 relative">
+                  <div class="absolute -top-2.5 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-purple-500 text-white text-[10px] font-bold uppercase tracking-wider rounded-full">Best Value</div>
+                  <div class="text-xs text-purple-400 font-semibold uppercase tracking-wider mb-2">Monthly</div>
+                  <div class="text-xl font-bold text-white mb-3" id="supertabSubPriceDisplay">{{ supertab_config.subscription_price }}</div>
+                  <div id="supertabSubButtonContainer" class="flex justify-center">
+                    <div id="supertabSubButtonLoading" class="flex items-center gap-2 text-white/50">
+                      <div class="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style="animation-delay:0ms"></div>
+                      <div class="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style="animation-delay:150ms"></div>
+                      <div class="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style="animation-delay:300ms"></div>
+                    </div>
+                  </div>
+                  <div class="text-xs text-white/30 mt-2">Unlimited conversations</div>
+                </div>
+                {% endif %}
               </div>
 
               <!-- Disclaimer Notes -->
-              <div class="text-xs text-white/40 space-y-1 mt-6 border-t border-white/10 pt-4">
+              <div class="text-xs text-white/40 space-y-1 mt-5 border-t border-white/10 pt-4">
                 <p class="font-medium text-white/50">Please Note</p>
-                <p>Single-use, tied to your device</p>
-                <p>Reloading restarts the session</p>
+                {% if supertab_config.experience_id %}
+                <p>Single sessions are tied to your device</p>
+                {% endif %}
                 <p>Pricing may change</p>
               </div>
 
@@ -1025,6 +1046,7 @@
     const CLIENT_ID = "{{ client_id }}";
     const AGENT_ID = "{{ agent_id or '' }}";
     const AGENT_SLUG = "{{ agent_slug }}";
+    const AGENT_NAME = {{ agent_name | tojson }};
     const SUPABASE_URL = "{{ supabase_url }}";
     const SUPABASE_ANON = "{{ supabase_anon_key }}";
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
@@ -1047,9 +1069,14 @@
     const SUPERTAB_CONFIG = {
       enabled: {{ 'true' if supertab_config and supertab_config.enabled else 'false' }},
       clientId: "{{ supertab_config.client_id if supertab_config else '' }}",
+      voiceEnabled: {{ 'true' if supertab_config and supertab_config.voice_enabled else 'false' }},
+      textEnabled: {{ 'true' if supertab_config and supertab_config.text_enabled else 'false' }},
+      videoEnabled: {{ 'true' if supertab_config and supertab_config.video_enabled else 'false' }},
       experienceId: "{{ supertab_config.experience_id if supertab_config else '' }}",
       price: "{{ supertab_config.price if supertab_config else 'per session' }}",
-      cta: "{{ supertab_config.cta if supertab_config else 'Start a voice conversation' }}"
+      cta: "{{ supertab_config.cta if supertab_config else 'Start a voice conversation' }}",
+      subscriptionExperienceId: "{{ supertab_config.subscription_experience_id if supertab_config else '' }}",
+      subscriptionPrice: "{{ supertab_config.subscription_price if supertab_config else '' }}"
     };
 
     // Chat mode configuration
@@ -1061,6 +1088,14 @@
     let supertabPurchaseButton = null;
     let hasVoiceEntitlement = false;
     let supertabResolve = null;  // Promise resolver for purchase flow
+
+    function requiresSupertabForMode(mode) {
+      if (!SUPERTAB_CONFIG.enabled || !SUPERTAB_CONFIG.clientId) return false;
+      if (mode === 'voice') return !!SUPERTAB_CONFIG.voiceEnabled;
+      if (mode === 'text') return !!SUPERTAB_CONFIG.textEnabled;
+      if (mode === 'video') return !!SUPERTAB_CONFIG.videoEnabled;
+      return false;
+    }
 
     // Conversation history state
     let currentConversationId = null;
@@ -1216,44 +1251,57 @@
         supertabClient = new window.Supertab({ clientId: SUPERTAB_CONFIG.clientId });
         console.log('[supertab] Initialized with clientId:', SUPERTAB_CONFIG.clientId);
 
-        // Create purchase button for this experience (single item / per-session billing)
+        // Shared onDone handler for both purchase buttons
+        function onSupertabDone({ priorEntitlement, purchase }) {
+          console.log('[supertab] onDone callback', { priorEntitlement, purchase });
+          if (priorEntitlement) {
+            console.log('[supertab] User has prior entitlement');
+            hasVoiceEntitlement = true;
+            handleSupertabSuccess({ status: 'entitled', priorEntitlement });
+          } else if (purchase && purchase.status === 'completed') {
+            console.log('[supertab] Purchase completed!', purchase);
+            hasVoiceEntitlement = true;
+            handleSupertabSuccess({ status: 'purchased', purchase });
+          } else {
+            console.log('[supertab] Purchase cancelled or abandoned');
+          }
+        }
+
+        // Create per-session purchase button
         if (SUPERTAB_CONFIG.experienceId) {
           const buttonContainer = document.getElementById('supertabButtonContainer');
-
           if (buttonContainer) {
-            // Hide loading indicator once we start creating the button
             if (loadingEl) loadingEl.classList.add('hidden');
-
             const { initialState, show } = await supertabClient.createPurchaseButton({
               experienceId: SUPERTAB_CONFIG.experienceId,
               containerElement: buttonContainer,
-              onDone: ({ priorEntitlement, purchase }) => {
-                console.log('[supertab] onDone callback', { priorEntitlement, purchase });
-
-                if (priorEntitlement) {
-                  // User already has access
-                  console.log('[supertab] User has prior entitlement');
-                  hasVoiceEntitlement = true;
-                  handleSupertabSuccess({ status: 'entitled', priorEntitlement });
-                } else if (purchase && purchase.status === 'completed') {
-                  // User completed purchase
-                  console.log('[supertab] Purchase completed!', purchase);
-                  hasVoiceEntitlement = true;
-                  handleSupertabSuccess({ status: 'purchased', purchase });
-                } else {
-                  // User cancelled - stay on paywall
-                  console.log('[supertab] Purchase cancelled or abandoned');
-                }
-              }
+              onDone: onSupertabDone
             });
-
             supertabPurchaseButton = { initialState, show };
-            console.log('[supertab] Purchase button created, initialState:', initialState);
-
-            // Check if user already has entitlement - show voice UI immediately
+            console.log('[supertab] Per-session button created, initialState:', initialState);
             if (initialState === 'entitled') {
               hasVoiceEntitlement = true;
-              console.log('[supertab] User has existing entitlement from initialState');
+              console.log('[supertab] User has existing entitlement from per-session initialState');
+              showVoiceReadyUI();
+            }
+          }
+        }
+
+        // Create subscription purchase button
+        if (SUPERTAB_CONFIG.subscriptionExperienceId) {
+          const subContainer = document.getElementById('supertabSubButtonContainer');
+          const subLoadingEl = document.getElementById('supertabSubButtonLoading');
+          if (subContainer) {
+            if (subLoadingEl) subLoadingEl.classList.add('hidden');
+            const { initialState, show } = await supertabClient.createPurchaseButton({
+              experienceId: SUPERTAB_CONFIG.subscriptionExperienceId,
+              containerElement: subContainer,
+              onDone: onSupertabDone
+            });
+            console.log('[supertab] Subscription button created, initialState:', initialState);
+            if (initialState === 'entitled') {
+              hasVoiceEntitlement = true;
+              console.log('[supertab] User has existing entitlement from subscription initialState');
               showVoiceReadyUI();
             }
           }
@@ -1449,13 +1497,16 @@
           } else if (msg.role === 'assistant') {
             addAssistant(msg.content, msg.citations || [], false);
           } else if (msg.role === 'widget') {
-            // Restore widget from saved state
+            // Restore known widget state from saved transcripts
             const widgetData = msg.metadata?.widget;
-            if (widgetData && widgetData.type === 'content_catalyst') {
-              console.log('[history] Restoring Content Catalyst widget:', widgetData);
-              addWidget('content_catalyst', {
-                restoredState: widgetData
-              }, false);
+            if (widgetData?.type) {
+              const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready']);
+              if (supportedWidgetTypes.has(widgetData.type)) {
+                console.log('[history] Restoring widget:', widgetData.type, widgetData);
+                addWidget(widgetData.type, {
+                  restoredState: widgetData
+                }, false);
+              }
             }
           }
         });
@@ -1531,6 +1582,7 @@
         ...config,
         clientId: CLIENT_ID,
         agentId: AGENT_ID,
+        agentName: AGENT_NAME,
         agentSlug: AGENT_SLUG,
         userId: getEffectiveUserId(),
         conversationId: currentConversationId
@@ -1620,13 +1672,16 @@
             } else if (msg.role === 'assistant') {
               addAssistant(msg.content, msg.citations || [], false);
             } else if (msg.role === 'widget') {
-              // Restore widget from saved state
+              // Restore known widget state from saved transcripts
               const widgetData = msg.metadata?.widget;
-              if (widgetData && widgetData.type === 'content_catalyst') {
-                console.log('[history] Restoring Content Catalyst widget:', widgetData);
-                addWidget('content_catalyst', {
-                  restoredState: widgetData
-                }, false);
+              if (widgetData?.type) {
+                const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready']);
+                if (supportedWidgetTypes.has(widgetData.type)) {
+                  console.log('[history] Restoring widget:', widgetData.type, widgetData);
+                  addWidget(widgetData.type, {
+                    restoredState: widgetData
+                  }, false);
+                }
               }
             }
           });
@@ -2411,6 +2466,16 @@ function clearVoiceTranscriptError(){
       const ok = await ensureSession(); if (!ok) { setAuthVisible(true); setChatVisible(false); return false; }
       const input = document.getElementById('msg');
       const text = input.value; if (!text) return false;
+
+      if (requiresSupertabForMode('text') && !hasVoiceEntitlement) {
+        // Route users to the voice paywall entrypoint to unlock entitled access.
+        if (VOICE_CHAT_ENABLED) {
+          switchTab('voice');
+        }
+        addAsstHtml('This chat mode requires an active access purchase. Please unlock access first.');
+        return false;
+      }
+
       input.value = '';
 
       // Track if this is the first message in a new conversation
@@ -3253,7 +3318,7 @@ function clearVoiceTranscriptError(){
 
       // With inline paywall, users can only reach this function after purchase
       // Double-check entitlement for safety
-      if (SUPERTAB_CONFIG.enabled && SUPERTAB_CONFIG.clientId && SUPERTAB_CONFIG.experienceId) {
+      if (requiresSupertabForMode('voice')) {
         if (!hasVoiceEntitlement) {
           console.log('[voice] No entitlement - user should use purchase button first');
           return;
@@ -4159,11 +4224,21 @@ function clearVoiceTranscriptError(){
 
     async function startVideo() {
       try { console.log('[video] startVideo invoked'); } catch {}
+
+      // Check Supertab entitlement for video mode
+      if (requiresSupertabForMode('video')) {
+        if (!hasVoiceEntitlement) {
+          console.log('[video] No entitlement - switching to voice panel for purchase');
+          switchTab('voice');
+          return;
+        }
+      }
+
       const status = document.getElementById('videoStatus');
       const startBtn = document.getElementById('videoStartBtn');
       const welcome = document.getElementById('videoWelcome');
       const container = document.getElementById('videoContainer');
-      
+
       status.textContent = 'Connecting to video...';
       
       try { console.log('[video] ensuring session'); } catch {}

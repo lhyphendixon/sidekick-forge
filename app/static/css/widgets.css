@@ -133,6 +133,65 @@
     overflow: hidden;
 }
 
+/* ========================================
+   PrintReady Widget
+   ======================================== */
+.print-ready-widget .print-ready-conversation-list {
+    max-height: 220px;
+    overflow-y: auto;
+    display: grid;
+    gap: 8px;
+    padding-right: 4px;
+}
+
+.print-ready-widget .print-ready-checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.print-ready-widget .print-ready-checkbox {
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    accent-color: #14b8a6;
+}
+
+.print-ready-widget .print-ready-conv-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.print-ready-widget .print-ready-btn {
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-weight: 600;
+    font-size: 14px;
+    transition: opacity 0.2s ease, background-color 0.2s ease;
+}
+
+.print-ready-widget .print-ready-btn:hover {
+    opacity: 0.92;
+}
+
+.print-ready-widget .print-ready-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.print-ready-widget .print-ready-btn-primary {
+    color: #fff;
+    background: linear-gradient(135deg, #0ea5e9, #14b8a6);
+}
+
+.print-ready-widget .print-ready-btn-secondary {
+    color: rgba(255, 255, 255, 0.95);
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
 /* Modal Styles */
 .cc-modal {
     opacity: 0;

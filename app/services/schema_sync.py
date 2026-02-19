@@ -67,9 +67,14 @@ create table if not exists public.agents (
   context_retention_minutes int default 30,
   max_context_messages int default 50,
   supertab_enabled boolean default false,
+  supertab_voice_enabled boolean default false,
+  supertab_text_enabled boolean default false,
+  supertab_video_enabled boolean default false,
   supertab_experience_id text,
   supertab_price text,
   supertab_cta text,
+  supertab_subscription_experience_id text,
+  supertab_subscription_price text,
   voice_chat_enabled boolean default true,
   text_chat_enabled boolean default true,
   video_chat_enabled boolean default false,
@@ -1101,6 +1106,9 @@ alter table if exists public.agents
 -- Ensure Supertab paywall columns exist for agents
 alter table if exists public.agents
   add column if not exists supertab_enabled boolean default false,
+  add column if not exists supertab_voice_enabled boolean default false,
+  add column if not exists supertab_text_enabled boolean default false,
+  add column if not exists supertab_video_enabled boolean default false,
   add column if not exists supertab_experience_id text,
   add column if not exists supertab_price text,
   add column if not exists supertab_cta text;

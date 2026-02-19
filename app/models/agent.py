@@ -157,8 +157,13 @@ class Agent(BaseModel):
     rag_results_limit: Optional[int] = Field(default=5, description="Number of knowledge base results to include in RAG context")
 
     # Supertab paywall settings
-    supertab_enabled: Optional[bool] = Field(default=False, description="Enable Supertab paywall for voice chat")
-    supertab_experience_id: Optional[str] = Field(default=None, description="Supertab offering ID for pricing")
+    supertab_enabled: Optional[bool] = Field(default=False, description="Legacy master switch for Supertab paywall")
+    supertab_voice_enabled: Optional[bool] = Field(default=None, description="Enable Supertab paywall for voice chat")
+    supertab_text_enabled: Optional[bool] = Field(default=False, description="Enable Supertab paywall for text chat")
+    supertab_video_enabled: Optional[bool] = Field(default=False, description="Enable Supertab paywall for video chat")
+    supertab_experience_id: Optional[str] = Field(default=None, description="Supertab offering ID for per-session pricing")
+    supertab_subscription_experience_id: Optional[str] = Field(default=None, description="Supertab offering ID for subscription pricing")
+    supertab_subscription_price: Optional[str] = Field(default=None, description="Subscription price display text")
 
     # Chat mode settings
     voice_chat_enabled: bool = Field(default=True, description="Whether voice chat is enabled for this agent")
@@ -221,7 +226,12 @@ class AgentUpdate(BaseModel):
     channels: Optional[ChannelSettings] = None
     rag_results_limit: Optional[int] = None
     supertab_enabled: Optional[bool] = Field(None, description="Enable Supertab paywall for voice chat")
-    supertab_experience_id: Optional[str] = Field(None, description="Supertab experience ID for pricing")
+    supertab_voice_enabled: Optional[bool] = Field(None, description="Enable Supertab paywall for voice chat")
+    supertab_text_enabled: Optional[bool] = Field(None, description="Enable Supertab paywall for text chat")
+    supertab_video_enabled: Optional[bool] = Field(None, description="Enable Supertab paywall for video chat")
+    supertab_experience_id: Optional[str] = Field(None, description="Supertab experience ID for per-session pricing")
+    supertab_subscription_experience_id: Optional[str] = Field(None, description="Supertab experience ID for subscription pricing")
+    supertab_subscription_price: Optional[str] = Field(None, description="Subscription price display text")
     voice_chat_enabled: Optional[bool] = Field(None, description="Whether voice chat is enabled")
     text_chat_enabled: Optional[bool] = Field(None, description="Whether text chat is enabled")
     video_chat_enabled: Optional[bool] = Field(None, description="Whether video chat with avatar is enabled")

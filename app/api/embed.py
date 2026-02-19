@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Request, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import asyncio
 import json
 import logging
 import uuid
+from io import BytesIO
 
 from fastapi.templating import Jinja2Templates
 
@@ -22,12 +23,58 @@ from app.middleware.auth import require_user_auth
 from app.models.user import AuthContext
 from app.agent_modules.transcript_store import store_turn
 from app.services.usage_tracking import usage_tracking_service
+from app.services.tier_features import get_tier_features
 from pydantic import BaseModel, EmailStr
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+
+ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    return bool(value)
+
+
+def _effective_client_tier(client_record: Dict[str, Any]) -> str:
+    tier = str(client_record.get("tier") or "adventurer").lower()
+    if tier not in {"adventurer", "champion", "paragon"}:
+        tier = "adventurer"
+
+    subscription_id = client_record.get("stripe_subscription_id")
+    subscription_status = str(client_record.get("subscription_status") or "").lower()
+
+    # If a paid plan exists but subscription is no longer active, fail closed to base tier features.
+    if tier in {"champion", "paragon"} and subscription_id:
+        if subscription_status and subscription_status not in ACTIVE_SUBSCRIPTION_STATUSES:
+            return "adventurer"
+
+    return tier
+
+
+def _compute_effective_mode_access(agent_record: Dict[str, Any], client_record: Dict[str, Any]) -> Dict[str, bool]:
+    tier = _effective_client_tier(client_record)
+    tier_features = get_tier_features(tier)
+
+    voice_enabled = _as_bool(agent_record.get("voice_chat_enabled"), True) and bool(
+        tier_features.get("voice_chat_enabled", True)
+    )
+    text_enabled = _as_bool(agent_record.get("text_chat_enabled"), True) and bool(
+        tier_features.get("text_chat_enabled", True)
+    )
+    video_enabled = _as_bool(agent_record.get("video_chat_enabled"), False) and bool(
+        tier_features.get("video_chat_enabled", False)
+    )
+
+    return {
+        "voice_chat_enabled": voice_enabled,
+        "text_chat_enabled": text_enabled,
+        "video_chat_enabled": video_enabled,
+    }
 
 
 async def _resolve_effective_user_id(user_id: str, client_id: str) -> str:
@@ -92,28 +139,51 @@ async def embed_sidekick(
     try:
         from supabase import create_client
 
-        # Get client's Supertab client_id and service role key from platform database
+        # Get client billing/plan context and Supertab config from platform database
         platform_sb = create_client(settings.supabase_url, settings.supabase_service_role_key)
-        client_result = platform_sb.table("clients").select("supertab_client_id, supabase_service_role_key").eq("id", client_id).maybe_single().execute()
+        try:
+            client_result = platform_sb.table("clients").select(
+                "supertab_client_id, supabase_service_role_key, tier, stripe_subscription_id, subscription_status"
+            ).eq("id", client_id).maybe_single().execute()
+        except Exception:
+            # Backward-compatible fallback if optional columns are unavailable.
+            client_result = platform_sb.table("clients").select(
+                "supertab_client_id, supabase_service_role_key"
+            ).eq("id", client_id).maybe_single().execute()
+        client_record = client_result.data or {}
         client_supertab_id = client_result.data.get("supertab_client_id") if client_result.data else None
         client_service_key = client_result.data.get("supabase_service_role_key") if client_result.data else None
 
         # Get agent settings from client database (chat mode settings, Supertab, and display info)
         if client_supabase_url and client_service_key:
             client_sb = create_client(client_supabase_url, client_service_key)
-            agent_result = client_sb.table("agents").select("id, name, description, agent_image, supertab_enabled, supertab_experience_id, supertab_price, supertab_cta, voice_chat_enabled, text_chat_enabled, video_chat_enabled").eq("slug", agent_slug).maybe_single().execute()
+            try:
+                agent_result = client_sb.table("agents").select(
+                    "id, name, description, agent_image, supertab_enabled, supertab_voice_enabled, "
+                    "supertab_text_enabled, supertab_video_enabled, supertab_experience_id, supertab_price, "
+                    "supertab_cta, supertab_subscription_experience_id, supertab_subscription_price, "
+                    "voice_chat_enabled, text_chat_enabled, video_chat_enabled"
+                ).eq("slug", agent_slug).maybe_single().execute()
+            except Exception:
+                # Fallback for tenant schemas that haven't received new supertab per-mode columns yet.
+                agent_result = client_sb.table("agents").select(
+                    "id, name, description, agent_image, supertab_enabled, supertab_experience_id, "
+                    "supertab_price, supertab_cta, supertab_subscription_experience_id, "
+                    "supertab_subscription_price, voice_chat_enabled, text_chat_enabled, video_chat_enabled"
+                ).eq("slug", agent_slug).maybe_single().execute()
 
             if agent_result.data:
+                agent_record = agent_result.data
                 # Get agent ID
-                if agent_result.data.get("id"):
-                    agent_id = str(agent_result.data.get("id"))
+                if agent_record.get("id"):
+                    agent_id = str(agent_record.get("id"))
                 # Get agent display info
-                if agent_result.data.get("name"):
-                    agent_name = agent_result.data.get("name")
-                if agent_result.data.get("agent_image"):
-                    agent_image = agent_result.data.get("agent_image")
-                if agent_result.data.get("description"):
-                    agent_description = agent_result.data.get("description")
+                if agent_record.get("name"):
+                    agent_name = agent_record.get("name")
+                if agent_record.get("agent_image"):
+                    agent_image = agent_record.get("agent_image")
+                if agent_record.get("description"):
+                    agent_description = agent_record.get("description")
 
                 # Fetch assigned tools for this agent
                 if agent_id:
@@ -141,33 +211,51 @@ async def embed_sidekick(
                         logger.warning(f"[embed] Failed to fetch agent tools: {tools_err}")
 
                 # Get chat mode settings (default to True if not set)
-                voice_chat_enabled = agent_result.data.get("voice_chat_enabled", True)
-                text_chat_enabled = agent_result.data.get("text_chat_enabled", True)
-                # Handle None values from database
-                if voice_chat_enabled is None:
-                    voice_chat_enabled = True
-                if text_chat_enabled is None:
-                    text_chat_enabled = True
-                video_chat_enabled = agent_result.data.get("video_chat_enabled", False)
-                if video_chat_enabled is None:
-                    video_chat_enabled = False
+                mode_access = _compute_effective_mode_access(agent_record, client_record)
+                voice_chat_enabled = mode_access["voice_chat_enabled"]
+                text_chat_enabled = mode_access["text_chat_enabled"]
+                video_chat_enabled = mode_access["video_chat_enabled"]
 
                 # Get Supertab settings
-                agent_supertab_enabled = agent_result.data.get("supertab_enabled", False)
-                agent_supertab_experience_id = agent_result.data.get("supertab_experience_id")
-                agent_supertab_price = agent_result.data.get("supertab_price")
-                agent_supertab_cta = agent_result.data.get("supertab_cta")
+                agent_supertab_enabled = _as_bool(agent_record.get("supertab_enabled"), False)
+                supertab_voice_enabled = _as_bool(
+                    agent_record.get("supertab_voice_enabled"),
+                    agent_supertab_enabled,
+                )
+                supertab_text_enabled = _as_bool(agent_record.get("supertab_text_enabled"), False)
+                supertab_video_enabled = _as_bool(agent_record.get("supertab_video_enabled"), False)
 
-                # Only create Supertab config if both client_id and agent is enabled with experience_id
-                if client_supertab_id and agent_supertab_enabled and agent_supertab_experience_id:
+                # Fail closed: only allow paywall modes that are currently accessible.
+                supertab_voice_enabled = supertab_voice_enabled and voice_chat_enabled
+                supertab_text_enabled = supertab_text_enabled and text_chat_enabled
+                supertab_video_enabled = supertab_video_enabled and video_chat_enabled
+
+                agent_supertab_experience_id = agent_record.get("supertab_experience_id")
+                agent_supertab_price = agent_record.get("supertab_price")
+                agent_supertab_cta = agent_record.get("supertab_cta")
+
+                # Subscription settings
+                agent_supertab_sub_experience_id = agent_record.get("supertab_subscription_experience_id")
+                agent_supertab_sub_price = agent_record.get("supertab_subscription_price")
+
+                # Only create Supertab config if both client_id and agent is enabled with at least one experience_id
+                has_session = bool(agent_supertab_experience_id)
+                has_subscription = bool(agent_supertab_sub_experience_id)
+                supertab_any_mode_enabled = supertab_voice_enabled or supertab_text_enabled or supertab_video_enabled
+                if client_supertab_id and (agent_supertab_enabled or supertab_any_mode_enabled) and (has_session or has_subscription):
                     supertab_config = {
                         "enabled": True,
                         "client_id": client_supertab_id,
-                        "experience_id": agent_supertab_experience_id,
+                        "voice_enabled": supertab_voice_enabled,
+                        "text_enabled": supertab_text_enabled,
+                        "video_enabled": supertab_video_enabled,
+                        "experience_id": agent_supertab_experience_id or "",
                         "price": agent_supertab_price or "per session",
-                        "cta": agent_supertab_cta or "Start a voice conversation"
+                        "cta": agent_supertab_cta or "Start a voice conversation",
+                        "subscription_experience_id": agent_supertab_sub_experience_id or "",
+                        "subscription_price": agent_supertab_sub_price or "$20/mo",
                     }
-                    logger.info(f"[embed] Supertab enabled for {client_id}/{agent_slug}")
+                    logger.info(f"[embed] Supertab enabled for {client_id}/{agent_slug} (session={has_session}, subscription={has_subscription})")
     except Exception as e:
         # Fail open - if we can't get config, just continue with defaults
         logger.warning(f"[embed] Failed to fetch agent config: {e}")
@@ -228,6 +316,15 @@ class SupertabUserCreateRequest(BaseModel):
     supertab_user_id: Optional[str] = None
     payment_status: str
     offering_id: Optional[str] = None
+
+
+class PrintReadyPdfRequest(BaseModel):
+    client_id: str
+    user_id: str
+    conversation_ids: List[str]
+    filename: Optional[str] = None
+    user_label: Optional[str] = None
+    assistant_label: Optional[str] = None
 
 
 @router.post("/api/embed/supertab/create-user")
@@ -375,6 +472,22 @@ async def embed_text_stream(
             platform_client = await client_service.get_client(client_id)
             if not platform_client:
                 yield f"data: {json.dumps({'error': 'Client not found'})}\n\n"
+                return
+
+            # Enforce text mode access in backend (agent + product tier gating)
+            platform_client_data = (
+                platform_client.model_dump()
+                if hasattr(platform_client, "model_dump")
+                else (platform_client.dict() if hasattr(platform_client, "dict") else {})
+            )
+            agent_data_for_access = {
+                "voice_chat_enabled": getattr(agent, "voice_chat_enabled", True),
+                "text_chat_enabled": getattr(agent, "text_chat_enabled", True),
+                "video_chat_enabled": getattr(agent, "video_chat_enabled", False),
+            }
+            mode_access = _compute_effective_mode_access(agent_data_for_access, platform_client_data)
+            if not mode_access["text_chat_enabled"]:
+                yield f"data: {json.dumps({'error': 'Text chat is disabled for this sidekick'})}\n\n"
                 return
 
             api_keys = await agent_service.get_client_api_keys(client_uuid)
@@ -803,6 +916,251 @@ async def get_embed_conversation_messages(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/api/embed/print-ready/pdf")
+async def generate_print_ready_pdf(payload: PrintReadyPdfRequest):
+    """
+    Generate a server-side PDF containing one combined, text-only transcript
+    across selected conversations that belong to the requesting user.
+    """
+    try:
+        if not payload.conversation_ids:
+            raise HTTPException(status_code=400, detail="conversation_ids is required")
+
+        # Keep payload bounded so one request cannot generate massive PDFs.
+        if len(payload.conversation_ids) > 100:
+            raise HTTPException(status_code=400, detail="Maximum 100 conversations per export")
+
+        from supabase import create_client
+        from reportlab.lib.pagesizes import LETTER
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+        import html
+
+        client_supabase_url, _, client_service_key = await SupabaseCredentialManager.get_client_supabase_credentials(
+            payload.client_id
+        )
+        client_sb = create_client(client_supabase_url, client_service_key)
+
+        effective_user_id = await _resolve_effective_user_id(payload.user_id, payload.client_id)
+
+        def _pick_name(record: Dict[str, Any]) -> Optional[str]:
+            if not isinstance(record, dict):
+                return None
+            full_name = (record.get("full_name") or "").strip()
+            if full_name:
+                return full_name
+            display_name = (record.get("display_name") or "").strip()
+            if display_name:
+                return display_name
+            name = (record.get("name") or "").strip()
+            if name:
+                return name
+            first_name = (record.get("first_name") or "").strip()
+            last_name = (record.get("last_name") or "").strip()
+            joined = f"{first_name} {last_name}".strip()
+            return joined or None
+
+        def _resolve_user_label() -> str:
+            explicit = (payload.user_label or "").strip()
+            if explicit:
+                return explicit
+            for table in ("profiles", "users"):
+                try:
+                    result = (
+                        client_sb.table(table)
+                        .select("*")
+                        .eq("id", effective_user_id)
+                        .limit(1)
+                        .execute()
+                    )
+                    rows = result.data or []
+                    if rows:
+                        picked = _pick_name(rows[0])
+                        if picked:
+                            return picked
+                except Exception:
+                    continue
+            return "User"
+
+        # Enforce ownership: only export conversations tied to this effective user.
+        try:
+            conv_result = (
+                client_sb.table("conversations")
+                .select("id, agent_id, conversation_title, title, created_at, user_id")
+                .in_("id", payload.conversation_ids)
+                .eq("user_id", effective_user_id)
+                .execute()
+            )
+        except Exception as conv_err:
+            # Backward-compatible fallback for tenant schemas without `title`.
+            if "title" in str(conv_err).lower() or "column" in str(conv_err).lower():
+                conv_result = (
+                    client_sb.table("conversations")
+                    .select("id, agent_id, conversation_title, created_at, user_id")
+                    .in_("id", payload.conversation_ids)
+                    .eq("user_id", effective_user_id)
+                    .execute()
+                )
+            else:
+                raise
+        conversation_rows = conv_result.data or []
+        conversation_by_id = {str(row.get("id")): row for row in conversation_rows if row.get("id")}
+
+        selected_ids = [cid for cid in payload.conversation_ids if cid in conversation_by_id]
+        if not selected_ids:
+            raise HTTPException(status_code=403, detail="No accessible conversations found for export")
+
+        # Resolve sidekick labels by agent_id for diarized-style role labels.
+        agent_ids = list(
+            {
+                str(conversation_by_id[cid].get("agent_id"))
+                for cid in selected_ids
+                if conversation_by_id[cid].get("agent_id")
+            }
+        )
+        agent_name_by_id: Dict[str, str] = {}
+        if agent_ids:
+            try:
+                agents_result = (
+                    client_sb.table("agents")
+                    .select("id, name")
+                    .in_("id", agent_ids)
+                    .execute()
+                )
+                for row in (agents_result.data or []):
+                    aid = str(row.get("id") or "")
+                    aname = str(row.get("name") or "").strip()
+                    if aid and aname:
+                        agent_name_by_id[aid] = aname
+            except Exception:
+                pass
+
+        user_label = _resolve_user_label()
+        default_assistant_label = (payload.assistant_label or "").strip() or "Assistant"
+
+        def _format_timestamp(value: Any) -> str:
+            if not value:
+                return ""
+            try:
+                return str(value).replace("T", " ").replace("Z", "")
+            except Exception:
+                return str(value)
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=LETTER,
+            leftMargin=54,
+            rightMargin=54,
+            topMargin=54,
+            bottomMargin=54,
+            title="PrintReady Export",
+            author="Sidekick Forge",
+        )
+
+        styles = getSampleStyleSheet()
+        title_style = styles["Title"]
+        heading_style = styles["Heading2"]
+        meta_style = ParagraphStyle(
+            "MetaStyle",
+            parent=styles["Normal"],
+            fontSize=9,
+            textColor=colors.HexColor("#666666"),
+            leading=12,
+            spaceAfter=8,
+        )
+        role_style = ParagraphStyle(
+            "RoleStyle",
+            parent=styles["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            textColor=colors.HexColor("#333333"),
+            leading=11,
+            spaceAfter=2,
+        )
+        message_style = ParagraphStyle(
+            "MessageStyle",
+            parent=styles["Normal"],
+            fontSize=11,
+            leading=15,
+            spaceAfter=10,
+        )
+
+        story = []
+        story.append(Paragraph("Conversation Transcript", title_style))
+        story.append(
+            Paragraph(
+                f"Generated for {html.escape(str(payload.user_id))} | "
+                f"Conversations: {len(selected_ids)}",
+                meta_style,
+            )
+        )
+        story.append(Spacer(1, 12))
+
+        for index, conversation_id in enumerate(selected_ids):
+            conversation = conversation_by_id[conversation_id]
+            title = (
+                conversation.get("conversation_title")
+                or conversation.get("title")
+                or f"Conversation {index + 1}"
+            )
+            created_at = _format_timestamp(conversation.get("created_at"))
+
+            story.append(Paragraph(html.escape(str(title)), heading_style))
+            if created_at:
+                story.append(Paragraph(f"Created: {html.escape(created_at)}", meta_style))
+
+            msg_result = (
+                client_sb.table("conversation_transcripts")
+                .select("role, content, created_at")
+                .eq("conversation_id", conversation_id)
+                .in_("role", ["user", "assistant"])
+                .order("created_at", desc=False)
+                .execute()
+            )
+            messages = msg_result.data or []
+
+            if not messages:
+                story.append(Paragraph("No text messages found.", meta_style))
+            else:
+                agent_id = str(conversation.get("agent_id") or "")
+                assistant_label = agent_name_by_id.get(agent_id) or default_assistant_label
+                for msg in messages:
+                    role = user_label if (msg.get("role") == "user") else assistant_label
+                    content = str(msg.get("content") or "").strip()
+                    if not content:
+                        continue
+                    safe_content = html.escape(content).replace("\n", "<br/>")
+                    story.append(Paragraph(role, role_style))
+                    story.append(Paragraph(safe_content, message_style))
+
+            if index < len(selected_ids) - 1:
+                story.append(PageBreak())
+
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+
+        base_filename = (payload.filename or "print-ready-export").strip() or "print-ready-export"
+        safe_filename = "".join(ch for ch in base_filename if ch.isalnum() or ch in ("-", "_", " ")).strip()
+        if not safe_filename:
+            safe_filename = "print-ready-export"
+        if not safe_filename.lower().endswith(".pdf"):
+            safe_filename = f"{safe_filename}.pdf"
+
+        return StreamingResponse(
+            BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate print-ready PDF: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate print-ready PDF")
+
+
 @router.get("/api/embed/conversations/recent")
 async def get_most_recent_conversation(
     client_id: str,
@@ -1180,7 +1538,15 @@ async def get_react_embed_connection_details(
         # Get agent from client database
         from supabase import create_client
         client_sb = create_client(client_supabase_url, client_service_key)
-        agent_result = client_sb.table("agents").select("id, name, slug, enabled, voice_settings, system_prompt").eq("slug", agent_slug).maybe_single().execute()
+        try:
+            agent_result = client_sb.table("agents").select(
+                "id, name, slug, enabled, voice_settings, system_prompt, "
+                "voice_chat_enabled, text_chat_enabled, video_chat_enabled"
+            ).eq("slug", agent_slug).maybe_single().execute()
+        except Exception:
+            agent_result = client_sb.table("agents").select(
+                "id, name, slug, enabled, voice_settings, system_prompt"
+            ).eq("slug", agent_slug).maybe_single().execute()
 
         if not agent_result.data or not agent_result.data.get("enabled", True):
             raise HTTPException(status_code=404, detail="Agent not found or disabled")
@@ -1192,6 +1558,14 @@ async def get_react_embed_connection_details(
         client = await client_service.get_client(client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+
+        # Enforce voice mode access in backend for this voice connection path.
+        client_data_for_access = (
+            client.model_dump() if hasattr(client, "model_dump") else (client.dict() if hasattr(client, "dict") else {})
+        )
+        mode_access = _compute_effective_mode_access(agent_data, client_data_for_access)
+        if not mode_access["voice_chat_enabled"]:
+            raise HTTPException(status_code=403, detail="Voice chat is disabled for this sidekick")
 
         # Initialize LiveKit
         if not livekit_manager._initialized:

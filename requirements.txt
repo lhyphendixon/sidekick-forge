@@ -62,6 +62,7 @@ structlog==23.2.0
 # Document Processing
 python-docx==1.2.0
 PyPDF2==3.0.1
+reportlab==4.4.10
 beautifulsoup4==4.12.2
 markdown==3.5.1
 prometheus-client>=0.19.0

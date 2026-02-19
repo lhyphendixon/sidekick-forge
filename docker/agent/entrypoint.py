@@ -1007,7 +1007,7 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
         tool_args = tc.get("arguments", {})
 
         # Skip widget triggers - these trigger frontend widgets, not backend execution
-        if tool_name in ("content_catalyst", "lingua", "image-catalyst"):
+        if tool_name in ("content_catalyst", "lingua", "image-catalyst", "print-ready", "print_ready"):
             continue
 
         # Find the tool function
@@ -1169,6 +1169,28 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
                     response_text = "I'll help you create an image. Please configure your preferences in the Image Catalyst widget below."
 
                 logger.info(f"🖼️ TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
+                break
+
+    # Check for print-ready tool call from native function calling
+    if not widget_trigger:
+        for tc in detected_tool_calls:
+            if tc["name"] in ("print-ready", "print_ready"):
+                logger.info(f"🖨️ TEXT-MODE: Processing PrintReady tool call: {tc['arguments']}")
+                args = tc["arguments"]
+                suggested_context = args.get("suggested_context", "")
+
+                widget_trigger = {
+                    "type": "print_ready",
+                    "config": {
+                        "suggested_context": suggested_context,
+                    },
+                    "message": "Opening PrintReady..."
+                }
+
+                if not response_text:
+                    response_text = "I can prepare a print-ready transcript for you. Use the PrintReady widget below to print or download HTML."
+
+                logger.info(f"🖨️ TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
                 break
 
     # Fallback: Also check for JSON tool call in LLM text response (for models that don't support native function calling)
@@ -2300,7 +2322,7 @@ async def agent_job_handler(ctx: JobContext):
                         logger.info(f"🧰 Built {len(built_tools)} tools successfully")
                         for tool_def in tool_defs:
                             tool_type = tool_def.get("type")
-                            if tool_type not in {"n8n", "asana", "helpscout", "user_overview", "content_catalyst", "documentsense", "lingua"}:
+                            if tool_type not in {"n8n", "asana", "helpscout", "user_overview", "content_catalyst", "documentsense", "lingua", "print_ready"}:
                                 continue
                             slug_candidate = tool_def.get("slug") or tool_def.get("name") or tool_def.get("id")
                             if slug_candidate:

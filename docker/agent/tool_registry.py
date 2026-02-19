@@ -179,6 +179,8 @@ class ToolRegistry:
                     ft = self._build_image_catalyst_tool(t)
                 elif ttype == "prediction_market":
                     ft = self._build_prediction_market_tool(t)
+                elif ttype == "print_ready":
+                    ft = self._build_print_ready_tool(t)
                 elif ttype == "scrape_url":
                     ft = self._build_scrape_url_tool(t)
                 elif ttype == "builtin":
@@ -363,6 +365,9 @@ Note: Reasoning mode increases response quality but takes longer. Only enable it
         elif slug in ("lingua", "transcribe", "subtitles"):
             self._logger.info(f"🔧 Mapping builtin '{slug}' to lingua tool")
             return self._build_lingua_tool(t)
+        elif slug in ("print_ready", "print-ready", "printready"):
+            self._logger.info(f"🔧 Mapping builtin '{slug}' to print_ready tool")
+            return self._build_print_ready_tool(t)
         else:
             self._logger.warning(f"⚠️ Unknown builtin tool slug '{slug}'; skipping")
             return None
@@ -2041,6 +2046,61 @@ Do NOT use this for general knowledge questions - only for document-specific que
             )
 
             return f"WIDGET_TRIGGER:image_catalyst:{suggested_mode}:{suggested_prompt}"
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_print_ready_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the PrintReady tool for transcript printing/export."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "print-ready"
+        description = t.get("description") or (
+            "Trigger the PrintReady transcript widget. "
+            "Use this when the user wants to print, export, or download one or more conversations."
+        )
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_widget": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Set to true to trigger the PrintReady widget UI",
+                    },
+                    "suggested_context": {
+                        "type": "string",
+                        "description": "Optional context to prefill the print request",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            try:
+                self._logger.info("🖨️ PrintReady widget trigger invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+
+            suggested_context = kwargs.get("suggested_context", "")
+
+            widget_trigger = {
+                "widget_type": "print_ready",
+                "suggested_context": suggested_context,
+                "message": "Opening PrintReady...",
+            }
+
+            self._emit_tool_result(
+                slug=slug,
+                tool_type="print_ready",
+                success=True,
+                output="Widget triggered",
+                raw_output=widget_trigger,
+            )
+
+            return f"WIDGET_TRIGGER:print_ready:{suggested_context}"
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
 

@@ -8,7 +8,9 @@ from app.services.perplexity_mcp_manager import get_perplexity_mcp_manager
 
 
 class ToolsService:
-    # Class-level flag to only seed default tools once per process
+    # Class-level flag to avoid reseeding unchanged defaults repeatedly.
+    # We still perform a lightweight guard for must-have defaults (e.g. print-ready)
+    # so newly introduced built-ins appear without requiring a process restart.
     _default_tools_seeded = False
     # Cache for table existence checks (table_name -> exists)
     _table_exists_cache: Dict[str, bool] = {}
@@ -17,15 +19,26 @@ class ToolsService:
         self.client_service = client_service
 
     def _ensure_default_global_tools(self) -> None:
-        """Seed built-in global abilities (non-destructive). Only runs once per process."""
-        # Skip if already seeded in this process
-        if ToolsService._default_tools_seeded:
-            return
-        ToolsService._default_tools_seeded = True
+        """Seed built-in global abilities (non-destructive)."""
 
         platform_sb = self.client_service.supabase
         if not self._table_exists(platform_sb, "tools"):
             return
+
+        if ToolsService._default_tools_seeded:
+            try:
+                exists = (
+                    platform_sb.table("tools")
+                    .select("slug")
+                    .eq("slug", "print-ready")
+                    .limit(1)
+                    .execute()
+                )
+                if exists.data:
+                    return
+            except Exception:
+                # If the guard query fails, continue with full seed attempt.
+                pass
 
         default_tools = [
             {
@@ -134,6 +147,28 @@ class ToolsService:
                 },
                 "enabled": False,
             },
+            {
+                "name": "PrintReady",
+                "slug": "print-ready",
+                "description": "Prepare a print-ready transcript from one or more conversations and allow direct browser printing or HTML download.",
+                "type": "print_ready",
+                "scope": "global",
+                "client_id": None,
+                "icon_url": "/static/images/ability-default.png",
+                "config": {
+                    "system_prompt_instructions": (
+                        "IMPORTANT: You have access to the PrintReady tool.\n\n"
+                        "WHEN TO USE THIS TOOL:\n"
+                        "- The user asks to print, export, or download a conversation transcript\n"
+                        "- The user wants a printable or shareable conversation document\n\n"
+                        "HOW TO USE:\n"
+                        "- Call the PrintReady tool immediately when print/export intent is clear\n"
+                        "- The inline widget will let the user choose current conversation and/or additional conversations\n"
+                        "- Output is a combined, text-only, print-ready document\n"
+                    ),
+                },
+                "enabled": True,
+            },
         ]
 
         try:
@@ -146,6 +181,8 @@ class ToolsService:
         except Exception:
             # Seed failures should not block the admin UI; log and continue.
             return
+        finally:
+            ToolsService._default_tools_seeded = True
 
     async def get_client_supabase(self, client_id: Optional[str]) -> SupabaseClient:
         if not client_id:
@@ -165,6 +202,7 @@ class ToolsService:
         "lingua": "/static/images/abilities/lingua.svg",
         "image-catalyst": "/static/images/abilities/image-catalyst.svg",
         "prediction_market": "/static/images/abilities/prediction-market.svg",
+        "print-ready": "/static/images/ability-default.png",
     }
 
     @staticmethod

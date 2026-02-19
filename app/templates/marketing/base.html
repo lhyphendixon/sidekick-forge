@@ -295,7 +295,7 @@
                             <img src="/static/images/Logos/SF-Symbol-Medium-bg.jpg" alt="" class="logo-bg" />
                             <img src="/static/images/Logos/SF-Symbol-Medium-Gem.png" alt="Sidekick Forge" class="logo-gem" />
                         </div>
-                        <span class="logo-text hidden sm:block">Sidekick Forge</span>
+                        <span class="logo-text">Sidekick Forge</span>
                     </a>
                 </div>
 
@@ -438,6 +438,12 @@
         <div class="py-6">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center text-sm text-gray-500">
                 <p>&copy; {{ current_year }} Sidekick Forge. All rights reserved.</p>
+                <div class="flex items-center gap-2">
+                    <span>Powered by</span>
+                    <a href="https://autonomite.com" target="_blank" rel="noopener noreferrer">
+                        <img src="/static/images/Logos/Autonomite-Logo-V3-Horizontal-small.png" alt="Autonomite" style="height: 22px; opacity: 0.6; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.6'">
+                    </a>
+                </div>
                 <div class="flex space-x-4 mt-4 md:mt-0">
                     <a href="#" class="text-gray-500 hover:text-brand-teal transition">Privacy Policy</a>
                     <a href="#" class="text-gray-500 hover:text-brand-teal transition">Terms of Service</a>
