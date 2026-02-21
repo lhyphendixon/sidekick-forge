@@ -41,6 +41,12 @@ curl http://localhost:8000/health
 
 # Admin
 curl http://localhost:8000/admin
+
+# Deployment (Production Server)
+./scripts/deploy_to_production.sh
+
+# Staging Release Preparation (Staging Server)
+./scripts/prepare_staging_release.sh
 ```
 
 ## LiveKit requirements (v1.0+)
@@ -58,3 +64,11 @@ curl http://localhost:8000/admin
 - Prefer explicit, stateless, testable flows.
 - Fail fast with clear errors rather than adding fallbacks.
 - Keep repo keys out of code; source from Supabase at runtime.
+
+## Deployment
+- **Quick Start**: See [DEPLOYMENT_QUICKSTART.md](./DEPLOYMENT_QUICKSTART.md)
+- **Full Guide**: See [DEPLOYMENT.md](./DEPLOYMENT.md)
+- **Staging → Production**: Run `prepare_staging_release.sh` on staging, then `deploy_to_production.sh` on production
+- **Supabase Migrations**: Handled automatically via `supabase/migrations/` directory (version controlled)
+- **Zero-Downtime**: Deployment script handles container updates without service interruption
+- **Auto-Rollback**: System automatically rolls back on failure
