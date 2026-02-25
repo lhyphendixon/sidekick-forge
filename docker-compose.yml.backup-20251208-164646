@@ -1,0 +1,140 @@
+version: '3.8'
+
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${APP_NAME:-sidekick-forge}-fastapi
+    user: root
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - DEVELOPMENT_MODE=false
+      - REDIS_HOST=redis
+      - DATABASE_URL=${DATABASE_URL}
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - APP_NAME=${APP_NAME}
+      - PLATFORM_NAME=${PLATFORM_NAME}
+      # Platform Supabase credentials
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_ACCESS_TOKEN=${SUPABASE_ACCESS_TOKEN}
+      - SUPABASE_ORG_ID=${SUPABASE_ORG_ID}
+      - SUPABASE_DEFAULT_REGION=${SUPABASE_DEFAULT_REGION}
+      - SUPABASE_DEFAULT_PLAN=${SUPABASE_DEFAULT_PLAN}
+      # Asana OAuth configuration
+      - ASANA_OAUTH_CLIENT_ID=${ASANA_OAUTH_CLIENT_ID}
+      - ASANA_OAUTH_CLIENT_SECRET=${ASANA_OAUTH_CLIENT_SECRET}
+      - ASANA_OAUTH_REDIRECT_URI=${ASANA_OAUTH_REDIRECT_URI}
+      # LiveKit credentials  
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      # Agent name for staging (must match agent-worker)
+      - AGENT_NAME=sidekick-agent-staging
+      - LIVEKIT_AGENT_NAME=sidekick-agent-staging
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - DOCUMENT_PROCESSOR_MAX_CONCURRENCY=2
+      - DOCUMENT_PROCESSOR_MAX_CHUNKS=250
+      # Remove duplicate DEVELOPMENT_MODE to avoid conflicting overrides
+    volumes:
+      - ./app:/app/app
+      - ./logs:/app/logs
+      - ./app/static:/app/static
+      - ./.env:/app/.env:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - platform-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${APP_NAME:-sidekick-forge}-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - platform-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: ${APP_NAME:-sidekick-forge}-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+      - ./app/static:/app/static:ro
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - platform-network
+
+  agent-worker:
+    build:
+      context: ./docker/agent
+      dockerfile: Dockerfile
+    image: ${APP_NAME:-sidekick-forge}/agent-runtime:latest
+    restart: always
+    command: python /app/entrypoint.py  # Use original entrypoint
+    volumes:
+      - ./docker/agent/entrypoint.py:/app/entrypoint.py:ro
+      - ./docker/agent/sidekick_agent.py:/app/sidekick_agent.py:ro
+      - ./docker/agent/context.py:/app/context.py:ro
+      - ./docker/agent/config_validator.py:/app/config_validator.py:ro
+      - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
+      - ./docker/agent/citations_service.py:/app/citations_service.py:ro
+      - ./docker/agent/tool_registry.py:/app/tool_registry.py:ro
+      - ./app:/app/app:ro
+    environment:
+      - LIVEKIT_URL=${LIVEKIT_URL:-wss://litebridge-hw6srhvi.livekit.cloud}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      # Agent configuration
+      - AGENT_NAME=sidekick-agent-staging
+      - ENABLE_PROACTIVE_GREETING=true
+      # Supabase configuration for API key fallback
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      # API keys will be loaded from Supabase client configurations
+      # Only pass empty values to ensure no test keys are used
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      - CARTESIA_API_KEY=${CARTESIA_API_KEY:-}
+      - REPLICATE_API_KEY=${REPLICATE_API_KEY:-}
+      - DEEPINFRA_API_KEY=${DEEPINFRA_API_KEY:-}
+      - NOVITA_API_KEY=${NOVITA_API_KEY:-}
+      - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-}
+      - JINA_API_KEY=${JINA_API_KEY:-}
+      - SPEECHIFY_API_KEY=${SPEECHIFY_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - COHERE_API_KEY=${COHERE_API_KEY:-}
+    networks:
+      - platform-network
+
+volumes:
+  redis-data:
+
+networks:
+  platform-network:
+    name: ${APP_NAME:-sidekick-forge}-network
+    driver: bridge

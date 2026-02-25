@@ -116,3 +116,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - TBD
+
+## v2.9.9 (2026-02-25)
+
+### Fixed
+- **Content Catalyst trigger reliability**: Strengthened system prompt instructions to ensure Content Catalyst triggers immediately without asking clarifying questions
+  - Added explicit trigger for just saying "content catalyst"
+  - Made trigger conditions more inclusive (blog, article, post, essay, any written content)
+  - Added "NEVER ASK CLARIFYING QUESTIONS" directive with emphasis
+  - Added guidance to infer topic from context when user request is vague
+  - Added examples for vague requests like "write me a blog" without specifying topic
+
+### Investigated
+- Confirmed `admin_only` field is NOT causing tool filtering issues (field doesn't exist in client databases, and filtering code handles this gracefully)

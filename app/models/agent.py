@@ -99,7 +99,12 @@ class Agent(BaseModel):
     
     # Citations feature flag
     show_citations: bool = Field(default=True, description="Whether to show RAG citations in responses")
-    
+
+    # Chat mode feature flags
+    text_chat_enabled: bool = Field(default=True, description="Whether text chat is enabled")
+    voice_chat_enabled: bool = Field(default=True, description="Whether voice chat is enabled")
+    video_chat_enabled: bool = Field(default=False, description="Whether video chat is enabled")
+
     # Generation model + context retention
     model: Optional[str] = Field(default="gpt-4o-mini", description="LLM model to use for responses")
     context_retention_minutes: Optional[int] = Field(default=30, description="How long to retain context for voice sessions")

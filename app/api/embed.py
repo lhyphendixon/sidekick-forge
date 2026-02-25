@@ -49,6 +49,26 @@ async def embed_sidekick(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    # Fetch agent configuration to get chat mode settings
+    agent_service = get_agent_service()
+    try:
+        from uuid import UUID
+        client_uuid = UUID(client_id)
+        agent = await agent_service.get_agent(client_uuid, agent_slug)
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_slug}' not found for client '{client_id}'")
+
+        # Extract chat mode settings, defaulting to True if not set
+        text_chat_enabled = getattr(agent, 'text_chat_enabled', True)
+        voice_chat_enabled = getattr(agent, 'voice_chat_enabled', True)
+        video_chat_enabled = getattr(agent, 'video_chat_enabled', False)
+    except Exception as e:
+        logger.error(f"Failed to fetch agent configuration: {e}")
+        # Default to all modes enabled except video if agent fetch fails
+        text_chat_enabled = True
+        voice_chat_enabled = True
+        video_chat_enabled = False
+
     return templates.TemplateResponse(
         "embed/sidekick.html",
         {
@@ -60,6 +80,9 @@ async def embed_sidekick(
             "supabase_anon_key": settings.supabase_anon_key,
             "client_supabase_url": client_supabase_url,
             "client_supabase_anon_key": client_supabase_anon_key,
+            "text_chat_enabled": text_chat_enabled,
+            "voice_chat_enabled": voice_chat_enabled,
+            "video_chat_enabled": video_chat_enabled,
         },
     )
 
