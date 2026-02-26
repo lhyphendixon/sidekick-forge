@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="asanaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f06a6a"/>
+      <stop offset="50%" style="stop-color:#f9819a"/>
+      <stop offset="100%" style="stop-color:#f06a6a"/>
+    </linearGradient>
+  </defs>
+  <circle cx="256" cy="170" r="96" fill="url(#asanaGrad)"/>
+  <circle cx="130" cy="342" r="96" fill="url(#asanaGrad)"/>
+  <circle cx="382" cy="342" r="96" fill="url(#asanaGrad)"/>
+</svg>

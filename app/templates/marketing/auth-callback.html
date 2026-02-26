@@ -1,0 +1,120 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Verifying... - Sidekick Forge{% endblock %}
+
+{% block content %}
+<section class="py-16 min-h-screen">
+    <div class="max-w-lg mx-auto px-4 sm:px-6 lg:px-8">
+        <!-- Loading State (shown initially) -->
+        <div id="loading-state" class="text-center">
+            <div class="w-20 h-20 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <svg class="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+            <h1 class="text-3xl font-bold text-white mb-3">Verifying...</h1>
+            <p class="text-gray-400">Please wait while we verify your email.</p>
+        </div>
+
+        <!-- Success State (hidden initially) -->
+        <div id="success-state" class="text-center hidden">
+            <div class="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <svg class="w-10 h-10 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+            </div>
+            <h1 class="text-3xl md:text-4xl font-bold text-white mb-3">
+                Email Verified!
+            </h1>
+            <p class="text-xl text-gray-400 mb-8">
+                Your email has been verified successfully.
+            </p>
+
+            <div class="glass-container rounded-2xl p-8 mb-8">
+                <h2 class="text-lg font-semibold text-white mb-4">You're all set!</h2>
+                <p class="text-gray-400 mb-6">
+                    Your account is now active. You can log in to your dashboard using the password you created during checkout.
+                </p>
+                <a href="/admin/login"
+                   class="inline-block w-full bg-gradient-to-r from-blue-500 to-cyan-400 hover:from-blue-600 hover:to-cyan-500 text-white px-6 py-3 rounded-lg font-semibold transition text-center shadow-lg shadow-blue-500/25">
+                    Go to Login
+                </a>
+            </div>
+        </div>
+
+        <!-- Error State (hidden initially) -->
+        <div id="error-state" class="text-center hidden">
+            <div class="w-20 h-20 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <svg class="w-10 h-10 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+                </svg>
+            </div>
+            <h1 class="text-3xl font-bold text-white mb-3">
+                Verification Failed
+            </h1>
+            <p id="error-message" class="text-gray-400 mb-8">
+                Something went wrong during verification.
+            </p>
+
+            <div class="glass-container rounded-2xl p-8">
+                <p class="text-gray-400 mb-4">Need a new verification link?</p>
+                <a href="/admin/login"
+                   class="inline-block w-full bg-gradient-to-r from-blue-500 to-cyan-400 hover:from-blue-600 hover:to-cyan-500 text-white px-6 py-3 rounded-lg font-semibold transition text-center shadow-lg shadow-blue-500/25">
+                    Go to Login
+                </a>
+                <p class="text-gray-500 text-sm mt-4">
+                    You can request a new verification email from the login page.
+                </p>
+            </div>
+
+            <div class="mt-8 text-gray-500 text-sm">
+                <p>
+                    Still having trouble? Contact us at
+                    <a href="mailto:team@sidekickforge.com" class="text-blue-400 hover:underline">team@sidekickforge.com</a>
+                </p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Parse hash parameters from Supabase redirect
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+
+    const accessToken = params.get('access_token');
+    const error = params.get('error');
+    const errorDescription = params.get('error_description');
+    const type = params.get('type');
+
+    const loadingState = document.getElementById('loading-state');
+    const successState = document.getElementById('success-state');
+    const errorState = document.getElementById('error-state');
+    const errorMessage = document.getElementById('error-message');
+
+    // Small delay for visual feedback
+    setTimeout(function() {
+        loadingState.classList.add('hidden');
+
+        if (error) {
+            // Show error state
+            errorState.classList.remove('hidden');
+            if (errorDescription) {
+                errorMessage.textContent = decodeURIComponent(errorDescription.replace(/\+/g, ' '));
+            }
+        } else if (accessToken || type === 'signup') {
+            // Show success state
+            successState.classList.remove('hidden');
+            // Clear the hash from URL for cleaner look
+            history.replaceState(null, '', window.location.pathname);
+        } else {
+            // No recognizable parameters - might be direct access
+            // Redirect to login
+            window.location.href = '/admin/login';
+        }
+    }, 500);
+});
+</script>
+{% endblock %}

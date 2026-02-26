@@ -1,0 +1,150 @@
+{% extends "admin/docs/base_docs.html" %}
+
+{% set doc_title = "Monitoring & Conversations" %}
+
+{% block docs_content %}
+
+<div class="docs-breadcrumb">
+    <a href="/admin/docs">Docs</a>
+    <span>/</span>
+    <span>Monitoring</span>
+</div>
+
+<div class="docs-hero">
+    <h1>Monitoring & Conversations</h1>
+    <p>Track your sidekick's performance, monitor usage in real-time, and review conversation activity from a single dashboard.</p>
+</div>
+
+<div class="docs-toc">
+    <h4>On this page</h4>
+    <a href="#dashboard">The Monitoring Dashboard</a>
+    <a href="#usage-cards">Usage Overview</a>
+    <a href="#sidekick-grid">Sidekick Status Grid</a>
+    <a href="#activity-timeline">Activity Timeline</a>
+    <a href="#warnings">Usage Warnings</a>
+</div>
+
+<!-- Section: Dashboard -->
+<div class="docs-section" id="dashboard">
+    <h2>The Monitoring Dashboard</h2>
+    <p>Navigate to <strong>Monitoring</strong> in the admin panel to see a real-time overview of all your sidekicks' activity and usage.</p>
+
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Monitoring Dashboard</span>
+        </div>
+        <img src="/static/images/docs/monitoring.png" alt="Monitoring Dashboard" style="width:100%;display:block;">
+    </div>
+
+    <p>The dashboard updates automatically &mdash; you don't need to refresh the page. Usage cards update every 60 seconds, the sidekick grid every 30 seconds, and the activity timeline every 15 seconds.</p>
+</div>
+
+<!-- Section: Usage Cards -->
+<div class="docs-section" id="usage-cards">
+    <h2>Usage Overview</h2>
+    <p>At the top of the dashboard, usage cards show your current consumption against your plan's limits:</p>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 20px 0;">
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 10px; padding: 20px; text-align: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#01a4a6" stroke-width="2" style="margin-bottom:8px;"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+            <div style="color: #e0e0e0; font-weight: 600; font-size: 13px; margin-bottom: 4px;">Voice Minutes</div>
+            <div style="color: #888; font-size: 12px;">Time spent in voice conversations across all sidekicks</div>
+        </div>
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 10px; padding: 20px; text-align: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fc7244" stroke-width="2" style="margin-bottom:8px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <div style="color: #e0e0e0; font-weight: 600; font-size: 13px; margin-bottom: 4px;">Text Messages</div>
+            <div style="color: #888; font-size: 12px;">Total messages exchanged in text chat mode</div>
+        </div>
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 10px; padding: 20px; text-align: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" style="margin-bottom:8px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <div style="color: #e0e0e0; font-weight: 600; font-size: 13px; margin-bottom: 4px;">Embedding Chunks</div>
+            <div style="color: #888; font-size: 12px;">Knowledge base chunks retrieved for answers</div>
+        </div>
+    </div>
+
+    <p>Each card shows a progress ring that fills as you approach your plan's limit. The ring color changes based on usage:</p>
+    <ul>
+        <li><strong style="color:#01a4a6;">Teal</strong> &mdash; Under 80% used. Healthy.</li>
+        <li><strong style="color:#fc7244;">Orange</strong> &mdash; Between 80% and 99% used. Consider upgrading.</li>
+        <li><strong style="color:#f56453;">Red</strong> &mdash; At or over the limit.</li>
+    </ul>
+</div>
+
+<!-- Section: Sidekick Grid -->
+<div class="docs-section" id="sidekick-grid">
+    <h2>Sidekick Status Grid</h2>
+    <p>The main section of the dashboard shows a card for each of your sidekicks. Each card displays:</p>
+
+    <ul>
+        <li>The sidekick's name, avatar, and current status</li>
+        <li>Individual voice, text, and embedding usage bars</li>
+        <li>Quick visual indicators of each sidekick's relative activity</li>
+    </ul>
+
+    <p>This view makes it easy to spot which sidekick is consuming the most resources and whether any sidekick might need attention.</p>
+
+    <div class="docs-callout docs-callout-tip">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+        <div><strong>Tip:</strong> Remember that usage limits are shared across all your sidekicks &mdash; they're not per-sidekick quotas. The grid helps you understand distribution, but the total is what matters against your plan limit.</div>
+    </div>
+</div>
+
+<!-- Section: Activity Timeline -->
+<div class="docs-section" id="activity-timeline">
+    <h2>Activity Timeline</h2>
+    <p>The right side of the dashboard shows a chronological timeline of recent conversations and events. Each entry shows:</p>
+
+    <ul>
+        <li>The type of interaction (voice, text, or system event)</li>
+        <li>The sidekick involved</li>
+        <li>A timestamp</li>
+    </ul>
+
+    <p>The timeline updates every 15 seconds, giving you a live view of how your sidekicks are being used.</p>
+</div>
+
+<!-- Section: Warnings -->
+<div class="docs-section" id="warnings">
+    <h2>Usage Warnings</h2>
+    <p>The dashboard is designed to give you early warning when you're approaching your plan's limits:</p>
+
+    <div style="margin: 16px 0;">
+        <div style="display:flex; align-items:center; gap:12px; background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 14px 18px; margin-bottom: 8px;">
+            <div style="width:12px;height:12px;border-radius:50%;background:#01a4a6;flex-shrink:0;"></div>
+            <div>
+                <div style="color: #e0e0e0; font-weight: 600; font-size: 13px;">Healthy (under 80%)</div>
+                <div style="color: #888; font-size: 12px;">Everything is running smoothly. No action needed.</div>
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px; background: rgba(252,114,68,0.06); border: 1px solid rgba(252,114,68,0.2); border-radius: 8px; padding: 14px 18px; margin-bottom: 8px;">
+            <div style="width:12px;height:12px;border-radius:50%;background:#fc7244;flex-shrink:0;"></div>
+            <div>
+                <div style="color: #e0e0e0; font-weight: 600; font-size: 13px;">Warning (80% - 99%)</div>
+                <div style="color: #888; font-size: 12px;">You're approaching your limit. Consider upgrading your plan or reducing usage.</div>
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px; background: rgba(245,100,83,0.06); border: 1px solid rgba(245,100,83,0.2); border-radius: 8px; padding: 14px 18px;">
+            <div style="width:12px;height:12px;border-radius:50%;background:#f56453;flex-shrink:0;"></div>
+            <div>
+                <div style="color: #e0e0e0; font-weight: 600; font-size: 13px;">Exceeded (at or over limit)</div>
+                <div style="color: #888; font-size: 12px;">You've reached your plan's limit for this period. <a href="/admin/docs/billing#upgrading">Upgrade your plan</a> for uninterrupted service.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="docs-nav-footer">
+    <a href="/admin/docs/wordpress" class="docs-nav-link">
+        <span class="label">Previous</span>
+        <span class="title">&larr; WordPress Integration</span>
+    </a>
+    <a href="/admin/docs/billing" class="docs-nav-link next">
+        <span class="label">Next</span>
+        <span class="title">Billing & Plans &rarr;</span>
+    </a>
+</div>
+
+{% endblock %}

@@ -12,12 +12,16 @@
           colors: {
             'brand-teal': '#01a4a6',
             'brand-orange': '#fc7244',
+            'brand-salmon': '#f56453',
             'dark-bg': '#000000',
             'dark-surface': 'rgb(20, 20, 20)',
             'dark-elevated': '#252525',
             'dark-border': '#2a2a2a',
             'dark-text': '#e0e0e0',
             'dark-text-secondary': '#a0a0a0'
+          },
+          ringColor: {
+            DEFAULT: '#01a4a6'
           }
         }
       }
@@ -27,14 +31,131 @@
     html, body { height: 100%; }
     html { background: #000000 !important; }
     body { margin: 0; background: #000000 !important; color:#e0e0e0; height:100%; }
-    * { background-color: inherit; }
     .htmx-indicator { opacity: 0; transition: opacity 300ms ease; }
     .htmx-request .htmx-indicator { opacity: 1; }
     /* Button inline loading */
-    .btn-loading { position: relative; opacity: 0.9; pointer-events: none; }
+    .btn-loading { position: relative; opacity: 0.9; pointer-events: none; transition: none !important; }
     .btn-loading > * { visibility: hidden; }
-    .btn-loading::after { content:""; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:16px; height:16px; border:2px solid #2a2a2a; border-top-color:#01a4a6; border-radius:9999px; animation: spin 0.9s linear infinite; }
-    @keyframes spin { 0%{transform:translate(-50%,-50%) rotate(0deg);} 100%{transform:translate(-50%,-50%) rotate(360deg);} }
+    .btn-loading::after { content:""; position:absolute; left:50%; top:50%; width:16px; height:16px; border:2px solid #01a4a6; border-top-color:#fc7244; border-radius:9999px; animation: btn-spin 0.7s linear infinite; }
+    @keyframes btn-spin { from{transform:translate(-50%,-50%) rotate(0deg);} to{transform:translate(-50%,-50%) rotate(360deg);} }
+
+    /* Initial loading overlay */
+    #initialLoader {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.95);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 100;
+      transition: opacity 0.3s ease, visibility 0.3s ease;
+    }
+    #initialLoader.fade-out {
+      opacity: 0;
+      visibility: hidden;
+    }
+    /* Modern animated loader - orbital rings */
+    .orbital-loader {
+      position: relative;
+      width: 60px;
+      height: 60px;
+    }
+    .orbital-loader .ring {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border-width: 3px;
+      border-style: solid;
+      border-color: #01a4a6;
+      box-sizing: border-box;
+      --tw-ring-color: transparent;
+      --tw-ring-offset-color: transparent;
+      box-shadow: none;
+      outline: none;
+    }
+    .orbital-loader .ring:nth-child(1) {
+      border-top-color: #fc7244;
+      animation: orbit 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+    }
+    .orbital-loader .ring:nth-child(2) {
+      inset: 8px;
+      border-right-color: #fc7244;
+      animation: orbit 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+      animation-delay: -0.4s;
+    }
+    .orbital-loader .ring:nth-child(3) {
+      inset: 16px;
+      border-bottom-color: #fc7244;
+      animation: orbit 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+      animation-delay: -0.8s;
+    }
+    @keyframes orbit {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .loader-text {
+      margin-top: 16px;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+    }
+    .loader-dot {
+      display: inline-block;
+      animation: dotPulse 1.4s infinite;
+    }
+    .loader-dot:nth-child(2) { animation-delay: 0.2s; }
+    .loader-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dotPulse {
+      0%, 80%, 100% { opacity: 0.3; }
+      40% { opacity: 1; }
+    }
+
+    /* Ambient ability notification toast - top right like save confirmations */
+    .ambient-notification {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      transform: translateX(20px);
+      background: linear-gradient(135deg, rgba(1, 164, 166, 0.25), rgba(252, 114, 68, 0.15));
+      border: 1px solid rgba(1, 164, 166, 0.5);
+      border-radius: 12px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 9990;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      max-width: 280px;
+    }
+    .ambient-notification.show {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(0);
+    }
+    .ambient-notification .notification-icon {
+      font-size: 16px;
+      animation: sparkle 2s ease-in-out infinite;
+    }
+    @keyframes sparkle {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.7; transform: scale(1.1); }
+    }
+    .ambient-notification .notification-text {
+      color: rgba(255, 255, 255, 0.95);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+    }
+
     /* Force black background on everything */
     body, html {
       background: #000000 !important;
@@ -51,85 +172,871 @@
     .prose p:last-child {
       margin-bottom: 0;
     }
+
+    /* Dark scrollbar styles */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    /* Firefox scrollbar */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) rgba(255, 255, 255, 0.05);
+    }
+
+    /* Glass morphism styles */
+    .glass-container {
+      background: rgba(15, 15, 15, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glass-container:fullscreen {
+      background: #000;
+      border-radius: 0 !important;
+      border: none;
+      width: 100vw;
+      height: 100vh;
+    }
+    .glass-surface {
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .glass-input {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transition: all 0.2s ease;
+    }
+    .glass-input:focus {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(1, 164, 166, 0.5);
+      box-shadow: 0 0 20px rgba(1, 164, 166, 0.15);
+      outline: none;
+    }
+    .glass-input::placeholder {
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    /* Mode toggle buttons */
+    .mode-toggle {
+      display: inline-flex;
+      padding: 3px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .mode-toggle-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+      font-weight: 500;
+      border-radius: 6px;
+      transition: all 0.2s ease;
+      color: rgba(255, 255, 255, 0.5);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+    }
+    /* Icon-only mode toggle — no labels */
+    .mode-toggle-btn span { display: none; }
+    .mode-toggle-btn:hover {
+      color: rgba(255, 255, 255, 0.8);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .mode-toggle-btn.active {
+      color: white;
+      background: rgba(1, 164, 166, 0.9);
+      box-shadow: 0 2px 8px rgba(1, 164, 166, 0.3);
+    }
+    .mode-toggle-btn svg {
+      width: 20px;
+      height: 20px;
+    }
+    /* Disabled mode styling */
+    .mode-toggle-btn.disabled-mode {
+      opacity: 0.35;
+      cursor: not-allowed;
+      position: relative;
+    }
+    .mode-toggle-btn.disabled-mode:hover {
+      color: rgba(255, 255, 255, 0.5);
+      background: transparent;
+    }
+    .mode-toggle-btn.disabled-mode::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 8px;
+      right: 8px;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.4);
+    }
+
+    /* Agent profile display in header */
+    .agent-profile {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .agent-profile-image {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid rgba(1, 164, 166, 0.5);
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .agent-profile-placeholder {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(1, 164, 166, 0.8), rgba(1, 164, 166, 0.4));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 600;
+      color: white;
+      border: 2px solid rgba(1, 164, 166, 0.5);
+    }
+    .agent-profile-name {
+      font-size: 14px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.85);
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* Hide agent name on small screens, show avatar only */
+    @media (max-width: 480px) {
+      .agent-profile-name { display: none; }
+      .agent-profile { gap: 6px; }
+      .agent-profile-image, .agent-profile-placeholder { width: 28px; height: 28px; }
+    }
+
+    /* Make agent profile clickable */
+    .agent-profile-clickable {
+      cursor: pointer;
+      transition: all 0.2s ease;
+      padding: 4px 8px;
+      margin: -4px -8px;
+      border-radius: 12px;
+    }
+    .agent-profile-clickable:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .agent-profile-clickable:hover .agent-profile-image,
+    .agent-profile-clickable:hover .agent-profile-placeholder {
+      border-color: rgba(1, 164, 166, 0.8);
+      transform: scale(1.05);
+    }
+
+    /* Agent Info Modal */
+    .agent-info-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .agent-info-modal-overlay.active {
+      opacity: 1;
+      visibility: visible;
+    }
+    .agent-info-modal {
+      background: linear-gradient(180deg, rgba(18, 18, 22, 0.99) 0%, rgba(10, 10, 14, 0.99) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      max-width: 560px;
+      width: 100%;
+      min-height: 480px;
+      max-height: 85vh;
+      overflow-y: auto;
+      transform: scale(0.9) translateY(20px);
+      transition: transform 0.3s ease;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+    }
+    .agent-info-modal-overlay.active .agent-info-modal {
+      transform: scale(1) translateY(0);
+    }
+    .agent-info-header {
+      padding: 24px 24px 16px;
+      text-align: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .agent-info-section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: rgba(1, 164, 166, 0.9);
+      margin-bottom: 16px;
+    }
+    .agent-info-avatar {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 3px solid rgba(1, 164, 166, 0.6);
+      margin: 0 auto 12px;
+      display: block;
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .agent-info-avatar-placeholder {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(1, 164, 166, 0.8), rgba(1, 164, 166, 0.4));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      font-weight: 600;
+      color: white;
+      border: 3px solid rgba(1, 164, 166, 0.6);
+      margin: 0 auto 12px;
+    }
+    .agent-info-name {
+      font-size: 20px;
+      font-weight: 600;
+      color: white;
+      margin-bottom: 4px;
+    }
+    .agent-info-description {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.6);
+      line-height: 1.5;
+      padding: 0 8px;
+    }
+    .agent-info-body {
+      padding: 20px 24px 24px;
+    }
+    .agent-info-section-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .agent-info-section-title svg {
+      width: 14px;
+      height: 14px;
+    }
+    .agent-info-section-hint {
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: normal;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.35);
+      font-style: italic;
+    }
+    .ability-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .ability-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      transition: all 0.2s ease;
+    }
+    .ability-item:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(1, 164, 166, 0.3);
+    }
+    .ability-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, rgba(1, 164, 166, 0.3), rgba(252, 114, 68, 0.3));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .ability-icon img {
+      width: 20px;
+      height: 20px;
+      object-fit: contain;
+    }
+    .ability-icon svg {
+      width: 18px;
+      height: 18px;
+      color: rgba(1, 164, 166, 0.9);
+    }
+    .ability-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .ability-name {
+      font-size: 14px;
+      font-weight: 500;
+      color: white;
+      margin-bottom: 2px;
+    }
+    .ability-description {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.5);
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .agent-info-close {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.6);
+      transition: all 0.2s ease;
+    }
+    .agent-info-close:hover {
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+    }
+    .no-abilities-message {
+      text-align: center;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 13px;
+      padding: 16px;
+    }
+
+    /* Disabled mode tooltip */
+    .disabled-mode-tooltip {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: white;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      z-index: 1000;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+    .animate-fade-in {
+      animation: fadeInOut 2.5s ease-in-out;
+    }
+    @keyframes fadeInOut {
+      0% { opacity: 0; transform: translateX(-50%) translateY(10px); }
+      15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+      85% { opacity: 1; transform: translateX(-50%) translateY(0); }
+      100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+    }
+
+    /* Message bubbles */
+    .msg-user {
+      background: linear-gradient(135deg, rgba(1, 164, 166, 0.2) 0%, rgba(1, 164, 166, 0.1) 100%);
+      border: 1px solid rgba(1, 164, 166, 0.2);
+    }
+    .msg-assistant {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    /* Video transcript bubbles - elegant subtitle style */
+    .video-transcript-user {
+      background: rgba(1, 164, 166, 0.15);
+      border: none;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 0, 0, 0.5);
+    }
+    .video-transcript-assistant {
+      background: rgba(0, 0, 0, 0.25);
+      border: none;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 0, 0, 0.5);
+    }
+    /* Keep prose compact inside video subtitle bubbles */
+    .video-transcript-assistant .prose {
+      font-size: inherit;
+      line-height: 1.4;
+    }
+    .video-transcript-assistant .prose p { margin: 0.15em 0; }
+    .video-transcript-assistant .prose ul,
+    .video-transcript-assistant .prose ol { margin: 0.15em 0; padding-left: 1.2em; }
+    .video-transcript-assistant .prose li { margin: 0; }
+    .video-transcript-assistant .prose h1,
+    .video-transcript-assistant .prose h2,
+    .video-transcript-assistant .prose h3,
+    .video-transcript-assistant .prose h4 { font-size: inherit; margin: 0.2em 0; }
+    /* Smooth fade-in animation for new transcripts */
+    .video-transcript-bubble {
+      animation: transcriptFadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: opacity 0.4s ease, transform 0.4s ease;
+    }
+    @keyframes transcriptFadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(12px) scale(0.98);
+        filter: blur(2px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        filter: blur(0);
+      }
+    }
+    /* Fade out old transcripts smoothly */
+    .video-transcript-fade {
+      opacity: 0.35;
+      transform: scale(0.98);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    /* Exit animation for removing transcripts */
+    .video-transcript-exit {
+      animation: transcriptFadeOut 0.3s ease-out forwards;
+    }
+    @keyframes transcriptFadeOut {
+      from { opacity: 1; transform: translateY(0); }
+      to { opacity: 0; transform: translateY(-8px); }
+    }
+
+    /* Send button */
+    .send-btn {
+      background: linear-gradient(135deg, #01a4a6 0%, #018a8c 100%);
+      border: none;
+      padding: 10px 16px;
+      border-radius: 10px;
+      color: white;
+      font-weight: 500;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .send-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(1, 164, 166, 0.4);
+    }
+    .send-btn:active {
+      transform: translateY(0);
+    }
+    /* Compact send button on small screens */
+    @media (max-width: 480px) {
+      .chat-send-btn span { display: none; }
+      .chat-send-btn { padding: 10px 12px; }
+    }
+
+    /* History button */
+    .history-btn {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.5);
+      transition: all 0.2s ease;
+    }
+    .history-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.15);
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    /* Subtle glow effect for active elements */
+    .glow-teal {
+      box-shadow: 0 0 30px rgba(1, 164, 166, 0.1);
+    }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.47.10/dist/umd/supabase.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
-  <link rel="stylesheet" href="/static/css/citations.css">
-  <script src="/static/js/citations.js"></script>
-  <script>
-    // Injected by server
-    const DEV_MODE = {{ 'true' if development_mode else 'false' }};
-    // Short-lived token scoped to this client/agent for production-safe embeds.
-    // Note: this DOES NOT replace user authentication; it's used for scope checks only.
-    window.EMBED_TOKEN = "{{ embed_token }}";
+  {% if supertab_config and supertab_config.enabled %}
+  <script type="module">
+    // Load Supertab SDK via ES module import
+    (async function() {
+      try {
+        const { Supertab } = await import('https://js.supertab.co/v3/supertab.js');
+        window.Supertab = Supertab;
+        window.supertabReady = true;
+        window.dispatchEvent(new Event('supertab-ready'));
+        console.log('[supertab] SDK loaded via ES module import');
+      } catch (err) {
+        console.error('[supertab] Failed to load SDK:', err);
+        window.supertabReady = false;
+        window.supertabLoadError = err;
+      }
+    })();
   </script>
+  {% endif %}
+  <link rel="stylesheet" href="/static/css/citations.css?v=20260210a">
+  <link rel="stylesheet" href="/static/css/widgets.css?v=20260204c">
+  <link rel="stylesheet" href="/static/css/kenburns.css?v=20260206d">
+  <script src="/static/js/citations.js?v=20260210a"></script>
+  <script src="/static/js/widgets.js?v=20260102c"></script>
+  <script src="/static/js/content-catalyst-widget.js?v=20260204c"></script>
+  <script src="/static/js/lingua-widget.js?v=20260201"></script>
+  <script src="/static/js/image-catalyst-widget.js?v=20260226a"></script>
+  <script src="/static/js/print-ready-widget.js?v=20260219b"></script>
+  <script src="/static/js/kenburns.js?v=20260202c"></script>
 </head>
 <body style="background: #000000;">
-  <div class="mx-auto p-3 h-full" style="max-width: 800px;">
-    <div class="bg-dark-bg border border-dark-border rounded-lg h-full flex flex-col">
-      <div id="auth" class="p-4 space-y-2">
-        <h3 class="text-lg text-dark-text">Sign in</h3>
-        <input id="email" class="w-full bg-dark-elevated text-dark-text border border-dark-border rounded p-2" placeholder="email" />
-        <input id="password" class="w-full bg-dark-elevated text-dark-text border border-dark-border rounded p-2" placeholder="password" type="password" />
-        <div class="flex gap-2">
-          <button class="btn-primary px-3 py-2 rounded text-sm" onclick="login()">Login</button>
-          <button class="px-3 py-2 rounded text-sm border border-dark-border" onclick="signup()">Create account</button>
+  <div class="w-full p-1.5 sm:p-3 md:p-4 h-full" style="min-height: min(700px, 95vh);">
+    <div class="glass-container rounded-xl sm:rounded-2xl h-full flex flex-col overflow-hidden relative" style="min-height: min(650px, 90vh);">
+      <!-- Initial loading overlay - shown while checking auth -->
+      <div id="initialLoader">
+        <div class="orbital-loader">
+          <div class="ring"></div>
+          <div class="ring"></div>
+          <div class="ring"></div>
+        </div>
+        <div class="loader-text">
+          Loading<span class="loader-dot">.</span><span class="loader-dot">.</span><span class="loader-dot">.</span>
+        </div>
+      </div>
+
+      <!-- Ambient ability notification toast -->
+      <div id="ambientNotification" class="ambient-notification">
+        <span class="notification-icon">✨</span>
+        <span class="notification-text">User Understanding Expanded</span>
+      </div>
+
+      <div id="auth" class="p-5 space-y-3 hidden">
+        <h3 class="text-lg font-medium text-white">Sign in</h3>
+        <input id="email" class="w-full glass-input text-white rounded-lg px-4 py-3" placeholder="Email address" />
+        <input id="password" class="w-full glass-input text-white rounded-lg px-4 py-3" placeholder="Password" type="password" />
+        <div class="flex gap-3 pt-1">
+          <button class="send-btn flex-1" onclick="login()">Sign In</button>
+          <button class="flex-1 py-2 px-4 rounded-lg text-sm font-medium history-btn" onclick="signup()">Create Account</button>
         </div>
         <div id="auth-msg" class="text-dark-text-secondary text-sm"></div>
       </div>
-      <div id="chat" class="hidden flex-1 flex flex-col">
-        <div class="p-3 border-b border-dark-border flex gap-2">
-          <button id="tab-text" class="mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-brand-teal text-white" onclick="switchTab('text')">Text</button>
-          <button id="tab-voice" class="mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border" onclick="switchTab('voice')">Voice</button>
-        </div>
-        <div id="panel-text" class="flex-1 flex flex-col">
-          <div class="flex-1 flex flex-col">
-            <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-4">
-              <div class="text-center text-dark-text-secondary text-sm py-8">
-                <p>Start a conversation with your sidekick</p>
-                <p class="text-xs mt-2">Messages are not saved</p>
-              </div>
+      <div id="chat" class="hidden flex-1 flex flex-col min-h-0">
+        <!-- Header with mode toggle and new conversation button - all in one row -->
+        <div class="px-2 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2 border-b border-white/5 relative">
+          <!-- Mode toggle - left side -->
+          <div class="flex items-center gap-2 flex-shrink-0 relative z-10">
+            <div class="mode-toggle">
+              <button id="tab-text" class="mode-toggle-btn active" onclick="switchTab('text')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                <span>Text</span>
+              </button>
+              <button id="tab-voice" class="mode-toggle-btn" onclick="switchTab('voice')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                <span>Voice</span>
+              </button>
+              <button id="tab-video" class="mode-toggle-btn" onclick="switchTab('video')">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                <span>Video</span>
+              </button>
             </div>
-            <div class="border-t border-dark-border p-3">
-              <form onsubmit="return sendMsg(event)" class="flex gap-2">
-                <input id="msg" name="message" placeholder="Type a message..." class="flex-1 bg-dark-elevated border-dark-border text-dark-text rounded-md px-3 py-2 border" autocomplete="off" required />
-                <button type="submit" class="btn-primary px-4 py-2 rounded text-sm font-medium">Send</button>
-              </form>
-            </div>
-          </div>
-        </div>
-        <div id="panel-voice" class="hidden p-4 flex-1 flex flex-col items-center">
-          <div class="text-dark-text-secondary mb-4 text-center">Start a voice chat with your sidekick.</div>
-          <div class="flex items-center gap-2 mb-2">
-            <button id="voiceStartBtn" class="inline-flex items-center gap-2 px-4 py-2 bg-brand-teal text-white rounded-lg hover:bg-brand-teal/90 transition-all" onclick="withBtnLoading(this, startVoice)">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 1a3 3 0 013 3v7a3 3 0 11-6 0V4a3 3 0 013-3zm7 10a7 7 0 01-14 0M5 21h14"/></svg>
-              <span>Start Voice Chat</span>
+            <!-- Fullscreen toggle -->
+            <button id="fullscreenBtn" class="p-1.5 text-white/40 hover:text-white hover:bg-white/10 rounded-lg transition-all" onclick="toggleEmbedFullscreen()" title="Toggle fullscreen">
+              <svg id="fullscreenExpandIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5h-4m4 0v-4m0 4l-5-5"/></svg>
+              <svg id="fullscreenShrinkIcon" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9L4 4m0 0v4m0-4h4m7 5l5-5m0 0v4m0-4h-4M9 15l-5 5m0 0v-4m0 4h4m7-5l5 5m0 0v-4m0 4h-4"/></svg>
             </button>
           </div>
-          <div id="voiceTranscriptList" class="w-full max-w-xl mx-auto flex-1 overflow-y-auto space-y-3 mb-3"></div>
-          <div id="agentSpeakingIndicator" class="hidden mb-2">
-            <div class="flex items-center gap-2 text-dark-text-secondary text-sm">
-              <span>Agent speaking</span>
-              <div class="flex space-x-1">
+          <!-- New Conversation button - absolutely centered in the header -->
+          <button id="newConversationBtn" onclick="startNewConversation()" class="absolute left-1/2 -translate-x-1/2 inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-all border border-white/10 hover:border-white/20" title="New Conversation">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            <span class="hidden sm:inline">New Conversation</span>
+          </button>
+          <!-- Right side: Agent profile + End Call button -->
+          <div class="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+            <!-- Agent profile - right aligned, clickable to show info -->
+            <div class="agent-profile agent-profile-clickable" id="agentProfileHeader" onclick="openAgentInfoModal()" title="Click to view sidekick info">
+              <span class="agent-profile-name">{{ agent_name }}</span>
+              {% if agent_image -%}
+              {%- set img_base = agent_image.rsplit('.', 1)[0] if '.' in agent_image else agent_image -%}
+              {%- set img_dir = img_base.rsplit('/', 1)[0] if '/' in img_base else '' -%}
+              {%- set img_stem = img_base.rsplit('/', 1)[1] if '/' in img_base else img_base -%}
+              {%- set proto = request.headers.get('X-Forwarded-Proto', 'https') -%}
+              {%- set origin = proto ~ '://' ~ request.url.netloc %}
+              <picture>
+                <source srcset="{{ origin }}{{ img_dir }}/optimized/{{ img_stem }}.webp" type="image/webp">
+
+                <source srcset="{{ origin }}{{ img_dir }}/optimized/{{ img_stem }}.png" type="image/png">
+
+                <img src="{{ origin }}{{ img_dir }}/optimized/{{ img_stem }}.png" alt="{{ agent_name }}" class="agent-profile-image" loading="lazy" onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';">
+              </picture>
+              <div class="agent-profile-placeholder" style="display: none;">{{ agent_name[0] | upper if agent_name else 'S' }}</div>
+              {% else %}
+              <div class="agent-profile-placeholder">{{ agent_name[0] | upper if agent_name else 'S' }}</div>
+              {% endif %}
+            </div>
+            <!-- End Call button (shown during voice call) -->
+            <button id="voiceEndBtn" class="hidden inline-flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-500 transition-all" onclick="withBtnLoading(this, endVoice)">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              <span>End</span>
+            </button>
+          </div>
+        </div>
+        <div id="panel-text" class="flex-1 flex flex-col min-h-0">
+          <div class="flex-1 flex flex-col min-h-0">
+            <div id="chatMessages" class="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 min-h-0">
+              <div id="welcomeMessage" class="text-center text-white/40 text-sm py-12">
+                <svg class="w-12 h-12 mx-auto mb-3 text-white/20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                <p>Start a conversation with your sidekick</p>
+              </div>
+            </div>
+            <div class="glass-surface border-t-0 border-x-0 rounded-none p-3 sm:p-4">
+              <form onsubmit="return sendMsg(event)" class="flex gap-2 sm:gap-3">
+                <input id="msg" name="message" placeholder="Type a message..." class="flex-1 min-w-0 glass-input text-white rounded-xl px-3 sm:px-4 py-3" autocomplete="off" required />
+                <button type="submit" class="send-btn chat-send-btn">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+                  <span>Send</span>
+                </button>
+              </form>
+              <button id="historyBtn" onclick="openConversationHistory()" class="w-full mt-3 py-2.5 px-4 text-sm history-btn rounded-xl flex items-center justify-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>View Conversation History</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div id="panel-voice" class="hidden flex-1 flex flex-col min-h-0">
+          <div class="flex-1 flex flex-col min-h-0 p-6 items-center justify-center">
+            <!-- Supertab Paywall Section (shown when Supertab is enabled and user has no entitlement) -->
+            {% if supertab_config and supertab_config.enabled %}
+            <div id="supertabPaywallSection" class="text-center max-w-sm mx-auto">
+              <!-- Call to Action -->
+              <p class="text-white/80 text-base mb-5" id="supertabCtaDisplay">{{ supertab_config.cta if supertab_config else 'Start a voice conversation' }}</p>
+
+              <!-- Pricing Options -->
+              <div class="flex gap-3 mb-4 {% if not supertab_config.subscription_experience_id %}justify-center{% endif %}">
+                <!-- Per-Session Option -->
+                {% if supertab_config.experience_id %}
+                <div class="flex-1 rounded-xl border border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 to-transparent p-4">
+                  <div class="text-xs text-emerald-400 font-semibold uppercase tracking-wider mb-2">Per Session</div>
+                  <div class="text-xl font-bold text-white mb-3" id="supertabPriceDisplay">{{ supertab_config.price if supertab_config else 'per session' }}</div>
+                  <div id="supertabButtonContainer" class="flex justify-center">
+                    <div id="supertabButtonLoading" class="flex items-center gap-2 text-white/50">
+                      <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
+                      <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
+                      <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
+                    </div>
+                  </div>
+                  <div class="text-xs text-white/30 mt-2">One conversation</div>
+                </div>
+                {% endif %}
+
+                <!-- Subscription Option -->
+                {% if supertab_config.subscription_experience_id %}
+                <div class="flex-1 rounded-xl border border-purple-500/30 bg-gradient-to-b from-purple-500/10 to-transparent p-4 relative">
+                  <div class="absolute -top-2.5 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-purple-500 text-white text-[10px] font-bold uppercase tracking-wider rounded-full">Best Value</div>
+                  <div class="text-xs text-purple-400 font-semibold uppercase tracking-wider mb-2">Monthly</div>
+                  <div class="text-xl font-bold text-white mb-3" id="supertabSubPriceDisplay">{{ supertab_config.subscription_price }}</div>
+                  <div id="supertabSubButtonContainer" class="flex justify-center">
+                    <div id="supertabSubButtonLoading" class="flex items-center gap-2 text-white/50">
+                      <div class="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style="animation-delay:0ms"></div>
+                      <div class="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style="animation-delay:150ms"></div>
+                      <div class="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style="animation-delay:300ms"></div>
+                    </div>
+                  </div>
+                  <div class="text-xs text-white/30 mt-2">Unlimited conversations</div>
+                </div>
+                {% endif %}
+              </div>
+
+              <!-- Disclaimer Notes -->
+              <div class="text-xs text-white/40 space-y-1 mt-5 border-t border-white/10 pt-4">
+                <p class="font-medium text-white/50">Please Note</p>
+                {% if supertab_config.experience_id %}
+                <p>Single sessions are tied to your device</p>
+                {% endif %}
+                <p>Pricing may change</p>
+              </div>
+
+              <!-- Admin Bypass (visible only to authenticated admins) -->
+              <div id="adminBypassSection" class="hidden mt-6 border-t border-white/10 pt-4">
+                <p class="text-xs text-white/50 mb-2">Admin access detected</p>
+                <button id="adminBypassBtn" onclick="handleAdminBypass()" class="send-btn px-5 py-2 text-sm">
+                  Admin Bypass
+                </button>
+              </div>
+            </div>
+            {% endif %}
+
+            <!-- Regular Voice Welcome (shown when no Supertab or user has entitlement) -->
+            <div id="voiceWelcome" class="text-center {% if supertab_config and supertab_config.enabled %}hidden{% endif %}">
+              <div class="text-white/40 mb-6 text-sm">Start a voice chat with your sidekick</div>
+              <button id="voiceStartBtn" class="send-btn px-6 py-3" onclick="withBtnLoading(this, startVoice)">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                <span>Start Voice Chat</span>
+              </button>
+            </div>
+
+            <!-- Voice Session Active Area -->
+            <div id="voiceTranscriptList" class="w-full flex-1 overflow-y-auto p-4 space-y-4 min-h-0 hidden"></div>
+            <div id="agentSpeakingIndicator" class="hidden mb-2">
+              <div class="flex items-center gap-2 text-dark-text-secondary text-sm">
+                <span>Agent speaking</span>
+                <div class="flex space-x-1">
+                  <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
+                  <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
+                  <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
+                </div>
+              </div>
+            </div>
+            <div id="voiceStatus" class="text-xs text-dark-text-secondary text-center"></div>
+          </div>
+          <!-- Voice History Button -->
+          <div class="glass-surface border-t-0 border-x-0 rounded-none p-4">
+            <button onclick="openConversationHistory()" class="w-full py-2.5 px-4 text-sm history-btn rounded-xl flex items-center justify-center gap-2">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span>View Conversation History</span>
+            </button>
+          </div>
+        </div>
+        <!-- Video Chat Panel -->
+        <div id="panel-video" class="hidden flex-1 flex flex-col min-h-0">
+          <div class="flex-1 flex flex-col min-h-0 p-4 items-center justify-center relative">
+            <!-- Video Welcome (shown before video starts) -->
+            <div id="videoWelcome" class="text-center">
+              <div class="text-white/40 mb-6 text-sm">Start a video chat with your sidekick's avatar</div>
+              <button id="videoStartBtn" class="send-btn px-6 py-3" onclick="withBtnLoading(this, startVideo)">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                <span>Start Video Chat</span>
+              </button>
+            </div>
+
+            <!-- Ken Burns Image Display (for ken_burns video provider) -->
+            <div id="kenburnsContainer" class="hidden absolute inset-0 bg-black">
+              <!-- End Ken Burns button - top right -->
+              <button id="kenburnsEndBtn" class="absolute top-4 right-4 z-20 inline-flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-500 transition-all" onclick="withBtnLoading(this, endVideo)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                <span>End</span>
+              </button>
+            </div>
+
+            <!-- Video Container (hidden until video starts) -->
+            <div id="videoContainer" class="hidden absolute inset-0 bg-black flex items-center justify-center">
+              <video id="remoteVideoElement" autoplay playsinline class="w-full h-full object-contain"></video>
+
+              <!-- Model Loading Overlay (shown while avatar model loads) -->
+              <div id="videoModelLoader" class="absolute inset-0 bg-black flex flex-col items-center justify-center z-10">
+                <div class="orbital-loader mb-6">
+                  <div class="ring"></div>
+                  <div class="ring"></div>
+                  <div class="ring"></div>
+                </div>
+                <div id="videoLoaderText" class="text-white/70 text-sm font-medium mb-4">Initializing avatar...</div>
+                <div class="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                  <div id="videoLoaderProgress" class="h-full bg-gradient-to-r from-brand-teal to-brand-orange rounded-full transition-all duration-500 ease-out" style="width: 5%"></div>
+                </div>
+                <div id="videoLoaderPercent" class="text-white/40 text-xs mt-2">5%</div>
+              </div>
+
+              <!-- End Video button - top right -->
+              <button id="videoEndBtn" class="absolute top-4 right-4 inline-flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-500 transition-all" onclick="withBtnLoading(this, endVideo)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                <span>End</span>
+              </button>
+              <!-- Fullscreen toggle - top left -->
+              <button id="videoFullscreenBtn" class="absolute top-4 left-4 p-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-all" onclick="toggleVideoFullscreen()">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5h-4m4 0v-4m0 4l-5-5"/></svg>
+              </button>
+            </div>
+
+            <!-- Shared Transcript overlay - works for both video and Ken Burns modes -->
+            <div id="videoTranscriptOverlay" class="hidden absolute bottom-0 left-0 right-0 p-4 pointer-events-none z-30" style="background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.3) 50%, transparent 100%);">
+              <div id="videoTranscriptList" class="max-h-32 overflow-hidden space-y-2 flex flex-col justify-end"></div>
+            </div>
+            
+            <div id="videoStatus" class="text-xs text-dark-text-secondary text-center mt-4"></div>
+          </div>
+          <!-- Video History Button -->
+          <div class="glass-surface border-t-0 border-x-0 rounded-none p-4">
+            <button onclick="openConversationHistory()" class="w-full py-2.5 px-4 text-sm history-btn rounded-xl flex items-center justify-center gap-2">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span>View Conversation History</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Conversation History Overlay (inside glass-container so it works in fullscreen) -->
+      <div id="historyOverlay" class="hidden absolute inset-0 bg-black/75 z-50 flex items-end justify-center" style="backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);">
+        <div class="bg-dark-surface rounded-t-2xl w-full max-w-[900px] max-h-[90vh] sm:max-h-[85vh] flex flex-col animate-slide-up border border-white/8">
+          <div class="p-4 border-b border-white/5 flex items-center justify-between">
+            <h3 class="text-lg font-medium text-white">Conversation History</h3>
+            <button onclick="closeConversationHistory()" class="text-white/50 hover:text-white p-1 transition-colors">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="p-4 border-b border-white/5">
+            <button onclick="startNewConversation()" class="send-btn w-full py-3 justify-center">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              <span>Start New Conversation</span>
+            </button>
+          </div>
+          <div id="historyList" class="flex-1 overflow-y-auto p-4 space-y-2">
+            <div id="historyLoading" class="text-center text-white/40 py-8">
+              <div class="flex justify-center space-x-2 mb-2">
                 <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
                 <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
                 <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
               </div>
+              <p>Loading conversations...</p>
             </div>
-          </div>
-          <div id="voiceStatus" class="text-xs text-dark-text-secondary text-center"></div>
-          <div class="flex items-center gap-2 mt-2">
-            <button id="voiceEndBtn" class="hidden inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-all" onclick="withBtnLoading(this, endVoice)">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-              <span>End Call</span>
-            </button>
+            <div id="historyEmpty" class="hidden text-center text-white/40 py-8">
+              <p>No previous conversations found.</p>
+              <p class="text-xs mt-2">Start a new conversation to begin!</p>
+            </div>
           </div>
         </div>
       </div>
     </div>
   </div>
+
+  <style>
+    @keyframes slide-up {
+      from { transform: translateY(100%); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .animate-slide-up {
+      animation: slide-up 0.3s ease-out;
+    }
+  </style>
 
   <script>
     try { console.log('[voice] embed script initializing'); } catch {}
@@ -148,7 +1055,9 @@
     function setBtnLoading(btn, isLoading){ try { if(!btn) return; btn.classList.toggle('btn-loading', !!isLoading); btn.disabled = !!isLoading; } catch{} }
     async function withBtnLoading(btn, fn){ setBtnLoading(btn, true); try { return await fn(); } finally { setBtnLoading(btn, false); } }
     const CLIENT_ID = "{{ client_id }}";
+    const AGENT_ID = "{{ agent_id or '' }}";
     const AGENT_SLUG = "{{ agent_slug }}";
+    const AGENT_NAME = {{ agent_name | tojson }};
     const SUPABASE_URL = "{{ supabase_url }}";
     const SUPABASE_ANON = "{{ supabase_anon_key }}";
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
@@ -163,11 +1072,661 @@
     let transcriptRealtimeChannel = null;
     let transcriptConversationId = null;
     let session = null;
-    // manualToken is for Supabase access tokens provided by the parent (postMessage) or future SSO
-    // Do NOT preload with EMBED_TOKEN, to ensure login is required if no Supabase session exists
-    let manualToken = null;
+    let manualToken = null; // token provided by parent preview via postMessage
     window.__lk_audio_elements = window.__lk_audio_elements || {};
     window.__lk_transcript_seen = window.__lk_transcript_seen || {};
+
+    // Supertab configuration
+    const SUPERTAB_CONFIG = {
+      enabled: {{ 'true' if supertab_config and supertab_config.enabled else 'false' }},
+      clientId: "{{ supertab_config.client_id if supertab_config else '' }}",
+      voiceEnabled: {{ 'true' if supertab_config and supertab_config.voice_enabled else 'false' }},
+      textEnabled: {{ 'true' if supertab_config and supertab_config.text_enabled else 'false' }},
+      videoEnabled: {{ 'true' if supertab_config and supertab_config.video_enabled else 'false' }},
+      experienceId: "{{ supertab_config.experience_id if supertab_config else '' }}",
+      price: "{{ supertab_config.price if supertab_config else 'per session' }}",
+      cta: "{{ supertab_config.cta if supertab_config else 'Start a voice conversation' }}",
+      subscriptionExperienceId: "{{ supertab_config.subscription_experience_id if supertab_config else '' }}",
+      subscriptionPrice: "{{ supertab_config.subscription_price if supertab_config else '' }}"
+    };
+
+    // Chat mode configuration
+    const VOICE_CHAT_ENABLED = {{ 'true' if voice_chat_enabled else 'false' }};
+    const VIDEO_CHAT_ENABLED = {{ 'true' if video_chat_enabled else 'false' }};
+    const TEXT_CHAT_ENABLED = {{ 'true' if text_chat_enabled else 'false' }};
+
+    let supertabClient = null;
+    let supertabPurchaseButton = null;
+    let hasVoiceEntitlement = false;
+    let supertabResolve = null;  // Promise resolver for purchase flow
+
+    function requiresSupertabForMode(mode) {
+      if (!SUPERTAB_CONFIG.enabled || !SUPERTAB_CONFIG.clientId) return false;
+      if (mode === 'voice') return !!SUPERTAB_CONFIG.voiceEnabled;
+      if (mode === 'text') return !!SUPERTAB_CONFIG.textEnabled;
+      if (mode === 'video') return !!SUPERTAB_CONFIG.videoEnabled;
+      return false;
+    }
+
+    // Conversation history state
+    let currentConversationId = null;
+    let isFirstMessage = true;
+
+    // Get effective user ID for conversation history
+    // For admin preview, __client_user_id takes precedence (set via postMessage from parent)
+    // This ensures the correct shadow user ID is used rather than the session's user ID
+    function getEffectiveUserId() {
+      // Admin preview mode: use the explicitly provided client_user_id
+      if (window.__client_user_id) return window.__client_user_id;
+      // Normal mode: use session user ID
+      if (session && session.user && session.user.id) return session.user.id;
+      return null;
+    }
+
+    // Open conversation history overlay
+    async function openConversationHistory() {
+      const overlay = document.getElementById('historyOverlay');
+      const loading = document.getElementById('historyLoading');
+      const empty = document.getElementById('historyEmpty');
+      const list = document.getElementById('historyList');
+
+      overlay.classList.remove('hidden');
+      loading.classList.remove('hidden');
+      empty.classList.add('hidden');
+
+      // Clear previous items (keep loading and empty divs)
+      Array.from(list.children).forEach(child => {
+        if (child.id !== 'historyLoading' && child.id !== 'historyEmpty') {
+          child.remove();
+        }
+      });
+
+      const userId = getEffectiveUserId();
+      if (!userId) {
+        loading.classList.add('hidden');
+        empty.classList.remove('hidden');
+        empty.innerHTML = '<p>Please sign in to view conversation history.</p>';
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({
+          client_id: CLIENT_ID,
+          user_id: userId,
+          agent_slug: AGENT_SLUG,
+          limit: '50'
+        });
+
+        const res = await fetch(`/api/embed/conversations?${params}`);
+        const data = await res.json();
+
+        loading.classList.add('hidden');
+
+        if (!data.success || !data.conversations || data.conversations.length === 0) {
+          empty.classList.remove('hidden');
+          return;
+        }
+
+        // Render conversation items
+        data.conversations.forEach(conv => {
+          const item = document.createElement('div');
+          item.className = 'p-3 glass-surface rounded-xl hover:border-brand-teal/50 cursor-pointer transition-all';
+          item.onclick = () => resumeConversation(conv.id);
+
+          const title = conv.conversation_title || 'Untitled Conversation';
+          const date = conv.updated_at || conv.created_at;
+          const formattedDate = date ? new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+          const preview = conv.last_message ? conv.last_message.content : 'No messages yet';
+          const isActive = conv.id === currentConversationId;
+
+          item.innerHTML = `
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <h4 class="text-white font-medium truncate">${escapeHtml(title)}</h4>
+                  ${isActive ? '<span class="text-xs bg-brand-teal text-white px-2 py-0.5 rounded-md">Current</span>' : ''}
+                </div>
+                <p class="text-white/50 text-sm truncate mt-1">${escapeHtml(preview)}</p>
+              </div>
+              <span class="text-white/40 text-xs whitespace-nowrap">${formattedDate}</span>
+            </div>
+          `;
+
+          list.appendChild(item);
+        });
+
+      } catch (err) {
+        console.error('[history] Failed to load conversations:', err);
+        loading.classList.add('hidden');
+        empty.classList.remove('hidden');
+        empty.innerHTML = '<p>Failed to load conversations.</p>';
+      }
+    }
+
+    // Close conversation history overlay
+    function closeConversationHistory() {
+      document.getElementById('historyOverlay').classList.add('hidden');
+    }
+
+    // Start a new conversation
+    function startNewConversation() {
+      currentConversationId = null;
+      isFirstMessage = true;
+      clearChatMessages();
+      closeConversationHistory();
+      console.log('[history] Started new conversation');
+    }
+
+    // ========================================
+    // Supertab Paywall Functions
+    // ========================================
+
+    async function waitForSupertabSDK(timeout = 5000) {
+      // If already ready, return immediately
+      if (window.supertabReady && window.Supertab) {
+        return true;
+      }
+
+      // Wait for the supertab-ready event
+      return new Promise((resolve) => {
+        const timeoutId = setTimeout(() => {
+          console.warn('[supertab] SDK load timeout');
+          resolve(false);
+        }, timeout);
+
+        window.addEventListener('supertab-ready', () => {
+          clearTimeout(timeoutId);
+          resolve(true);
+        }, { once: true });
+      });
+    }
+
+    async function initSupertab() {
+      if (!SUPERTAB_CONFIG.enabled || !SUPERTAB_CONFIG.clientId) {
+        console.log('[supertab] Not enabled or missing config');
+        return;
+      }
+
+      // Hide loading indicator
+      const loadingEl = document.getElementById('supertabButtonLoading');
+
+      try {
+        // Wait for SDK to load
+        const sdkReady = await waitForSupertabSDK();
+        if (!sdkReady || typeof window.Supertab === 'undefined') {
+          console.warn('[supertab] SDK not loaded after waiting');
+          if (loadingEl) loadingEl.innerHTML = '<span class="text-red-400">Failed to load payment options</span>';
+          return;
+        }
+
+        supertabClient = new window.Supertab({ clientId: SUPERTAB_CONFIG.clientId });
+        console.log('[supertab] Initialized with clientId:', SUPERTAB_CONFIG.clientId);
+
+        // Shared onDone handler for both purchase buttons
+        function onSupertabDone({ priorEntitlement, purchase }) {
+          console.log('[supertab] onDone callback', { priorEntitlement, purchase });
+          if (priorEntitlement) {
+            console.log('[supertab] User has prior entitlement');
+            hasVoiceEntitlement = true;
+            handleSupertabSuccess({ status: 'entitled', priorEntitlement });
+          } else if (purchase && purchase.status === 'completed') {
+            console.log('[supertab] Purchase completed!', purchase);
+            hasVoiceEntitlement = true;
+            handleSupertabSuccess({ status: 'purchased', purchase });
+          } else {
+            console.log('[supertab] Purchase cancelled or abandoned');
+          }
+        }
+
+        // Create per-session purchase button
+        if (SUPERTAB_CONFIG.experienceId) {
+          const buttonContainer = document.getElementById('supertabButtonContainer');
+          if (buttonContainer) {
+            if (loadingEl) loadingEl.classList.add('hidden');
+            const { initialState, show } = await supertabClient.createPurchaseButton({
+              experienceId: SUPERTAB_CONFIG.experienceId,
+              containerElement: buttonContainer,
+              onDone: onSupertabDone
+            });
+            supertabPurchaseButton = { initialState, show };
+            console.log('[supertab] Per-session button created, initialState:', initialState);
+            if (initialState === 'entitled') {
+              hasVoiceEntitlement = true;
+              console.log('[supertab] User has existing entitlement from per-session initialState');
+              showVoiceReadyUI();
+            }
+          }
+        }
+
+        // Create subscription purchase button
+        if (SUPERTAB_CONFIG.subscriptionExperienceId) {
+          const subContainer = document.getElementById('supertabSubButtonContainer');
+          const subLoadingEl = document.getElementById('supertabSubButtonLoading');
+          if (subContainer) {
+            if (subLoadingEl) subLoadingEl.classList.add('hidden');
+            const { initialState, show } = await supertabClient.createPurchaseButton({
+              experienceId: SUPERTAB_CONFIG.subscriptionExperienceId,
+              containerElement: subContainer,
+              onDone: onSupertabDone
+            });
+            console.log('[supertab] Subscription button created, initialState:', initialState);
+            if (initialState === 'entitled') {
+              hasVoiceEntitlement = true;
+              console.log('[supertab] User has existing entitlement from subscription initialState');
+              showVoiceReadyUI();
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[supertab] Failed to initialize:', err);
+        window.supertabInitError = err;
+        if (loadingEl) loadingEl.innerHTML = '<span class="text-red-400">Failed to load payment options</span>';
+      }
+    }
+
+    // Check if the current user is an admin for this client (for Supertab bypass)
+    async function checkAdminBypass() {
+      if (!SUPERTAB_CONFIG.enabled) return;
+      try {
+        const resp = await fetch('/admin/auth/check', { credentials: 'same-origin' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data.authenticated) return;
+        const user = data.user;
+        // Superadmins bypass all, admins only for their own clients
+        const isAuthorized = user.is_super_admin ||
+          (user.visible_client_ids && user.visible_client_ids.includes(CLIENT_ID));
+        if (isAuthorized) {
+          const section = document.getElementById('adminBypassSection');
+          if (section) section.classList.remove('hidden');
+        }
+      } catch (err) {
+        // Silent fail — non-admins just never see the button
+        console.log('[admin-bypass] Check failed (expected for non-admins):', err.message);
+      }
+    }
+
+    // Handle admin clicking the bypass button
+    function handleAdminBypass() {
+      console.log('[admin-bypass] Admin bypassing Supertab paywall');
+      hasVoiceEntitlement = true;
+      showVoiceReadyUI();
+    }
+
+    // Show the voice-ready UI (hide paywall, show start button)
+    function showVoiceReadyUI() {
+      const paywallSection = document.getElementById('supertabPaywallSection');
+      const voiceWelcome = document.getElementById('voiceWelcome');
+      const transcriptList = document.getElementById('voiceTranscriptList');
+
+      if (paywallSection) paywallSection.classList.add('hidden');
+      if (voiceWelcome) voiceWelcome.classList.remove('hidden');
+      if (transcriptList) transcriptList.classList.remove('hidden');
+    }
+
+    // Handle successful Supertab purchase or entitlement
+    async function handleSupertabSuccess(result) {
+      console.log('[supertab] handleSupertabSuccess:', result);
+
+      // Hide paywall section and show voice UI
+      showVoiceReadyUI();
+
+      // Create user account if we have purchase info
+      if (result.purchase) {
+        try {
+          await handleSupertabPaymentSuccess(result);
+        } catch (err) {
+          console.warn('[supertab] Failed to create user after purchase:', err);
+        }
+      }
+
+      // Automatically start voice chat after successful purchase
+      setTimeout(() => {
+        const voiceStartBtn = document.getElementById('voiceStartBtn');
+        if (voiceStartBtn) {
+          console.log('[supertab] Auto-starting voice chat after purchase');
+          withBtnLoading(voiceStartBtn, startVoice);
+        }
+      }, 500);
+    }
+
+    async function checkVoiceEntitlement() {
+      if (!SUPERTAB_CONFIG.enabled) return true;
+      if (hasVoiceEntitlement) return true;
+
+      // Check if purchase button reports entitlement
+      if (supertabPurchaseButton) {
+        try {
+          if (supertabPurchaseButton.initialState === 'entitled') {
+            hasVoiceEntitlement = true;
+            return true;
+          }
+        } catch (err) {
+          console.error('[supertab] Entitlement check failed:', err);
+          // Fail open
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    // DEPRECATED: showSupertabPaywall and closeSupertabOverlay - now using inline paywall in voice panel
+
+    // Handle successful Supertab payment - create/link user in client's Supabase
+    async function handleSupertabPaymentSuccess(paymentResult) {
+      console.log('[supertab] Processing payment success, creating user account...', paymentResult);
+
+      // Get user info from Supertab - handle both paywall and purchase button formats
+      const purchase = paymentResult.purchase || paymentResult;
+      const supertabUser = purchase.user || purchase.customer || paymentResult.user || paymentResult.customer || {};
+      const email = supertabUser.email || purchase.email;
+      const supertabUserId = supertabUser.id || purchase.customerId || paymentResult.customerId;
+
+      if (!email) {
+        console.log('[supertab] No email from payment result, skipping user creation');
+        return;
+      }
+
+      try {
+        // Call backend API to create/link user in client's Supabase
+        const response = await fetch('/api/embed/supertab/create-user', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            client_id: CLIENT_ID,
+            agent_slug: AGENT_SLUG,
+            email: email,
+            supertab_user_id: supertabUserId,
+            payment_status: paymentResult.status,
+            offering_id: SUPERTAB_CONFIG.experienceId,
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          console.log('[supertab] User created/linked successfully:', result);
+
+          // If a new user was created and we got credentials, sign them in
+          if (result.user_id) {
+            window.__supertab_user_id = result.user_id;
+            // Store for conversation history
+            if (!session) {
+              window.__client_user_id = result.user_id;
+            }
+          }
+        } else {
+          const error = await response.text();
+          console.warn('[supertab] User creation failed:', error);
+        }
+      } catch (err) {
+        console.error('[supertab] Error creating user:', err);
+      }
+    }
+
+    // Resume a previous conversation
+    async function resumeConversation(conversationId) {
+      closeConversationHistory();
+      clearChatMessages();
+
+      // Show loading indicator
+      const chatMessages = document.getElementById('chatMessages');
+      chatMessages.innerHTML = `
+        <div class="text-center text-white/40 py-8">
+          <div class="flex justify-center space-x-2 mb-2">
+            <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
+            <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
+            <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
+          </div>
+          <p>Loading conversation...</p>
+        </div>
+      `;
+
+      try {
+        const params = new URLSearchParams({
+          client_id: CLIENT_ID
+        });
+
+        const res = await fetch(`/api/embed/conversations/${conversationId}/messages?${params}`);
+        const data = await res.json();
+
+        if (!data.success) {
+          throw new Error('Failed to load messages');
+        }
+
+        currentConversationId = conversationId;
+        isFirstMessage = false; // Not first message since we're resuming
+
+        chatMessages.innerHTML = '';
+
+        // Render each message
+        data.messages.forEach(msg => {
+          if (msg.role === 'user') {
+            addUser(msg.content, false);
+          } else if (msg.role === 'assistant') {
+            addAssistant(msg.content, msg.citations || [], false);
+          } else if (msg.role === 'widget') {
+            // Restore known widget state from saved transcripts
+            const widgetData = msg.metadata?.widget;
+            if (widgetData?.type) {
+              const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready']);
+              if (supportedWidgetTypes.has(widgetData.type)) {
+                console.log('[history] Restoring widget:', widgetData.type, widgetData);
+                addWidget(widgetData.type, {
+                  restoredState: widgetData
+                }, false);
+              }
+            }
+          }
+        });
+
+        // Scroll to bottom
+        scrollBottom();
+        console.log('[history] Resumed conversation:', conversationId, 'with', data.messages.length, 'messages');
+
+      } catch (err) {
+        console.error('[history] Failed to load conversation:', err);
+        chatMessages.innerHTML = `
+          <div class="text-center text-white/40 py-8">
+            <p>Failed to load conversation.</p>
+            <button onclick="startNewConversation()" class="mt-2 text-brand-teal hover:underline">Start a new conversation</button>
+          </div>
+        `;
+      }
+    }
+
+    // Clear chat messages and show welcome message
+    function clearChatMessages() {
+      const chatMessages = document.getElementById('chatMessages');
+      chatMessages.innerHTML = `
+        <div id="welcomeMessage" class="text-center text-dark-text-secondary text-sm py-8">
+          <p>Start a conversation with your sidekick</p>
+        </div>
+      `;
+    }
+
+    // Add assistant message to chat (reusable)
+    function addAssistant(text, citations = [], shouldScroll = true) {
+      const chatMessages = document.getElementById('chatMessages');
+      const welcome = document.getElementById('welcomeMessage');
+      if (welcome) welcome.remove();
+
+      const asstDiv = document.createElement('div');
+      asstDiv.className = 'flex flex-col items-start';
+
+      const asstBubble = document.createElement('div');
+      asstBubble.className = 'max-w-[80%] px-4 py-3 rounded-2xl msg-assistant text-white/90 whitespace-pre-wrap';
+
+      const rawText = String(text).replace(/\\n/g, '\n');
+      asstBubble.innerHTML = (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(rawText)) : rawText;
+
+      asstDiv.appendChild(asstBubble);
+
+      // Add citations if present
+      if (citations && citations.length > 0 && window.citationsComponent) {
+        const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const citationsElement = citationsComponent.render(citations, messageId);
+        if (citationsElement) {
+          citationsElement.classList.add('compact');
+          asstDiv.appendChild(citationsElement);
+        }
+      }
+
+      chatMessages.appendChild(asstDiv);
+      if (shouldScroll) scrollBottom();
+    }
+
+    // Add a widget to the chat
+    function addWidget(widgetType, config = {}, shouldScroll = true) {
+      const chatMessages = document.getElementById('chatMessages');
+      const welcome = document.getElementById('welcomeMessage');
+      if (welcome) welcome.remove();
+
+      // Create wrapper div for the widget
+      const widgetWrapper = document.createElement('div');
+      widgetWrapper.className = 'flex flex-col widget-wrapper';
+
+      // Merge config with context data
+      const widgetConfig = {
+        ...config,
+        clientId: CLIENT_ID,
+        agentId: AGENT_ID,
+        agentName: AGENT_NAME,
+        agentSlug: AGENT_SLUG,
+        userId: getEffectiveUserId(),
+        conversationId: currentConversationId
+      };
+
+      // Create widget using registry
+      if (window.widgetRegistry) {
+        const widget = window.widgetRegistry.create(widgetType, widgetConfig, widgetWrapper);
+        if (widget) {
+          chatMessages.appendChild(widgetWrapper);
+          if (shouldScroll) scrollBottom();
+          console.log('[widgets] Widget added to chat:', widgetType, widget.id);
+          return widget;
+        }
+      }
+
+      console.error('[widgets] Failed to create widget:', widgetType);
+      return null;
+    }
+
+    // Handle widget triggers from agent responses
+    function handleWidgetTrigger(widgetData) {
+      if (!widgetData || !widgetData.type) {
+        console.warn('[widgets] Invalid widget data:', widgetData);
+        return null;
+      }
+
+      console.log('[widgets] Handling widget trigger:', widgetData);
+      console.log('[widgets] Widget registry available:', !!window.widgetRegistry);
+      if (window.widgetRegistry) {
+        console.log('[widgets] Registered widget types:', Array.from(window.widgetRegistry.widgets.keys()));
+      }
+
+      // Don't add a separate message - the agent's response already contains the text
+      // The widget will appear directly after the agent's response bubble
+
+      // Create and add the widget
+      const widget = addWidget(widgetData.type, widgetData.config || {});
+      if (!widget) {
+        console.error('[widgets] Failed to create widget of type:', widgetData.type);
+      }
+      return widget;
+    }
+
+    // Generate conversation title after first message
+    async function generateConversationTitle(conversationId, firstMessage) {
+      try {
+        const res = await fetch(`/api/embed/conversations/${conversationId}/generate-title?client_id=${CLIENT_ID}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ first_message: firstMessage })
+        });
+        const data = await res.json();
+        if (data.success) {
+          console.log('[history] Generated title:', data.title);
+        }
+      } catch (err) {
+        console.error('[history] Failed to generate title:', err);
+      }
+    }
+
+    // Auto-restore most recent conversation on load
+    async function autoRestoreConversation() {
+      const userId = getEffectiveUserId();
+      if (!userId) return;
+
+      try {
+        const params = new URLSearchParams({
+          client_id: CLIENT_ID,
+          user_id: userId,
+          agent_slug: AGENT_SLUG
+        });
+
+        const res = await fetch(`/api/embed/conversations/recent?${params}`);
+        const data = await res.json();
+
+        if (data.success && data.conversation && data.messages && data.messages.length > 0) {
+          currentConversationId = data.conversation.id;
+          isFirstMessage = false;
+
+          const chatMessages = document.getElementById('chatMessages');
+          chatMessages.innerHTML = '';
+
+          data.messages.forEach(msg => {
+            if (msg.role === 'user') {
+              addUser(msg.content, false);
+            } else if (msg.role === 'assistant') {
+              addAssistant(msg.content, msg.citations || [], false);
+            } else if (msg.role === 'widget') {
+              // Restore known widget state from saved transcripts
+              const widgetData = msg.metadata?.widget;
+              if (widgetData?.type) {
+                const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready']);
+                if (supportedWidgetTypes.has(widgetData.type)) {
+                  console.log('[history] Restoring widget:', widgetData.type, widgetData);
+                  addWidget(widgetData.type, {
+                    restoredState: widgetData
+                  }, false);
+                }
+              }
+            }
+          });
+
+          scrollBottom();
+          console.log('[history] Auto-restored conversation:', currentConversationId);
+        }
+      } catch (err) {
+        console.error('[history] Failed to auto-restore conversation:', err);
+      }
+    }
+
+    // HTML escape helper
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Convert URLs in text to clickable links (call after escapeHtml for security)
+    function linkifyUrls(escapedText) {
+      // URL regex pattern - matches http/https URLs
+      const urlPattern = /(https?:\/\/[^\s<>"']+)/gi;
+      return escapedText.replace(urlPattern, (url) => {
+        // Decode HTML entities that might be in the URL from escapeHtml
+        const cleanUrl = url.replace(/&amp;/g, '&');
+        return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="text-brand-teal hover:underline break-all">${url}</a>`;
+      });
+    }
+
+    // Escape HTML and convert URLs to clickable links
+    function escapeAndLinkify(text) {
+      return linkifyUrls(escapeHtml(text));
+    }
 
     function iterateTrackPublications(participant, callback) {
       if (!participant || typeof callback !== 'function') { return; }
@@ -382,17 +1941,27 @@
 
     function markTranscriptSeen(id){
       if (!id) { return false; }
-      const seenMap = window.__lk_transcript_seen;
-      if (!seenMap) { return false; }
       const key = String(id);
-      if ((__seenTranscriptIds && __seenTranscriptIds.has(key)) || seenMap[key]) { return true; }
+
+      // Initialize seen map if needed
+      if (!window.__lk_transcript_seen) {
+        window.__lk_transcript_seen = {};
+      }
+      const seenMap = window.__lk_transcript_seen;
+
+      // Check if already seen in either tracking structure
+      const alreadySeen = (__seenTranscriptIds && __seenTranscriptIds.has(key)) || seenMap[key];
+
+      // Always mark as seen (even if already was) to ensure consistency
       seenMap[key] = true;
       try { __seenTranscriptIds?.add(key); } catch {}
-      return false;
+
+      return alreadySeen;
     }
 
     function ingestLivekitTranscript(payload, fallbackRole){
-      if (!LIVEKIT_TRANSCRIPT_FALLBACK) { return; }
+      // Always process LiveKit transcripts - they provide real-time UI updates
+      // Supabase Realtime is a backup/sync mechanism, not the primary display source
       try {
         if (!payload) { return; }
         const role = payload.role || fallbackRole || 'assistant';
@@ -624,7 +2193,14 @@ function clearVoiceTranscriptError(){
         showVoiceTranscriptError('Client Supabase credentials are missing. Please contact support.');
         return null;
       }
-      transcriptSupabase = supabase.createClient(CLIENT_SUPABASE_URL, CLIENT_SUPABASE_ANON);
+      transcriptSupabase = supabase.createClient(CLIENT_SUPABASE_URL, CLIENT_SUPABASE_ANON, {
+        realtime: {
+          params: {
+            eventsPerSecond: 10
+          }
+        }
+      });
+      try { console.log('[voice] Created transcript Supabase client with realtime config'); } catch {}
       if (CLIENT_SUPABASE_BOOTSTRAP.access_token) {
         transcriptSupabase.auth.setSession({
           access_token: CLIENT_SUPABASE_BOOTSTRAP.access_token,
@@ -764,56 +2340,190 @@ function clearVoiceTranscriptError(){
     }
 
     function switchTab(t) {
+      // Prevent switching to disabled modes - show tooltip instead
+      if (t === 'voice' && !VOICE_CHAT_ENABLED) {
+        showDisabledModeTooltip('voice');
+        return;
+      }
+      if (t === 'text' && !TEXT_CHAT_ENABLED) {
+        showDisabledModeTooltip('text');
+        return;
+      }
+      if (t === 'video' && !VIDEO_CHAT_ENABLED) {
+        showDisabledModeTooltip('video');
+        return;
+      }
+
       const textBtn = document.getElementById('tab-text');
       const voiceBtn = document.getElementById('tab-voice');
-      if (t==='text') {
-        textBtn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-brand-teal text-white';
-        voiceBtn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border';
-        document.getElementById('panel-text').classList.remove('hidden');
-        document.getElementById('panel-voice').classList.add('hidden');
-      } else {
-        voiceBtn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-brand-teal text-white';
-        textBtn.className = 'mode-btn flex-1 py-2 px-4 rounded-md text-sm font-medium bg-dark-elevated text-dark-text border border-dark-border';
-        document.getElementById('panel-voice').classList.remove('hidden');
-        document.getElementById('panel-text').classList.add('hidden');
+      const videoBtn = document.getElementById('tab-video');
+      const panelText = document.getElementById('panel-text');
+      const panelVoice = document.getElementById('panel-voice');
+      const panelVideo = document.getElementById('panel-video');
+      
+      // Reset all tabs and panels
+      textBtn.classList.remove('active');
+      voiceBtn.classList.remove('active');
+      if (videoBtn) videoBtn.classList.remove('active');
+      panelText.classList.add('hidden');
+      panelVoice.classList.add('hidden');
+      if (panelVideo) panelVideo.classList.add('hidden');
+      
+      // Activate selected tab and panel
+      if (t === 'text') {
+        textBtn.classList.add('active');
+        panelText.classList.remove('hidden');
+      } else if (t === 'voice') {
+        voiceBtn.classList.add('active');
+        panelVoice.classList.remove('hidden');
+      } else if (t === 'video' && videoBtn && panelVideo) {
+        videoBtn.classList.add('active');
+        panelVideo.classList.remove('hidden');
       }
     }
 
-    function addUser(text) {
+    function showDisabledModeTooltip(mode) {
+      const modeName = mode === 'voice' ? 'Voice chat' : (mode === 'video' ? 'Video chat' : 'Text chat');
+      const tooltip = document.getElementById('disabledModeTooltip');
+      const tooltipText = document.getElementById('disabledModeTooltipText');
+      if (tooltip && tooltipText) {
+        tooltipText.textContent = `${modeName} is not available for this sidekick`;
+        tooltip.classList.remove('hidden');
+        tooltip.classList.add('animate-fade-in');
+        setTimeout(() => {
+          tooltip.classList.add('hidden');
+          tooltip.classList.remove('animate-fade-in');
+        }, 2500);
+      }
+    }
+
+    function initChatModeUI() {
+      const modeToggle = document.querySelector('.mode-toggle');
+      const textBtn = document.getElementById('tab-text');
+      const voiceBtn = document.getElementById('tab-voice');
+      const videoBtn = document.getElementById('tab-video');
+
+      // Style disabled modes as grayed out instead of hiding them
+      if (!TEXT_CHAT_ENABLED && textBtn) {
+        textBtn.classList.add('disabled-mode');
+        textBtn.setAttribute('title', 'Text chat is not available for this sidekick');
+      }
+      if (!VOICE_CHAT_ENABLED && voiceBtn) {
+        voiceBtn.classList.add('disabled-mode');
+        voiceBtn.setAttribute('title', 'Voice chat is not available for this sidekick');
+      }
+      if (!VIDEO_CHAT_ENABLED && videoBtn) {
+        videoBtn.classList.add('disabled-mode');
+        videoBtn.setAttribute('title', 'Video chat is not available for this sidekick');
+      }
+
+      // Set default tab based on which modes are enabled
+      if (TEXT_CHAT_ENABLED) {
+        switchTab('text');
+      } else if (VOICE_CHAT_ENABLED) {
+        switchTab('voice');
+      } else if (VIDEO_CHAT_ENABLED) {
+        switchTab('video');
+      }
+    }
+
+    function addUser(text, shouldScroll = true) {
+      const chatMessages = document.getElementById('chatMessages');
+      const welcome = document.getElementById('welcomeMessage');
+      if (welcome) welcome.remove();
+
       const wrap = document.createElement('div'); wrap.className='flex justify-end';
-      wrap.innerHTML = `<div class="w-3/4 px-4 py-2 rounded-lg bg-brand-teal text-white">${text}</div>`;
-      document.getElementById('chatMessages').appendChild(wrap);
-      scrollBottom();
+      wrap.innerHTML = `<div class="max-w-[80%] px-4 py-3 rounded-2xl msg-user text-white">${escapeAndLinkify(text)}</div>`;
+      chatMessages.appendChild(wrap);
+      if (shouldScroll) scrollBottom();
     }
     function addAsstHtml(html) {
       const wrap = document.createElement('div'); wrap.className='flex justify-start';
-      const b = document.createElement('div'); b.className='w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap';
+      const b = document.createElement('div'); b.className='max-w-[80%] px-4 py-3 rounded-2xl msg-assistant text-white/90 whitespace-pre-wrap';
       b.innerHTML = html; wrap.appendChild(b);
       document.getElementById('chatMessages').appendChild(wrap);
       scrollBottom();
     }
-    function scrollBottom(){ const el = document.getElementById('chatMessages'); el.scrollTop = el.scrollHeight; }
+    // Smart scroll - only auto-scroll if user is near bottom (within 150px)
+    // Use force=true to always scroll (e.g., when typing indicator appears)
+    function scrollBottom(force = false, smooth = false){
+      const el = document.getElementById('chatMessages');
+      if (!el) return;
+      const isNearBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 150;
+      if (force || isNearBottom) {
+        if (smooth) {
+          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+        } else {
+          el.scrollTop = el.scrollHeight;
+        }
+      }
+    }
+
+    // Scroll to position the top of an element at the top of the chat window
+    function scrollToElementTop(element, smooth = true){
+      if (!element) return;
+      // Use scrollIntoView with 'start' to align element's top with container's top
+      // Delay slightly to ensure element is in the DOM and has layout
+      setTimeout(() => {
+        element.scrollIntoView({
+          behavior: smooth ? 'smooth' : 'instant',
+          block: 'start'
+        });
+      }, 50);
+    }
 
     async function sendMsg(evt){
       if (evt && evt.preventDefault) evt.preventDefault();
       const ok = await ensureSession(); if (!ok) { setAuthVisible(true); setChatVisible(false); return false; }
       const input = document.getElementById('msg');
       const text = input.value; if (!text) return false;
+
+      if (requiresSupertabForMode('text') && !hasVoiceEntitlement) {
+        // Route users to the voice paywall entrypoint to unlock entitled access.
+        if (VOICE_CHAT_ENABLED) {
+          switchTab('voice');
+        }
+        addAsstHtml('This chat mode requires an active access purchase. Please unlock access first.');
+        return false;
+      }
+
       input.value = '';
+
+      // Track if this is the first message in a new conversation
+      const wasFirstMessage = isFirstMessage;
+      isFirstMessage = false;
+
       addUser(text);
+      incrementSessionMessageCount(); // Track for ambient abilities
       // Insert loading indicator like preview
       const chatMessages = document.getElementById('chatMessages');
       const loadingDiv = document.createElement('div');
       loadingDiv.className = 'flex justify-start';
       loadingDiv.id = 'tempLoadingIndicator';
-      loadingDiv.innerHTML = `<div class="w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border"><div class="flex space-x-2"><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div></div></div>`;
+      loadingDiv.innerHTML = `<div class="max-w-[80%] px-4 py-3 rounded-2xl msg-assistant"><div class="flex space-x-2"><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div><div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div></div></div>`;
       chatMessages.appendChild(loadingDiv);
+      // Always scroll to show the typing indicator (force=true, smooth=true)
+      scrollBottom(true, true);
+
       // stream (FormData to match server Form(...))
-      const fd = new FormData(); fd.append('client_id', CLIENT_ID); fd.append('agent_slug', AGENT_SLUG); fd.append('message', text);
+      const fd = new FormData();
+      fd.append('client_id', CLIENT_ID);
+      fd.append('agent_slug', AGENT_SLUG);
+      fd.append('message', text);
+
+      // Include conversation_id if continuing an existing conversation
+      if (currentConversationId) {
+        fd.append('conversation_id', currentConversationId);
+      }
+
+      // Include user_id for conversation tracking
+      const userId = getEffectiveUserId();
+      if (userId) {
+        fd.append('user_id', userId);
+      }
+
       const bearer = manualToken || (session && session.access_token) || '';
-      const extraHeaders = {};
-      if (window.EMBED_TOKEN) { extraHeaders['X-Embed-Token'] = window.EMBED_TOKEN; }
-      const res = await fetch('/api/embed/text/stream', { method: 'POST', body: fd, headers: Object.assign({ Authorization: `Bearer ${bearer}` }, extraHeaders) });
+      const res = await fetch('/api/embed/text/stream', { method: 'POST', body: fd, headers: { Authorization: `Bearer ${bearer}` } });
       if (!res.ok || !res.body) {
         const errDiv = document.createElement('div'); errDiv.className='flex justify-start';
         errDiv.innerHTML = `<div class="w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">Sorry, streaming failed.</div>`;
@@ -823,7 +2533,7 @@ function clearVoiceTranscriptError(){
       const reader = res.body.getReader(); const decoder = new TextDecoder(); let buf='';
       let acc = '';
       const asstDiv = document.createElement('div'); asstDiv.className='flex flex-col items-start';
-      const asstBubble = document.createElement('div'); asstBubble.className='w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border whitespace-pre-wrap'; asstBubble.textContent=''; asstDiv.appendChild(asstBubble);
+      const asstBubble = document.createElement('div'); asstBubble.className='max-w-[80%] px-4 py-3 rounded-2xl msg-assistant text-white/90 whitespace-pre-wrap'; asstBubble.textContent=''; asstDiv.appendChild(asstBubble);
       let inserted = false;
       while(true){
         const {value, done} = await reader.read(); if (done) break;
@@ -838,17 +2548,65 @@ function clearVoiceTranscriptError(){
             if (payload.error === 'unauthorized') { setAuthVisible(true); setChatVisible(false); }
           }
           if(payload.delta){
-            if (!inserted){ chatMessages.replaceChild(asstDiv, loadingDiv); inserted = true; }
+            if (!inserted){
+              chatMessages.replaceChild(asstDiv, loadingDiv);
+              inserted = true;
+              // Scroll to show the top of the new response so user can read from the beginning
+              scrollToElementTop(asstDiv, true);
+            }
             acc += String(payload.delta).replace(/\\n/g,'\n');
             asstBubble.innerHTML = (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(acc)) : acc;
+            // Don't auto-scroll during streaming - let user read from the top
           }
           if(payload.done && payload.full_text){
-            if (!inserted){ chatMessages.replaceChild(asstDiv, loadingDiv); inserted = true; }
+            if (!inserted){
+              chatMessages.replaceChild(asstDiv, loadingDiv);
+              inserted = true;
+              // Scroll to show the top of the response so user can read from the beginning
+              scrollToElementTop(asstDiv, true);
+            }
             acc = String(payload.full_text).replace(/\\n/g,'\n');
             asstBubble.innerHTML = (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(acc)) : acc;
-            
-            // Handle citations if present
+            // Don't scroll after final content - user is reading from the top
+
+            // DEBUG: Log what we received from the backend
+            console.log('[stream] DONE received - full_text length:', payload.full_text?.length, 'preview:', payload.full_text?.slice(0, 100));
+            console.log('[stream] DONE received - citations count:', payload.citations?.length || 0);
+            console.log('[stream] DONE received - widget present:', !!payload.widget, payload.widget);
+            console.log('[stream] DONE received - all payload keys:', Object.keys(payload));
             if (payload.citations && payload.citations.length > 0) {
+              console.log('[stream] Citation titles:', payload.citations.slice(0, 3).map(c => c.title));
+            }
+
+            // Update conversation_id from response
+            if (payload.conversation_id) {
+              currentConversationId = payload.conversation_id;
+              console.log('[history] Conversation ID:', currentConversationId, 'is_new:', payload.is_new_conversation);
+
+              // Generate title for new conversations
+              if (payload.is_new_conversation && wasFirstMessage) {
+                generateConversationTitle(currentConversationId, text);
+              }
+            }
+
+            // Handle widget triggers if present (before citations - widgets take priority)
+            let widgetCreated = false;
+            if (payload.widget) {
+              console.log('[stream] Widget trigger received:', payload.widget);
+              try {
+                widgetCreated = handleWidgetTrigger(payload.widget);
+                if (widgetCreated) {
+                  console.log('[stream] Widget created successfully, skipping citations');
+                } else {
+                  console.warn('[stream] Widget creation returned null');
+                }
+              } catch (widgetErr) {
+                console.error('[stream] Widget creation error:', widgetErr);
+              }
+            }
+
+            // Handle citations only if no widget was created
+            if (!widgetCreated && payload.citations && payload.citations.length > 0) {
               const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
               const citationsElement = citationsComponent.render(payload.citations, messageId);
               if (citationsElement) {
@@ -864,7 +2622,7 @@ function clearVoiceTranscriptError(){
       // If stream ended without any insertion, show a fallback message
       if (!inserted) {
         const errDiv = document.createElement('div'); errDiv.className='flex justify-start';
-        errDiv.innerHTML = `<div class="w-3/4 px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border">No response received.</div>`;
+        errDiv.innerHTML = `<div class="max-w-[80%] px-4 py-3 rounded-2xl msg-assistant text-white/90">No response received.</div>`;
         try { chatMessages.replaceChild(errDiv, loadingDiv); } catch { chatMessages.appendChild(errDiv); }
       }
       return false;
@@ -887,7 +2645,7 @@ function clearVoiceTranscriptError(){
             if (isUser) {
               const currentText = bubble.textContent || '';
               if (newText.length >= currentText.length) {
-                bubble.textContent = newText;
+                bubble.innerHTML = escapeAndLinkify(newText);
               }
               // else: skip update - probably an out-of-order interim result
             } else {
@@ -900,10 +2658,11 @@ function clearVoiceTranscriptError(){
                 ? DOMPurify.sanitize(marked.parse(rawText))
                 : rawText;
             }
-            // Auto-scroll to bottom
+            // Smart auto-scroll - only if user is near bottom
             const container = document.getElementById('voiceTranscriptList');
             if (container) {
-              container.scrollTop = container.scrollHeight;
+              const isNearBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 150;
+              if (isNearBottom) container.scrollTop = container.scrollHeight;
             }
           }
         }
@@ -912,10 +2671,50 @@ function clearVoiceTranscriptError(){
       }
     }
 
+    // Content-based deduplication for transcripts (catches duplicates from different sources)
+    // LiveKit delivers raw STT text; Supabase delivers enhanced/markdown text — need fuzzy matching
+    let __recentTranscriptTexts = [];
+    function _normalizeForDedup(text) {
+      // Strip markdown, extra whitespace, punctuation to get comparable core text
+      return (text || '').trim().toLowerCase()
+        .replace(/[*_~`#>\-\[\]()!|]/g, '')  // strip markdown chars
+        .replace(/\n+/g, ' ')                  // collapse newlines
+        .replace(/\s+/g, ' ')                  // collapse whitespace
+        .trim()
+        .slice(0, 60);                          // compare first 60 chars of core text
+    }
+    function isRecentDuplicateText(role, text) {
+      if (!text || text.length < 5) return false;
+      const normalized = _normalizeForDedup(text);
+      if (!normalized || normalized.length < 4) return false;
+      const key = `${role}:${normalized}`;
+      // Check if any recent entry matches (exact or prefix overlap)
+      for (const recent of __recentTranscriptTexts) {
+        if (recent === key) return true;
+        // Fuzzy: check if one is a prefix of the other (handles partial vs full text)
+        const [rRole, rText] = recent.split(':', 2);
+        if (rRole === role && rText && normalized) {
+          if (rText.startsWith(normalized.slice(0, 30)) || normalized.startsWith(rText.slice(0, 30))) {
+            return true;
+          }
+        }
+      }
+      __recentTranscriptTexts.push(key);
+      // Keep only last 15 entries to avoid memory bloat
+      if (__recentTranscriptTexts.length > 15) __recentTranscriptTexts.shift();
+      return false;
+    }
+
     function appendVoiceTranscript(role, text, createdAt, citations, id){
       try {
         if (id && markTranscriptSeen(id)) {
-          try { console.log('[voice] appendVoiceTranscript SKIPPED (already seen):', id?.slice(0,8), role); } catch {}
+          try { console.log('[voice] appendVoiceTranscript SKIPPED (already seen by ID):', id?.slice(0,8), role); } catch {}
+          return;
+        }
+        // Content-based deduplication - catches same text from different sources (LiveKit vs Supabase)
+        if (isRecentDuplicateText(role, text)) {
+          try { console.log('[voice] appendVoiceTranscript SKIPPED (duplicate text):', id?.slice(0,8), role, text?.slice(0,30)); } catch {}
+          if (id) markTranscriptSeen(id); // Still mark ID as seen
           return;
         }
         try { console.log('[voice] appendVoiceTranscript ADDING:', id?.slice(0,8), role, text?.slice(0,30)); } catch {}
@@ -928,11 +2727,11 @@ function clearVoiceTranscriptError(){
         const bubble = document.createElement('div');
         bubble.setAttribute('data-transcript-text', 'true'); // Add attribute for finding text element
         bubble.className = (isUser
-          ? 'max-w-[80%] px-4 py-2 rounded-lg bg-brand-teal text-white'
-          : 'max-w-[80%] px-4 py-2 rounded-lg bg-dark-elevated text-dark-text border border-dark-border prose prose-invert prose-sm max-w-none');
-        // Render markdown for assistant messages, plain text for user
+          ? 'max-w-[80%] px-4 py-3 rounded-2xl msg-user text-white'
+          : 'max-w-[80%] px-4 py-3 rounded-2xl msg-assistant text-white/90 prose prose-invert prose-sm max-w-none');
+        // Render markdown for assistant messages, linkify URLs for user messages
         if (isUser) {
-          bubble.textContent = text || '';
+          bubble.innerHTML = escapeAndLinkify(text || '');
         } else {
           // Use marked + DOMPurify for markdown rendering (same as text mode)
           // Debug: log what we're receiving
@@ -955,9 +2754,82 @@ function clearVoiceTranscriptError(){
             container.appendChild(citeWrap);
           }
         }
-        container.scrollTop = container.scrollHeight;
-        if (id) { __seenTranscriptIds.add(id); }
+        // Smart auto-scroll - only if user is near bottom
+        const isNearBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 150;
+        if (isNearBottom) container.scrollTop = container.scrollHeight;
+        // Note: markTranscriptSeen already added to __seenTranscriptIds, no need to duplicate
       } catch {}
+    }
+
+    // Add citations to an existing transcript bubble (when Supabase sends them after LiveKit displayed the text)
+    // Note: LiveKit uses different IDs than Supabase, so we find the most recent assistant message without citations
+    function addCitationsToTranscript(transcriptId, citations, content) {
+      try {
+        if (!citations || !citations.length) return;
+        const container = document.getElementById('voiceTranscriptList');
+        if (!container) return;
+
+        // Strategy 1: Try to find by exact ID (works if Supabase arrived first)
+        let transcriptWrap = transcriptId ? container.querySelector(`[data-transcript-id="${transcriptId}"]`) : null;
+
+        // Strategy 2: Find the most recent assistant bubble without citations
+        // This handles the common case where LiveKit arrived first with a different ID
+        if (!transcriptWrap) {
+          const allBubbles = Array.from(container.children);
+          for (let i = allBubbles.length - 1; i >= 0; i--) {
+            const bubble = allBubbles[i];
+            // Assistant messages use justify-start class
+            if (!bubble.classList?.contains('justify-start')) continue;
+            const hasTextBubble = bubble.querySelector('[data-transcript-text]');
+            if (!hasTextBubble) continue;
+
+            // Check if next sibling already has citations
+            const nextSib = bubble.nextElementSibling;
+            const hasCitations = nextSib?.querySelector?.('.citations-container');
+            if (hasCitations) continue;
+
+            // If content provided, do fuzzy match
+            if (content) {
+              const bubbleText = (hasTextBubble.textContent || '').trim().slice(0, 100);
+              const targetText = content.trim().slice(0, 100);
+              // Match if first 50 chars overlap significantly
+              if (bubbleText.slice(0, 50) === targetText.slice(0, 50) ||
+                  bubbleText.includes(targetText.slice(0, 30)) ||
+                  targetText.includes(bubbleText.slice(0, 30))) {
+                transcriptWrap = bubble;
+                break;
+              }
+            } else {
+              // No content to match - use the most recent assistant without citations
+              transcriptWrap = bubble;
+              break;
+            }
+          }
+        }
+
+        if (!transcriptWrap) {
+          try { console.log('[voice] addCitationsToTranscript: no matching transcript found for', citations.length, 'citations'); } catch {}
+          return;
+        }
+
+        // Double-check citations don't already exist
+        if (transcriptWrap.nextElementSibling?.querySelector?.('.citations-container')) {
+          return;
+        }
+
+        // Render citations
+        const citationsElement = citationsComponent.render(citations, `voice-${transcriptId || Date.now()}`);
+        if (citationsElement) {
+          citationsElement.classList.add('compact');
+          const citeWrap = document.createElement('div');
+          citeWrap.className = 'flex justify-start';
+          citeWrap.appendChild(citationsElement);
+          transcriptWrap.insertAdjacentElement('afterend', citeWrap);
+          try { console.log('[voice] addCitationsToTranscript: added', citations.length, 'citations'); } catch {}
+        }
+      } catch (err) {
+        try { console.warn('[voice] addCitationsToTranscript error:', err); } catch {}
+      }
     }
 
     let _transcriptStreamStarting = false; // Guard against concurrent calls
@@ -986,12 +2858,17 @@ function clearVoiceTranscriptError(){
         }
         pendingTranscriptStart = null;
         if (transcriptConversationId !== conversationId) {
+          // Clear both deduplication trackers when switching conversations
           __seenTranscriptIds?.clear?.();
+          window.__lk_transcript_seen = {};
         }
         transcriptConversationId = conversationId;
         stopVoiceTranscriptStream();
+        // Use a unique channel name that includes timestamp to avoid conflicts
+        const channelName = `transcripts-${conversationId}-${Date.now()}`;
+        try { console.log('[voice] Creating realtime channel:', channelName); } catch {}
         transcriptRealtimeChannel = supabaseClient
-          .channel(`voice-transcripts:${conversationId}`)
+          .channel(channelName)
           .on(
             'postgres_changes',
             {
@@ -1001,12 +2878,24 @@ function clearVoiceTranscriptError(){
               filter: `conversation_id=eq.${conversationId}`
             },
             (payload) => {
-              const row = payload?.new;
-              if (!row) { return; }
-              const txt = row.content || row.transcript || '';
-              if (!txt) { return; }
-              try { console.log('[voice] INSERT event for', row.id?.slice(0,8), row.role, 'seen:', __seenTranscriptIds?.has(row.id)); } catch {}
-              appendVoiceTranscript(row.role, txt, row.created_at, row.citations, row.id);
+              try { console.log('[voice] INSERT-specific callback triggered! payload:', JSON.stringify(payload).slice(0, 200)); } catch {}
+              try {
+                const row = payload?.new;
+                if (!row) { console.log('[voice] INSERT: no row in payload'); return; }
+                const txt = row.content || row.transcript || '';
+                if (!txt) { console.log('[voice] INSERT: no content in row'); return; }
+                console.log('[voice] INSERT event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'citations:', row.citations?.length || 0);
+                // In voice mode, TranscriptionReceived is the sole source for new transcript bubbles.
+                // Supabase Realtime INSERT only handles citations and content updates on existing bubbles.
+                // This prevents duplicate bubbles since Supabase row IDs differ from LiveKit segment IDs.
+                markTranscriptSeen(row.id); // Mark Supabase ID as seen for UPDATE handler
+                if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
+                  console.log('[voice] INSERT: adding citations from DB:', row.id?.slice(0,8), row.citations.length);
+                  addCitationsToTranscript(row.id, row.citations, txt);
+                }
+              } catch (cbErr) {
+                console.error('[voice] INSERT callback error:', cbErr);
+              }
             }
           )
           .on(
@@ -1018,23 +2907,70 @@ function clearVoiceTranscriptError(){
               filter: `conversation_id=eq.${conversationId}`
             },
             (payload) => {
-              const row = payload?.new;
-              if (!row) { return; }
-              const txt = row.content || row.transcript || '';
-              if (!txt) { return; }
-              updateVoiceTranscript(row.id, txt, row.role);
+              try { console.log('[voice] UPDATE callback triggered! payload:', JSON.stringify(payload).slice(0, 200)); } catch {}
+              try {
+                const row = payload?.new;
+                if (!row) { console.log('[voice] UPDATE: no row in payload'); return; }
+                const txt = row.content || row.transcript || '';
+                if (!txt) { console.log('[voice] UPDATE: no content in row'); return; }
+                console.log('[voice] UPDATE event:', row.id?.slice(0,8), row.role, 'len:', txt?.length, 'citations:', row.citations?.length || 0);
+                updateVoiceTranscript(row.id, txt, row.role);
+                // Handle citations in UPDATE events (citations are often added via UPDATE after initial INSERT)
+                if (row.citations && Array.isArray(row.citations) && row.citations.length > 0 && row.role === 'assistant') {
+                  console.log('[voice] UPDATE adding citations:', row.id?.slice(0,8), row.citations.length);
+                  addCitationsToTranscript(row.id, row.citations, txt);
+                }
+              } catch (cbErr) {
+                console.error('[voice] UPDATE callback error:', cbErr);
+              }
             }
           )
-          .subscribe((status) => {
+          .subscribe((status, err) => {
+            try { console.log('[voice] realtime status:', status, err ? 'Error: ' + JSON.stringify(err) : ''); } catch {}
             if (status === 'SUBSCRIBED') {
-              try { console.log('[voice] realtime subscribed for transcripts (INSERT + UPDATE)'); } catch {}
+              try {
+                console.log('[voice] realtime subscribed for transcripts (INSERT + UPDATE)');
+                // Log WebSocket state and connection details for debugging
+                const wsState = transcriptSupabase?.realtime?.socket?.readyState;
+                const wsUrl = transcriptSupabase?.realtime?.socket?.url || 'unknown';
+                console.log('[voice] WebSocket state:', wsState, '(1=OPEN)');
+                console.log('[voice] WebSocket URL:', wsUrl);
+                console.log('[voice] Channel topic:', transcriptRealtimeChannel?.topic);
+                console.log('[voice] Channel bindings:', transcriptRealtimeChannel?.bindings?.length || 0);
+                // Store reference for debugging
+                window.__debugRealtimeChannel = transcriptRealtimeChannel;
+                window.__debugRealtimeClient = transcriptSupabase;
+
+                // Add raw WebSocket message listener for debugging
+                const rawSocket = transcriptSupabase?.realtime?.socket;
+                if (rawSocket && !rawSocket.__debugListenerAdded) {
+                  rawSocket.__debugListenerAdded = true;
+                  const originalOnMessage = rawSocket.onmessage;
+                  rawSocket.onmessage = function(event) {
+                    try {
+                      const data = JSON.parse(event.data);
+                      if (data.event === 'postgres_changes') {
+                        console.log('[voice] RAW WebSocket postgres_changes:', JSON.stringify(data).slice(0, 300));
+                      } else if (data.event !== 'phx_reply' && data.event !== 'heartbeat') {
+                        console.log('[voice] RAW WebSocket event:', data.event, data.topic?.slice(0, 50));
+                      }
+                    } catch (e) {}
+                    if (originalOnMessage) originalOnMessage.call(this, event);
+                  };
+                  console.log('[voice] Added raw WebSocket message listener');
+                }
+              } catch (debugErr) { console.warn('[voice] debug logging error:', debugErr); }
             } else if (status === 'CHANNEL_ERROR') {
-              try { console.warn('[voice] transcript channel error; retrying'); } catch {}
+              try { console.warn('[voice] transcript channel error; retrying', err); } catch {}
               setTimeout(() => {
                 if (transcriptConversationId === conversationId) {
                   startVoiceTranscriptStream(conversationId, clientId, agentId);
                 }
               }, 2000);
+            } else if (status === 'TIMED_OUT') {
+              try { console.warn('[voice] realtime subscription timed out'); } catch {}
+            } else if (status === 'CLOSED') {
+              try { console.warn('[voice] realtime channel closed'); } catch {}
             }
           });
         await loadVoiceTranscriptHistory(conversationId);
@@ -1045,6 +2981,173 @@ function clearVoiceTranscriptError(){
         showVoiceTranscriptError('Unable to start transcript stream. Please refresh and try again.');
       } finally {
         _transcriptStreamStarting = false;
+      }
+    }
+
+    // Debug function to test Realtime - call from console: window.testRealtimeDebug()
+    window.testRealtimeDebug = async function() {
+      console.log('=== REALTIME DEBUG TEST ===');
+      const client = window.__debugRealtimeClient || transcriptSupabase;
+      const channel = window.__debugRealtimeChannel || transcriptRealtimeChannel;
+
+      if (!client) {
+        console.error('No Supabase client available. Start a voice session first.');
+        return;
+      }
+
+      console.log('Client URL:', client.supabaseUrl);
+      console.log('Realtime socket state:', client.realtime?.socket?.readyState, '(1=OPEN)');
+      console.log('Realtime socket URL:', client.realtime?.socket?.url);
+
+      if (channel) {
+        console.log('Channel topic:', channel.topic);
+        console.log('Channel state:', channel.state);
+        console.log('Channel bindings:', channel.bindings);
+      } else {
+        console.log('No active channel');
+      }
+
+      // List all channels
+      console.log('All channels:', client.realtime?.channels?.map(c => c.topic));
+
+      // Try to manually subscribe to a test channel
+      console.log('\n--- Creating test subscription ---');
+      const testChannel = client
+        .channel('debug-test-' + Date.now())
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'conversation_transcripts'
+        }, (payload) => {
+          console.log('🔔 TEST CHANNEL received event:', payload.eventType, payload);
+        })
+        .subscribe((status) => {
+          console.log('TEST CHANNEL status:', status);
+        });
+
+      window.__testChannel = testChannel;
+      console.log('Test channel created. If you insert a record, you should see an event.');
+      console.log('To cleanup: window.__testChannel?.unsubscribe()');
+    };
+
+    // Citation polling fallback - polls for citations when Realtime doesn't deliver them
+    let citationPollingInterval = null;
+    let citationPollingConversationId = null;
+    const CITATION_POLL_INTERVAL = 2000;  // Poll every 2 seconds
+    const CITATION_POLL_MAX_DURATION = 30000;  // Stop after 30 seconds
+
+    async function startCitationPolling(conversationId) {
+      if (citationPollingInterval) {
+        clearInterval(citationPollingInterval);
+      }
+      citationPollingConversationId = conversationId;
+      const startTime = Date.now();
+      let lastCheckedId = null;
+      let citationsFound = false;
+
+      console.log('[voice] Starting citation polling fallback for', conversationId?.slice(0,8));
+
+      // Define the poll function so we can call it immediately AND on interval
+      async function doPoll() {
+        // Stop if conversation changed or timeout exceeded or already found
+        if (citationsFound || citationPollingConversationId !== conversationId ||
+            Date.now() - startTime > CITATION_POLL_MAX_DURATION) {
+          console.log('[voice] Stopping citation polling (timeout/changed/found)');
+          if (citationPollingInterval) {
+            clearInterval(citationPollingInterval);
+            citationPollingInterval = null;
+          }
+          return;
+        }
+
+        try {
+          const supabaseClient = getTranscriptSupabase();
+          if (!supabaseClient) {
+            console.log('[voice] Citation poll: no supabase client');
+            return;
+          }
+
+          // Ensure we're authenticated (like loadVoiceTranscriptHistory does)
+          const authorized = await ensureTranscriptSupabaseAuth();
+          if (!authorized) {
+            console.log('[voice] Citation poll: not authorized');
+            return;
+          }
+
+          console.log('[voice] Citation poll running for', conversationId?.slice(0,8));
+
+          // Use raw fetch with anon key - the Supabase client uses authenticated session
+          // which has different RLS permissions than anon role
+          let data = null;
+          try {
+            const rawUrl = `${CLIENT_SUPABASE_URL}/rest/v1/conversation_transcripts?select=id,role,content,citations,created_at&conversation_id=eq.${conversationId}&role=eq.assistant&order=created_at.desc&limit=10`;
+            console.log('[voice] Citation poll fetching with anon key...');
+            const rawResp = await fetch(rawUrl, {
+              headers: {
+                'apikey': CLIENT_SUPABASE_ANON,
+                'Authorization': `Bearer ${CLIENT_SUPABASE_ANON}`
+              }
+            });
+            if (!rawResp.ok) {
+              console.warn('[voice] Citation poll fetch error:', rawResp.status, rawResp.statusText);
+              return;
+            }
+            data = await rawResp.json();
+          } catch (fetchErr) {
+            console.warn('[voice] Citation poll fetch exception:', fetchErr);
+            return;
+          }
+
+          console.log('[voice] Citation poll got', data?.length || 0, 'assistant transcripts');
+          if (data && data.length > 0) {
+            console.log('[voice] Citation poll first result:', data[0].id?.slice(0,8), 'citations:', data[0].citations?.length || 0);
+          } else {
+            console.log('[voice] Citation poll returned empty array or null');
+          }
+
+          if (data && data.length > 0) {
+            for (const transcript of data) {
+              // Skip if we already processed this one
+              if (transcript.id === lastCheckedId) continue;
+
+              const citations = transcript.citations;
+              // Filter for transcripts WITH citations (check in JavaScript)
+              if (citations && Array.isArray(citations) && citations.length > 0) {
+                console.log('[voice] Citation poll found citations:', transcript.id?.slice(0,8), citations.length);
+                lastCheckedId = transcript.id;
+                citationsFound = true;
+
+                // Try to add citations to the displayed transcript
+                addCitationsToTranscript(transcript.id, citations, transcript.content);
+
+                // Stop polling after finding citations
+                console.log('[voice] Citation polling complete - found citations');
+                if (citationPollingInterval) {
+                  clearInterval(citationPollingInterval);
+                  citationPollingInterval = null;
+                }
+                return;
+              }
+            }
+          }
+        } catch (pollErr) {
+          console.warn('[voice] Citation poll exception:', pollErr);
+        }
+      }
+
+      // Run immediately (don't wait for first interval)
+      console.log('[voice] Running immediate citation poll...');
+      doPoll();
+
+      // Then set up interval for subsequent polls
+      citationPollingInterval = setInterval(doPoll, CITATION_POLL_INTERVAL);
+    }
+
+    function stopCitationPolling() {
+      if (citationPollingInterval) {
+        clearInterval(citationPollingInterval);
+        citationPollingInterval = null;
+        citationPollingConversationId = null;
       }
     }
 
@@ -1067,13 +3170,59 @@ function clearVoiceTranscriptError(){
           return;
         }
         try { console.log('[voice] loadVoiceTranscriptHistory got', data?.length || 0, 'rows'); } catch {}
+
+        // Pre-mark all history IDs as seen FIRST to prevent race conditions
+        // with realtime events that might arrive during the forEach loop
+        (data || []).forEach((t) => {
+          if (t.id) {
+            markTranscriptSeen(t.id);
+          }
+        });
+
+        // Now append the transcripts to the DOM
         (data || []).forEach((t) => {
           const txt = t.content || t.transcript || '';
           if (txt) {
-            try { console.log('[voice] history row:', t.id?.slice(0,8), t.role, txt?.slice(0,30)); } catch {}
-            appendVoiceTranscript(t.role, txt, t.created_at, t.citations, t.id);
+            try { console.log('[voice] history row:', t.id?.slice(0,8), t.role, 'len:', txt?.length); } catch {}
+            // Directly append without re-checking markTranscriptSeen since we just marked them
+            const container = document.getElementById('voiceTranscriptList');
+            if (!container) return;
+            const wrap = document.createElement('div');
+            const isUser = t.role === 'user';
+            wrap.className = isUser ? 'flex justify-end' : 'flex justify-start';
+            if (t.id) wrap.setAttribute('data-transcript-id', t.id);
+            const bubble = document.createElement('div');
+            bubble.setAttribute('data-transcript-text', 'true');
+            bubble.className = (isUser
+              ? 'max-w-[80%] px-4 py-3 rounded-2xl msg-user text-white'
+              : 'max-w-[80%] px-4 py-3 rounded-2xl msg-assistant text-white/90 prose prose-invert prose-sm max-w-none');
+            if (isUser) {
+              bubble.innerHTML = escapeAndLinkify(txt);
+            } else {
+              const rawText = txt.replace(/\\n/g, '\n');
+              bubble.innerHTML = (window.marked && window.DOMPurify)
+                ? DOMPurify.sanitize(marked.parse(rawText))
+                : rawText;
+            }
+            wrap.appendChild(bubble);
+            container.appendChild(wrap);
+            // Handle citations
+            if (t.citations && Array.isArray(t.citations) && t.citations.length > 0) {
+              const citationsElement = citationsComponent.render(t.citations, `voice-hist-${t.id}`);
+              if (citationsElement) {
+                citationsElement.classList.add('compact');
+                const citeWrap = document.createElement('div');
+                citeWrap.className = 'flex justify-start';
+                citeWrap.appendChild(citationsElement);
+                container.appendChild(citeWrap);
+              }
+            }
           }
         });
+
+        // Scroll to bottom after loading history
+        const container = document.getElementById('voiceTranscriptList');
+        if (container) container.scrollTop = container.scrollHeight;
         if (data && data.length > 0) {
           clearVoiceTranscriptError();
         }
@@ -1092,6 +3241,8 @@ function clearVoiceTranscriptError(){
         try { console.warn('[voice] error while stopping transcript stream', err); } catch {}
       }
       transcriptRealtimeChannel = null;
+      // Also stop citation polling
+      stopCitationPolling();
     }
 
     function clearVoiceConnectionMonitor() {
@@ -1172,9 +3323,19 @@ function clearVoiceTranscriptError(){
     }
 
     // Removed overlay in favor of autoplay under user gesture
-    
+
     async function startVoice(){
       try { console.log('[voice] startVoice invoked'); } catch {}
+
+      // With inline paywall, users can only reach this function after purchase
+      // Double-check entitlement for safety
+      if (requiresSupertabForMode('voice')) {
+        if (!hasVoiceEntitlement) {
+          console.log('[voice] No entitlement - user should use purchase button first');
+          return;
+        }
+      }
+
       const status = document.getElementById('voiceStatus');
       setVoiceAudioMuted(true);
       showVoicePlaybackPrompt();
@@ -1189,6 +3350,7 @@ function clearVoiceTranscriptError(){
       try {
         window.__lk_transcript_seen = {};
         __seenTranscriptIds = new Set();
+        __recentTranscriptTexts = [];
       } catch {}
       let playbackPrimed = false;
       try {
@@ -1222,11 +3384,8 @@ function clearVoiceTranscriptError(){
         user_id: (hasSupabaseUser ? session.user.id : (injectedUserId || 'preview-user'))
       };
       const bearer = manualToken || (session && session.access_token) || '';
-      const extraHeaders2 = {};
-      if (window.EMBED_TOKEN) { extraHeaders2['X-Embed-Token'] = window.EMBED_TOKEN; }
       try { console.log('[voice] trigger payload prepared', { room, bearerPresent: !!bearer }); } catch {}
-      const headers = Object.assign({ 'Content-Type':'application/json', Authorization: `Bearer ${bearer}` }, extraHeaders2);
-      const res = await fetch('/api/v1/trigger-agent', { method: 'POST', headers, body: JSON.stringify(payload) });
+      const res = await fetch('/api/v1/trigger-agent', { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${bearer}` }, body: JSON.stringify(payload) });
       try { console.log('[voice] trigger request sent', payload); } catch {}
       const startBtn = document.getElementById('voiceStartBtn');
       const endBtn = document.getElementById('voiceEndBtn');
@@ -1249,6 +3408,29 @@ function clearVoiceTranscriptError(){
       if (conversationId && conversationId !== activeConversationId) {
         activeConversationId = conversationId;
         startVoiceTranscriptStream(conversationId, CLIENT_ID, agentId);
+        // Ensure transcript list is visible when voice starts (may be hidden if not using Supertab)
+        const transcriptList = document.getElementById('voiceTranscriptList');
+        if (transcriptList) transcriptList.classList.remove('hidden');
+
+        // Initialize Ken Burns if agent has ken_burns video provider
+        const agentContext = data?.data?.agent_context || {};
+        const voiceSettings = agentContext.voice_settings || agentContext.metadata?.voice_settings || {};
+        const videoProvider = voiceSettings.video_provider || '';
+
+        // Debug: Log voice settings for Ken Burns
+        console.log('[voice] DEBUG - voiceSettings:', JSON.stringify(voiceSettings, null, 2));
+        console.log('[voice] DEBUG - video_provider:', videoProvider);
+
+        if (videoProvider === 'ken_burns') {
+          const kenburnsContainer = document.getElementById('kenburnsContainer');
+          if (kenburnsContainer && window.initKenBurns) {
+            kenburnsContainer.classList.remove('hidden');
+            const startingImage = voiceSettings.kenburns_starting_image || null;
+            console.log('[voice] DEBUG - kenburns_starting_image:', startingImage);
+            window.initKenBurns('kenburnsContainer', { startingImage });
+            console.log('[voice] Ken Burns mode initialized', startingImage ? 'with starting image' : 'without starting image');
+          }
+        }
       }
       storedVoiceSession = { server, token, conversationId, agentId };
       reconnectAttempts = 0;
@@ -1262,6 +3444,10 @@ function clearVoiceTranscriptError(){
         status.textContent = 'Connection failed. Please try again.';
         startBtn.classList.remove('hidden');
         endBtn.classList.add('hidden');
+        const headerSpacerFail = document.getElementById('headerSpacer');
+        if (headerSpacerFail) headerSpacerFail.classList.remove('hidden');
+        const voiceWelcomeFail = document.getElementById('voiceWelcome');
+        if (voiceWelcomeFail) voiceWelcomeFail.classList.remove('hidden');
       }
     }
 
@@ -1305,6 +3491,10 @@ function clearVoiceTranscriptError(){
 
       startBtn.classList.add('hidden');
       endBtn.classList.remove('hidden');
+      const headerSpacer = document.getElementById('headerSpacer');
+      if (headerSpacer) headerSpacer.classList.add('hidden');
+      const voiceWelcome = document.getElementById('voiceWelcome');
+      if (voiceWelcome) voiceWelcome.classList.add('hidden');
 
       try { roomConn.on(RoomEvent.ConnectionStateChanged, (state) => { try { console.log('[voice] connection state', state); } catch {} }); } catch {}
       try {
@@ -1586,27 +3776,200 @@ function clearVoiceTranscriptError(){
               textPayload = decoder.decode(payload.buffer);
             }
             if (!textPayload) { return; }
+            // Skip non-JSON data (e.g., emotion SSML tags, binary data)
+            if (!textPayload.startsWith('{')) { return; }
             let parsed = null;
-            try { parsed = JSON.parse(textPayload); } catch {}
-            if (parsed && (parsed.content || parsed.transcript || parsed.text)) {
-              parsed.id = parsed.id || `${topic || 'data'}-${Date.now()}`;
-              const pIdentity = String(participant?.identity || '').toLowerCase();
-              const fallbackRole = parsed.role || (pIdentity.includes('agent') ? 'assistant' : 'user');
-              ingestLivekitTranscript(parsed, fallbackRole);
+            try { parsed = JSON.parse(textPayload); } catch { return; }
+
+            // Handle Ken Burns image data
+            if (parsed && parsed.type === 'kenburns_image') {
+              console.log('[voice] Received Ken Burns image data');
+              if (window.handleKenBurnsData) {
+                window.handleKenBurnsData(parsed);
+              }
+              return;
+            }
+
+            // Skip transcription-like messages in DataReceived — these are already
+            // handled by the TranscriptionReceived handler. The LiveKit SDK delivers
+            // transcriptions via both text streams (DataReceived) and the transcription
+            // protocol (TranscriptionReceived), causing duplicates if both are ingested.
+            // Only process explicit non-transcription data here (typed events like
+            // model_loading, model_ready, kenburns_image are handled above).
+            if (parsed && parsed.type && !['kenburns_image','model_loading','model_ready'].includes(parsed.type)) {
+              // Custom typed events from agent — handle as needed
+              console.log('[voice] DataReceived custom event:', parsed.type);
             }
           } catch (err) {
             try { console.warn('[voice] failed to process LiveKit data payload', err); } catch {}
           }
         });
       } catch {}
+      // Track conversation turns to prevent response from overwriting greeting
+      let _voiceTurnCounter = 0;
+      let _lastInterimRole = null;
+
       try {
         const transcriptionEvent = RoomEvent.TranscriptionReceived;
         if (transcriptionEvent) {
-          roomConn.on(transcriptionEvent, (evt) => {
-            ingestLivekitTranscript(evt, 'assistant');
+          roomConn.on(transcriptionEvent, (segments, participant, publication) => {
+            try {
+              console.log('[voice] TranscriptionReceived', {
+                segments: segments?.length,
+                participant: participant?.identity,
+                isFinal: segments?.[0]?.final
+              });
+              // LiveKit sends segments array - combine them into transcript
+              if (segments && segments.length > 0) {
+                const text = segments.map(s => s.text || '').join(' ').trim();
+                const isFinal = segments.some(s => s.final);
+                const segmentId = segments[0]?.id || `lk-${Date.now()}`;
+                // Use first segment ID as a per-speech key for interim bubble IDs.
+                // This prevents consecutive same-role speeches from colliding:
+                // each speech gets its own unique interim ID based on its segment ID.
+                const speechKey = segments[0]?.id || _voiceTurnCounter;
+                if (text) {
+                  // Determine role from participant identity
+                  const isAgent = participant && (
+                    String(participant.identity || '').toLowerCase().includes('agent') ||
+                    participant.kind === (ParticipantKind?.AGENT || 1)
+                  );
+                  const role = isAgent ? 'assistant' : 'user';
+
+                  // Increment turn counter when switching between user and assistant
+                  // (kept as fallback for when segment IDs are unavailable)
+                  if (_lastInterimRole && _lastInterimRole !== role) {
+                    _voiceTurnCounter++;
+                  }
+                  _lastInterimRole = role;
+
+                  if (isFinal) {
+                    // Check if this speech's final bubble already exists (subsequent
+                    // events for the same speech add more final segments)
+                    const existingFinal = document.querySelector(`[data-transcript-id="${segmentId}"]`);
+                    if (existingFinal) {
+                      // Same speech — just update the growing text
+                      updateVoiceTranscript(segmentId, text, role);
+                    } else {
+                      // Promote the interim bubble to final instead of creating a new one.
+                      // This prevents any flash of duplicate transcription.
+                      const interimId = `interim-${role}-${speechKey}`;
+                      const interimEl = document.querySelector(`[data-transcript-id="${interimId}"]`);
+                      if (interimEl) {
+                        // Re-tag the interim bubble with the final segment ID
+                        interimEl.setAttribute('data-transcript-id', segmentId);
+                        // Update content to the final text
+                        updateVoiceTranscript(segmentId, text, role);
+                        // Mark both IDs as seen so no other source can duplicate
+                        markTranscriptSeen(segmentId);
+                        markTranscriptSeen(interimId);
+                      } else {
+                        // No interim existed (e.g. very fast response) — add normally
+                        ingestLivekitTranscript({
+                          text,
+                          role,
+                          id: segmentId,
+                          createdAt: new Date().toISOString()
+                        }, role);
+                      }
+                    }
+
+                    // Register text in content-based dedup so Supabase Realtime
+                    // INSERT of the same content is also suppressed
+                    if (text && text.length >= 5) {
+                      isRecentDuplicateText(role, text);
+                    }
+
+                    // Start citation polling for assistant messages
+                    // Since Realtime isn't reliably delivering events, we poll for citations
+                    if (role === 'assistant' && transcriptConversationId) {
+                      console.log('[voice] Final assistant transcript - starting citation poll');
+                      startCitationPolling(transcriptConversationId);
+                    }
+                  } else {
+                    // Interim transcript - use per-speech key so consecutive
+                    // same-role responses each get their own bubble
+                    const tempId = `interim-${role}-${speechKey}`;
+                    if (!updateVoiceTranscript(tempId, text, role)) {
+                      appendVoiceTranscript(role, text, new Date().toISOString(), [], tempId);
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.warn('[voice] TranscriptionReceived handler error', err);
+            }
           });
         }
       } catch {}
+
+      // ── Modern text-stream handler for lk.transcription ──
+      // The LiveKit Agents SDK publishes transcriptions via BOTH:
+      //   1. Legacy publish_transcription → TranscriptionReceived (handled above)
+      //   2. Modern stream_text → registerTextStreamHandler (handled here)
+      // The legacy path silently drops text if the audio track isn't published
+      // yet (track_id race), so this handler serves as a robust fallback.
+      try {
+        if (typeof roomConn.registerTextStreamHandler === 'function') {
+          roomConn.registerTextStreamHandler('lk.transcription', async (reader, participantInfo) => {
+            try {
+              const isFinal = reader.info?.attributes?.['lk.transcription_final'] === 'true';
+              const segmentId = reader.info?.attributes?.['lk.segment_id'];
+              const identity = participantInfo?.identity || '';
+              const isAgent = identity.toLowerCase().includes('agent') ||
+                participantInfo?.kind === (ParticipantKind?.AGENT || 1);
+              const role = isAgent ? 'assistant' : 'user';
+
+              // readAll waits for the stream to close, then returns full text
+              const text = await reader.readAll();
+              if (!text || !text.trim()) return;
+
+              console.log('[voice] TextStream lk.transcription', {
+                role, isFinal, segmentId: segmentId?.slice(0, 8), len: text.length
+              });
+
+              // Dedup: if the TranscriptionReceived handler already rendered this
+              // segment, skip to avoid duplicates.
+              if (segmentId && document.querySelector(`[data-transcript-id="${segmentId}"]`)) {
+                // Already rendered by legacy handler — just update text
+                updateVoiceTranscript(segmentId, text, role);
+                return;
+              }
+
+              if (isFinal) {
+                const speechKey = segmentId || _voiceTurnCounter;
+                const interimId = `interim-${role}-${speechKey}`;
+                const interimEl = document.querySelector(`[data-transcript-id="${interimId}"]`);
+                if (interimEl) {
+                  interimEl.setAttribute('data-transcript-id', segmentId);
+                  updateVoiceTranscript(segmentId, text, role);
+                  markTranscriptSeen(segmentId);
+                  markTranscriptSeen(interimId);
+                } else {
+                  ingestLivekitTranscript({
+                    text, role, id: segmentId, createdAt: new Date().toISOString()
+                  }, role);
+                }
+                if (text.length >= 5) isRecentDuplicateText(role, text);
+                if (role === 'assistant' && transcriptConversationId) {
+                  startCitationPolling(transcriptConversationId);
+                }
+              } else {
+                // Interim — create or update bubble
+                const tempId = `interim-${role}-${segmentId || _voiceTurnCounter}`;
+                if (!updateVoiceTranscript(tempId, text, role)) {
+                  appendVoiceTranscript(role, text, new Date().toISOString(), [], tempId);
+                }
+              }
+            } catch (err) {
+              console.warn('[voice] TextStream lk.transcription handler error', err);
+            }
+          });
+          console.log('[voice] Registered lk.transcription text stream handler');
+        }
+      } catch (err) {
+        console.warn('[voice] Failed to register text stream handler', err);
+      }
 
       roomConn.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
         try {
@@ -1693,6 +4056,10 @@ function clearVoiceTranscriptError(){
       status.textContent = 'Call ended.';
       endBtn.classList.add('hidden');
       startBtn.classList.remove('hidden');
+      const headerSpacerEnd = document.getElementById('headerSpacer');
+      if (headerSpacerEnd) headerSpacerEnd.classList.remove('hidden');
+      const voiceWelcomeEnd = document.getElementById('voiceWelcome');
+      if (voiceWelcomeEnd) voiceWelcomeEnd.classList.remove('hidden');
       setVoiceAudioMuted(true);
       try {
         const elementsMap = window.__lk_audio_elements || {};
@@ -1701,8 +4068,820 @@ function clearVoiceTranscriptError(){
           delete elementsMap[key];
         });
       } catch {}
-      try { window.__lk_transcript_seen = {}; __seenTranscriptIds = new Set(); } catch {}
+      try { window.__lk_transcript_seen = {}; __seenTranscriptIds = new Set(); __recentTranscriptTexts = []; } catch {}
       try { delete window.__voicePlaybackPrimed; } catch {}
+      // Clean up Ken Burns provider
+      try {
+        const kenburnsContainer = document.getElementById('kenburnsContainer');
+        if (kenburnsContainer) {
+          kenburnsContainer.classList.add('hidden');
+          if (window.__kenburnsProvider) {
+            window.__kenburnsProvider.destroy();
+            window.__kenburnsProvider = null;
+          }
+        }
+      } catch {}
+    }
+
+    // =====================================================
+    // VIDEO CHAT FUNCTIONS
+    // =====================================================
+    let __videoRoomConn = null;
+    let storedVideoSession = null;
+    let manualVideoEnd = false;
+
+    // Storage for video mode audio elements (similar to voice mode)
+    window.__video_audio_elements = window.__video_audio_elements || {};
+
+    // Handle remote audio track from agent in video mode (TTS output)
+    function handleVideoRemoteAudioTrack(track, pub, participant) {
+      if (!track || String(track.kind || '').toLowerCase() !== 'audio') { return; }
+      try { console.log('[video] handleVideoRemoteAudioTrack', { sid: track.sid, pubSid: pub?.trackSid, participant: participant?.identity }); } catch {}
+
+      try {
+        track.setEnabled?.(true);
+        track.setVolume?.(1.0);
+      } catch {}
+
+      const sidKey = pub?.trackSid || `video-audio-${track.sid || Date.now()}`;
+      try { console.log('[video] audio sid key', sidKey); } catch {}
+
+      // Detach from any previous elements
+      try {
+        const previous = track.detach?.() || [];
+        previous.forEach((node) => { try { node.remove?.(); } catch {} });
+      } catch {}
+
+      let el = window.__video_audio_elements[sidKey];
+      try { console.log('[video] existing audio element?', !!el); } catch {}
+      const needAttach = !el || !document.body.contains(el);
+      if (needAttach) {
+        try { el?.pause?.(); el?.remove?.(); } catch {}
+        el = document.createElement('audio');
+        el.autoplay = true;
+        el.playsInline = true;
+        el.muted = false; // Video mode audio should not be muted
+        try { el.volume = 1.0; } catch {}
+        el.style.position = 'fixed';
+        el.style.bottom = '8px';
+        el.style.right = '8px';
+        el.style.width = '0px';
+        el.style.height = '0px';
+        el.style.opacity = '0';
+        el.style.pointerEvents = 'none';
+        document.body.appendChild(el);
+        window.__video_audio_elements[sidKey] = el;
+        try { console.log('[video] created new audio element', sidKey); } catch {}
+      }
+
+      try { track.attach(el); } catch {}
+
+      try {
+        console.log('[video] attempting el.play');
+        console.log('[video] audio element state BEFORE play:', {
+          muted: el.muted,
+          volume: el.volume,
+          paused: el.paused,
+          readyState: el.readyState,
+          srcObject: !!el.srcObject,
+          currentSrc: el.currentSrc?.slice(0, 50) || 'none',
+        });
+        const playPromise = el.play?.();
+        if (playPromise && typeof playPromise.then === 'function') {
+          playPromise
+            .then(() => {
+              console.log('[video] el.play resolved - agent audio playing');
+              console.log('[video] audio element state AFTER play:', {
+                muted: el.muted,
+                volume: el.volume,
+                paused: el.paused,
+                readyState: el.readyState,
+                srcObject: !!el.srcObject,
+                currentTime: el.currentTime,
+              });
+            })
+            .catch((err) => {
+              console.warn('[video] audio play blocked', err);
+            });
+        }
+      } catch (err) {
+        try { console.warn('[video] audio play failed', err); } catch {}
+      }
+
+      try { document.getElementById('videoStatus').textContent = 'Video & audio connected'; } catch {}
+    }
+
+    // Cleanup video audio elements
+    function cleanupVideoAudioElements() {
+      try {
+        for (const key in window.__video_audio_elements) {
+          const el = window.__video_audio_elements[key];
+          try { el?.pause?.(); el?.remove?.(); } catch {}
+        }
+        window.__video_audio_elements = {};
+      } catch {}
+    }
+
+    // Video model loading progress functions
+    function updateVideoLoadingProgress(progress, message) {
+      try {
+        const progressBar = document.getElementById('videoLoaderProgress');
+        const percentText = document.getElementById('videoLoaderPercent');
+        const loaderText = document.getElementById('videoLoaderText');
+
+        if (progressBar) {
+          progressBar.style.width = `${Math.min(100, Math.max(0, progress))}%`;
+        }
+        if (percentText) {
+          percentText.textContent = `${Math.round(progress)}%`;
+        }
+        if (loaderText && message) {
+          loaderText.textContent = message;
+        }
+        console.log('[video] Model loading:', progress + '%', message);
+      } catch (err) {
+        console.warn('[video] Failed to update loading progress', err);
+      }
+    }
+
+    function showVideoModelLoader() {
+      try {
+        const loader = document.getElementById('videoModelLoader');
+        if (loader) {
+          loader.classList.remove('hidden');
+          loader.style.display = 'flex';
+          // Reset progress
+          updateVideoLoadingProgress(5, 'Initializing avatar...');
+        }
+      } catch {}
+    }
+
+    function hideVideoModelLoader() {
+      try {
+        const loader = document.getElementById('videoModelLoader');
+        if (loader) {
+          // Smooth fade out
+          loader.style.transition = 'opacity 0.5s ease-out';
+          loader.style.opacity = '0';
+          setTimeout(() => {
+            loader.classList.add('hidden');
+            loader.style.display = 'none';
+            loader.style.opacity = '1';
+          }, 500);
+        }
+        console.log('[video] Model ready - hiding loader');
+      } catch {}
+    }
+
+    async function startVideo() {
+      try { console.log('[video] startVideo invoked'); } catch {}
+
+      // Check Supertab entitlement for video mode
+      if (requiresSupertabForMode('video')) {
+        if (!hasVoiceEntitlement) {
+          console.log('[video] No entitlement - switching to voice panel for purchase');
+          switchTab('voice');
+          return;
+        }
+      }
+
+      const status = document.getElementById('videoStatus');
+      const startBtn = document.getElementById('videoStartBtn');
+      const welcome = document.getElementById('videoWelcome');
+      const container = document.getElementById('videoContainer');
+
+      status.textContent = 'Connecting to video...';
+      
+      try { console.log('[video] ensuring session'); } catch {}
+      const ok = await ensureSession();
+
+      const hasSupabaseUser = !!(session?.user?.id);
+      const hasManualToken = !!manualToken;
+      const injectedUserId = window.__client_user_id;
+      
+      if (!hasSupabaseUser && !hasManualToken && !injectedUserId) {
+        status.textContent = 'Please sign in to start video.';
+        return;
+      }
+      
+      const bearer = manualToken || session?.access_token || '';
+      const room = `video_${AGENT_SLUG}_${Date.now()}`;
+      const payload = {
+        agent_slug: AGENT_SLUG,
+        client_id: CLIENT_ID,
+        mode: 'video',
+        room_name: room,
+        platform: 'livekit',
+        user_id: injectedUserId || session?.user?.id || 'preview-user',
+      };
+
+      try { console.log('[video] trigger payload prepared', payload); } catch {}
+      const res = await fetch('/api/v1/trigger-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${bearer}` },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        console.error('[video] trigger failed', res.status, errText);
+        status.textContent = 'Video start failed: ' + (errText || res.status);
+        return;
+      }
+
+      const data = await res.json();
+      try { console.log('[video] trigger response', data); } catch {}
+
+      if (!data || !data.data) {
+        status.textContent = 'Error: trigger-agent returned no data.';
+        return;
+      }
+
+      const info = data.data.livekit_config;
+      const server = info?.server_url;
+      const token = info?.user_token;
+      const conversationId = data.data.conversation_id;
+      const agentId = data.data.agent_context?.agent_id || '';
+      
+      if (!server || !token) { 
+        status.textContent = 'Video start response incomplete.'; 
+        return; 
+      }
+      
+      storedVideoSession = { server, token, conversationId, agentId };
+      manualVideoEnd = false;
+
+      // Check if Ken Burns mode is enabled
+      const agentContext = data.data.agent_context || {};
+      const voiceSettings = agentContext.voice_settings || agentContext.metadata?.voice_settings || {};
+      const videoProvider = voiceSettings.video_provider || '';
+      const isKenBurnsMode = videoProvider === 'ken_burns';
+      const kenburnsStartingImage = voiceSettings.kenburns_starting_image || null;
+
+      // VERY VISIBLE DEBUG - check browser console
+      console.warn('🟡🟡🟡 [video] TRIGGER RESPONSE - agent_context keys:', Object.keys(agentContext));
+      console.warn('🟡🟡🟡 [video] TRIGGER RESPONSE - voiceSettings:', JSON.stringify(voiceSettings));
+      console.warn('🟡🟡🟡 [video] TRIGGER RESPONSE - kenburns_starting_image:', kenburnsStartingImage || 'NULL/UNDEFINED');
+
+      if (isKenBurnsMode) {
+        console.warn('🟢🟢🟢 [video] Ken Burns mode DETECTED - starting image:', kenburnsStartingImage || 'NONE');
+      }
+
+      try {
+        await connectVideoLivekit(storedVideoSession, isKenBurnsMode, kenburnsStartingImage);
+        // Start transcript stream for video mode
+        if (conversationId) {
+          startVideoTranscriptStream(conversationId, CLIENT_ID, agentId);
+        }
+      } catch (err) {
+        console.error('[video] connection failed', err);
+        status.textContent = 'Video connection failed: ' + (err.message || err);
+        welcome.classList.remove('hidden');
+        container.classList.add('hidden');
+      }
+    }
+
+    async function connectVideoLivekit(sessionData, isKenBurnsMode = false, kenburnsStartingImage = null) {
+      const { server, token } = sessionData;
+      const status = document.getElementById('videoStatus');
+      const welcome = document.getElementById('videoWelcome');
+      const container = document.getElementById('videoContainer');
+      const videoElement = document.getElementById('remoteVideoElement');
+      const kenburnsContainer = document.getElementById('kenburnsContainer');
+
+      const LiveKit = window.LivekitClient || window.LiveKit || {};
+      const { Room, RoomEvent, VideoPresets, ConnectionState } = LiveKit;
+
+      if (!Room || !RoomEvent) {
+        status.textContent = 'Video SDK not available.';
+        throw new Error('LiveKit SDK not loaded');
+      }
+
+      __videoRoomConn = new Room({
+        adaptiveStream: true,
+        dynacast: true,
+        videoCaptureDefaults: { resolution: VideoPresets?.h720?.resolution },
+      });
+
+      // Store Ken Burns mode for use in event handlers
+      __videoRoomConn.__isKenBurnsMode = isKenBurnsMode;
+
+      // Hide welcome
+      welcome.classList.add('hidden');
+
+      // Show shared transcript overlay for both modes
+      const transcriptOverlay = document.getElementById('videoTranscriptOverlay');
+      if (transcriptOverlay) transcriptOverlay.classList.remove('hidden');
+
+      if (isKenBurnsMode) {
+        // Ken Burns mode: show Ken Burns container, hide video container
+        container.classList.add('hidden');
+        if (kenburnsContainer && window.initKenBurns) {
+          kenburnsContainer.classList.remove('hidden');
+          window.initKenBurns('kenburnsContainer', { startingImage: kenburnsStartingImage });
+          console.log('[video] Ken Burns container initialized', kenburnsStartingImage ? 'with starting image' : 'without starting image');
+        }
+        status.textContent = 'Connecting to Ken Burns mode...';
+      } else {
+        // Regular video mode: show video container with loading overlay
+        container.classList.remove('hidden');
+        showVideoModelLoader();  // Show loading overlay while model loads
+        status.textContent = 'Connecting...';
+      }
+      
+      // Handle video track subscription
+      __videoRoomConn.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+        const isKenBurns = __videoRoomConn.__isKenBurnsMode;
+        try {
+          console.log('[video] TrackSubscribed', {
+            kind: track?.kind,
+            kindType: typeof track?.kind,
+            trackSid: track?.sid,
+            participant: participant?.identity,
+            isVideoTrack: String(track?.kind || '').toLowerCase() === 'video',
+            isAudioTrack: String(track?.kind || '').toLowerCase() === 'audio',
+            isKenBurnsMode: isKenBurns
+          });
+        } catch {}
+        // Use string conversion for robust comparison (SDK may return string or enum)
+        const trackKind = String(track?.kind || '').toLowerCase();
+        if (trackKind === 'video') {
+          // Skip video track handling in Ken Burns mode (no video tracks expected)
+          if (isKenBurns) {
+            console.log('[video] Skipping video track in Ken Burns mode');
+            return;
+          }
+          try {
+            track.attach(videoElement);
+            status.textContent = 'Video connected';
+            console.log('[video] Video track attached to element');
+            // Hide loader as fallback when video track arrives (model_ready event is preferred)
+            hideVideoModelLoader();
+            // Log video dimensions after a short delay to let the stream start
+            setTimeout(() => {
+              console.log('[video] Video track dimensions:', {
+                videoWidth: videoElement.videoWidth,
+                videoHeight: videoElement.videoHeight,
+                aspectRatio: videoElement.videoWidth && videoElement.videoHeight
+                  ? (videoElement.videoWidth / videoElement.videoHeight).toFixed(2)
+                  : 'unknown',
+                trackDimensions: track.dimensions,
+              });
+            }, 1500);
+          } catch (attachErr) {
+            console.error('[video] Failed to attach video track', attachErr);
+          }
+        } else if (trackKind === 'audio') {
+          // Handle audio track from the agent (TTS output)
+          try {
+            console.log('[video] Audio track received from agent');
+            handleVideoRemoteAudioTrack(track, pub, participant);
+            // In Ken Burns mode, update status when audio connects
+            if (isKenBurns) {
+              status.textContent = 'Ken Burns mode ready - listening...';
+            }
+          } catch (audioErr) {
+            console.error('[video] Failed to handle audio track', audioErr);
+          }
+        }
+      });
+
+      __videoRoomConn.on(RoomEvent.TrackUnsubscribed, (track) => {
+        try { console.log('[video] TrackUnsubscribed', track?.kind); } catch {}
+        const trackKind = String(track?.kind || '').toLowerCase();
+        if (trackKind === 'video') {
+          try { track.detach(videoElement); } catch {}
+        } else if (trackKind === 'audio') {
+          // Detach audio track
+          try {
+            track.detach?.();
+            console.log('[video] Audio track detached');
+          } catch {}
+        }
+      });
+      
+      __videoRoomConn.on(RoomEvent.ConnectionStateChanged, (state) => {
+        try { console.log('[video] ConnectionState', state); } catch {}
+        if (state === ConnectionState.Disconnected && !manualVideoEnd) {
+          status.textContent = 'Video disconnected';
+        }
+      });
+      
+      __videoRoomConn.on(RoomEvent.DataReceived, (payload, participant) => {
+        try {
+          const text = new TextDecoder().decode(payload);
+          // Skip non-JSON data (e.g., binary audio, emotion SSML tags)
+          if (!text.startsWith('{')) {
+            // Not JSON - ignore silently (could be emotion tags or other non-JSON data)
+            return;
+          }
+          const data = JSON.parse(text);
+          if (data.type === 'transcript') {
+            appendVideoTranscript(data.role, data.text);
+          } else if (data.type === 'model_loading') {
+            // Handle model loading progress updates
+            updateVideoLoadingProgress(data.progress, data.message);
+          } else if (data.type === 'model_ready') {
+            // Model is ready - hide the loader and show video
+            hideVideoModelLoader();
+          } else if (data.type === 'kenburns_image') {
+            // Ken Burns image received - display it
+            console.log('[video] Ken Burns image received:', data.data?.image_url?.substring(0, 60));
+            if (window.handleKenBurnsData) {
+              window.handleKenBurnsData(data);
+            }
+          }
+        } catch (e) {
+          // Silently ignore parse errors for non-JSON data
+        }
+      });
+
+      // Handle when participants connect (avatar agent joining)
+      __videoRoomConn.on(RoomEvent.ParticipantConnected, (participant) => {
+        try {
+          console.log('[video] ParticipantConnected:', participant?.identity);
+          // When participant connects, check for video and audio tracks
+          if (participant?.trackPublications) {
+            participant.trackPublications.forEach((pub) => {
+              const trackKind = String(pub?.kind || pub?.track?.kind || '').toLowerCase();
+              console.log('[video] Participant track:', { kind: trackKind, subscribed: pub?.isSubscribed });
+              if (trackKind === 'video' && pub?.track) {
+                try {
+                  pub.track.attach(videoElement);
+                  status.textContent = 'Video connected';
+                  console.log('[video] Attached video from new participant');
+                } catch (attachErr) {
+                  console.error('[video] Failed to attach video', attachErr);
+                }
+              } else if (trackKind === 'audio' && pub?.track) {
+                try {
+                  handleVideoRemoteAudioTrack(pub.track, pub, participant);
+                  console.log('[video] Attached audio from new participant');
+                } catch (attachErr) {
+                  console.error('[video] Failed to attach audio', attachErr);
+                }
+              }
+            });
+          }
+        } catch {}
+      });
+
+      // Handle when tracks are published by remote participants
+      __videoRoomConn.on(RoomEvent.TrackPublished, (pub, participant) => {
+        try {
+          const trackKind = String(pub?.kind || '').toLowerCase();
+          console.log('[video] TrackPublished:', { kind: trackKind, participant: participant?.identity, trackSid: pub?.trackSid });
+        } catch {}
+      });
+
+      await __videoRoomConn.connect(server, token);
+      try { console.log('[video] connected to room'); } catch {}
+
+      // Enable audio playback
+      try {
+        await __videoRoomConn.startAudio();
+      } catch (err) {
+        try { console.warn('[video] startAudio failed', err); } catch {}
+      }
+
+      // Enable microphone for user voice capture (STT)
+      try {
+        const audioCaptureOptions = {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        };
+        await __videoRoomConn.localParticipant.setMicrophoneEnabled(true, audioCaptureOptions, { preConnectBuffer: true });
+        console.log('[video] Microphone enabled with echo cancellation');
+        status.textContent = 'Video & audio connected. Microphone enabled.';
+      } catch (micErr) {
+        console.error('[video] Failed to enable microphone', micErr);
+        status.textContent = 'Video connected but microphone unavailable. Check browser permissions.';
+      }
+
+      // Check for already-published video and audio tracks from remote participants
+      try {
+        const remoteParticipants = __videoRoomConn.remoteParticipants || __videoRoomConn.participants;
+        if (remoteParticipants) {
+          console.log('[video] Checking existing participants:', remoteParticipants.size || Object.keys(remoteParticipants).length);
+          remoteParticipants.forEach((participant, identity) => {
+            console.log('[video] Checking participant:', identity, participant?.trackPublications?.size);
+            if (participant?.trackPublications) {
+              participant.trackPublications.forEach((pub) => {
+                const trackKind = String(pub?.kind || pub?.track?.kind || '').toLowerCase();
+                console.log('[video] Existing track:', { kind: trackKind, subscribed: pub?.isSubscribed, trackSid: pub?.trackSid });
+                if (trackKind === 'video' && pub?.track) {
+                  try {
+                    pub.track.attach(videoElement);
+                    status.textContent = 'Video connected';
+                    console.log('[video] Attached existing video track');
+                  } catch (attachErr) {
+                    console.error('[video] Failed to attach existing video track', attachErr);
+                  }
+                } else if (trackKind === 'audio' && pub?.track) {
+                  try {
+                    handleVideoRemoteAudioTrack(pub.track, pub, participant);
+                    console.log('[video] Attached existing audio track');
+                  } catch (attachErr) {
+                    console.error('[video] Failed to attach existing audio track', attachErr);
+                  }
+                }
+              });
+            }
+          });
+        }
+      } catch (existingErr) {
+        console.error('[video] Error checking existing tracks', existingErr);
+      }
+    }
+
+    async function endVideo() {
+      const status = document.getElementById('videoStatus');
+      const welcome = document.getElementById('videoWelcome');
+      const container = document.getElementById('videoContainer');
+      const videoElement = document.getElementById('remoteVideoElement');
+      const kenburnsContainer = document.getElementById('kenburnsContainer');
+      const transcriptOverlay = document.getElementById('videoTranscriptOverlay');
+
+      manualVideoEnd = true;
+      stopVideoTranscriptStream();
+
+      // Hide transcript overlay
+      if (transcriptOverlay) transcriptOverlay.classList.add('hidden');
+
+      try {
+        if (__videoRoomConn) {
+          await __videoRoomConn.disconnect();
+        }
+      } catch {}
+
+      __videoRoomConn = null;
+      storedVideoSession = null;
+
+      // Detach video
+      videoElement.srcObject = null;
+
+      // Cleanup audio elements
+      cleanupVideoAudioElements();
+
+      // Cleanup Ken Burns if active
+      if (kenburnsContainer) {
+        kenburnsContainer.classList.add('hidden');
+        if (window.__kenburnsProvider) {
+          window.__kenburnsProvider.destroy();
+          window.__kenburnsProvider = null;
+        }
+      }
+
+      // Reset UI
+      container.classList.add('hidden');
+      welcome.classList.remove('hidden');
+      status.textContent = 'Video ended.';
+
+      // Clear transcripts and deduplication state
+      const transcriptList = document.getElementById('videoTranscriptList');
+      if (transcriptList) transcriptList.innerHTML = '';
+      __videoTranscriptIds.clear();
+      __videoSeenTranscriptIds.clear();
+    }
+
+    function toggleEmbedFullscreen() {
+      const container = document.querySelector('.glass-container');
+      if (!document.fullscreenElement) {
+        (container.requestFullscreen?.() || container.webkitRequestFullscreen?.());
+      } else {
+        (document.exitFullscreen?.() || document.webkitExitFullscreen?.());
+      }
+    }
+
+    // Update fullscreen button icon on change
+    document.addEventListener('fullscreenchange', () => {
+      const expand = document.getElementById('fullscreenExpandIcon');
+      const shrink = document.getElementById('fullscreenShrinkIcon');
+      if (expand && shrink) {
+        expand.classList.toggle('hidden', !!document.fullscreenElement);
+        shrink.classList.toggle('hidden', !document.fullscreenElement);
+      }
+    });
+
+    function toggleVideoFullscreen() {
+      toggleEmbedFullscreen();
+    }
+
+    // Video transcript handling
+    let __videoTranscriptChannel = null;
+    let __videoTranscriptIds = new Map(); // Map of id -> element for updates
+    let __videoSeenTranscriptIds = new Set(); // Deduplication set (mirrors voice mode)
+
+    // Check if video transcript already seen (deduplication - mirrors voice mode logic)
+    function markVideoTranscriptSeen(id) {
+      if (!id) return false;
+      const key = String(id);
+      if (__videoSeenTranscriptIds.has(key)) return true;
+      __videoSeenTranscriptIds.add(key);
+      return false;
+    }
+
+    function appendVideoTranscript(role, text, id) {
+      const list = document.getElementById('videoTranscriptList');
+      if (!text) return;
+
+      // Update Ken Burns transcript overlay if in Ken Burns mode
+      if (window.__kenburnsProvider && window.__videoRoomConn?.__isKenBurnsMode) {
+        window.__kenburnsProvider.updateTranscript(text, role);
+      }
+
+      // If videoTranscriptList doesn't exist (Ken Burns mode), skip DOM updates
+      if (!list) return;
+
+      // Deduplication check - skip if already seen (mirrors voice mode)
+      if (id && markVideoTranscriptSeen(id)) {
+        console.log('[video] appendVideoTranscript SKIPPED (already seen):', id?.slice(0, 8), role);
+        return;
+      }
+
+      const isUser = role === 'user';
+
+      // Check if this transcript already exists in DOM (for updates via INSERT after UPDATE race)
+      if (id && __videoTranscriptIds.has(id)) {
+        const existingBubble = __videoTranscriptIds.get(id);
+        if (existingBubble) {
+          // Find the text span inside the bubble and update if new text is longer (for user) or always (for assistant)
+          const textSpan = existingBubble.querySelector('.transcript-text');
+          if (textSpan) {
+            if (isUser) {
+              // For user: only update if new text is longer (handles out-of-order STT chunks)
+              if (text.length >= (textSpan.textContent || '').length) {
+                textSpan.innerHTML = escapeAndLinkify(text);
+              }
+            } else {
+              const rawText = (text || '').replace(/\\n/g, '\n');
+              textSpan.innerHTML = (window.marked && window.DOMPurify)
+                ? DOMPurify.sanitize(marked.parse(rawText))
+                : rawText.replace(/\n/g, '<br>');
+            }
+          }
+          return;
+        }
+      }
+
+      console.log('[video] appendVideoTranscript ADDING:', id?.slice(0, 8), role, text?.slice(0, 30));
+
+      // Create wrapper for alignment
+      const wrapper = document.createElement('div');
+      wrapper.className = isUser ? 'flex justify-end' : 'flex justify-start';
+      if (id) wrapper.setAttribute('data-video-transcript-id', id);
+
+      // Create styled bubble - elegant subtitle style
+      const bubble = document.createElement('div');
+      bubble.className = isUser
+        ? 'video-transcript-bubble video-transcript-user max-w-[85%] px-4 py-2 rounded-2xl text-white text-sm font-medium'
+        : 'video-transcript-bubble video-transcript-assistant max-w-[85%] px-4 py-2 rounded-2xl text-white text-sm prose prose-invert prose-sm max-w-none';
+
+      // Add subtle role indicator for assistant
+      if (!isUser) {
+        const roleLabel = document.createElement('span');
+        roleLabel.className = 'text-brand-teal/80 text-xs mr-1.5';
+        roleLabel.textContent = '●';
+        bubble.appendChild(roleLabel);
+      }
+
+      // Add text content (linkify URLs for user, markdown for assistant)
+      const textSpan = document.createElement('span');
+      textSpan.className = 'transcript-text';
+      if (isUser) {
+        textSpan.innerHTML = escapeAndLinkify(text);
+      } else {
+        const rawText = (text || '').replace(/\\n/g, '\n');
+        textSpan.innerHTML = (window.marked && window.DOMPurify)
+          ? DOMPurify.sanitize(marked.parse(rawText))
+          : rawText.replace(/\n/g, '<br>');
+      }
+      bubble.appendChild(textSpan);
+
+      if (id) {
+        bubble.dataset.transcriptId = id;
+        __videoTranscriptIds.set(id, bubble);
+      }
+
+      wrapper.appendChild(bubble);
+      list.appendChild(wrapper);
+
+      // Scroll to bottom
+      list.scrollTop = list.scrollHeight;
+
+      // Fade out older transcripts for visual hierarchy
+      const wrappers = list.querySelectorAll(':scope > div');
+      wrappers.forEach((w, i) => {
+        const bubbleEl = w.querySelector('.video-transcript-bubble');
+        if (bubbleEl && i < wrappers.length - 3) {
+          bubbleEl.classList.add('video-transcript-fade');
+        } else if (bubbleEl) {
+          bubbleEl.classList.remove('video-transcript-fade');
+        }
+      });
+
+      // Keep only last 6 transcript entries for compact overlay
+      while (list.children.length > 6) {
+        const removed = list.firstChild;
+        const removedBubble = removed?.querySelector?.('[data-transcript-id]');
+        if (removedBubble && removedBubble.dataset.transcriptId) {
+          __videoTranscriptIds.delete(removedBubble.dataset.transcriptId);
+          // Note: don't remove from __videoSeenTranscriptIds - still want dedup
+        }
+        list.removeChild(removed);
+      }
+    }
+
+    function updateVideoTranscript(id, text, role) {
+      if (!id) return;
+
+      // Update Ken Burns transcript overlay if in Ken Burns mode
+      if (window.__kenburnsProvider && window.__videoRoomConn?.__isKenBurnsMode) {
+        window.__kenburnsProvider.updateTranscript(text, role);
+      }
+
+      const existingBubble = __videoTranscriptIds.get(id);
+      if (existingBubble) {
+        const textSpan = existingBubble.querySelector('.transcript-text');
+        if (textSpan) {
+          const isUser = role === 'user';
+          if (isUser) {
+            // For user messages: only update if new text is longer
+            // This prevents out-of-order STT updates from overwriting the full message
+            const currentText = textSpan.textContent || '';
+            if (text.length >= currentText.length) {
+              textSpan.innerHTML = escapeAndLinkify(text);
+            }
+            // else: skip update - probably an out-of-order interim result
+          } else {
+            // For assistant messages: always update with markdown rendering
+            const rawText = (text || '').replace(/\\n/g, '\n');
+            textSpan.innerHTML = (window.marked && window.DOMPurify)
+              ? DOMPurify.sanitize(marked.parse(rawText))
+              : rawText.replace(/\n/g, '<br>');
+          }
+        }
+      }
+    }
+
+    async function startVideoTranscriptStream(conversationId, clientId, agentId) {
+      // Use the same transcript Supabase client as voice mode
+      const sbClient = getTranscriptSupabase();
+      if (!conversationId || !sbClient) {
+        console.warn('[video] Cannot start transcript stream - missing conversationId or Supabase client');
+        return;
+      }
+
+      // Ensure authentication before subscribing
+      const authorized = await ensureTranscriptSupabaseAuth();
+      if (!authorized) {
+        console.warn('[video] Cannot start transcript stream - auth failed');
+        return;
+      }
+
+      stopVideoTranscriptStream();
+      // Clear deduplication state for new conversation (mirrors voice mode)
+      __videoTranscriptIds.clear();
+      __videoSeenTranscriptIds.clear();
+
+      console.log('[video] Starting transcript stream for conversation:', conversationId?.slice(0, 8));
+
+      __videoTranscriptChannel = sbClient
+        .channel(`video-transcripts:${conversationId}`)
+        .on('postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'conversation_transcripts', filter: `conversation_id=eq.${conversationId}` },
+          (payload) => {
+            const row = payload.new;
+            if (row && row.content) {
+              console.log('[video] INSERT transcript:', row.id?.slice(0, 8), row.role, 'seen:', __videoSeenTranscriptIds.has(row.id));
+              appendVideoTranscript(row.role, row.content, row.id);
+            }
+          }
+        )
+        .on('postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'conversation_transcripts', filter: `conversation_id=eq.${conversationId}` },
+          (payload) => {
+            const row = payload.new;
+            if (row && row.content && row.id) {
+              console.log('[video] UPDATE transcript:', row.id?.slice(0, 8), row.role);
+              // Pass role for the length-check logic on user messages
+              updateVideoTranscript(row.id, row.content, row.role);
+            }
+          }
+        )
+        .subscribe((status) => {
+          console.log('[video] Transcript channel status:', status);
+        });
+    }
+
+    function stopVideoTranscriptStream() {
+      if (__videoTranscriptChannel) {
+        try { __videoTranscriptChannel.unsubscribe(); } catch {}
+        __videoTranscriptChannel = null;
+      }
+      __videoTranscriptIds.clear();
+      // Don't clear __videoSeenTranscriptIds here - keep dedup across reconnects
     }
 
     // Listen for admin preview postMessage with Supabase tokens
@@ -1758,7 +4937,178 @@ function clearVoiceTranscriptError(){
       }
     })();
 
-    (async ()=>{ const ok = await ensureSession(); setAuthVisible(!ok); setChatVisible(ok); try { document.getElementById('voiceStartBtn').disabled = !ok; } catch {} })();
+    // WordPress Bridge: Request session token from parent window if in iframe
+    // Returns a promise that resolves when bridge auth completes (or times out)
+    function initWordPressBridge() {
+      return new Promise((resolve) => {
+        if (window.self === window.top) {
+          resolve(false); // Not in iframe, no bridge needed
+          return;
+        }
+
+        try {
+          console.log('[wordpress-bridge] Embed loaded in iframe, requesting token from parent');
+
+          // Set a timeout in case parent doesn't respond (e.g., not a WordPress site).
+          // Allow 15s so the user has time to interact with the invitation modal.
+          const timeout = setTimeout(() => {
+            console.log('[wordpress-bridge] No response from parent, proceeding without bridge auth');
+            resolve(false);
+          }, 15000);
+
+          // Listen for token response from parent
+          window.addEventListener('message', async (event) => {
+            if (!event.data || (event.data.type !== 'SKF_TOKEN' && event.data.type !== 'SKF_TOKEN_ERROR')) {
+              return;
+            }
+
+            clearTimeout(timeout);
+
+            if (event.data.type === 'SKF_TOKEN_ERROR') {
+              console.error('[wordpress-bridge] Token error from parent:', event.data.error);
+              resolve(false);
+              return;
+            }
+
+            try {
+              console.log('[wordpress-bridge] Received token from parent', event.origin);
+
+              if (event.data.debug) {
+                console.log('[wordpress-bridge] Debug data:', event.data.debug);
+              }
+
+              if (event.data.session) {
+                const sessionData = event.data.session;
+                console.log('[wordpress-bridge] Setting Supabase session');
+
+                // The WordPress session returns tokens from the CLIENT Supabase project
+                // We need to use the supabase_url and supabase_anon_key from the response
+                // to create a client that can verify these tokens
+                let authClient = sb;
+                let dynamicClient = null;
+
+                if (sessionData.supabase_url && sessionData.supabase_anon_key) {
+                  // WordPress session includes client Supabase credentials - use them
+                  console.log('[wordpress-bridge] Using client Supabase from session response:', sessionData.supabase_url);
+                  dynamicClient = supabase.createClient(sessionData.supabase_url, sessionData.supabase_anon_key);
+                  authClient = dynamicClient;
+                }
+
+                // Set the session in the appropriate Supabase client
+                const { data, error } = await authClient.auth.setSession({
+                  access_token: sessionData.access_token,
+                  refresh_token: sessionData.refresh_token
+                });
+
+                if (error) {
+                  console.error('[wordpress-bridge] Failed to set session:', error);
+                  resolve(false);
+                } else {
+                  console.log('[wordpress-bridge] Session established successfully');
+
+                  // Store the token for API calls
+                  manualToken = sessionData.access_token;
+
+                  // If we used a dynamic client, also update the client Supabase bootstrap
+                  if (dynamicClient) {
+                    // This token is for the CLIENT Supabase, set it up for transcripts
+                    CLIENT_SUPABASE_BOOTSTRAP.access_token = sessionData.access_token;
+                    CLIENT_SUPABASE_BOOTSTRAP.refresh_token = sessionData.refresh_token;
+                    // Store the dynamic client for transcript use
+                    transcriptSupabase = dynamicClient;
+                    // Also set the session variable so getEffectiveUserId() works
+                    session = {
+                      access_token: sessionData.access_token,
+                      refresh_token: sessionData.refresh_token,
+                      user: sessionData.user
+                    };
+                  } else {
+                    session = data.session;
+                    // Also set client Supabase session if available
+                    if (CLIENT_SUPABASE_BOOTSTRAP.access_token) {
+                      await ensureTranscriptSupabaseAuth();
+                    }
+                  }
+
+                  // Update UI — covers both the happy path (resolve still pending)
+                  // and the late-token path (init already timed out).
+                  setAuthVisible(false);
+                  setChatVisible(true);
+                  try { document.getElementById('voiceStartBtn').disabled = false; } catch {}
+                  hideInitialLoader();
+                  initChatModeUI();
+
+                  // Restore the most recent conversation (safe to call even if
+                  // the main init already ran — it's idempotent).
+                  autoRestoreConversation().catch(function(e){
+                    console.warn('[wordpress-bridge] autoRestore error:', e);
+                  });
+
+                  resolve(true);
+                }
+              } else {
+                resolve(false);
+              }
+            } catch (err) {
+              console.error('[wordpress-bridge] Error processing token:', err);
+              resolve(false);
+            }
+          });
+
+          // Request token from parent, include client_id
+          window.parent.postMessage({
+            type: 'SKF_REQUEST_TOKEN',
+            client_id: CLIENT_ID
+          }, '*');
+          console.log('[wordpress-bridge] Token request sent to parent with client_id:', CLIENT_ID);
+
+        } catch (err) {
+          console.error('[wordpress-bridge] Error initializing bridge:', err);
+          resolve(false);
+        }
+      });
+    }
+
+    function hideInitialLoader() {
+      const loader = document.getElementById('initialLoader');
+      if (loader) {
+        loader.classList.add('fade-out');
+        // Remove from DOM after animation completes
+        setTimeout(() => loader.remove(), 300);
+      }
+    }
+
+    (async ()=>{
+      // First, try WordPress bridge auth if in iframe
+      const bridgeAuth = await initWordPressBridge();
+
+      // Then check session (bridge may have set it, or there may be an existing session)
+      const ok = bridgeAuth || await ensureSession();
+
+      // Hide loading overlay and show appropriate view
+      hideInitialLoader();
+      setAuthVisible(!ok);
+      setChatVisible(ok);
+      try { document.getElementById('voiceStartBtn').disabled = !ok; } catch {}
+
+      // Initialize chat mode UI (show/hide tabs based on configuration)
+      initChatModeUI();
+
+      // Initialize Supertab if configured (non-blocking)
+      if (SUPERTAB_CONFIG.enabled) {
+        initSupertab().catch(err => {
+          console.warn('[supertab] Background init failed:', err);
+        });
+        checkAdminBypass().catch(err => {
+          console.log('[admin-bypass] Check skipped:', err.message);
+        });
+      }
+
+      // Auto-restore most recent conversation if authenticated
+      if (ok) {
+        await autoRestoreConversation();
+      }
+    })();
 
     // Clean up realtime subscription when page unloads to prevent orphaned connections
     window.addEventListener('beforeunload', () => {
@@ -1778,6 +5128,311 @@ function clearVoiceTranscriptError(){
       ) {
         try { console.log('[voice] Tab visible, resuming transcript realtime channel'); } catch {}
         startVoiceTranscriptStream(storedVoiceSession.conversationId, CLIENT_ID, storedVoiceSession.agentId);
+      }
+    });
+
+    // ==========================================================================
+    // Ambient Abilities - Session End Detection & Notifications
+    // ==========================================================================
+
+    let sessionMessageCount = 0;
+    let sessionIdleTimeout = null;
+    const SESSION_IDLE_THRESHOLD = 30000; // 30 seconds of inactivity to consider session ended
+
+    function resetSessionIdleTimer() {
+      if (sessionIdleTimeout) clearTimeout(sessionIdleTimeout);
+      sessionIdleTimeout = setTimeout(notifySessionEnd, SESSION_IDLE_THRESHOLD);
+    }
+
+    async function notifySessionEnd() {
+      if (!currentConversationId || sessionMessageCount < 1) return;
+
+      const userId = getEffectiveUserId();
+      if (!userId) return;
+
+      try {
+        console.log('[ambient] Notifying session end:', {
+          conversationId: currentConversationId,
+          messageCount: sessionMessageCount
+        });
+
+        const fd = new FormData();
+        fd.append('client_id', CLIENT_ID);
+        fd.append('user_id', userId);
+        fd.append('conversation_id', currentConversationId);
+        fd.append('message_count', sessionMessageCount.toString());
+        fd.append('agent_slug', AGENT_SLUG);
+
+        const bearer = manualToken || (session && session.access_token) || '';
+        await fetch('/api/embed/session-end', {
+          method: 'POST',
+          body: fd,
+          headers: { Authorization: `Bearer ${bearer}` }
+        });
+
+        // Reset for next session
+        sessionMessageCount = 0;
+
+        // Start polling for UserSense completion notification
+        // UserSense typically takes 5-15 seconds to process
+        startNotificationPolling();
+      } catch (err) {
+        console.warn('[ambient] Failed to notify session end:', err);
+      }
+    }
+
+    // Poll for notifications after session-end to show real-time feedback
+    let notificationPollInterval = null;
+    let notificationPollCount = 0;
+    const MAX_NOTIFICATION_POLLS = 12; // Poll for up to 60 seconds (12 * 5s)
+
+    function startNotificationPolling() {
+      // Clear any existing polling
+      if (notificationPollInterval) {
+        clearInterval(notificationPollInterval);
+      }
+      notificationPollCount = 0;
+
+      console.log('[ambient] Starting notification polling after session end');
+
+      // Poll every 5 seconds for UserSense completion
+      notificationPollInterval = setInterval(async () => {
+        notificationPollCount++;
+
+        // Stop polling after max attempts
+        if (notificationPollCount >= MAX_NOTIFICATION_POLLS) {
+          console.log('[ambient] Stopping notification polling (max attempts reached)');
+          clearInterval(notificationPollInterval);
+          notificationPollInterval = null;
+          return;
+        }
+
+        // Check for notifications
+        const found = await checkAmbientNotifications();
+
+        // Stop polling if we found and showed a notification
+        if (found) {
+          console.log('[ambient] Notification found, stopping polling');
+          clearInterval(notificationPollInterval);
+          notificationPollInterval = null;
+        }
+      }, 5000);
+    }
+
+    function stopNotificationPolling() {
+      if (notificationPollInterval) {
+        clearInterval(notificationPollInterval);
+        notificationPollInterval = null;
+      }
+    }
+
+    // Track message count for session
+    function incrementSessionMessageCount() {
+      sessionMessageCount++;
+      resetSessionIdleTimer();
+    }
+
+    // Check for ambient notifications on load and periodically
+    // Returns true if a notification was found and shown
+    async function checkAmbientNotifications() {
+      const userId = getEffectiveUserId();
+      if (!userId) return false;
+
+      try {
+        const bearer = manualToken || (session && session.access_token) || '';
+        const res = await fetch(
+          `/api/embed/notifications?client_id=${CLIENT_ID}&user_id=${userId}`,
+          { headers: { Authorization: `Bearer ${bearer}` } }
+        );
+
+        if (!res.ok) return false;
+
+        const data = await res.json();
+        if (data.notifications && data.notifications.length > 0) {
+          const notification = data.notifications[0];
+          showAmbientNotification(notification.message || 'User Understanding Expanded');
+
+          // Mark as shown
+          await fetch(`/api/embed/notifications/${notification.id}/shown`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${bearer}` }
+          });
+          return true;
+        }
+        return false;
+      } catch (err) {
+        console.warn('[ambient] Failed to check notifications:', err);
+        return false;
+      }
+    }
+
+    function showAmbientNotification(message) {
+      const el = document.getElementById('ambientNotification');
+      if (!el) return;
+
+      // Update message text
+      const textEl = el.querySelector('.notification-text');
+      if (textEl) textEl.textContent = message;
+
+      // Show with animation
+      el.classList.add('show');
+
+      // Hide after 4 seconds
+      setTimeout(() => {
+        el.classList.remove('show');
+      }, 4000);
+    }
+
+    // Notify session end when user leaves page - use sendBeacon for reliability
+    function notifySessionEndSync() {
+      if (!currentConversationId || sessionMessageCount < 1) return;
+
+      const userId = getEffectiveUserId();
+      if (!userId) return;
+
+      console.log('[ambient] Sending session end beacon:', {
+        conversationId: currentConversationId,
+        messageCount: sessionMessageCount
+      });
+
+      // Use sendBeacon for reliable delivery during page unload
+      const fd = new FormData();
+      fd.append('client_id', CLIENT_ID);
+      fd.append('user_id', userId);
+      fd.append('conversation_id', currentConversationId);
+      fd.append('message_count', sessionMessageCount.toString());
+      fd.append('agent_slug', AGENT_SLUG);
+
+      // sendBeacon is fire-and-forget but reliable during unload
+      navigator.sendBeacon('/api/embed/session-end', fd);
+
+      // Reset to prevent duplicate sends
+      sessionMessageCount = 0;
+    }
+
+    window.addEventListener('beforeunload', notifySessionEndSync);
+
+    // Also trigger on visibility change (tab switch, minimize)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden' && sessionMessageCount >= 1) {
+        notifySessionEndSync();
+      }
+    });
+
+    // Also trigger on pagehide (more reliable on mobile)
+    window.addEventListener('pagehide', notifySessionEndSync);
+
+    // Check for notifications when page loads (after auth)
+    setTimeout(() => {
+      if (session || manualToken) {
+        checkAmbientNotifications();
+      }
+    }, 2000);
+
+    // Periodically check for notifications (every 60 seconds)
+    setInterval(() => {
+      if (session || manualToken) {
+        checkAmbientNotifications();
+      }
+    }, 60000);
+  </script>
+
+  <!-- Disabled mode tooltip -->
+  <div id="disabledModeTooltip" class="disabled-mode-tooltip hidden">
+    <span id="disabledModeTooltipText">This mode is not available</span>
+  </div>
+
+  <!-- Agent Info Modal -->
+  <div id="agentInfoModal" class="agent-info-modal-overlay" onclick="closeAgentInfoModal(event)">
+    <div class="agent-info-modal" onclick="event.stopPropagation()">
+      <button class="agent-info-close" onclick="closeAgentInfoModal()" aria-label="Close">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+      <div class="agent-info-header">
+        <div class="agent-info-section-label">About this Sidekick</div>
+        {% if agent_image -%}
+        {%- set img_base2 = agent_image.rsplit('.', 1)[0] if '.' in agent_image else agent_image -%}
+        {%- set img_dir2 = img_base2.rsplit('/', 1)[0] if '/' in img_base2 else '' -%}
+        {%- set img_stem2 = img_base2.rsplit('/', 1)[1] if '/' in img_base2 else img_base2 -%}
+        {%- set proto2 = request.headers.get('X-Forwarded-Proto', 'https') -%}
+        {%- set origin2 = proto2 ~ '://' ~ request.url.netloc %}
+        <picture>
+          <source srcset="{{ origin2 }}{{ img_dir2 }}/optimized/{{ img_stem2 }}.webp" type="image/webp">
+
+          <source srcset="{{ origin2 }}{{ img_dir2 }}/optimized/{{ img_stem2 }}.png" type="image/png">
+
+          <img src="{{ origin2 }}{{ img_dir2 }}/optimized/{{ img_stem2 }}.png" alt="{{ agent_name }}" class="agent-info-avatar" loading="lazy" onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';">
+        </picture>
+        <div class="agent-info-avatar-placeholder" style="display: none;">{{ agent_name[0] | upper if agent_name else 'S' }}</div>
+        {% else %}
+        <div class="agent-info-avatar-placeholder">{{ agent_name[0] | upper if agent_name else 'S' }}</div>
+        {% endif %}
+        <div class="agent-info-name">{{ agent_name }}</div>
+        {% if agent_description %}
+        <p class="agent-info-description">{{ agent_description }}</p>
+        {% endif %}
+      </div>
+      <div class="agent-info-body">
+        <div class="agent-info-section-title">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          Abilities
+          <span class="agent-info-section-hint">— Invoke by simply asking</span>
+        </div>
+        {% if agent_tools and agent_tools|length > 0 %}
+        <div class="ability-list">
+          {% for tool in agent_tools %}
+          <div class="ability-item">
+            <div class="ability-icon">
+              {% if tool.icon_url %}
+              <img src="{{ tool.icon_url }}" alt="{{ tool.name }}" onerror="this.parentElement.innerHTML='<svg fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M13 10V3L4 14h7v7l9-11h-7z\'/></svg>'">
+              {% else %}
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+              {% endif %}
+            </div>
+            <div class="ability-info">
+              <div class="ability-name">{{ tool.name }}</div>
+              {% if tool.description %}
+              <div class="ability-description">{{ tool.description }}</div>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="no-abilities-message">
+          <svg class="w-8 h-8 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+          This sidekick is here to chat with you!
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Agent Info Modal Functions
+    function openAgentInfoModal() {
+      const modal = document.getElementById('agentInfoModal');
+      if (modal) {
+        modal.classList.add('active');
+        document.body.style.overflow = 'hidden';
+      }
+    }
+
+    function closeAgentInfoModal(event) {
+      // If event is passed and clicked on the modal content, don't close
+      if (event && event.target !== event.currentTarget) return;
+
+      const modal = document.getElementById('agentInfoModal');
+      if (modal) {
+        modal.classList.remove('active');
+        document.body.style.overflow = '';
+      }
+    }
+
+    // Close modal on Escape key
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        closeAgentInfoModal();
       }
     });
   </script>

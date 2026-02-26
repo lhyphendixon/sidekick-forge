@@ -1,0 +1,68 @@
+<!-- Upgrade Prompt Modal (shown when user is at sidekick limit) -->
+<div id="upgradePromptModal" class="fixed inset-0 z-50 flex items-center justify-center">
+    <!-- Backdrop -->
+    <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="closeUpgradePromptModal()"></div>
+
+    <!-- Modal -->
+    <div class="relative bg-dark-surface rounded-2xl border border-dark-border p-8 max-w-md w-full mx-4">
+        <!-- Close button -->
+        <button onclick="closeUpgradePromptModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+        </button>
+
+        <!-- Content -->
+        <div class="text-center">
+            <!-- Lock icon -->
+            <div class="mx-auto w-16 h-16 rounded-full bg-amber-500/20 flex items-center justify-center mb-6">
+                <svg class="w-8 h-8 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                </svg>
+            </div>
+
+            <h2 class="text-2xl font-bold text-white mb-2">Sidekick Limit Reached</h2>
+            <p class="text-dark-text-secondary mb-6">
+                You've reached the maximum number of sidekicks for your current plan.
+                Upgrade to Champion to unlock up to 5 sidekicks and more features.
+            </p>
+
+            <!-- Action buttons -->
+            <div class="flex gap-3">
+                <button onclick="closeUpgradePromptModal()"
+                        class="flex-1 px-4 py-3 rounded-xl border border-dark-border text-dark-text-secondary hover:bg-dark-elevated transition-colors">
+                    Maybe Later
+                </button>
+                <button onclick="upgradeFromPrompt()"
+                        class="flex-1 btn-primary py-3 rounded-xl font-semibold">
+                    Upgrade Now
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function closeUpgradePromptModal() {
+    const modal = document.getElementById('upgradePromptModal');
+    if (modal) {
+        modal.remove();
+    }
+    // Also clear the modal container
+    const container = document.getElementById('modal-container');
+    if (container) {
+        container.innerHTML = '';
+    }
+}
+
+function upgradeFromPrompt() {
+    closeUpgradePromptModal();
+    // Trigger the main page upgrade modal
+    if (typeof showUpgradePrompt === 'function') {
+        showUpgradePrompt();
+    } else {
+        // Fallback: redirect with upgrade param
+        window.location.href = '/admin/agents?upgrade=1';
+    }
+}
+</script>

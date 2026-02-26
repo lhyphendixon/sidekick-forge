@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your User Overview - {{ client_name }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);
+            min-height: 100vh;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .section-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .insight-tag {
+            background: rgba(139, 92, 246, 0.2);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+        }
+    </style>
+</head>
+<body class="text-gray-100 p-4 md:p-8">
+    <div class="max-w-4xl mx-auto">
+        <!-- Header -->
+        <div class="glass rounded-2xl p-6 mb-6">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold text-white">Your User Overview</h1>
+                    <p class="text-gray-400 text-sm">What {{ client_name }} sidekicks understand about you</p>
+                </div>
+            </div>
+
+            {% if learning_status == 'in_progress' %}
+            <div class="mt-4 p-3 rounded-lg bg-purple-500/20 border border-purple-500/30">
+                <div class="flex items-center gap-2">
+                    <svg class="animate-spin h-4 w-4 text-purple-400" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span class="text-purple-300 text-sm">Still learning about you from your conversation history...</span>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Shared Understanding Section -->
+        {% if user_overview and user_overview|length > 0 %}
+        <div class="glass rounded-2xl p-6 mb-6">
+            <h2 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                Shared Understanding
+            </h2>
+            <p class="text-gray-400 text-sm mb-4">This information is shared across all sidekicks</p>
+
+            <div class="grid gap-4 md:grid-cols-2">
+                {% if user_overview.identity and user_overview.identity|length > 0 %}
+                <div class="section-card rounded-xl p-4">
+                    <h3 class="text-sm font-medium text-indigo-300 mb-2">Identity</h3>
+                    <ul class="space-y-1 text-gray-300 text-sm">
+                        {% for key, value in user_overview.identity.items() %}
+                        {% if value %}
+                        <li><span class="text-gray-500">{{ key|replace('_', ' ')|title }}:</span> {{ value }}</li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if user_overview.goals and user_overview.goals|length > 0 %}
+                <div class="section-card rounded-xl p-4">
+                    <h3 class="text-sm font-medium text-green-300 mb-2">Goals</h3>
+                    <ul class="space-y-1 text-gray-300 text-sm">
+                        {% for key, value in user_overview.goals.items() %}
+                        {% if value %}
+                        <li><span class="text-gray-500">{{ key|replace('_', ' ')|title }}:</span>
+                            {% if value is iterable and value is not string %}
+                            {{ value|join(', ') }}
+                            {% else %}
+                            {{ value }}
+                            {% endif %}
+                        </li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if user_overview.working_style and user_overview.working_style|length > 0 %}
+                <div class="section-card rounded-xl p-4">
+                    <h3 class="text-sm font-medium text-yellow-300 mb-2">Working Style</h3>
+                    <ul class="space-y-1 text-gray-300 text-sm">
+                        {% for key, value in user_overview.working_style.items() %}
+                        {% if value %}
+                        <li><span class="text-gray-500">{{ key|replace('_', ' ')|title }}:</span> {{ value }}</li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if user_overview.relationship_history and user_overview.relationship_history|length > 0 %}
+                <div class="section-card rounded-xl p-4">
+                    <h3 class="text-sm font-medium text-pink-300 mb-2">Relationship History</h3>
+                    <ul class="space-y-1 text-gray-300 text-sm">
+                        {% for key, value in user_overview.relationship_history.items() %}
+                        {% if value %}
+                        <li><span class="text-gray-500">{{ key|replace('_', ' ')|title }}:</span>
+                            {% if value is iterable and value is not string %}
+                            {{ value|join(', ') }}
+                            {% else %}
+                            {{ value }}
+                            {% endif %}
+                        </li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if user_overview.important_context and user_overview.important_context|length > 0 %}
+            <div class="section-card rounded-xl p-4 mt-4">
+                <h3 class="text-sm font-medium text-orange-300 mb-2">Important Context</h3>
+                <ul class="space-y-1 text-gray-300 text-sm">
+                    {% for item in user_overview.important_context %}
+                    {% if item %}
+                    <li class="flex items-start gap-2">
+                        <span class="text-orange-400 mt-1">•</span>
+                        <span>{{ item }}</span>
+                    </li>
+                    {% endif %}
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="glass rounded-2xl p-6 mb-6 text-center">
+            <div class="text-gray-400">
+                <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+                <p>No shared understanding built yet.</p>
+                <p class="text-sm mt-1">Have some conversations to help sidekicks learn about you!</p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Sidekick-Specific Insights -->
+        {% if sidekick_insights and sidekick_insights|length > 0 %}
+        <div class="glass rounded-2xl p-6 mb-6">
+            <h2 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                Sidekick-Specific Insights
+            </h2>
+            <p class="text-gray-400 text-sm mb-4">Each sidekick's unique understanding of you</p>
+
+            <div class="space-y-4">
+                {% for agent_id, insight_data in sidekick_insights.items() %}
+                <div class="section-card rounded-xl p-4">
+                    <div class="flex items-center gap-2 mb-3">
+                        <div class="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-sm font-bold">
+                            {{ insight_data.agent_name[0] if insight_data.agent_name else '?' }}
+                        </div>
+                        <h3 class="font-medium text-white">{{ insight_data.agent_name or 'Unknown Sidekick' }}</h3>
+                    </div>
+
+                    {% if insight_data.insights %}
+                    <div class="space-y-2 text-sm">
+                        {% if insight_data.insights.relationship_context %}
+                        <div>
+                            <span class="text-purple-300">Role:</span>
+                            <span class="text-gray-300 ml-1">{{ insight_data.insights.relationship_context }}</span>
+                        </div>
+                        {% endif %}
+
+                        {% if insight_data.insights.interaction_patterns %}
+                        <div>
+                            <span class="text-purple-300">How you interact:</span>
+                            <span class="text-gray-300 ml-1">{{ insight_data.insights.interaction_patterns }}</span>
+                        </div>
+                        {% endif %}
+
+                        {% if insight_data.insights.unique_observations and insight_data.insights.unique_observations|length > 0 %}
+                        <div>
+                            <span class="text-purple-300">Unique observations:</span>
+                            <ul class="mt-1 space-y-1">
+                                {% for obs in insight_data.insights.unique_observations %}
+                                <li class="text-gray-300 flex items-start gap-2">
+                                    <span class="text-purple-400 mt-1">•</span>
+                                    <span>{{ obs }}</span>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+
+                        {% if insight_data.insights.topics_discussed and insight_data.insights.topics_discussed|length > 0 %}
+                        <div class="flex flex-wrap gap-2 mt-2">
+                            {% for topic in insight_data.insights.topics_discussed %}
+                            <span class="insight-tag px-2 py-1 rounded-full text-xs text-purple-300">{{ topic }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <p class="text-gray-500 text-sm">No specific insights yet</p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Privacy Notice -->
+        <div class="glass rounded-2xl p-6">
+            <div class="flex items-start gap-3">
+                <svg class="w-5 h-5 text-blue-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div class="text-sm text-gray-400">
+                    <p class="font-medium text-gray-300 mb-1">About Your User Overview</p>
+                    <p>This information is built from your conversations with sidekicks to provide more personalized assistance. It's stored securely and used only to improve your experience. The shared understanding is accessible to all sidekicks within {{ client_name }}, while sidekick-specific insights are used only by that particular sidekick.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

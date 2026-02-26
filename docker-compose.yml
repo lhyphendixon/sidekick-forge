@@ -10,8 +10,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - APP_ENV=production
-      - DEVELOPMENT_MODE=false
+      - APP_ENV=${APP_ENV:-production}
+      - DEVELOPMENT_MODE=${DEVELOPMENT_MODE:-false}
       - REDIS_HOST=redis
       - DATABASE_URL=${DATABASE_URL}
       - DOMAIN_NAME=${DOMAIN_NAME}
@@ -35,9 +35,9 @@ services:
       - LIVEKIT_URL=${LIVEKIT_URL}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
-      # Agent name for staging (must match agent-worker)
-      - AGENT_NAME=sidekick-agent-staging-docker
-      - LIVEKIT_AGENT_NAME=sidekick-agent-staging-docker
+      # Agent name (set per-server in .env; must match agent-worker)
+      - AGENT_NAME=${AGENT_NAME:-sidekick-agent}
+      - LIVEKIT_AGENT_NAME=${AGENT_NAME:-sidekick-agent}
       - DOCKER_HOST=unix:///var/run/docker.sock
       - DOCUMENT_PROCESSOR_MAX_CONCURRENCY=2
       - DOCUMENT_PROCESSOR_MAX_CHUNKS=250
@@ -114,7 +114,7 @@ services:
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - DOMAIN_NAME=${DOMAIN_NAME}
       # Agent configuration
-      - AGENT_NAME=sidekick-agent-staging-docker
+      - AGENT_NAME=${AGENT_NAME:-sidekick-agent}
       - ENABLE_PROACTIVE_GREETING=true
       # Supabase configuration for API key fallback
       - SUPABASE_URL=${SUPABASE_URL}

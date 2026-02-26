@@ -1,0 +1,196 @@
+<!-- Step 4: Avatar Generation -->
+<div class="space-y-8">
+    <div class="text-center space-y-3">
+        <h1 class="text-4xl md:text-5xl font-light text-white">
+            Create <span class="text-brand-teal" x-text="stepData.name || 'your sidekick'"></span>'s avatar
+        </h1>
+        <p class="text-dark-text-secondary text-lg">
+            Generate an AI image or upload your own
+        </p>
+    </div>
+
+    <div class="max-w-xl mx-auto space-y-6">
+        <!-- Custom Prompt -->
+        <div class="space-y-2">
+            <label class="text-sm text-dark-text-secondary">Describe the look (optional)</label>
+            <input
+                type="text"
+                x-model="avatarPrompt"
+                placeholder="e.g., Professional, friendly, blue eyes..."
+                class="wizard-input text-lg"
+            />
+        </div>
+
+        <!-- Generate Button -->
+        <div class="text-center">
+            <button
+                @click="generateAvatar()"
+                :disabled="generatingAvatar"
+                class="btn-wizard-primary inline-flex items-center gap-2">
+                <svg x-show="generatingAvatar" class="w-5 h-5 spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                <span x-text="generatingAvatar ? 'Generating...' : 'Generate Avatar'"></span>
+            </button>
+            <p class="text-xs text-dark-text-secondary mt-2">
+                Unlimited retries - generate as many as you like!
+            </p>
+        </div>
+
+        <!-- Divider -->
+        <div class="flex items-center gap-4">
+            <div class="flex-1 border-t border-white/10"></div>
+            <span class="text-sm text-dark-text-secondary">or</span>
+            <div class="flex-1 border-t border-white/10"></div>
+        </div>
+
+        <!-- Upload Own Image -->
+        <div class="text-center">
+            <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                @change="uploadAvatar($event)"
+                x-ref="avatarFileInput"
+                class="hidden"
+            />
+            <button
+                @click="$refs.avatarFileInput.click()"
+                :disabled="uploadingAvatar"
+                class="btn-wizard-secondary inline-flex items-center gap-2">
+                <svg x-show="uploadingAvatar" class="w-5 h-5 spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                <svg x-show="!uploadingAvatar" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                </svg>
+                <span x-text="uploadingAvatar ? 'Uploading...' : 'Upload Your Own Image'"></span>
+            </button>
+            <p class="text-xs text-dark-text-secondary mt-2">
+                PNG, JPG, WEBP, GIF, or SVG. Max 5 MB.
+            </p>
+        </div>
+
+        <!-- Avatar History Grid -->
+        <div x-show="avatarHistory.length > 0" class="space-y-4">
+            <p class="text-sm text-dark-text-secondary text-center">Select your favorite:</p>
+            <div class="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                <template x-for="(avatar, index) in avatarHistory" :key="avatar.id">
+                    <div
+                        @click="selectAvatar(avatar)"
+                        :class="{ 'selected': stepData.avatar_url === avatar.image_url }"
+                        class="avatar-card relative">
+                        <img :src="avatar.image_url" class="w-full h-full object-cover" :alt="avatar.prompt" />
+                        <span class="absolute top-1 left-1 bg-black/70 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" x-text="index + 1"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Selected Avatar Preview -->
+        <div x-show="stepData.avatar_url" class="text-center space-y-4">
+            <p class="text-sm text-dark-text-secondary">Selected Avatar</p>
+            <img
+                :src="stepData.avatar_url"
+                class="w-32 h-32 rounded-2xl mx-auto object-cover border-2 border-brand-teal"
+                alt="Selected avatar"
+            />
+        </div>
+
+        <!-- Skip Option -->
+        <p class="text-center text-sm text-dark-text-secondary">
+            You can skip this step and add an avatar later
+        </p>
+    </div>
+</div>
+
+<script>
+    // Extend wizardController with avatar methods
+    document.addEventListener('alpine:init', () => {
+        const originalController = window.wizardControllerConfig || {};
+
+        Object.assign(originalController, {
+            async generateAvatar() {
+                if (this.generatingAvatar || !this.sessionId) return;
+
+                this.generatingAvatar = true;
+
+                try {
+                    const token = localStorage.getItem('admin_token');
+                    const response = await fetch(`/api/v1/wizard/sessions/${this.sessionId}/generate-avatar`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            prompt: this.avatarPrompt || null
+                        })
+                    });
+
+                    if (response.ok) {
+                        const avatar = await response.json();
+                        this.avatarHistory.unshift(avatar);
+                        this.stepData.avatar_url = avatar.image_url;
+                    }
+                } catch (e) {
+                    console.error('Failed to generate avatar:', e);
+                } finally {
+                    this.generatingAvatar = false;
+                }
+            },
+
+            async selectAvatar(avatar) {
+                this.stepData.avatar_url = avatar.image_url;
+
+                try {
+                    const token = localStorage.getItem('admin_token');
+                    await fetch(`/api/v1/wizard/sessions/${this.sessionId}/avatars/${avatar.id}/select`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                } catch (e) {
+                    console.error('Failed to select avatar:', e);
+                }
+            },
+
+            async uploadAvatar(event) {
+                const file = event?.target?.files?.[0];
+                if (!file || this.uploadingAvatar || !this.sessionId) return;
+
+                this.uploadingAvatar = true;
+
+                try {
+                    const token = localStorage.getItem('admin_token');
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    const response = await fetch(`/api/v1/wizard/sessions/${this.sessionId}/upload-avatar`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: formData
+                    });
+
+                    if (response.ok) {
+                        const avatar = await response.json();
+                        this.avatarHistory.unshift(avatar);
+                        this.stepData.avatar_url = avatar.image_url;
+                    } else {
+                        const err = await response.json().catch(() => ({}));
+                        alert(err.detail || 'Failed to upload image. Please try again.');
+                    }
+                } catch (e) {
+                    console.error('Failed to upload avatar:', e);
+                    alert('Failed to upload image. Please try again.');
+                } finally {
+                    this.uploadingAvatar = false;
+                    // Reset file input so the same file can be re-selected
+                    if (this.$refs.avatarFileInput) this.$refs.avatarFileInput.value = '';
+                }
+            }
+        });
+
+        window.wizardControllerConfig = originalController;
+    });
+</script>

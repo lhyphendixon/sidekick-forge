@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Your Sidekick - Sidekick Forge</title>
+
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <!-- Futura PT Font from Adobe Fonts -->
+    <link rel="stylesheet" href="https://use.typekit.net/oqv5jkr.css">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        'futura': ['"futura-pt"', 'sans-serif'],
+                    },
+                    colors: {
+                        'brand-teal': '#01a4a6',
+                        'brand-orange': '#fc7244',
+                        'brand-salmon': '#f56453',
+                        'dark-bg': '#000000',
+                        'dark-surface': 'rgb(20, 20, 20)',
+                        'dark-elevated': '#252525',
+                        'dark-border': '#2a2a2a',
+                        'dark-text': '#e0e0e0',
+                        'dark-text-secondary': '#a0a0a0'
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background: #000000;
+            color: #e0e0e0;
+            font-family: "futura-pt", sans-serif;
+        }
+
+        /* Glassmorphic container */
+        .glass-container {
+            background: rgba(20, 20, 20, 0.55);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        /* Typeform-style input */
+        .wizard-input {
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+            font-size: 1.5rem;
+            padding: 0.75rem 0;
+            width: 100%;
+            color: #e0e0e0;
+            transition: border-color 0.3s ease;
+        }
+        .wizard-input:focus {
+            outline: none;
+            border-bottom-color: #01a4a6;
+        }
+        .wizard-input::placeholder {
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        /* Textarea styling */
+        .wizard-textarea {
+            background: rgba(32, 32, 32, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1rem;
+            width: 100%;
+            color: #e0e0e0;
+            resize: none;
+            transition: border-color 0.3s ease;
+        }
+        .wizard-textarea:focus {
+            outline: none;
+            border-color: #01a4a6;
+        }
+
+        /* Button styles */
+        .btn-wizard-primary {
+            background: linear-gradient(135deg, #01a4a6 0%, #018789 100%);
+            color: white;
+            padding: 0.875rem 2rem;
+            border-radius: 12px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            border: none;
+        }
+        .btn-wizard-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(1, 164, 166, 0.3);
+        }
+        .btn-wizard-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-wizard-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: #e0e0e0;
+            padding: 0.875rem 2rem;
+            border-radius: 12px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .btn-wizard-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        /* Progress bar */
+        .progress-bar {
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #01a4a6, #fc7244);
+            transition: width 0.5s ease;
+        }
+
+        /* Step transitions */
+        .step-container {
+            animation: fadeSlideIn 0.5s ease forwards;
+        }
+        @keyframes fadeSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Voice input button */
+        .voice-btn {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            transition: all 0.3s ease;
+        }
+        .voice-btn:hover {
+            background: rgba(1, 164, 166, 0.2);
+            border-color: #01a4a6;
+        }
+        .voice-btn.listening {
+            background: rgba(1, 164, 166, 0.3);
+            border-color: #01a4a6;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        /* Voice card */
+        .voice-card {
+            background: rgba(32, 32, 32, 0.5);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .voice-card:hover {
+            border-color: rgba(1, 164, 166, 0.5);
+        }
+        .voice-card.selected {
+            border-color: #01a4a6;
+            background: rgba(1, 164, 166, 0.1);
+        }
+
+        /* Avatar grid */
+        .avatar-card {
+            aspect-ratio: 1;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 3px solid transparent;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .avatar-card:hover {
+            border-color: rgba(1, 164, 166, 0.5);
+        }
+        .avatar-card.selected {
+            border-color: #01a4a6;
+            box-shadow: 0 0 20px rgba(1, 164, 166, 0.3);
+        }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .status-pending {
+            background: rgba(252, 114, 68, 0.2);
+            color: #fc7244;
+        }
+        .status-processing {
+            background: rgba(1, 164, 166, 0.2);
+            color: #01a4a6;
+        }
+        .status-ready {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        .status-error {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        /* File drop zone */
+        .drop-zone {
+            border: 2px dashed rgba(255, 255, 255, 0.2);
+            border-radius: 16px;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: #01a4a6;
+            background: rgba(1, 164, 166, 0.1);
+        }
+
+        /* Slider styling */
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.2);
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #01a4a6;
+            cursor: pointer;
+        }
+
+        /* Spinner animation */
+        .spinner {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col"
+      x-data="wizardController()"
+      x-init="init()">
+
+    <!-- Progress Bar -->
+    <div class="fixed top-0 left-0 right-0 z-50">
+        <div class="progress-bar">
+            <div class="progress-bar-fill" :style="`width: ${(currentStep / totalSteps) * 100}%`"></div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="fixed top-4 left-0 right-0 z-40 px-6">
+        <div class="max-w-4xl mx-auto flex items-center justify-between">
+            <!-- Logo -->
+            <a href="/admin/" class="flex items-center gap-3 text-white/80 hover:text-white transition">
+                <img src="/static/images/Logos/SF-Symbol-Medium-Gem.png" alt="Sidekick Forge" class="w-8 h-8">
+                <span class="text-sm font-light tracking-wider uppercase hidden sm:inline">Sidekick Forge</span>
+            </a>
+
+            <!-- Step Indicator -->
+            <div class="flex items-center gap-2 text-sm text-white/60">
+                <span x-text="`Step ${currentStep} of ${totalSteps}`"></span>
+            </div>
+
+            <!-- Exit -->
+            <a href="/admin/agents" class="text-white/60 hover:text-white transition text-sm">
+                Save & Exit
+            </a>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex items-center justify-center px-6 py-24">
+        <div class="w-full max-w-2xl">
+            <!-- Step Container -->
+            <div class="step-container" :key="currentStep">
+                <!-- Step Content loaded dynamically -->
+                <div x-show="currentStep === 1" x-cloak>
+                    {% include "admin/wizard/partials/step_name.html" %}
+                </div>
+                <div x-show="currentStep === 2" x-cloak>
+                    {% include "admin/wizard/partials/step_personality.html" %}
+                </div>
+                <div x-show="currentStep === 3" x-cloak>
+                    {% include "admin/wizard/partials/step_voice.html" %}
+                </div>
+                <div x-show="currentStep === 4" x-cloak>
+                    {% include "admin/wizard/partials/step_avatar.html" %}
+                </div>
+                <div x-show="currentStep === 5" x-cloak>
+                    {% include "admin/wizard/partials/step_abilities.html" %}
+                </div>
+                <div x-show="currentStep === 6" x-cloak>
+                    {% include "admin/wizard/partials/step_knowledge.html" %}
+                </div>
+                <div x-show="currentStep === 7" x-cloak>
+                    {% include "admin/wizard/partials/step_config.html" %}
+                </div>
+                <div x-show="currentStep === 8" x-cloak>
+                    {% include "admin/wizard/partials/step_api_keys.html" %}
+                </div>
+                <div x-show="currentStep === 9" x-cloak>
+                    {% include "admin/wizard/partials/step_launch.html" %}
+                </div>
+            </div>
+
+            <!-- Navigation -->
+            <div class="mt-12 flex justify-between items-center">
+                <button
+                    x-show="currentStep > 1"
+                    @click="prevStep()"
+                    class="btn-wizard-secondary flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                    </svg>
+                    Back
+                </button>
+                <div x-show="currentStep === 1"></div>
+
+                <button
+                    @click="nextStep()"
+                    :disabled="!canAdvance"
+                    class="btn-wizard-primary flex items-center gap-2 ml-auto">
+                    <span x-text="currentStep === totalSteps ? 'Create Sidekick' : 'Continue'"></span>
+                    <svg x-show="currentStep !== totalSteps" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Voice Input Button (Fixed) -->
+    <button
+        x-show="voiceInputSupported"
+        @click="toggleVoiceInput()"
+        :class="{ 'listening': isListening }"
+        class="voice-btn fixed bottom-8 right-8 flex items-center justify-center z-50"
+        title="Voice Input">
+        <svg x-show="!isListening" class="w-6 h-6 text-white/80" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
+        </svg>
+        <svg x-show="isListening" class="w-6 h-6 text-brand-teal" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
+        </svg>
+    </button>
+
+    <!-- Voice Transcript Overlay -->
+    <div
+        x-show="voiceTranscript"
+        x-transition
+        class="fixed bottom-24 right-8 max-w-sm p-4 glass-container rounded-xl text-brand-teal text-sm z-50">
+        <span x-text="voiceTranscript"></span>
+    </div>
+
+    <!-- Audio Player for Prompts -->
+    <audio x-ref="promptAudio" @ended="audioPlaying = false"></audio>
+    <!-- Audio Player for Voice Samples -->
+    <audio x-ref="voiceSampleAudio" @ended="playingVoiceId = null"></audio>
+
+    <script>
+        // Wizard Controller
+        function wizardController() {
+            return {
+                // State
+                sessionId: null,
+                currentStep: 1,
+                totalSteps: 9,
+                stepData: {
+                    name: '',
+                    slug: '',
+                    personality_description: '',
+                    personality_traits: {
+                        openness: 50,
+                        conscientiousness: 50,
+                        extraversion: 50,
+                        agreeableness: 50,
+                        neuroticism: 50
+                    },
+                    voice_id: '',
+                    voice_provider: 'cartesia',
+                    avatar_url: '',
+                    // Abilities selection with defaults
+                    abilities: {
+                        web_search: true,       // Pre-selected
+                        usersense: true,        // Pre-selected
+                        documentsense: false,
+                        content_catalyst: false
+                    },
+                    config_mode: 'default',
+                    advanced_config: {},
+                    api_keys: {}
+                },
+
+                // Abilities
+                availableAbilities: [],
+
+                // Voice input
+                voiceInputSupported: false,
+                isListening: false,
+                voiceTranscript: '',
+                recognition: null,
+
+                // Audio
+                audioPlaying: false,
+
+                // Voices
+                availableVoices: [],
+                playingVoiceId: null,
+                voiceSampleLoading: false,
+
+                // Avatars
+                avatarHistory: [],
+                generatingAvatar: false,
+                uploadingAvatar: false,
+                avatarPrompt: '',
+
+                // Knowledge
+                pendingDocuments: [],
+                knowledgePolling: null,
+
+                // Completion
+                launching: false,
+
+                // Client Settings (BYOK)
+                clientSettings: {
+                    bring_your_own_keys: true,
+                    uses_platform_keys: false,
+                    tier: 'champion',
+                    can_bring_own_keys: true
+                },
+
+                // Computed
+                get canAdvance() {
+                    switch (this.currentStep) {
+                        case 1: return this.stepData.name.trim().length > 0;
+                        case 2: return this.stepData.personality_description.trim().length > 0;
+                        case 3: return this.stepData.voice_id !== '';
+                        case 4: return true; // Avatar is optional
+                        case 5: return true; // Abilities - optional, has defaults
+                        case 6: return true; // Knowledge is optional
+                        case 7: return true; // Config has defaults
+                        case 8: return true; // API keys can be skipped
+                        case 9: return true; // Launch
+                        default: return true;
+                    }
+                },
+
+                // Methods
+                async init() {
+                    // Check voice input support
+                    this.voiceInputSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+                    if (this.voiceInputSupported) {
+                        this.initVoiceInput();
+                    }
+
+                    // Create or resume session
+                    await this.initSession();
+
+                    // Load voices, abilities, and client settings in parallel
+                    await Promise.all([
+                        this.loadVoices(),
+                        this.loadAvailableAbilities(),
+                        this.loadClientSettings()
+                    ]);
+                },
+
+                async initSession() {
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch('/api/v1/wizard/sessions', {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            }
+                        });
+
+                        if (response.ok) {
+                            const session = await response.json();
+                            this.sessionId = session.id;
+                            this.currentStep = session.current_step;
+                            if (session.step_data) {
+                                Object.assign(this.stepData, session.step_data);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to init session:', e);
+                    }
+                },
+
+                async loadVoices() {
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch('/api/v1/wizard/voices', {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.availableVoices = data.voices;
+                        }
+                    } catch (e) {
+                        console.error('Failed to load voices:', e);
+                    }
+                },
+
+                async loadAvailableAbilities() {
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch('/api/v1/wizard/abilities', {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.availableAbilities = data.abilities;
+                        }
+                    } catch (e) {
+                        console.error('Failed to load abilities:', e);
+                    }
+                },
+
+                toggleAbility(slug) {
+                    this.stepData.abilities[slug] = !this.stepData.abilities[slug];
+                },
+
+                async loadClientSettings() {
+                    if (!this.sessionId) return;
+
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch(`/api/v1/wizard/sessions/${this.sessionId}/client-settings`, {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.clientSettings = data;
+                            console.log('Client settings loaded:', data);
+                        }
+                    } catch (e) {
+                        console.error('Failed to load client settings:', e);
+                    }
+                },
+
+                initVoiceInput() {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    this.recognition = new SpeechRecognition();
+                    this.recognition.continuous = false;
+                    this.recognition.interimResults = true;
+                    this.recognition.lang = 'en-US';
+
+                    this.recognition.onresult = (event) => {
+                        let transcript = '';
+                        for (let i = event.resultIndex; i < event.results.length; i++) {
+                            transcript += event.results[i][0].transcript;
+                        }
+                        this.voiceTranscript = transcript;
+
+                        if (event.results[event.results.length - 1].isFinal) {
+                            this.handleVoiceInput(transcript);
+                        }
+                    };
+
+                    this.recognition.onend = () => {
+                        this.isListening = false;
+                    };
+                },
+
+                toggleVoiceInput() {
+                    if (this.isListening) {
+                        this.recognition.stop();
+                    } else {
+                        this.voiceTranscript = '';
+                        this.recognition.start();
+                        this.isListening = true;
+                    }
+                },
+
+                handleVoiceInput(transcript) {
+                    // Route to current step's input
+                    switch (this.currentStep) {
+                        case 1:
+                            this.stepData.name = transcript;
+                            this.generateSlug();
+                            break;
+                        case 2:
+                            this.stepData.personality_description = transcript;
+                            break;
+                    }
+
+                    // Clear transcript after a delay
+                    setTimeout(() => {
+                        this.voiceTranscript = '';
+                    }, 2000);
+                },
+
+                generateSlug() {
+                    let slug = this.stepData.name.toLowerCase();
+                    slug = slug.replace(/[^a-z0-9\s-]/g, '');
+                    slug = slug.replace(/[\s_]+/g, '-');
+                    slug = slug.replace(/-+/g, '-');
+                    slug = slug.replace(/^-|-$/g, '');
+                    this.stepData.slug = slug || 'sidekick';
+                },
+
+                async randomizeName() {
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch('/api/v1/wizard/randomize/name', {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.stepData.name = data.name;
+                            this.stepData.slug = data.slug;
+                        }
+                    } catch (e) {
+                        console.error('Failed to randomize name:', e);
+                    }
+                },
+
+                async randomizePersonality() {
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch('/api/v1/wizard/randomize/personality', {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.stepData.personality_description = data.description;
+                            this.stepData.personality_traits = data.traits;
+                        }
+                    } catch (e) {
+                        console.error('Failed to randomize personality:', e);
+                    }
+                },
+
+                selectVoice(voice) {
+                    this.stepData.voice_id = voice.id;
+                    this.stepData.voice_provider = voice.provider;
+                },
+
+                async playVoiceSample(voiceId) {
+                    const audioEl = this.$refs.voiceSampleAudio;
+                    if (!audioEl) {
+                        console.error('Voice sample audio element not found');
+                        return;
+                    }
+
+                    // If same voice is playing, pause it
+                    if (this.playingVoiceId === voiceId) {
+                        audioEl.pause();
+                        this.playingVoiceId = null;
+                        return;
+                    }
+
+                    // Stop any currently playing sample
+                    if (this.playingVoiceId) {
+                        audioEl.pause();
+                    }
+
+                    // Find voice to get sample URL
+                    const voice = this.availableVoices.find(v => v.id === voiceId);
+                    if (!voice || !voice.sample_url) {
+                        console.error('Voice or sample URL not found for:', voiceId);
+                        return;
+                    }
+
+                    // Set loading state
+                    this.playingVoiceId = voiceId;
+                    this.voiceSampleLoading = true;
+
+                    try {
+                        // Fetch with auth token
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch(voice.sample_url, {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(`Failed to load sample: ${response.status}`);
+                        }
+
+                        // Create blob URL from audio data
+                        const audioBlob = await response.blob();
+                        const audioUrl = URL.createObjectURL(audioBlob);
+
+                        // Set source and play
+                        audioEl.src = audioUrl;
+                        audioEl.onended = () => {
+                            this.playingVoiceId = null;
+                            URL.revokeObjectURL(audioUrl);
+                        };
+                        audioEl.onerror = (e) => {
+                            console.error('Audio playback error:', e);
+                            this.playingVoiceId = null;
+                            URL.revokeObjectURL(audioUrl);
+                        };
+
+                        await audioEl.play();
+                    } catch (error) {
+                        console.error('Error playing voice sample:', error);
+                        this.playingVoiceId = null;
+                    } finally {
+                        this.voiceSampleLoading = false;
+                    }
+                },
+
+                async saveStep() {
+                    if (!this.sessionId) return;
+
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        await fetch(`/api/v1/wizard/sessions/${this.sessionId}/step/${this.currentStep}`, {
+                            method: 'PUT',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                step_data: this.stepData,
+                                advance: false
+                            })
+                        });
+                    } catch (e) {
+                        console.error('Failed to save step:', e);
+                    }
+                },
+
+                async nextStep() {
+                    if (!this.canAdvance) return;
+
+                    if (this.currentStep === this.totalSteps) {
+                        await this.completeWizard();
+                        return;
+                    }
+
+                    // Save current step and advance
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch(`/api/v1/wizard/sessions/${this.sessionId}/step/${this.currentStep}`, {
+                            method: 'PUT',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                step_data: this.stepData,
+                                advance: true
+                            })
+                        });
+
+                        if (response.ok) {
+                            const result = await response.json();
+                            this.currentStep = result.current_step;
+                        }
+                    } catch (e) {
+                        console.error('Failed to advance step:', e);
+                    }
+                },
+
+                prevStep() {
+                    if (this.currentStep > 1) {
+                        this.currentStep--;
+                    }
+                },
+
+                async completeWizard() {
+                    this.launching = true;
+
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch(`/api/v1/wizard/sessions/${this.sessionId}/complete`, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            }
+                        });
+
+                        if (response.ok) {
+                            const result = await response.json();
+                            // Redirect to the new agent detail page
+                            window.location.href = `/admin/agents/${result.client_id}/${result.agent_slug}`;
+                        } else {
+                            alert('Failed to create sidekick. Please try again.');
+                        }
+                    } catch (e) {
+                        console.error('Failed to complete wizard:', e);
+                        alert('Failed to create sidekick. Please try again.');
+                    } finally {
+                        this.launching = false;
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>

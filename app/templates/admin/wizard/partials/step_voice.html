@@ -1,0 +1,66 @@
+<!-- Step 3: Voice Selection -->
+<div class="space-y-8">
+    <div class="text-center space-y-3">
+        <h1 class="text-4xl md:text-5xl font-light text-white">
+            Choose <span class="text-brand-teal" x-text="stepData.name || 'your sidekick'"></span>'s voice
+        </h1>
+        <p class="text-dark-text-secondary text-lg">
+            Click a voice to hear a sample
+        </p>
+    </div>
+
+    <!-- Voice Grid -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
+        <template x-for="voice in availableVoices" :key="voice.id">
+            <div
+                @click="selectVoice(voice)"
+                :class="{ 'selected': stepData.voice_id === voice.id }"
+                class="voice-card flex items-center gap-4">
+
+                <!-- Play Button -->
+                <button
+                    @click.stop="playVoiceSample(voice.id)"
+                    :disabled="voiceSampleLoading && playingVoiceId === voice.id"
+                    class="w-12 h-12 rounded-full bg-brand-teal/20 flex items-center justify-center flex-shrink-0 hover:bg-brand-teal/30 transition disabled:opacity-50">
+                    <!-- Loading spinner -->
+                    <svg x-show="voiceSampleLoading && playingVoiceId === voice.id" class="w-5 h-5 text-brand-teal animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <!-- Play icon -->
+                    <svg x-show="playingVoiceId !== voice.id && !(voiceSampleLoading && playingVoiceId === voice.id)" class="w-5 h-5 text-brand-teal" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z"/>
+                    </svg>
+                    <!-- Pause icon (playing but not loading) -->
+                    <svg x-show="playingVoiceId === voice.id && !voiceSampleLoading" class="w-5 h-5 text-brand-teal" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/>
+                    </svg>
+                </button>
+
+                <!-- Voice Info -->
+                <div class="flex-1 min-w-0">
+                    <p class="font-medium text-white truncate" x-text="voice.name"></p>
+                    <p class="text-sm text-dark-text-secondary truncate" x-text="voice.description"></p>
+                </div>
+
+                <!-- Selected Indicator -->
+                <div x-show="stepData.voice_id === voice.id" class="w-6 h-6 rounded-full bg-brand-teal flex items-center justify-center">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+                    </svg>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Tags Legend -->
+    <div class="flex flex-wrap justify-center gap-2 text-xs">
+        <template x-for="voice in availableVoices" :key="voice.id">
+            <template x-if="stepData.voice_id === voice.id">
+                <template x-for="tag in voice.tags" :key="tag">
+                    <span class="px-2 py-1 rounded-full bg-dark-elevated text-dark-text-secondary" x-text="tag"></span>
+                </template>
+            </template>
+        </template>
+    </div>
+</div>

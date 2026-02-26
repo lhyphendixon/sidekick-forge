@@ -6,17 +6,24 @@
 <div class="container mx-auto px-4">
   <div class="flex items-center justify-between mb-6">
     <h1 class="text-3xl font-bold text-dark-text">Abilities</h1>
-    <button class="btn-primary px-4 py-2 rounded" onclick="openCreateToolModal()">Add Ability</button>
+    <div class="flex items-center gap-3">
+      <span class="text-xs text-dark-text-secondary italic">Custom Abilities Coming Soon</span>
+      <button class="px-4 py-2 rounded bg-dark-border text-dark-text-secondary cursor-not-allowed opacity-60" disabled>Add Ability</button>
+    </div>
   </div>
 
   <div class="mb-4 flex gap-2 items-center flex-wrap">
+    {% if user.is_super_admin %}
     <select id="clientFilter" data-default="{{ default_client_id or '' }}" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="onClientFilterChange()">
       <option value="">All clients</option>
       {% for client in clients or [] %}
       <option value="{{ client.id }}">{{ client.name }}</option>
       {% endfor %}
     </select>
-    <input id="searchInput" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" placeholder="Search abilities..." oninput="refreshTools()" />
+    {% else %}
+    <input type="hidden" id="clientFilter" value="{{ default_client_id or '' }}" data-default="{{ default_client_id or '' }}" />
+    {% endif %}
+    <input id="searchInput" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" placeholder="Search abilities..." oninput="debouncedRefreshTools()" />
     <select id="typeFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
       <option value="">All types</option>
       <option value="mcp">MCP</option>
@@ -24,15 +31,44 @@
       <option value="sidekick">Sidekick</option>
       <option value="code">Code</option>
       <option value="asana">Asana</option>
+      <option value="helpscout">HelpScout</option>
+      <option value="content_catalyst">Content Catalyst</option>
+      <option value="print_ready">PrintReady</option>
+      <option value="builtin">Built-in</option>
     </select>
     <select id="scopeFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
       <option value="">All scopes</option>
       <option value="global">Global</option>
       <option value="client">Client</option>
     </select>
+    <select id="phaseFilter" class="px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="refreshTools()">
+      <option value="">All phases</option>
+      <option value="active">Active</option>
+      <option value="ambient">Ambient</option>
+    </select>
   </div>
 
-  <div id="toolsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+  <!-- Active Abilities Section -->
+  <div class="mb-8">
+    <div class="flex items-center gap-2 mb-4">
+      <h2 class="text-xl font-semibold text-dark-text">Active Abilities</h2>
+      <span class="text-xs px-2 py-1 rounded bg-brand-teal/20 text-brand-teal">During Conversation</span>
+    </div>
+    <p class="text-sm text-dark-text-secondary mb-4">Tools that sidekicks can invoke during active conversations with users.</p>
+    <div id="activeToolsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+    <div id="activeToolsEmpty" class="hidden text-sm text-dark-text-secondary py-4">No active abilities found for the current filters.</div>
+  </div>
+
+  <!-- Ambient Abilities Section -->
+  <div class="mb-8">
+    <div class="flex items-center gap-2 mb-4">
+      <h2 class="text-xl font-semibold text-dark-text">Ambient Abilities</h2>
+      <span class="text-xs px-2 py-1 rounded bg-brand-salmon/20 text-brand-salmon">Background Processing</span>
+    </div>
+    <p class="text-sm text-dark-text-secondary mb-4">Background processes triggered after sessions end, on schedules, or by events. These run without user interaction.</p>
+    <div id="ambientToolsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+    <div id="ambientToolsEmpty" class="hidden text-sm text-dark-text-secondary py-4">No ambient abilities found for the current filters.</div>
+  </div>
 </div>
 
 <div id="createToolModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50">
@@ -65,6 +101,9 @@
             <option value="sidekick">Sidekick</option>
             <option value="code">Code</option>
             <option value="asana">Asana</option>
+            <option value="helpscout">HelpScout</option>
+            <option value="content_catalyst">Content Catalyst</option>
+            <option value="print_ready">PrintReady</option>
           </select>
         </div>
         <div>
@@ -74,6 +113,15 @@
             <option value="global">Global</option>
           </select>
         </div>
+        <div>
+          <label class="text-sm text-dark-text">Execution Phase</label>
+          <select id="ct_execution_phase" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="toggleTriggerConfig('ct')">
+            <option value="active">Active (During Conversation)</option>
+            <option value="ambient">Ambient (Background)</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-3 mt-3">
         <div>
           <label class="text-sm text-dark-text">Icon URL</label>
           <input id="ct_icon" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
@@ -88,15 +136,46 @@
           </select>
         </div>
       </div>
+      <!-- Trigger Configuration (for Ambient abilities) -->
+      <div id="ct_trigger_config" class="hidden mt-3 p-3 bg-dark-elevated rounded border border-dark-border">
+        <label class="text-sm font-medium text-dark-text mb-2 block">Ambient Trigger Configuration</label>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-dark-text-secondary">Trigger Type</label>
+            <select id="ct_trigger_type" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text">
+              <option value="post_session">Post-Session</option>
+              <option value="scheduled">Scheduled (Cron)</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Min Messages (for post-session)</label>
+            <input type="number" id="ct_trigger_min_messages" value="3" min="1" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Delay (seconds)</label>
+            <input type="number" id="ct_trigger_delay" value="30" min="0" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Agent Slugs (comma-separated, optional)</label>
+            <input id="ct_trigger_agents" placeholder="agent-1, agent-2" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+        </div>
+        <p class="text-xs text-dark-text-secondary mt-2">Post-session triggers run after conversations end. Scheduled triggers run on a cron schedule.</p>
+      </div>
       <div id="ct_typeFields" class="space-y-2">
         <!-- Dynamic config inputs per type -->
       </div>
       <div id="ct_perplexity_client_panel" class="hidden text-sm text-dark-text-secondary">
         Client-specific Perplexity API keys can be managed from the Clients page after assigning this ability.
       </div>
-      <div class="flex justify-end gap-2">
-        <button class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="closeCreateToolModal()">Cancel</button>
-        <button class="btn-primary px-4 py-2 rounded" onclick="createTool()">Create</button>
+      <div class="flex items-center justify-between">
+        <label class="flex items-center gap-2 text-sm text-dark-text">
+          <input type="checkbox" id="ct_admin_only" class="w-4 h-4" /> Admin Only
+        </label>
+        <div class="flex gap-2">
+          <button class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="closeCreateToolModal()">Cancel</button>
+          <button class="btn-primary px-4 py-2 rounded" onclick="createTool()">Create</button>
+        </div>
       </div>
     </div>
   </div>
@@ -132,6 +211,10 @@
             <option value="sidekick">Sidekick</option>
             <option value="code">Code</option>
             <option value="asana">Asana</option>
+            <option value="helpscout">HelpScout</option>
+            <option value="content_catalyst">Content Catalyst</option>
+            <option value="print_ready">PrintReady</option>
+            <option value="builtin">Built-in</option>
           </select>
         </div>
         <div>
@@ -141,6 +224,15 @@
             <option value="global">Global</option>
           </select>
         </div>
+        <div>
+          <label class="text-sm text-dark-text">Execution Phase</label>
+          <select id="et_execution_phase" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" onchange="toggleTriggerConfig('et')">
+            <option value="active">Active (During Conversation)</option>
+            <option value="ambient">Ambient (Background)</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-3 mt-3">
         <div>
           <label class="text-sm text-dark-text">Icon URL</label>
           <input id="et_icon" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" />
@@ -154,6 +246,32 @@
           <option value="{{ client.id }}">{{ client.name }}</option>
           {% endfor %}
         </select>
+      </div>
+      <!-- Trigger Configuration (for Ambient abilities) -->
+      <div id="et_trigger_config" class="hidden mt-3 p-3 bg-dark-elevated rounded border border-dark-border">
+        <label class="text-sm font-medium text-dark-text mb-2 block">Ambient Trigger Configuration</label>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-dark-text-secondary">Trigger Type</label>
+            <select id="et_trigger_type" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text">
+              <option value="post_session">Post-Session</option>
+              <option value="scheduled">Scheduled (Cron)</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Min Messages (for post-session)</label>
+            <input type="number" id="et_trigger_min_messages" value="3" min="1" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Delay (seconds)</label>
+            <input type="number" id="et_trigger_delay" value="30" min="0" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+          <div>
+            <label class="text-xs text-dark-text-secondary">Agent Slugs (comma-separated, optional)</label>
+            <input id="et_trigger_agents" placeholder="agent-1, agent-2" class="w-full px-3 py-2 bg-dark-surface border border-dark-border rounded text-dark-text" />
+          </div>
+        </div>
+        <p class="text-xs text-dark-text-secondary mt-2">Post-session triggers run after conversations end. Scheduled triggers run on a cron schedule.</p>
       </div>
       <div id="et_typeFields" class="space-y-2"></div>
       <div id="et_perplexity_client_panel" class="hidden space-y-2">
@@ -176,9 +294,14 @@
         <div id="et_perplexity_client_notice" class="text-xs text-brand-salmon hidden">Select a client using the page filter or the dropdown above to manage this Perplexity API key.</div>
       </div>
       <div class="flex items-center justify-between">
-        <label class="flex items-center gap-2 text-sm text-dark-text">
-          <input type="checkbox" id="et_enabled" class="w-4 h-4" /> Enabled
-        </label>
+        <div class="flex items-center gap-4">
+          <label class="flex items-center gap-2 text-sm text-dark-text">
+            <input type="checkbox" id="et_enabled" class="w-4 h-4" /> Enabled
+          </label>
+          <label class="flex items-center gap-2 text-sm text-dark-text">
+            <input type="checkbox" id="et_admin_only" class="w-4 h-4" /> Admin Only
+          </label>
+        </div>
         <div class="flex gap-2">
           <button class="px-4 py-2 rounded border border-dark-border text-dark-text-secondary" onclick="closeEditToolModal()">Cancel</button>
           <button class="btn-primary px-4 py-2 rounded" onclick="updateTool()">Save Changes</button>
@@ -214,11 +337,61 @@ function openCreateToolModal(){
   document.getElementById('ct_icon').value = '';
   document.getElementById('ct_type').value = 'mcp';
   document.getElementById('ct_scope').value = 'client';
+  document.getElementById('ct_execution_phase').value = 'active';
   handleScopeChange('ct');
   renderTypeFields('ct', 'mcp');
   togglePerplexityClientPanel('ct', false);
+  toggleTriggerConfig('ct');
   document.getElementById('createToolModal').classList.remove('hidden');
   document.getElementById('createToolModal').classList.add('flex');
+}
+
+function toggleTriggerConfig(prefix){
+  const phaseSelect = document.getElementById(`${prefix}_execution_phase`);
+  const triggerConfigDiv = document.getElementById(`${prefix}_trigger_config`);
+  if(!phaseSelect || !triggerConfigDiv) return;
+  if(phaseSelect.value === 'ambient'){
+    triggerConfigDiv.classList.remove('hidden');
+  } else {
+    triggerConfigDiv.classList.add('hidden');
+  }
+}
+
+function getTriggerConfig(prefix){
+  const phaseSelect = document.getElementById(`${prefix}_execution_phase`);
+  if(!phaseSelect || phaseSelect.value !== 'ambient') return null;
+
+  const triggerType = document.getElementById(`${prefix}_trigger_type`)?.value || 'post_session';
+  const minMessages = parseInt(document.getElementById(`${prefix}_trigger_min_messages`)?.value || '3', 10);
+  const delay = parseInt(document.getElementById(`${prefix}_trigger_delay`)?.value || '30', 10);
+  const agentsRaw = document.getElementById(`${prefix}_trigger_agents`)?.value || '';
+  const agents = agentsRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+  const config = {
+    trigger: triggerType,
+    min_messages: minMessages,
+    delay_seconds: delay
+  };
+  if(agents.length > 0) config.agents = agents;
+  return config;
+}
+
+function setTriggerConfig(prefix, triggerConfig){
+  if(!triggerConfig) {
+    toggleTriggerConfig(prefix);
+    return;
+  }
+  const typeEl = document.getElementById(`${prefix}_trigger_type`);
+  const minMessagesEl = document.getElementById(`${prefix}_trigger_min_messages`);
+  const delayEl = document.getElementById(`${prefix}_trigger_delay`);
+  const agentsEl = document.getElementById(`${prefix}_trigger_agents`);
+
+  if(typeEl) typeEl.value = triggerConfig.trigger || 'post_session';
+  if(minMessagesEl) minMessagesEl.value = triggerConfig.min_messages || 3;
+  if(delayEl) delayEl.value = triggerConfig.delay_seconds || 30;
+  if(agentsEl) agentsEl.value = (triggerConfig.agents || []).join(', ');
+
+  toggleTriggerConfig(prefix);
 }
 
 function closeCreateToolModal(){
@@ -232,10 +405,35 @@ function closeEditToolModal(){
   editingToolId = null;
 }
 
-function renderTypeFields(prefix, toolType, existingConfig = {}){
+function renderTypeFields(prefix, toolType, existingConfig = {}, toolName = ''){
   const wrap = document.getElementById(`${prefix}_typeFields`);
   if(!wrap) return;
   const safeConfig = existingConfig || {};
+
+  // Check if this is Content Catalyst by type OR by name (for builtin abilities)
+  const isContentCatalyst = toolType === 'content_catalyst' ||
+    (toolName && toolName.toLowerCase().includes('content catalyst'));
+
+  // Handle Content Catalyst first (before other type checks)
+  if(isContentCatalyst){
+    const stylePrompt = escapeHtml(safeConfig.default_style_prompt || '');
+    const exampleWriting = escapeHtml(safeConfig.example_writing || '');
+    wrap.innerHTML = `
+    <div class="space-y-4">
+      <div>
+        <label class="text-sm text-dark-text">Writing Instructions <span class="text-dark-text-secondary font-normal">(optional)</span></label>
+        <textarea id="${prefix}_cc_style_prompt" rows="4" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" placeholder="e.g., Write in a conversational tone. Use concrete examples. Avoid jargon.">${stylePrompt}</textarea>
+        <p class="text-xs text-dark-text-secondary mt-1">Describe the voice, tone, and style you want for generated articles.</p>
+      </div>
+      <div>
+        <label class="text-sm text-dark-text">Example Article <span class="text-dark-text-secondary font-normal">(optional)</span></label>
+        <textarea id="${prefix}_cc_example_writing" rows="10" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-sm" placeholder="Paste a sample article (2000-3000 words) that represents the writing style you want. The AI will match its voice and tone.">${exampleWriting}</textarea>
+        <p class="text-xs text-dark-text-secondary mt-1">The AI will analyze this sample and match its sentence structure, vocabulary, and overall voice.</p>
+      </div>
+    </div>`;
+    // Don't append hidden instructions for Content Catalyst - it has its own fields
+    return;
+  }
   if(toolType === 'n8n'){
     const headersJson = safeConfig.headers ? JSON.stringify(safeConfig.headers, null, 2) : '';
     const payloadJson = safeConfig.default_payload ? JSON.stringify(safeConfig.default_payload, null, 2) : '';
@@ -357,6 +555,44 @@ function renderTypeFields(prefix, toolType, existingConfig = {}){
     </div>`;
     appendHiddenInstructions(prefix, wrap, safeConfig);
     setTimeout(() => loadAsanaStatus(prefix), 0);
+    return;
+  }
+  if(toolType === 'helpscout'){
+    const defaultMailboxId = escapeHtml(safeConfig.default_mailbox_id || '');
+    const maxResults = Number.isFinite(Number(safeConfig.max_results)) ? Number(safeConfig.max_results) : 10;
+    const defaultAction = escapeHtml(safeConfig.default_action || 'list');
+    const mailboxesJsonRaw = safeConfig.mailboxes ? JSON.stringify(safeConfig.mailboxes, null, 2) : '';
+    const mailboxesJson = escapeHtml(mailboxesJsonRaw);
+
+    wrap.innerHTML = `
+    <div class="space-y-3">
+      <p class="text-sm text-dark-text-secondary">HelpScout OAuth connection is managed on the Sidekick Configuration page. Add this ability to a sidekick, then connect HelpScout from the ability card.</p>
+      <div>
+        <label class="text-sm text-dark-text">Mailboxes (JSON array)</label>
+        <textarea id="${prefix}_helpscout_mailboxes" rows="4" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder='[\n  {"id": 12345, "name": "Support"},\n  {"id": 67890, "name": "Sales"}\n]'>${mailboxesJson}</textarea>
+        <p class="text-xs text-dark-text-secondary mt-1">Provide mailbox IDs with optional names. The first entry becomes the default if not specified.</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div>
+          <label class="text-sm text-dark-text">Default Mailbox ID</label>
+          <input id="${prefix}_helpscout_default_mailbox" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${defaultMailboxId}" placeholder="12345" />
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Max Results</label>
+          <input id="${prefix}_helpscout_max_results" type="number" min="1" max="50" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text" value="${maxResults}" />
+        </div>
+        <div>
+          <label class="text-sm text-dark-text">Default Action</label>
+          <select id="${prefix}_helpscout_default_action" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text">
+            <option value="list" ${defaultAction === 'list' ? 'selected' : ''}>List conversations</option>
+            <option value="get" ${defaultAction === 'get' ? 'selected' : ''}>Get conversation</option>
+            <option value="create" ${defaultAction === 'create' ? 'selected' : ''}>Create conversation</option>
+            <option value="reply" ${defaultAction === 'reply' ? 'selected' : ''}>Reply to conversation</option>
+          </select>
+        </div>
+      </div>
+    </div>`;
+    appendHiddenInstructions(prefix, wrap, safeConfig);
     return;
   }
   if(toolType === 'code'){
@@ -684,7 +920,7 @@ function toggleTypeFields(){
   const select = document.getElementById('ct_type');
   if(select){
     const scopeSelect = document.getElementById('ct_scope');
-    if(scopeSelect && select.value === 'asana' && scopeSelect.value !== 'global'){
+    if(scopeSelect && (select.value === 'asana' || select.value === 'helpscout') && scopeSelect.value !== 'global'){
       scopeSelect.value = 'global';
       handleScopeChange('ct');
     }
@@ -695,7 +931,23 @@ function toggleTypeFields(){
   }
 }
 
-function buildConfigFromForm(prefix, type){
+function buildConfigFromForm(prefix, type, toolName = ''){
+  // Check if this is Content Catalyst by type OR by name (for builtin abilities)
+  const isContentCatalyst = type === 'content_catalyst' ||
+    (toolName && toolName.toLowerCase().includes('content catalyst'));
+
+  if(isContentCatalyst){
+    const stylePrompt = document.getElementById(`${prefix}_cc_style_prompt`);
+    const exampleWriting = document.getElementById(`${prefix}_cc_example_writing`);
+    const cfg = {};
+    if(stylePrompt && stylePrompt.value.trim()){
+      cfg.default_style_prompt = stylePrompt.value.trim();
+    }
+    if(exampleWriting && exampleWriting.value.trim()){
+      cfg.example_writing = exampleWriting.value.trim();
+    }
+    return cfg;
+  }
   if(type === 'n8n'){
     const webhookUrl = document.getElementById(`${prefix}_n8n_url`).value.trim();
     if(!webhookUrl){
@@ -793,6 +1045,34 @@ function buildConfigFromForm(prefix, type){
     cfg.oauth_provider = 'asana';
     return applyHiddenInstructions(prefix, cfg);
   }
+  if(type === 'helpscout'){
+    const mailboxesField = document.getElementById(`${prefix}_helpscout_mailboxes`);
+    const mailboxesRaw = mailboxesField ? mailboxesField.value.trim() : '';
+    let mailboxesValue = null;
+    if(mailboxesRaw){
+      try {
+        mailboxesValue = JSON.parse(mailboxesRaw);
+      } catch(err){
+        throw new Error('Mailboxes field must be valid JSON (array of mailbox objects).');
+      }
+      if(!Array.isArray(mailboxesValue)){
+        throw new Error('Mailboxes field must be a JSON array.');
+      }
+    }
+    const defaultMailboxInput = document.getElementById(`${prefix}_helpscout_default_mailbox`);
+    const defaultMailbox = defaultMailboxInput ? defaultMailboxInput.value.trim() : '';
+    const maxResultsInput = document.getElementById(`${prefix}_helpscout_max_results`);
+    const maxResults = maxResultsInput ? parseInt(maxResultsInput.value, 10) : NaN;
+    const defaultActionSelect = document.getElementById(`${prefix}_helpscout_default_action`);
+
+    const cfg = {};
+    if(mailboxesValue){ cfg.mailboxes = mailboxesValue; }
+    if(defaultMailbox){ cfg.default_mailbox_id = parseInt(defaultMailbox, 10) || null; }
+    if(!Number.isNaN(maxResults)){ cfg.max_results = maxResults; }
+    if(defaultActionSelect && defaultActionSelect.value){ cfg.default_action = defaultActionSelect.value; }
+    cfg.oauth_provider = 'helpscout';
+    return applyHiddenInstructions(prefix, cfg);
+  }
   if(type === 'mcp'){
     const providerSelect = document.getElementById(`${prefix}_mcp_provider`);
     const provider = providerSelect ? providerSelect.value : 'generic';
@@ -830,17 +1110,38 @@ function buildConfigFromForm(prefix, type){
   return applyHiddenInstructions(prefix, {});
 }
 
+// Debounce helper for search input
+let searchDebounceTimer = null;
+function debouncedRefreshTools() {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => refreshTools(), 300);
+}
+
 async function refreshTools(){
   const search = document.getElementById('searchInput').value.trim();
   const type = document.getElementById('typeFilter').value;
   const scope = document.getElementById('scopeFilter').value;
+  const phase = document.getElementById('phaseFilter').value;
   const clientSelect = document.getElementById('clientFilter');
   const clientId = clientSelect ? clientSelect.value : '';
-  const grid = document.getElementById('toolsGrid');
-  grid.innerHTML = '';
+
+  const activeGrid = document.getElementById('activeToolsGrid');
+  const ambientGrid = document.getElementById('ambientToolsGrid');
+  const activeEmpty = document.getElementById('activeToolsEmpty');
+  const ambientEmpty = document.getElementById('ambientToolsEmpty');
+
+  // Show loading state
+  activeGrid.innerHTML = '<div class="col-span-full text-center py-8 text-dark-text-secondary"><div class="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-brand-teal mr-2"></div>Loading abilities...</div>';
+  ambientGrid.innerHTML = '';
+  activeEmpty.classList.add('hidden');
+  ambientEmpty.classList.add('hidden');
 
   if(scope === 'client' && !clientId){
-    grid.innerHTML = '<div class="col-span-full text-sm text-dark-text-secondary">Select a client to view client-scoped abilities.</div>';
+    activeGrid.innerHTML = '';
+    activeEmpty.textContent = 'Select a client to view client-scoped abilities.';
+    activeEmpty.classList.remove('hidden');
+    ambientEmpty.textContent = 'Select a client to view client-scoped abilities.';
+    ambientEmpty.classList.remove('hidden');
     return;
   }
 
@@ -849,6 +1150,7 @@ async function refreshTools(){
   if(type) qs.set('type', type);
   if(scope) qs.set('scope', scope);
   if(clientId) qs.set('client_id', clientId);
+  // Note: phase filtering is done client-side to show both sections
 
   let data = [];
   try{
@@ -856,38 +1158,182 @@ async function refreshTools(){
     const url = `${ADMIN_TOOLS_BASE}${query ? `?${query}` : ''}`;
     data = await fetchJSON(url);
   }catch(err){
-    grid.innerHTML = `<div class="col-span-full text-sm text-brand-salmon">Failed to load abilities: ${err.message}</div>`;
+    activeGrid.innerHTML = '';
+    activeEmpty.textContent = `Failed to load abilities: ${err.message}`;
+    activeEmpty.classList.remove('hidden');
+    activeEmpty.classList.add('text-brand-salmon');
     return;
   }
 
-  if(!Array.isArray(data) || data.length === 0){
-    grid.innerHTML = '<div class="col-span-full text-sm text-dark-text-secondary">No abilities found for the current filters.</div>';
-    return;
+  if(!Array.isArray(data)){
+    data = [];
   }
 
   Object.keys(toolsCache).forEach(k => delete toolsCache[k]);
 
-  for(const t of data){
-    toolsCache[t.id] = t;
-    const card = document.createElement('div');
-    card.className = 'bg-dark-surface border border-dark-border rounded p-4 flex gap-3 items-start';
-    const icon = document.createElement('img');
-    icon.src = t.icon_url || '/static/images/ability-default.png';
-    icon.className = 'w-10 h-10 rounded';
-    const body = document.createElement('div');
-    body.className = 'flex-1';
-    body.innerHTML = `<div class="flex items-center gap-2"><span class="text-dark-text font-semibold">${t.name}</span><span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.type}</span><span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.scope}</span></div><div class="text-sm text-dark-text-secondary mt-1">${t.description||''}</div>`;
-    const actions = document.createElement('div');
+  // Split tools by execution phase
+  const activeTools = data.filter(t => (t.execution_phase || 'active') === 'active');
+  const ambientTools = data.filter(t => t.execution_phase === 'ambient');
+
+  // Apply phase filter if set
+  const showActive = !phase || phase === 'active';
+  const showAmbient = !phase || phase === 'ambient';
+
+  // Clear grids before rendering (removes loading spinner)
+  activeGrid.innerHTML = '';
+  ambientGrid.innerHTML = '';
+
+  // Render active tools
+  if(showActive){
+    if(activeTools.length === 0){
+      activeEmpty.classList.remove('hidden');
+    } else {
+      for(const t of activeTools){
+        toolsCache[t.id] = t;
+        activeGrid.appendChild(createToolCard(t));
+      }
+    }
+  }
+
+  // Render ambient tools
+  if(showAmbient){
+    if(ambientTools.length === 0){
+      ambientEmpty.classList.remove('hidden');
+    } else {
+      for(const t of ambientTools){
+        toolsCache[t.id] = t;
+        ambientGrid.appendChild(createToolCard(t));
+      }
+    }
+  }
+
+  // Hide sections if phase filter is set
+  document.querySelector('#activeToolsGrid').parentElement.style.display = showActive ? '' : 'none';
+  document.querySelector('#ambientToolsGrid').parentElement.style.display = showAmbient ? '' : 'none';
+}
+
+function createToolCard(t){
+  const card = document.createElement('div');
+  card.className = 'bg-dark-surface border border-dark-border rounded flex flex-col h-full';
+
+  // Top section with content - flex-1 to push banner to bottom
+  const topSection = document.createElement('div');
+  topSection.className = 'p-4 flex gap-3 items-start flex-1';
+
+  const icon = document.createElement('img');
+  icon.src = t.icon_url || '/static/images/ability-default.png';
+  icon.className = 'w-10 h-10 rounded';
+  icon.onerror = function(){ this.src = '/static/images/ability-default.png'; };
+  const body = document.createElement('div');
+  body.className = 'flex-1';
+
+  // Show trigger info for ambient abilities
+  let triggerBadge = '';
+  if(t.execution_phase === 'ambient' && t.trigger_config){
+    const trigger = t.trigger_config.trigger || 'post_session';
+    triggerBadge = `<span class="text-xs px-2 py-0.5 rounded bg-brand-salmon/20 text-brand-salmon">${trigger === 'post_session' ? 'Post-Session' : 'Scheduled'}</span>`;
+  }
+
+  const adminOnlyBadge = t.admin_only ? `<span class="text-xs px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400">Admin Only</span>` : '';
+  body.innerHTML = `
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-dark-text font-semibold">${escapeHtml(t.name)}</span>
+      <span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.type}</span>
+      <span class="text-xs px-2 py-0.5 rounded border border-dark-border text-dark-text-secondary">${t.scope}</span>
+      ${adminOnlyBadge}
+      ${triggerBadge}
+    </div>
+    <div class="text-sm text-dark-text-secondary mt-1">${escapeHtml(t.description||'')}</div>`;
+  const actions = document.createElement('div');
+
+  // Check if this is a built-in ability (non-editable) or certain global abilities (no config needed)
+  // Content Catalyst is builtin but still needs Edit for writing instructions
+  const isBuiltin = t.type === 'builtin';
+  const isContentCatalyst = t.name && t.name.toLowerCase().includes('content catalyst');
+  const isCryptoPriceCheck = t.name && t.name.toLowerCase().includes('crypto price');
+  const isPerplexitySearch = t.name && t.name.toLowerCase().includes('perplexity');
+  const isNoEdit = (isBuiltin && !isContentCatalyst) || isCryptoPriceCheck || isPerplexitySearch;
+  if(isNoEdit){
+    actions.innerHTML = `
+      <div class="flex flex-col gap-2">
+        <span class="text-xs text-dark-text-secondary">Built-in</span>
+      </div>`;
+  } else {
     actions.innerHTML = `
       <div class="flex flex-col gap-2">
         <button class="text-sm text-brand-teal" onclick="openEditToolModal('${t.id}')">Edit</button>
         <button class="text-sm text-brand-salmon" onclick="deleteTool('${t.id}', '${t.scope}', '${t.client_id || ''}')">Remove</button>
       </div>`;
-    card.appendChild(icon);
-    card.appendChild(body);
-    card.appendChild(actions);
-    grid.appendChild(card);
   }
+  topSection.appendChild(icon);
+  topSection.appendChild(body);
+  topSection.appendChild(actions);
+  card.appendChild(topSection);
+
+  // Bottom banner showing enabled/disabled status with sidekick avatars
+  const enabledAgents = t.enabled_agents || [];
+  const isEnabled = enabledAgents.length > 0;
+  const banner = document.createElement('div');
+  banner.className = `px-4 py-2 border-t border-dark-border flex items-center justify-center gap-2 ${isEnabled ? 'bg-brand-teal/10' : 'bg-dark-elevated'}`;
+
+  if(isEnabled){
+    // Create avatar stack
+    const avatarStack = document.createElement('div');
+    avatarStack.className = 'flex items-center -space-x-2';
+    const maxAvatars = 5;
+    const displayAgents = enabledAgents.slice(0, maxAvatars);
+    const remainingCount = enabledAgents.length - maxAvatars;
+
+    displayAgents.forEach((agent, idx) => {
+      const avatarWrapper = document.createElement('div');
+      avatarWrapper.className = 'relative';
+      avatarWrapper.style.zIndex = maxAvatars - idx;
+
+      if(agent.agent_image){
+        const img = document.createElement('img');
+        img.src = agent.agent_image;
+        img.alt = agent.name;
+        img.title = agent.name;
+        img.className = 'w-6 h-6 rounded-full border-2 border-dark-surface object-cover';
+        img.onerror = function(){ this.outerHTML = `<div class="w-6 h-6 rounded-full border-2 border-dark-surface bg-gradient-to-br from-brand-teal to-brand-orange flex items-center justify-center"><span class="text-xs font-bold text-white">${agent.name ? agent.name[0].toUpperCase() : 'S'}</span></div>`; };
+        avatarWrapper.appendChild(img);
+      } else {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'w-6 h-6 rounded-full border-2 border-dark-surface bg-gradient-to-br from-brand-teal to-brand-orange flex items-center justify-center';
+        placeholder.title = agent.name;
+        placeholder.innerHTML = `<span class="text-xs font-bold text-white">${agent.name ? agent.name[0].toUpperCase() : 'S'}</span>`;
+        avatarWrapper.appendChild(placeholder);
+      }
+      avatarStack.appendChild(avatarWrapper);
+    });
+
+    if(remainingCount > 0){
+      const moreIndicator = document.createElement('div');
+      moreIndicator.className = 'w-6 h-6 rounded-full border-2 border-dark-surface bg-dark-border flex items-center justify-center';
+      moreIndicator.style.zIndex = 0;
+      moreIndicator.innerHTML = `<span class="text-xs font-medium text-dark-text">+${remainingCount}</span>`;
+      avatarStack.appendChild(moreIndicator);
+    }
+
+    banner.appendChild(avatarStack);
+
+    const statusText = document.createElement('span');
+    statusText.className = 'text-xs font-medium text-brand-teal';
+    statusText.textContent = `Enabled on ${enabledAgents.length} sidekick${enabledAgents.length !== 1 ? 's' : ''}`;
+    banner.appendChild(statusText);
+  } else {
+    const statusDot = document.createElement('div');
+    statusDot.className = 'w-2 h-2 rounded-full bg-dark-text-secondary';
+    banner.appendChild(statusDot);
+
+    const statusText = document.createElement('span');
+    statusText.className = 'text-xs text-dark-text-secondary';
+    statusText.textContent = 'Not enabled on any sidekicks';
+    banner.appendChild(statusText);
+  }
+
+  card.appendChild(banner);
+  return card;
 }
 
 async function createTool(){
@@ -896,6 +1342,7 @@ async function createTool(){
   const description = document.getElementById('ct_desc').value.trim();
   const type = document.getElementById('ct_type').value;
   const scope = document.getElementById('ct_scope').value;
+  const execution_phase = document.getElementById('ct_execution_phase').value;
   const icon_url = document.getElementById('ct_icon').value.trim();
   const clientSelect = document.getElementById('ct_client_id');
   const clientId = clientSelect ? clientSelect.value : '';
@@ -910,9 +1357,17 @@ async function createTool(){
     alert('Select a client for client-scoped abilities.');
     return;
   }
-  const body = { name, slug, description, type, scope, icon_url, config, enabled: true };
+  const admin_only = document.getElementById('ct_admin_only').checked;
+  const body = { name, slug, description, type, scope, icon_url, config, enabled: true, admin_only, execution_phase };
   if(scope === 'client'){
     body.client_id = clientId;
+  }
+  // Add trigger_config for ambient abilities
+  if(execution_phase === 'ambient'){
+    const triggerConfig = getTriggerConfig('ct');
+    if(triggerConfig){
+      body.trigger_config = triggerConfig;
+    }
   }
   const response = await fetch(ADMIN_TOOLS_BASE, {
     method: 'POST',
@@ -947,17 +1402,56 @@ function openEditToolModal(id){
     return;
   }
   editingToolId = id;
+
+  // Check if this is Content Catalyst
+  const isContentCatalyst = tool.type === 'content_catalyst' ||
+    (tool.name && tool.name.toLowerCase().includes('content catalyst'));
+
+  // Show/hide fields based on ability type
+  const basicFieldsRow1 = document.querySelector('#editToolModal .space-y-3 > .grid.grid-cols-2');
+  const descField = document.querySelector('#editToolModal #et_desc')?.closest('div');
+  const typeFieldsRow = document.querySelectorAll('#editToolModal .space-y-3 > .grid.grid-cols-3');
+  const iconFieldRow = document.querySelector('#editToolModal .grid.grid-cols-3.mt-3');
+  const clientGroup = document.getElementById('et_client_group');
+  const triggerConfig = document.getElementById('et_trigger_config');
+  const enabledRow = document.querySelector('#editToolModal .flex.items-center.justify-between');
+
+  if(isContentCatalyst){
+    // Hide everything except the type-specific fields for Content Catalyst
+    if(basicFieldsRow1) basicFieldsRow1.style.display = 'none';
+    if(descField) descField.style.display = 'none';
+    typeFieldsRow.forEach(el => el.style.display = 'none');
+    if(iconFieldRow) iconFieldRow.style.display = 'none';
+    if(clientGroup) clientGroup.style.display = 'none';
+    if(triggerConfig) triggerConfig.style.display = 'none';
+    // Keep enabled/save buttons but hide enabled checkbox
+    const enabledCheckbox = document.getElementById('et_enabled')?.closest('label');
+    if(enabledCheckbox) enabledCheckbox.style.display = 'none';
+  } else {
+    // Show all fields for other abilities
+    if(basicFieldsRow1) basicFieldsRow1.style.display = '';
+    if(descField) descField.style.display = '';
+    typeFieldsRow.forEach(el => el.style.display = '');
+    if(iconFieldRow) iconFieldRow.style.display = '';
+    const enabledCheckbox = document.getElementById('et_enabled')?.closest('label');
+    if(enabledCheckbox) enabledCheckbox.style.display = '';
+  }
+
   document.getElementById('et_name').value = tool.name || '';
   document.getElementById('et_slug').value = tool.slug || '';
   document.getElementById('et_desc').value = tool.description || '';
   document.getElementById('et_icon').value = tool.icon_url || '';
   document.getElementById('et_type').value = tool.type || 'mcp';
   document.getElementById('et_scope').value = tool.scope || 'client';
+  document.getElementById('et_execution_phase').value = tool.execution_phase || 'active';
   document.getElementById('et_enabled').checked = tool.enabled !== false;
+  document.getElementById('et_admin_only').checked = !!tool.admin_only;
   const clientSelect = document.getElementById('et_client_id');
   if(clientSelect){ clientSelect.value = tool.client_id || ''; }
   handleScopeChange('et');
-  renderTypeFields('et', tool.type || 'mcp', tool.config || {});
+  renderTypeFields('et', tool.type || 'mcp', tool.config || {}, tool.name || '');
+  // Set trigger config for ambient abilities
+  setTriggerConfig('et', tool.trigger_config);
   const providerSelect = document.getElementById('et_mcp_provider');
   if(providerSelect){ togglePerplexityClientPanel('et', providerSelect.value === 'perplexity'); }
   if(tool.type === 'asana'){
@@ -980,14 +1474,25 @@ async function updateTool(){
   const description = document.getElementById('et_desc').value.trim();
   const icon_url = document.getElementById('et_icon').value.trim();
   const enabled = document.getElementById('et_enabled').checked;
+  const admin_only = document.getElementById('et_admin_only').checked;
+  const execution_phase = document.getElementById('et_execution_phase').value;
   let config = {};
   try{
-    config = buildConfigFromForm('et', tool.type);
+    config = buildConfigFromForm('et', tool.type, tool.name || '');
   }catch(err){
     alert(err.message);
     return;
   }
-  const payload = { name, description, icon_url, config, enabled };
+  const payload = { name, description, icon_url, config, enabled, admin_only, execution_phase };
+  // Add trigger_config for ambient abilities
+  if(execution_phase === 'ambient'){
+    const triggerConfig = getTriggerConfig('et');
+    if(triggerConfig){
+      payload.trigger_config = triggerConfig;
+    }
+  } else {
+    payload.trigger_config = null;
+  }
   const clientFilter = document.getElementById('clientFilter');
   const inlineClientSelect = document.getElementById('et_perplexity_client_select');
   const selectedClientId = (clientFilter && clientFilter.value) ? clientFilter.value : (inlineClientSelect ? inlineClientSelect.value : '');

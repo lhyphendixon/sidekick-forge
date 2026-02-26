@@ -1,0 +1,129 @@
+<!-- Conversation Analytics - Real data from livekit_events and agent_usage -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+    <!-- Voice Calls (Last 30 Days) -->
+    <div class="bg-dark-elevated rounded-lg p-4">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-lg bg-brand-teal/10 flex items-center justify-center">
+                <svg class="w-5 h-5 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+                </svg>
+            </div>
+            <div>
+                <p class="text-xs text-dark-text-secondary uppercase tracking-wide">Voice Calls</p>
+                <p class="text-2xl font-bold text-dark-text">{{ conversation_stats.total if conversation_stats else 0 }}</p>
+            </div>
+        </div>
+        <p class="text-xs text-dark-text-secondary mt-2">Last 30 days</p>
+    </div>
+
+    <!-- Text Messages (Current Period) -->
+    <div class="bg-dark-elevated rounded-lg p-4">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-lg bg-brand-orange/10 flex items-center justify-center">
+                <svg class="w-5 h-5 text-brand-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                </svg>
+            </div>
+            <div>
+                <p class="text-xs text-dark-text-secondary uppercase tracking-wide">Text Messages</p>
+                <p class="text-2xl font-bold text-dark-text">{{ channel_stats.text_count if channel_stats else 0 }}</p>
+            </div>
+        </div>
+        <p class="text-xs text-dark-text-secondary mt-2">Current billing period</p>
+    </div>
+
+    <!-- Avg Call Duration -->
+    <div class="bg-dark-elevated rounded-lg p-4">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-lg bg-brand-salmon/10 flex items-center justify-center">
+                <svg class="w-5 h-5 text-brand-salmon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+            </div>
+            <div>
+                <p class="text-xs text-dark-text-secondary uppercase tracking-wide">Avg Call Duration</p>
+                <p class="text-2xl font-bold text-dark-text">{{ conversation_stats.avg_duration if conversation_stats else '--' }}</p>
+            </div>
+        </div>
+        <p class="text-xs text-dark-text-secondary mt-2">Per voice call</p>
+    </div>
+
+    <!-- Channel Mix -->
+    <div class="bg-dark-elevated rounded-lg p-4">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+            </div>
+            <div>
+                <p class="text-xs text-dark-text-secondary uppercase tracking-wide">Voice / Text</p>
+                <p class="text-2xl font-bold text-dark-text">
+                    {% if channel_stats and (channel_stats.voice_percent or channel_stats.text_percent) %}
+                    {{ channel_stats.voice_percent }}% / {{ channel_stats.text_percent }}%
+                    {% else %}
+                    --
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+        <p class="text-xs text-dark-text-secondary mt-2">Channel distribution</p>
+    </div>
+</div>
+
+<!-- Channel Distribution Bar -->
+{% if channel_stats and (channel_stats.voice_count or channel_stats.text_count) %}
+<div class="mt-6 bg-dark-elevated rounded-lg p-4">
+    <h4 class="text-sm font-medium text-dark-text mb-4">Channel Distribution</h4>
+    <div class="space-y-3">
+        <!-- Voice -->
+        <div>
+            <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+                    </svg>
+                    <span class="text-sm text-dark-text">Voice Calls</span>
+                </div>
+                <span class="text-sm text-dark-text-secondary">{{ channel_stats.voice_count }} ({{ channel_stats.voice_percent }}%)</span>
+            </div>
+            <div class="h-2 bg-dark-border rounded-full overflow-hidden">
+                <div class="h-full bg-brand-teal rounded-full" style="width: {{ channel_stats.voice_percent }}%"></div>
+            </div>
+        </div>
+
+        <!-- Text -->
+        <div>
+            <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-brand-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                    </svg>
+                    <span class="text-sm text-dark-text">Text Messages</span>
+                </div>
+                <span class="text-sm text-dark-text-secondary">{{ channel_stats.text_count }} ({{ channel_stats.text_percent }}%)</span>
+            </div>
+            <div class="h-2 bg-dark-border rounded-full overflow-hidden">
+                <div class="h-full bg-brand-orange rounded-full" style="width: {{ channel_stats.text_percent }}%"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<!-- No Data State -->
+<div class="mt-6 bg-dark-elevated rounded-lg p-6 text-center">
+    <svg class="w-10 h-10 text-dark-text-secondary mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+    </svg>
+    <p class="text-sm text-dark-text-secondary">No conversation data yet</p>
+    <p class="text-xs text-dark-text-secondary mt-1">Data will appear as users interact with your sidekicks</p>
+</div>
+{% endif %}
+
+<!-- Info Note -->
+<div class="mt-4 text-center">
+    <p class="text-xs text-dark-text-secondary">
+        Voice calls from the last 30 days. Text messages from the current billing period.
+        <a href="/admin/agents" class="text-brand-teal hover:text-brand-teal/80 transition-colors">View individual sidekick stats</a>
+    </p>
+</div>

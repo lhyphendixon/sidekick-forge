@@ -1,0 +1,77 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Processing Payment - Sidekick Forge{% endblock %}
+
+{% block content %}
+<section class="py-16 min-h-screen">
+    <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8">
+        <!-- Processing State -->
+        <div class="text-center mb-8">
+            <div class="w-20 h-20 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <!-- Spinning loader -->
+                <svg class="w-10 h-10 text-blue-400 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+            <h1 class="text-3xl md:text-4xl font-bold text-white mb-3">
+                Processing Your Payment
+            </h1>
+            <p class="text-xl text-gray-400">
+                Your payment was successful! We're setting up your account...
+            </p>
+        </div>
+
+        <!-- Info Card -->
+        <div class="glass-container rounded-2xl p-8 mb-8">
+            <div class="flex items-start gap-4">
+                <div class="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-white mb-2">Almost There!</h3>
+                    <p class="text-gray-400 mb-4">
+                        Your payment has been confirmed. We're now creating your account and setting up your workspace.
+                        This usually takes just a few seconds.
+                    </p>
+                    <p class="text-gray-500 text-sm">
+                        <span class="text-white font-medium">{{ email }}</span> - {{ tier }} Tier
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Auto-refresh message -->
+        <div class="glass-card rounded-2xl p-8 text-center">
+            <p class="text-gray-400 mb-4">
+                This page will automatically refresh to show your order details.
+            </p>
+            <p class="text-gray-500 text-sm mb-6">
+                If you're not redirected in a few seconds, you can refresh manually.
+            </p>
+            <button onclick="location.reload()"
+                    class="bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-lg font-medium transition">
+                Refresh Now
+            </button>
+        </div>
+
+        <!-- Support -->
+        <div class="text-center mt-8 text-gray-500 text-sm">
+            <p>
+                Questions? Contact us at
+                <a href="mailto:team@sidekickforge.com" class="text-brand-teal hover:underline">team@sidekickforge.com</a>
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- Auto-refresh script -->
+<script>
+    // Refresh the page every 3 seconds to check if the order is ready
+    setTimeout(function() {
+        location.reload();
+    }, 3000);
+</script>
+{% endblock %}

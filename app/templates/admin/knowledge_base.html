@@ -216,11 +216,10 @@
 #processing-banner {
     display: none;
     width: 100%;
-    height: 80px;
     background: linear-gradient(90deg, rgba(1,164,166,0.12), rgba(252,114,68,0.12));
     border-top: 1px solid #2a2a2a;
     border-bottom: 1px solid #2a2a2a;
-    padding: 14px 18px;
+    padding: 14px 18px 18px 18px;
     box-sizing: border-box;
 }
 
@@ -251,21 +250,41 @@
 
 #processing-banner .banner-progress .progress-bar {
     height: 8px;
-    margin: 6px 0 2px 0;
+    margin: 6px 0 4px 0;
 }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="container mx-auto px-4">
-    <!-- Page Header + Upload -->
+    <!-- Page Header -->
     <div class="mb-6 bg-dark-surface rounded-lg border border-dark-border">
-        <div class="border-b border-dark-border px-6 py-4 flex flex-col gap-2">
-            <div class="flex items-center justify-between">
+        <div class="border-b border-dark-border px-6 py-4">
+            <div class="flex items-center justify-between flex-wrap gap-4">
                 <div>
                     <h1 class="text-2xl font-bold text-dark-text">Knowledge Base</h1>
-                    <p class="text-dark-text-secondary">Upload and manage documents for AI agent training</p>
+                    <p class="text-sm text-dark-text-secondary mt-1">
+                        {{ supported_formats }} ({{ max_upload_size_mb }}MB max) ·
+                        <span id="doc-count" class="font-medium text-dark-text">0</span> documents ·
+                        <span id="doc-total-size" class="font-medium text-dark-text">0 Bytes</span>
+                    </p>
                 </div>
+                <div class="flex items-center gap-3">
+                    <div class="flex items-center gap-3 text-sm text-dark-text-secondary">
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-orange"></span><span id="status-processing">0</span></span>
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-teal"></span><span id="status-ready">0</span></span>
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-salmon"></span><span id="status-error">0</span></span>
+                    </div>
+                    <button id="retry-errors-btn" class="btn-secondary px-3 py-1.5 rounded text-xs font-medium transition-all">
+                        <i class="fas fa-redo mr-1"></i>Retry Failed
+                    </button>
+                </div>
+            </div>
+            <div id="retry-progress" class="mt-3" style="display:none;">
+                <div class="progress-bar">
+                    <div id="retry-progress-fill" class="progress-fill"></div>
+                </div>
+                <p id="retry-progress-text" class="text-xs text-dark-text-secondary mt-1">Retrying failed documents...</p>
             </div>
         </div>
         <div id="processing-banner">
@@ -278,7 +297,7 @@
                     <span class="badge text-brand-orange"><span class="w-2 h-2 rounded-full bg-brand-orange inline-block"></span><span id="banner-processing-count">0</span> processing</span>
                     <span class="badge text-brand-teal"><span class="w-2 h-2 rounded-full bg-brand-teal inline-block"></span><span id="banner-ready-count">0</span> ready</span>
                     <span class="badge text-brand-salmon"><span class="w-2 h-2 rounded-full bg-brand-salmon inline-block"></span><span id="banner-error-count">0</span> failed</span>
-                    <span class="badge text-brand-orange/80"><span class="w-2 h-2 rounded-full bg-brand-orange inline-block"></span><span id="banner-pending-embeddings">0</span> embedding</span>
+                    <span class="badge text-brand-orange/80"><span class="w-2 h-2 rounded-full bg-brand-orange inline-block"></span><span id="banner-pending-embeddings">0</span> pending embeddings</span>
                     <button id="view-queue-btn" class="btn-secondary px-3 py-1 text-xs rounded whitespace-nowrap" onclick="kbManager.viewQueue()">
                         <i class="fas fa-tasks mr-1"></i>View Queue
                     </button>
@@ -288,36 +307,6 @@
                         <div id="banner-progress-fill" class="progress-fill"></div>
                     </div>
                     <div id="banner-progress-text" class="text-xs text-dark-text-secondary">Progress —</div>
-                </div>
-            </div>
-        </div>
-        <div class="border-b border-dark-border px-6 py-4">
-            <div class="flex items-center justify-between flex-wrap gap-3">
-                <div>
-                    <h2 class="text-lg font-semibold text-dark-text">Upload Documents</h2>
-                    <p class="text-sm text-dark-text-secondary">Supported formats: {{ supported_formats }} ({{ max_upload_size_mb }}MB max per file)</p>
-                    <div id="doc-summary" class="mt-2 flex flex-wrap gap-4 text-sm text-dark-text-secondary">
-                        <div>Documents: <span id="doc-count" class="font-semibold text-dark-text">0</span></div>
-                        <div>Total Size: <span id="doc-total-size" class="font-semibold text-dark-text">0 Bytes</span></div>
-                    </div>
-                </div>
-                <div class="flex flex-col gap-2 items-end w-full md:w-auto">
-                    <div class="flex items-center gap-4 text-sm text-dark-text-secondary">
-                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-orange"></span><span id="status-processing">— processing</span></span>
-                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-teal"></span><span id="status-ready">— ready</span></span>
-                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-brand-salmon"></span><span id="status-error">— failed</span></span>
-                    </div>
-                    <div class="flex items-center gap-3 w-full md:w-auto">
-                        <button id="retry-errors-btn" class="btn-secondary px-4 py-2 rounded text-sm font-medium transition-all">
-                            <i class="fas fa-redo mr-2"></i>Retry Failed
-                        </button>
-                    </div>
-                    <div id="retry-progress" class="w-full md:w-72" style="display:none;">
-                        <div class="progress-bar">
-                            <div id="retry-progress-fill" class="progress-fill"></div>
-                        </div>
-                        <p id="retry-progress-text" class="text-xs text-dark-text-secondary mt-1">Retrying failed documents...</p>
-                    </div>
                 </div>
             </div>
         </div>
@@ -332,7 +321,8 @@
             
             <!-- Agent Selection (appears after client selection) -->
             <div id="agent-selection" class="mb-6 overflow-hidden transition-all duration-500 ease-in-out" style="max-height: 0; opacity: 0;">
-                <h4 class="text-md font-medium text-dark-text mb-3">Grant Access to Sidekicks</h4>
+                <h4 class="text-md font-medium text-dark-text mb-3">Grant Access to Sidekicks <span class="text-red-400">*</span></h4>
+                <p class="text-xs text-dark-text-secondary mb-3">Select which Sidekick(s) can access these documents</p>
                 <div class="mb-4">
                     <div class="agent-checkbox">
                         <input type="checkbox" id="all-agents" value="all">
@@ -348,7 +338,17 @@
                 </div>
             </div>
             
-            <!-- Drag & Drop Upload Area -->
+            <!-- Upload Mode Toggle -->
+            <div class="flex border-b border-dark-border mb-6">
+                <button id="upload-mode-file" class="px-6 py-3 text-sm font-medium border-b-2 border-brand-teal text-brand-teal transition-all">
+                    <i class="fas fa-file-upload mr-2"></i>Upload Files
+                </button>
+                <button id="upload-mode-url" class="px-6 py-3 text-sm font-medium border-b-2 border-transparent text-dark-text-secondary hover:text-dark-text transition-all">
+                    <i class="fas fa-globe mr-2"></i>Add Website
+                </button>
+            </div>
+
+            <!-- Drag & Drop Upload Area (File Mode) -->
             <div id="upload-area" class="upload-area">
                 <div class="upload-icon">
                     <i class="fas fa-cloud-upload-alt"></i>
@@ -359,6 +359,89 @@
                 <button id="browse-btn" class="btn-primary px-6 py-2 rounded transition-all">
                     Choose Files
                 </button>
+            </div>
+
+            <!-- URL Upload Area (URL Mode) -->
+            <div id="url-upload-area" class="upload-area" style="display: none;">
+                <div class="upload-icon">
+                    <i class="fas fa-globe"></i>
+                </div>
+                <h3 class="text-lg font-medium text-dark-text mb-2">Add Website Content</h3>
+                <p class="text-sm text-dark-text-secondary mb-4">Scrape a website and add it to your knowledge base</p>
+
+                <div class="max-w-xl mx-auto text-left">
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-dark-text mb-2">Website URL <span class="text-brand-salmon">*</span></label>
+                        <input type="url" id="url-input"
+                               class="w-full bg-dark-elevated border border-dark-border text-dark-text rounded px-4 py-3 focus:border-brand-teal focus:outline-none transition-all"
+                               placeholder="https://example.com/page">
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-dark-text mb-2">Title (optional)</label>
+                        <input type="text" id="url-title"
+                               class="w-full bg-dark-elevated border border-dark-border text-dark-text rounded px-4 py-3 focus:border-brand-teal focus:outline-none transition-all"
+                               placeholder="Page title (auto-detected if empty)">
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-dark-text mb-2">Description (optional)</label>
+                        <textarea id="url-description" rows="2"
+                                  class="w-full bg-dark-elevated border border-dark-border text-dark-text rounded px-4 py-3 focus:border-brand-teal focus:outline-none transition-all resize-none"
+                                  placeholder="Brief description of this content"></textarea>
+                    </div>
+
+                    <div class="mb-6 p-4 bg-dark-elevated rounded-lg border border-dark-border">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-2">
+                                <input type="checkbox" id="url-crawl" class="w-4 h-4 rounded border-dark-border text-brand-teal focus:ring-brand-teal">
+                                <label for="url-crawl" class="text-sm font-medium text-dark-text">Crawl multiple pages</label>
+                            </div>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mb-3">When enabled, follows links within the same domain to scrape multiple pages</p>
+
+                        <div id="crawl-options" class="hidden space-y-4">
+                            <div>
+                                <label class="block text-sm text-dark-text-secondary mb-2">Max pages to crawl</label>
+                                <input type="number" id="url-crawl-limit" value="20" min="1" max="100"
+                                       class="w-24 bg-dark-surface border border-dark-border text-dark-text rounded px-3 py-2 focus:border-brand-teal focus:outline-none transition-all">
+                                <span class="text-xs text-dark-text-secondary ml-2">(max 100)</span>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm text-dark-text-secondary mb-2">Exclude paths (optional)</label>
+                                <input type="text" id="url-exclude-paths"
+                                       class="w-full bg-dark-surface border border-dark-border text-dark-text rounded px-3 py-2 focus:border-brand-teal focus:outline-none transition-all"
+                                       placeholder="/tag/*, /author/*, /category/*, /page/*">
+                                <p class="text-xs text-dark-text-secondary mt-1">Comma-separated glob patterns to skip (e.g., archive pages)</p>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm text-dark-text-secondary mb-2">Include paths only (optional)</label>
+                                <input type="text" id="url-include-paths"
+                                       class="w-full bg-dark-surface border border-dark-border text-dark-text rounded px-3 py-2 focus:border-brand-teal focus:outline-none transition-all"
+                                       placeholder="/blog/*, /articles/*">
+                                <p class="text-xs text-dark-text-secondary mt-1">If set, only crawl URLs matching these patterns</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="scrape-url-btn" class="btn-primary w-full px-6 py-3 rounded transition-all flex items-center justify-center gap-2">
+                        <i class="fas fa-download"></i>
+                        <span>Scrape & Add to Knowledge Base</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- URL Scraping Progress -->
+            <div id="url-scrape-progress" class="mt-6" style="display: none;">
+                <h4 class="text-md font-medium text-dark-text mb-3">
+                    <i class="fas fa-spider mr-2 text-brand-teal"></i>Scraping Website...
+                </h4>
+                <div class="progress-bar">
+                    <div id="scrape-progress-fill" class="progress-fill"></div>
+                </div>
+                <p id="scrape-progress-text" class="text-sm text-dark-text-secondary mt-2">Connecting to website...</p>
             </div>
 
             <!-- Selected Files List -->
@@ -530,9 +613,7 @@ class KnowledgeBaseManager {
             console.log('Loading user info and clients...');
             // Check if user has access to multiple clients
             const response = await fetch('/admin/api/clients', {
-                headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
-                }
+                credentials: 'include'
             });
             
             console.log('Clients API response status:', response.status);
@@ -542,20 +623,49 @@ class KnowledgeBaseManager {
                 console.log('Received clients:', clients);
                 this.clients = Array.isArray(clients) ? clients : [];
                 
-                if (this.clients.length > 1) {
+                const isAdventurer = {{ 'true' if user.get('is_adventurer_only') else 'false' }};
+                const isSuperAdmin = {{ 'true' if user.is_super_admin else 'false' }};
+                const primaryClientId = '{{ user.primary_client_id or "" }}';
+
+                if (!isSuperAdmin && primaryClientId) {
+                    // Non-superadmin: auto-select primary client, no dropdown
+                    const match = this.clients.find(c => c.id === primaryClientId);
+                    if (match) {
+                        console.log('Auto-selecting primary client for non-superadmin:', match);
+                        this.currentClient = primaryClientId;
+                        await this.loadAgents();
+                        await this.loadDocuments();
+                    }
+                } else if (isAdventurer && this.clients.length >= 1) {
+                    // Adventurer tier: auto-select their single client, no dropdown
+                    console.log('Adventurer detected, auto-selecting client:', this.clients[0]);
+                    this.currentClient = this.clients[0].id;
+                    await this.loadAgents();
+                    await this.loadDocuments();
+                } else if (this.clients.length > 1) {
                     console.log('Multiple clients detected, showing client selection');
                     this.isMultiClient = true;
+                    // Auto-select primary client if available
+                    const primaryMatch = primaryClientId && this.clients.find(c => c.id === primaryClientId);
+                    if (primaryMatch) {
+                        console.log('Auto-selecting primary client:', primaryMatch);
+                        this.currentClient = primaryClientId;
+                    }
                     this.showClientSelection();
-                    // No default - user must select from dropdown
-                    this.currentClient = null;
-                    this.showNotification('Please select a client from the dropdown', 'info');
+                    if (primaryMatch) {
+                        await this.loadAgents();
+                        await this.loadDocuments();
+                    } else {
+                        this.currentClient = null;
+                        this.showNotification('Please select a client from the dropdown', 'info');
+                    }
                 } else if (this.clients.length === 1) {
                     console.log('Single client detected:', this.clients[0]);
-                    // Even with single client, require explicit selection
-                    this.currentClient = null;
-                    this.showNotification('Please select the client from the dropdown', 'info');
-                    // Show client selection even for single client to make it clear which client is being used
+                    // Auto-select the single client
+                    this.currentClient = this.clients[0].id;
                     this.showClientSelection();
+                    await this.loadAgents();
+                    await this.loadDocuments();
                 } else {
                     console.log('No clients found');
                     this.showNotification('No clients available. Please contact administrator.', 'error');
@@ -728,6 +838,46 @@ class KnowledgeBaseManager {
         document.getElementById('cancel-delete').addEventListener('click', () => {
             document.getElementById('delete-modal').style.display = 'none';
         });
+
+        // Upload mode toggle (File vs URL)
+        const uploadModeFile = document.getElementById('upload-mode-file');
+        const uploadModeUrl = document.getElementById('upload-mode-url');
+        const urlUploadArea = document.getElementById('url-upload-area');
+
+        if (uploadModeFile && uploadModeUrl && urlUploadArea) {
+            uploadModeFile.addEventListener('click', () => {
+                uploadModeFile.classList.add('border-brand-teal', 'text-brand-teal');
+                uploadModeFile.classList.remove('border-transparent', 'text-dark-text-secondary');
+                uploadModeUrl.classList.remove('border-brand-teal', 'text-brand-teal');
+                uploadModeUrl.classList.add('border-transparent', 'text-dark-text-secondary');
+                uploadArea.style.display = 'block';
+                urlUploadArea.style.display = 'none';
+            });
+
+            uploadModeUrl.addEventListener('click', () => {
+                uploadModeUrl.classList.add('border-brand-teal', 'text-brand-teal');
+                uploadModeUrl.classList.remove('border-transparent', 'text-dark-text-secondary');
+                uploadModeFile.classList.remove('border-brand-teal', 'text-brand-teal');
+                uploadModeFile.classList.add('border-transparent', 'text-dark-text-secondary');
+                uploadArea.style.display = 'none';
+                urlUploadArea.style.display = 'block';
+            });
+        }
+
+        // Crawl toggle
+        const urlCrawlCheckbox = document.getElementById('url-crawl');
+        const crawlOptions = document.getElementById('crawl-options');
+        if (urlCrawlCheckbox && crawlOptions) {
+            urlCrawlCheckbox.addEventListener('change', (e) => {
+                crawlOptions.classList.toggle('hidden', !e.target.checked);
+            });
+        }
+
+        // URL scrape button
+        const scrapeUrlBtn = document.getElementById('scrape-url-btn');
+        if (scrapeUrlBtn) {
+            scrapeUrlBtn.addEventListener('click', () => this.scrapeUrl());
+        }
     }
 
     handleFiles(files) {
@@ -842,23 +992,38 @@ class KnowledgeBaseManager {
         }
         
         try {
-            const token = localStorage.getItem('admin_token');
+            // Get fresh token directly from Supabase client
+            let token = null;
+            try {
+                if (window.__adminSupabaseClient) {
+                    const { data: { session } } = await window.__adminSupabaseClient.auth.getSession();
+                    if (session && session.access_token) {
+                        token = session.access_token;
+                        localStorage.setItem('admin_token', token);
+                    }
+                }
+            } catch (e) {
+                console.warn('[loadAgents] Session refresh failed:', e);
+            }
+            if (!token) {
+                token = localStorage.getItem('admin_token');
+            }
             const headers = {
                 'Content-Type': 'application/json'
             };
-            
+
             if (token) {
                 headers['Authorization'] = `Bearer ${token}`;
             }
-            
+
             const response = await fetch(`/admin/knowledge-base/agents?client_id=${this.currentClient}`, {
                 headers: headers
             });
-            
+
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
-            
+
             const agents = await response.json();
             this.agents = Array.isArray(agents) ? agents : [];
             this.updateAgentsList();
@@ -927,10 +1092,18 @@ class KnowledgeBaseManager {
             // Get selected agents
             const allAgents = document.getElementById('all-agents').checked;
             let selectedAgents = [];
-            
+
             if (!allAgents) {
                 const specificCheckboxes = document.querySelectorAll('#specific-agents input[type="checkbox"]:checked');
                 selectedAgents = Array.from(specificCheckboxes).map(cb => cb.value);
+            }
+
+            // Validate that at least one agent is selected
+            if (!allAgents && selectedAgents.length === 0) {
+                this.showNotification('Please select at least one Sidekick to grant access to these documents', 'error');
+                uploadProgress.style.display = 'none';
+                document.getElementById('upload-btn').disabled = false;
+                return;
             }
 
             const totalFiles = this.selectedFiles.length;
@@ -960,15 +1133,30 @@ class KnowledgeBaseManager {
                 formData.append('description', fileObj.description || '');
                 formData.append('client_id', this.currentClient);
                 formData.append('replace_existing', replaceExisting ? 'true' : 'false');
-                
+
                 if (allAgents) {
                     formData.append('agent_ids', 'all');
                 } else {
                     formData.append('agent_ids', selectedAgents.join(','));
                 }
 
+                // Get fresh token for upload
+                let token = null;
+                if (window.refreshAdminToken) {
+                    token = await window.refreshAdminToken();
+                }
+                if (!token) {
+                    token = localStorage.getItem('admin_token');
+                }
+
+                const headers = {};
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+
                 const response = await fetch('/admin/knowledge-base/upload', {
                     method: 'POST',
+                    headers: headers,
                     body: formData
                 });
 
@@ -1005,12 +1193,162 @@ class KnowledgeBaseManager {
         }
     }
 
+    async scrapeUrl() {
+        // Validate client selection
+        if (!this.currentClient) {
+            this.showNotification('Please select a client before adding website content', 'error');
+            return;
+        }
+
+        const urlInput = document.getElementById('url-input');
+        const titleInput = document.getElementById('url-title');
+        const descInput = document.getElementById('url-description');
+        const crawlCheckbox = document.getElementById('url-crawl');
+        const crawlLimitInput = document.getElementById('url-crawl-limit');
+        const scrapeBtn = document.getElementById('scrape-url-btn');
+        const scrapeProgress = document.getElementById('url-scrape-progress');
+        const scrapeProgressFill = document.getElementById('scrape-progress-fill');
+        const scrapeProgressText = document.getElementById('scrape-progress-text');
+
+        const url = urlInput.value.trim();
+        if (!url) {
+            this.showNotification('Please enter a URL', 'error');
+            urlInput.focus();
+            return;
+        }
+
+        // Basic URL validation
+        try {
+            new URL(url.startsWith('http') ? url : `https://${url}`);
+        } catch (e) {
+            this.showNotification('Please enter a valid URL', 'error');
+            urlInput.focus();
+            return;
+        }
+
+        const title = titleInput.value.trim();
+        const description = descInput.value.trim();
+        const crawl = crawlCheckbox.checked;
+        const crawlLimit = parseInt(crawlLimitInput.value) || 20;
+
+        // Get path filters
+        const excludePathsInput = document.getElementById('url-exclude-paths');
+        const includePathsInput = document.getElementById('url-include-paths');
+        const excludePaths = excludePathsInput ? excludePathsInput.value.trim() : '';
+        const includePaths = includePathsInput ? includePathsInput.value.trim() : '';
+
+        // Get selected agents
+        const allAgents = document.getElementById('all-agents').checked;
+        let agentIds = '';
+        if (allAgents) {
+            agentIds = 'all';
+        } else {
+            const specificCheckboxes = document.querySelectorAll('#specific-agents input[type="checkbox"]:checked');
+            agentIds = Array.from(specificCheckboxes).map(cb => cb.value).join(',');
+        }
+
+        // Validate that at least one agent is selected
+        if (!allAgents && !agentIds) {
+            this.showNotification('Please select at least one Sidekick to grant access to these documents', 'error');
+            return;
+        }
+
+        // Show progress
+        scrapeBtn.disabled = true;
+        scrapeBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Scraping...';
+        scrapeProgress.style.display = 'block';
+        scrapeProgressFill.style.width = '0%';
+        scrapeProgressText.textContent = crawl ? 'Starting crawl...' : 'Scraping page...';
+
+        try {
+            // Get auth token
+            let token = null;
+            if (window.refreshAdminToken) {
+                token = await window.refreshAdminToken();
+            }
+            if (!token) {
+                token = localStorage.getItem('admin_token');
+            }
+
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
+            // Animate progress while waiting
+            let progressInterval = setInterval(() => {
+                const currentWidth = parseFloat(scrapeProgressFill.style.width) || 0;
+                if (currentWidth < 90) {
+                    scrapeProgressFill.style.width = `${currentWidth + 5}%`;
+                }
+            }, 500);
+
+            const response = await fetch('/admin/knowledge-base/upload-url', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    url: url,
+                    title: title,
+                    description: description,
+                    client_id: this.currentClient,
+                    agent_ids: agentIds,
+                    crawl: crawl,
+                    crawl_limit: crawlLimit,
+                    exclude_paths: excludePaths,
+                    include_paths: includePaths
+                })
+            });
+
+            clearInterval(progressInterval);
+            scrapeProgressFill.style.width = '100%';
+
+            const result = await response.json();
+
+            if (result.success) {
+                const pageCount = result.total_pages || 1;
+                const message = pageCount > 1
+                    ? `Successfully queued ${result.successful} page(s) for processing`
+                    : 'Website content queued for processing';
+                this.showNotification(message, 'success');
+
+                // Clear form
+                urlInput.value = '';
+                titleInput.value = '';
+                descInput.value = '';
+                crawlCheckbox.checked = false;
+                document.getElementById('crawl-options').classList.add('hidden');
+
+                // Refresh documents list
+                setTimeout(() => this.loadDocuments(), 1000);
+
+                scrapeProgressText.textContent = message;
+            } else {
+                this.showNotification(result.message || 'Failed to scrape URL', 'error');
+                scrapeProgressText.textContent = result.message || 'Scraping failed';
+            }
+
+        } catch (error) {
+            console.error('Scrape error:', error);
+            this.showNotification('Failed to scrape URL: ' + error.message, 'error');
+            scrapeProgressText.textContent = 'Error: ' + error.message;
+        } finally {
+            scrapeBtn.disabled = false;
+            scrapeBtn.innerHTML = '<i class="fas fa-download"></i><span>Scrape & Add to Knowledge Base</span>';
+
+            setTimeout(() => {
+                scrapeProgress.style.display = 'none';
+                scrapeProgressFill.style.width = '0%';
+            }, 3000);
+        }
+    }
+
     updateDocumentSummary(documents, totalSizeOverride = null) {
-        const summaryRow = document.getElementById('doc-summary');
         const countEl = document.getElementById('doc-count');
         const sizeEl = document.getElementById('doc-total-size');
 
-        if (!summaryRow || !countEl || !sizeEl) return;
+        if (!countEl || !sizeEl) return;
 
         const docArray = Array.isArray(documents) ? documents : [];
         const totalSizeBytes = docArray.reduce((sum, doc) => {
@@ -1019,15 +1357,13 @@ class KnowledgeBaseManager {
         }, 0) || 0;
 
         if (!this.currentClient) {
-            countEl.textContent = '—';
-            sizeEl.textContent = '—';
+            countEl.textContent = '0';
+            sizeEl.textContent = '0 Bytes';
         } else {
             const effectiveSize = Number.isFinite(totalSizeOverride) ? totalSizeOverride : totalSizeBytes;
             countEl.textContent = this.totalDocuments || docArray.length;
             sizeEl.textContent = this.formatFileSize(effectiveSize);
         }
-
-        summaryRow.style.display = 'flex';
     }
 
     updatePaginationControls(currentPageCount = 0) {
@@ -1111,7 +1447,14 @@ class KnowledgeBaseManager {
         if (!processingEl || !readyEl || !errorEl) return;
 
         try {
-            const token = localStorage.getItem('admin_token');
+            // Get fresh token
+            let token = null;
+            if (window.refreshAdminToken) {
+                token = await window.refreshAdminToken();
+            }
+            if (!token) {
+                token = localStorage.getItem('admin_token');
+            }
             const headers = { 'Content-Type': 'application/json' };
             if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -1197,11 +1540,26 @@ class KnowledgeBaseManager {
                 url += `&status=${statusFilter}`;
             }
 
-            const token = localStorage.getItem('admin_token');
+            // Get fresh token directly from Supabase client
+            let token = null;
+            try {
+                if (window.__adminSupabaseClient) {
+                    const { data: { session } } = await window.__adminSupabaseClient.auth.getSession();
+                    if (session && session.access_token) {
+                        token = session.access_token;
+                        localStorage.setItem('admin_token', token);
+                    }
+                }
+            } catch (e) {
+                console.warn('[loadDocuments] Session refresh failed:', e);
+            }
+            if (!token) {
+                token = localStorage.getItem('admin_token');
+            }
             const headers = {
                 'Content-Type': 'application/json'
             };
-            
+
             if (token) {
                 headers['Authorization'] = `Bearer ${token}`;
             }
@@ -1365,15 +1723,22 @@ class KnowledgeBaseManager {
         
         confirmBtn.onclick = async () => {
             try {
-                const token = localStorage.getItem('admin_token');
+                // Get fresh token
+                let token = null;
+                if (window.refreshAdminToken) {
+                    token = await window.refreshAdminToken();
+                }
+                if (!token) {
+                    token = localStorage.getItem('admin_token');
+                }
                 const headers = {
                     'Content-Type': 'application/json'
                 };
-                
+
                 if (token) {
                     headers['Authorization'] = `Bearer ${token}`;
                 }
-                
+
                 const response = await fetch(`/admin/knowledge-base/documents/${documentId}`, {
                     method: 'DELETE',
                     headers: headers
@@ -1397,15 +1762,22 @@ class KnowledgeBaseManager {
 
     async reprocessDocument(documentId) {
         try {
-            const token = localStorage.getItem('admin_token');
+            // Get fresh token
+            let token = null;
+            if (window.refreshAdminToken) {
+                token = await window.refreshAdminToken();
+            }
+            if (!token) {
+                token = localStorage.getItem('admin_token');
+            }
             const headers = {
                 'Content-Type': 'application/json'
             };
-            
+
             if (token) {
                 headers['Authorization'] = `Bearer ${token}`;
             }
-            
+
             const response = await fetch(`/admin/knowledge-base/documents/${documentId}/reprocess?client_id=${this.currentClient || ''}`, {
                 method: 'POST',
                 headers: headers
@@ -1441,7 +1813,14 @@ class KnowledgeBaseManager {
 
         try {
             this.suppressRefreshDuringRetry = true;
-            const token = localStorage.getItem('admin_token');
+            // Get fresh token
+            let token = null;
+            if (window.refreshAdminToken) {
+                token = await window.refreshAdminToken();
+            }
+            if (!token) {
+                token = localStorage.getItem('admin_token');
+            }
             const headers = { 'Content-Type': 'application/json' };
             if (token) headers['Authorization'] = `Bearer ${token}`;
 

@@ -1,0 +1,118 @@
+<!-- Step 6: Configuration -->
+<div class="space-y-8">
+    <div class="text-center space-y-3">
+        <h1 class="text-4xl md:text-5xl font-light text-white">
+            Configure <span class="text-brand-teal" x-text="stepData.name || 'your sidekick'"></span>'s brain
+        </h1>
+        <p class="text-dark-text-secondary text-lg">
+            Choose your AI configuration or use our optimized defaults
+        </p>
+    </div>
+
+    <div class="max-w-xl mx-auto space-y-6">
+        <!-- Default Config Card -->
+        <div class="glass-container rounded-xl p-6 space-y-4">
+            <div class="flex items-center justify-between">
+                <h3 class="font-medium text-brand-teal">Recommended Configuration</h3>
+                <span class="text-xs px-2 py-1 rounded-full bg-brand-teal/20 text-brand-teal">Optimized</span>
+            </div>
+
+            <div class="space-y-3 text-sm">
+                <div class="flex justify-between py-2 border-b border-white/10">
+                    <span class="text-dark-text-secondary">Speech-to-Text</span>
+                    <span class="text-white">Cartesia</span>
+                </div>
+                <div class="flex justify-between py-2 border-b border-white/10">
+                    <span class="text-dark-text-secondary">Text-to-Speech</span>
+                    <span class="text-white">Cartesia</span>
+                </div>
+                <div class="flex justify-between py-2 border-b border-white/10">
+                    <span class="text-dark-text-secondary">Embedding Model</span>
+                    <span class="text-white">Qwen3 Embedding 4B</span>
+                </div>
+                <div class="flex justify-between py-2 border-b border-white/10">
+                    <span class="text-dark-text-secondary">Reranking</span>
+                    <span class="text-white">Enabled (Qwen3 2B)</span>
+                </div>
+                <div class="flex justify-between py-2">
+                    <span class="text-dark-text-secondary">Language Model</span>
+                    <span class="text-white">Cerebras GLM 4.7</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mode Toggle -->
+        <div class="flex justify-center gap-4">
+            <button
+                @click="stepData.config_mode = 'default'"
+                :class="{ 'bg-brand-teal text-white': stepData.config_mode === 'default', 'bg-dark-elevated text-dark-text-secondary': stepData.config_mode !== 'default' }"
+                class="px-6 py-3 rounded-xl font-medium transition">
+                Use Defaults
+            </button>
+            <button
+                @click="stepData.config_mode = 'advanced'"
+                :class="{ 'bg-brand-teal text-white': stepData.config_mode === 'advanced', 'bg-dark-elevated text-dark-text-secondary': stepData.config_mode !== 'advanced' }"
+                class="px-6 py-3 rounded-xl font-medium transition">
+                Customize
+            </button>
+        </div>
+
+        <!-- Advanced Config (Collapsible) -->
+        <div x-show="stepData.config_mode === 'advanced'" x-collapse class="space-y-4">
+            <div class="glass-container rounded-xl p-6 space-y-5">
+                <!-- STT Provider -->
+                <div class="space-y-2">
+                    <label class="text-sm text-dark-text-secondary">Speech-to-Text Provider</label>
+                    <select
+                        x-model="stepData.advanced_config.stt_provider"
+                        class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white">
+                        <option value="cartesia">Cartesia (Recommended)</option>
+                        <option value="deepgram">Deepgram</option>
+                        <option value="openai">OpenAI Whisper</option>
+                    </select>
+                </div>
+
+                <!-- TTS Provider -->
+                <div class="space-y-2">
+                    <label class="text-sm text-dark-text-secondary">Text-to-Speech Provider</label>
+                    <select
+                        x-model="stepData.advanced_config.tts_provider"
+                        class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white">
+                        <option value="cartesia">Cartesia (Recommended)</option>
+                        <option value="elevenlabs">ElevenLabs</option>
+                        <option value="openai">OpenAI TTS</option>
+                    </select>
+                </div>
+
+                <!-- LLM Provider -->
+                <div class="space-y-2">
+                    <label class="text-sm text-dark-text-secondary">Language Model</label>
+                    <select
+                        x-model="stepData.advanced_config.llm_provider"
+                        class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white">
+                        <option value="cerebras">Cerebras GLM 4.7 (Recommended)</option>
+                        <option value="openai">OpenAI GPT-4</option>
+                        <option value="anthropic">Anthropic Claude</option>
+                        <option value="groq">Groq Llama</option>
+                    </select>
+                </div>
+
+                <!-- Embedding Provider -->
+                <div class="space-y-2">
+                    <label class="text-sm text-dark-text-secondary">Embedding Model</label>
+                    <select
+                        x-model="stepData.advanced_config.embedding_provider"
+                        class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white">
+                        <option value="siliconflow">SiliconFlow Qwen3 4B (Recommended)</option>
+                        <option value="openai">OpenAI Ada</option>
+                        <option value="cohere">Cohere</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <p class="text-center text-sm text-dark-text-secondary">
+            You can change these settings anytime from your sidekick's dashboard
+        </p>
+    </div>
+</div>

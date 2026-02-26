@@ -1,0 +1,870 @@
+/**
+ * Sidekick Forge Widget Styles
+ */
+
+/* Base Widget Container */
+.widget-container {
+    margin: 1rem 0;
+    max-width: 100%;
+    width: 100%;
+}
+
+/* Widget Wrapper - matches message bubble width */
+.widget-wrapper {
+    max-width: 80%;
+    width: 80%;  /* Use fixed 80% to match message bubbles */
+}
+
+.widget-wrapper .widget-container {
+    width: 100%;
+}
+
+/* Content Catalyst Widget */
+.cc-widget {
+    background: rgba(15, 15, 15, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+/* Source Type Tabs */
+.cc-tab {
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.6);
+    border: 1px solid transparent;
+}
+
+.cc-tab:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.cc-tab.active {
+    background: linear-gradient(135deg, rgba(1, 164, 166, 0.2), rgba(245, 100, 83, 0.1));
+    border-color: rgba(1, 164, 166, 0.5);
+    color: #01a4a6;
+}
+
+/* Glass Input Override for Widget */
+.cc-widget .glass-input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.cc-widget .glass-input:focus {
+    border-color: rgba(1, 164, 166, 0.5);
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(1, 164, 166, 0.2);
+}
+
+.cc-widget select.glass-input {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' fill-opacity='0.5' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 36px;
+}
+
+.cc-widget select.glass-input option {
+    background: #1a1a1a;
+    color: #e0e0e0;
+}
+
+/* Upload Zone */
+.cc-upload-zone {
+    transition: all 0.2s ease;
+}
+
+.cc-upload-zone:hover,
+.cc-upload-zone.dragover {
+    border-color: rgba(1, 164, 166, 0.5);
+    background: rgba(1, 164, 166, 0.05);
+}
+
+/* Checkbox Styling */
+.cc-checkbox {
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.2s ease;
+}
+
+.cc-checkbox:checked {
+    background: linear-gradient(135deg, #01a4a6, #f56453);
+    border-color: transparent;
+}
+
+.cc-checkbox:checked::after {
+    content: '✓';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* Progress Steps */
+.cc-step {
+    transition: all 0.3s ease;
+}
+
+.cc-step-icon {
+    transition: all 0.3s ease;
+}
+
+/* Glass Elevated for Cards */
+.glass-elevated {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Line Clamp Utility */
+.line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* ========================================
+   PrintReady Widget
+   ======================================== */
+.print-ready-widget .print-ready-conversation-list {
+    max-height: 220px;
+    overflow-y: auto;
+    display: grid;
+    gap: 8px;
+    padding-right: 4px;
+}
+
+.print-ready-widget .print-ready-checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.print-ready-widget .print-ready-checkbox {
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    accent-color: #14b8a6;
+}
+
+.print-ready-widget .print-ready-conv-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.print-ready-widget .print-ready-btn {
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-weight: 600;
+    font-size: 14px;
+    transition: opacity 0.2s ease, background-color 0.2s ease;
+}
+
+.print-ready-widget .print-ready-btn:hover {
+    opacity: 0.92;
+}
+
+.print-ready-widget .print-ready-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.print-ready-widget .print-ready-btn-primary {
+    color: #fff;
+    background: linear-gradient(135deg, #0ea5e9, #14b8a6);
+}
+
+.print-ready-widget .print-ready-btn-secondary {
+    color: rgba(255, 255, 255, 0.95);
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+/* Modal Styles */
+.cc-modal {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.cc-modal.show {
+    opacity: 1;
+}
+
+.cc-modal-content {
+    transform: scale(0.95) translateY(10px);
+    transition: transform 0.3s ease;
+}
+
+.cc-modal.show .cc-modal-content {
+    transform: scale(1) translateY(0);
+}
+
+/* Article Preview in Modal */
+.cc-modal-body .prose {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.cc-modal-body .prose h1,
+.cc-modal-body .prose h2,
+.cc-modal-body .prose h3,
+.cc-modal-body .prose h4 {
+    color: white;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+}
+
+.cc-modal-body .prose h1:first-child,
+.cc-modal-body .prose h2:first-child {
+    margin-top: 0;
+}
+
+.cc-modal-body .prose p {
+    margin-top: 1em;
+    margin-bottom: 1em;
+    line-height: 1.7;
+}
+
+.cc-modal-body .prose ul,
+.cc-modal-body .prose ol {
+    margin: 1em 0;
+    padding-left: 1.5em;
+}
+
+.cc-modal-body .prose li {
+    margin: 0.5em 0;
+}
+
+.cc-modal-body .prose strong {
+    color: white;
+}
+
+.cc-modal-body .prose a {
+    color: #01a4a6;
+}
+
+.cc-modal-body .prose blockquote {
+    border-left: 3px solid #01a4a6;
+    padding-left: 1em;
+    margin: 1em 0;
+    color: rgba(255, 255, 255, 0.7);
+    font-style: italic;
+}
+
+/* Submit Button Animation */
+.cc-submit-arrow {
+    transition: transform 0.2s ease;
+}
+
+#cc-submit-btn:hover .cc-submit-arrow {
+    transform: translateX(4px);
+}
+
+/* Loading State for Submit Button */
+#cc-submit-btn.loading {
+    position: relative;
+    pointer-events: none;
+    opacity: 0.8;
+}
+
+#cc-submit-btn.loading > * {
+    visibility: hidden;
+}
+
+#cc-submit-btn.loading::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* Advanced Options Toggle */
+.cc-advanced summary {
+    list-style: none;
+}
+
+.cc-advanced summary::-webkit-details-marker {
+    display: none;
+}
+
+.cc-advanced summary::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 6px;
+    transition: transform 0.2s ease;
+}
+
+.cc-advanced[open] summary::before {
+    transform: rotate(90deg);
+}
+
+/* Document Picker Overlay */
+.cc-document-picker-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: 0;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    z-index: 100;
+}
+
+.cc-document-picker-overlay.show {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Document Picker Slide-up Panel */
+.cc-document-picker {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-height: 70%;
+    background: rgba(20, 20, 20, 0.95);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px 16px 0 0;
+    transform: translateY(100%);
+    transition: transform 0.3s ease;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    z-index: 101;
+}
+
+.cc-document-picker.show {
+    transform: translateY(0);
+}
+
+/* Document Picker Header */
+.cc-document-picker-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.cc-document-picker-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: white;
+}
+
+.cc-document-picker-close {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+    transition: color 0.2s ease;
+}
+
+.cc-document-picker-close:hover {
+    color: white;
+}
+
+/* Document Picker Search */
+.cc-document-picker-search {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cc-document-picker-search input {
+    width: 100%;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: white;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.cc-document-picker-search input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.cc-document-picker-search input:focus {
+    border-color: rgba(1, 164, 166, 0.5);
+    box-shadow: 0 0 0 2px rgba(1, 164, 166, 0.2);
+}
+
+/* Document Picker List */
+.cc-document-picker-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+/* Document List Item */
+.cc-document-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.cc-document-item:hover {
+    background: rgba(1, 164, 166, 0.1);
+}
+
+.cc-document-item.selected {
+    background: rgba(1, 164, 166, 0.2);
+    border-left: 3px solid #01a4a6;
+}
+
+.cc-document-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.cc-document-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.cc-document-title {
+    color: white;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cc-document-meta {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+/* Document Picker Loading State */
+.cc-document-picker-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.cc-document-picker-loading .spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-top-color: #01a4a6;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 12px;
+}
+
+/* Document Picker Empty State */
+.cc-document-picker-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.cc-document-picker-empty p {
+    margin: 0;
+}
+
+/* Selected Document Display */
+.cc-selected-document {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: rgba(1, 164, 166, 0.1);
+    border: 1px solid rgba(1, 164, 166, 0.3);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.cc-selected-document:hover {
+    background: rgba(1, 164, 166, 0.15);
+}
+
+.cc-selected-document-icon {
+    font-size: 20px;
+}
+
+.cc-selected-document-title {
+    flex: 1;
+    color: white;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cc-selected-document-change {
+    color: #01a4a6;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* Always-visible Instructions Field */
+.cc-instructions-field {
+    margin-bottom: 16px;
+}
+
+.cc-instructions-label {
+    display: block;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 13px;
+    margin-bottom: 8px;
+}
+
+.cc-instructions-textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: white;
+    font-size: 14px;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.cc-instructions-textarea::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.cc-instructions-textarea:focus {
+    border-color: rgba(1, 164, 166, 0.5);
+    box-shadow: 0 0 0 2px rgba(1, 164, 166, 0.2);
+}
+
+/* Responsive Adjustments */
+@media (max-width: 480px) {
+    .cc-source-tabs {
+        flex-direction: column;
+    }
+
+    .cc-widget .grid-cols-2 {
+        grid-template-columns: 1fr;
+    }
+
+    .cc-modal-content {
+        max-height: 100vh;
+        border-radius: 0;
+    }
+
+    .cc-document-picker {
+        max-height: 80%;
+    }
+}
+
+/* ============================================================================
+   LINGUA Widget Styles
+   ============================================================================ */
+
+.lingua-widget {
+    background: rgba(15, 15, 15, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+/* Glass Input Override for LINGUA Widget */
+.lingua-widget .glass-input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lingua-widget .glass-input:focus {
+    border-color: rgba(1, 164, 166, 0.5);
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(1, 164, 166, 0.2);
+}
+
+.lingua-widget select.glass-input {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' fill-opacity='0.5' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 36px;
+}
+
+.lingua-widget select.glass-input option {
+    background: #1a1a1a;
+    color: #e0e0e0;
+}
+
+/* Upload Zone */
+.lingua-upload-zone {
+    transition: all 0.2s ease;
+}
+
+.lingua-upload-zone:hover,
+.lingua-upload-zone.dragover {
+    border-color: rgba(1, 164, 166, 0.5);
+    background: rgba(1, 164, 166, 0.05);
+}
+
+/* Language Selection Grid */
+.lingua-lang-grid {
+    gap: 0.5rem;
+}
+
+.lingua-lang-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border-radius: 0.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.lingua-lang-option:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.lingua-lang-checkbox {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.2s ease;
+}
+
+.lingua-lang-checkbox:checked {
+    background: linear-gradient(135deg, #01a4a6, #f56453);
+    border-color: transparent;
+}
+
+.lingua-lang-checkbox:checked::after {
+    content: '✓';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 10px;
+    color: white;
+}
+
+.lingua-lang-label {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.875rem;
+}
+
+/* Format Options */
+.lingua-format-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+}
+
+.lingua-format-checkbox {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.2s ease;
+}
+
+.lingua-format-checkbox:checked {
+    background: linear-gradient(135deg, #01a4a6, #f56453);
+    border-color: transparent;
+}
+
+.lingua-format-checkbox:checked::after {
+    content: '✓';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 10px;
+    color: white;
+}
+
+.lingua-format-label {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.875rem;
+}
+
+/* Download Buttons */
+.lingua-download-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 0.875rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.lingua-download-btn:hover {
+    background: rgba(1, 164, 166, 0.2);
+    border-color: rgba(1, 164, 166, 0.5);
+}
+
+/* Progress Phases */
+.lingua-phase {
+    transition: color 0.3s ease;
+}
+
+.lingua-phase-icon {
+    font-size: 1rem;
+}
+
+/* LINGUA Responsive Adjustments */
+@media (max-width: 480px) {
+    .lingua-lang-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* ========================================
+   Image Catalyst Widget
+   ======================================== */
+
+.ic-widget {
+    background: rgba(15, 15, 15, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+/* Mode Selection Buttons */
+.ic-mode-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.ic-mode-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.ic-mode-btn.ic-mode-active {
+    background: linear-gradient(135deg, rgba(147, 51, 234, 0.35), rgba(236, 72, 153, 0.2));
+    border-color: rgba(147, 51, 234, 0.7);
+    box-shadow: 0 0 12px rgba(147, 51, 234, 0.3), inset 0 0 8px rgba(147, 51, 234, 0.1);
+}
+
+/* Dimension / Quality Buttons */
+.ic-dim-btn,
+.ic-qual-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.ic-dim-btn:hover,
+.ic-qual-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.ic-dim-btn.ic-dim-active,
+.ic-qual-btn.ic-qual-active {
+    background: linear-gradient(135deg, rgba(147, 51, 234, 0.35), rgba(236, 72, 153, 0.2));
+    border-color: rgba(147, 51, 234, 0.7);
+    box-shadow: 0 0 8px rgba(147, 51, 234, 0.25);
+}
+
+/* Textarea */
+.ic-textarea {
+    font-family: inherit;
+    line-height: 1.5;
+}
+
+.ic-textarea::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+/* Dropzone */
+.ic-dropzone {
+    transition: all 0.2s ease;
+}
+
+/* Spinner */
+.ic-spinner {
+    width: 48px;
+    height: 48px;
+    border: 3px solid rgba(255, 255, 255, 0.1);
+    border-top-color: rgba(147, 51, 234, 0.8);
+    border-radius: 50%;
+    animation: ic-spin 0.8s linear infinite;
+}
+
+@keyframes ic-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Result Image */
+.ic-result-image img {
+    display: block;
+    max-height: 400px;
+    object-fit: contain;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* Line clamp utility */
+.line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}

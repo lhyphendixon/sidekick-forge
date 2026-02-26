@@ -100,6 +100,7 @@ class AgentService:
             slug=agent_data["slug"],
             name=agent_data["name"],
             description=agent_data.get("description", ""),
+            agent_image=agent_data.get("agent_image", ""),
             system_prompt=agent_data.get("system_prompt", "You are a helpful assistant."),
             webhook_url=agent_data.get("webhook_url"),
             model=agent_data.get("model", "gpt-4"),

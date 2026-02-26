@@ -1,0 +1,97 @@
+<!-- Step 5: Abilities Selection -->
+<div class="space-y-8">
+    <div class="text-center space-y-3">
+        <h1 class="text-4xl md:text-5xl font-light text-white">
+            Give <span class="text-brand-teal" x-text="stepData.name || 'your sidekick'"></span> superpowers
+        </h1>
+        <p class="text-dark-text-secondary text-lg">
+            Enable built-in abilities for your sidekick
+        </p>
+    </div>
+
+    <!-- Abilities Grid -->
+    <div class="max-w-2xl mx-auto space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <template x-for="ability in availableAbilities" :key="ability.slug">
+                <div
+                    @click="toggleAbility(ability.slug)"
+                    :class="{
+                        'border-brand-teal bg-brand-teal/10': stepData.abilities[ability.slug],
+                        'border-white/10 hover:border-white/20': !stepData.abilities[ability.slug]
+                    }"
+                    class="ability-card p-5 rounded-xl border-2 cursor-pointer transition-all duration-200">
+
+                    <div class="flex items-start gap-4">
+                        <!-- Icon -->
+                        <div :class="stepData.abilities[ability.slug] ? 'bg-brand-teal/20' : 'bg-dark-elevated'"
+                             class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors">
+                            <img :src="ability.icon_url || '/static/images/ability-default.png'"
+                                 :alt="ability.name"
+                                 class="w-7 h-7"
+                                 onerror="this.src='/static/images/ability-default.png'">
+                        </div>
+
+                        <!-- Content -->
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                                <h3 class="font-semibold text-white" x-text="ability.name"></h3>
+                                <!-- API Key Required Badge -->
+                                <span x-show="ability.requires_api_key"
+                                      class="text-xs px-2 py-0.5 rounded-full bg-brand-orange/20 text-brand-orange">
+                                    API Key
+                                </span>
+                            </div>
+                            <p class="text-sm text-dark-text-secondary line-clamp-2" x-text="ability.description"></p>
+                        </div>
+
+                        <!-- Toggle -->
+                        <div class="flex-shrink-0">
+                            <div :class="stepData.abilities[ability.slug] ? 'bg-brand-teal' : 'bg-dark-elevated'"
+                                 class="w-12 h-7 rounded-full relative transition-colors">
+                                <div :class="stepData.abilities[ability.slug] ? 'translate-x-5' : 'translate-x-0'"
+                                     class="absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white shadow transition-transform">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Info callout about API keys -->
+        <div x-show="Object.entries(stepData.abilities).some(([slug, enabled]) =>
+                     enabled && availableAbilities.find(a => a.slug === slug)?.requires_api_key)"
+             x-transition
+             class="flex items-start gap-3 p-4 bg-brand-orange/10 border border-brand-orange/20 rounded-xl">
+            <svg class="w-5 h-5 text-brand-orange flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+            </svg>
+            <div class="text-sm">
+                <p class="text-brand-orange font-medium">Some abilities require API keys</p>
+                <p class="text-dark-text-secondary mt-1">
+                    You'll configure these in the API Keys step. Abilities will work once keys are added.
+                </p>
+            </div>
+        </div>
+
+        <!-- Skip Option -->
+        <p class="text-center text-sm text-dark-text-secondary">
+            You can change abilities anytime from your sidekick's settings
+        </p>
+    </div>
+</div>
+
+<style>
+    .ability-card {
+        background: rgba(32, 32, 32, 0.5);
+    }
+    .ability-card:hover {
+        background: rgba(32, 32, 32, 0.7);
+    }
+    .line-clamp-2 {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+</style>

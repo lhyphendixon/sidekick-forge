@@ -1,0 +1,422 @@
+{% extends "admin/docs/base_docs.html" %}
+
+{% set doc_title = "WordPress Integration" %}
+
+{% block docs_content %}
+
+<div class="docs-breadcrumb">
+    <a href="/admin/docs">Docs</a>
+    <span>/</span>
+    <span>WordPress Integration</span>
+</div>
+
+<div class="docs-hero">
+    <h1>WordPress Integration</h1>
+    <p>The Sidekick Forge Connect plugin bridges your WordPress user sessions with Sidekick Forge, enabling automatic authentication and content sync for your knowledge base.</p>
+</div>
+
+<div class="docs-toc">
+    <h4>On this page</h4>
+    <a href="#install">Installing the Plugin</a>
+    <a href="#configure">Configuration</a>
+    <a href="#auth-flow">How Authentication Works</a>
+    <a href="#knowledge-sync">Knowledge Base Sync</a>
+    <a href="#developer-mode">Developer Mode</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+</div>
+
+<!-- Section: Install -->
+<div class="docs-section" id="install">
+    <h2>Installing the Plugin</h2>
+
+    <div class="docs-step">
+        <div class="docs-step-number">1</div>
+        <div class="docs-step-content">
+            <h3>Download</h3>
+            <p>Download the latest version of Sidekick Forge Connect from your admin panel or ask your account manager for the plugin zip file.</p>
+        </div>
+    </div>
+
+    <div class="docs-step">
+        <div class="docs-step-number">2</div>
+        <div class="docs-step-content">
+            <h3>Install via WordPress Admin</h3>
+            <p>Go to <strong>Plugins &rarr; Add New &rarr; Upload Plugin</strong> in your WordPress admin. Select the zip file and click <strong>Install Now</strong>.</p>
+        </div>
+    </div>
+
+    <!-- WordPress plugin upload mockup -->
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>WordPress Admin &mdash; Plugin Upload</span>
+        </div>
+        <div class="docs-screenshot-body">
+            <div style="display:flex;gap:0;padding:0;margin:-24px;">
+                <!-- WP sidebar -->
+                <div style="width:160px;background:#1d2327;padding:16px 0;flex-shrink:0;">
+                    <div style="padding:8px 16px;font-size:11px;color:#fff;font-weight:600;margin-bottom:4px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" style="vertical-align:middle;margin-right:6px;"><circle cx="12" cy="12" r="10"/></svg>
+                        MyWebsite
+                    </div>
+                    <div style="padding:6px 16px;font-size:11px;color:#9ea3a8;">Dashboard</div>
+                    <div style="padding:6px 16px;font-size:11px;color:#9ea3a8;">Posts</div>
+                    <div style="padding:6px 16px;font-size:11px;color:#9ea3a8;">Pages</div>
+                    <div style="padding:6px 16px;font-size:11px;color:#fff;background:#0073aa;">Plugins</div>
+                    <div style="padding:6px 24px;font-size:10px;color:#9ea3a8;">Installed</div>
+                    <div style="padding:6px 24px;font-size:10px;color:#fff;">Add New</div>
+                    <div style="padding:6px 16px;font-size:11px;color:#9ea3a8;">Settings</div>
+                    <div style="padding:6px 16px;font-size:11px;color:#01a4a6;margin-top:4px;">
+                        <svg width="12" height="12" viewBox="0 0 40 40" fill="none" style="vertical-align:middle;margin-right:4px;"><rect width="40" height="40" rx="10" fill="#01a4a6"/><path d="M12 28V12l8 6-8 6v4zm8-10l8 6V12l-8 6z" fill="#fff" opacity="0.9"/></svg>
+                        Sidekick Forge
+                    </div>
+                </div>
+                <!-- WP main area -->
+                <div style="flex:1;background:#f0f0f1;padding:20px 24px;">
+                    <div style="color:#1d2327;font-size:18px;font-weight:400;margin-bottom:16px;">Upload Plugin</div>
+                    <div style="background:#fff;border:1px solid #c3c4c7;border-radius:4px;padding:20px;margin-bottom:16px;">
+                        <div style="border:2px dashed #c3c4c7;border-radius:4px;padding:20px;text-align:center;">
+                            <div style="font-size:13px;color:#50575e;margin-bottom:12px;">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#50575e" stroke-width="1.5" style="vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                                Choose File
+                            </div>
+                            <div style="display:inline-block;background:#f6f7f7;border:1px solid #c3c4c7;border-radius:3px;padding:6px 14px;font-size:12px;color:#2c3338;">
+                                sidekick-forge-connect-v0.7.3.zip
+                            </div>
+                        </div>
+                        <div style="margin-top:12px;text-align:right;">
+                            <span style="display:inline-block;background:#2271b1;color:#fff;padding:6px 16px;border-radius:3px;font-size:12px;font-weight:500;">Install Now</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="docs-step">
+        <div class="docs-step-number">3</div>
+        <div class="docs-step-content">
+            <h3>Activate</h3>
+            <p>Click <strong>Activate Plugin</strong>. You'll see a new <strong>Sidekick Forge</strong> menu item in the WordPress sidebar.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Configure -->
+<div class="docs-section" id="configure">
+    <h2>Configuration</h2>
+    <p>Navigate to <strong>Sidekick Forge</strong> in the WordPress admin sidebar to access the settings page.</p>
+
+    <!-- Settings page mockup -->
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Sidekick Forge &mdash; Settings Page</span>
+        </div>
+        <div class="docs-screenshot-body">
+            <div style="max-width:500px;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+                    <svg width="24" height="24" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#01a4a6"/><path d="M12 28V12l8 6-8 6v4zm8-10l8 6V12l-8 6z" fill="#fff" opacity="0.9"/></svg>
+                    <span style="color:#fff;font-family:'futura-pt',sans-serif;font-size:16px;">Sidekick Forge Connect</span>
+                    <span class="mock-tag" style="background:rgba(1,164,166,0.15);color:#01a4a6;">v0.7.3</span>
+                </div>
+                <!-- Settings fields -->
+                <div style="margin-bottom:16px;">
+                    <div style="color:#888;font-size:11px;margin-bottom:4px;">API Endpoint <span style="color:#f56453;">*</span></div>
+                    <div class="mock-input" style="color:#01a4a6;font-size:11px;">https://sidekickforge.com/api/v1/wordpress/bridge-session</div>
+                </div>
+                <div style="margin-bottom:16px;">
+                    <div style="color:#888;font-size:11px;margin-bottom:4px;">Shared Secret <span style="color:#f56453;">*</span></div>
+                    <div class="mock-input" style="color:#666;font-size:11px;">&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;</div>
+                </div>
+                <div style="margin-bottom:16px;">
+                    <div style="color:#888;font-size:11px;margin-bottom:4px;">Allowed Origins <span style="color:#f56453;">*</span></div>
+                    <div class="mock-input" style="color:#e0e0e0;font-size:11px;">https://sidekickforge.com</div>
+                </div>
+                <div style="border-top:1px solid #222;padding-top:16px;margin-top:20px;">
+                    <div style="color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Optional</div>
+                    <div style="margin-bottom:12px;">
+                        <div style="color:#888;font-size:11px;margin-bottom:4px;">Invitation Message</div>
+                        <div class="mock-input" style="font-size:11px;">Connect your account to access your personalized AI assistant.</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                        <div style="width:16px;height:16px;border-radius:3px;border:1px solid #333;background:transparent;"></div>
+                        <span style="color:#888;font-size:12px;">Enable Terms & Conditions</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <div style="width:16px;height:16px;border-radius:3px;border:1px solid #01a4a6;background:#01a4a6;display:flex;align-items:center;justify-content:center;">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                        </div>
+                        <span style="color:#888;font-size:12px;">Developer Mode</span>
+                    </div>
+                </div>
+                <div style="margin-top:20px;">
+                    <span class="mock-btn mock-btn-primary">Save Settings</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <h3>Required Settings</h3>
+
+    <div style="overflow-x: auto; margin: 16px 0;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <thead>
+                <tr style="border-bottom: 1px solid #2a2a2a;">
+                    <th style="text-align: left; padding: 10px 12px; color: #888; font-weight: 500; width: 180px;">Setting</th>
+                    <th style="text-align: left; padding: 10px 12px; color: #888; font-weight: 500;">Description</th>
+                </tr>
+            </thead>
+            <tbody style="color: #b0b0b0;">
+                <tr style="border-bottom: 1px solid #1a1a1a;">
+                    <td style="padding: 10px 12px;"><strong style="color: #e0e0e0;">API Endpoint</strong></td>
+                    <td style="padding: 10px 12px;">The Sidekick Forge backend URL for session exchange. This is provided in your WordPress Sites settings in the Sidekick Forge admin.</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #1a1a1a;">
+                    <td style="padding: 10px 12px;"><strong style="color: #e0e0e0;">Shared Secret</strong></td>
+                    <td style="padding: 10px 12px;">HMAC secret used to sign payloads. Must match the secret configured in Sidekick Forge for your WordPress site.</td>
+                </tr>
+                <tr>
+                    <td style="padding: 10px 12px;"><strong style="color: #e0e0e0;">Allowed Origins</strong></td>
+                    <td style="padding: 10px 12px;">Comma-separated list of Sidekick Forge embed origins (e.g., <code style="color: #01a4a6;">https://sidekickforge.com</code>). Only embeds from these origins can request tokens.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <h3>Optional Settings</h3>
+    <ul>
+        <li><strong>Invitation Message</strong> &mdash; Custom message shown to users on first connection</li>
+        <li><strong>Terms & Conditions</strong> &mdash; Require users to accept terms before connecting (configurable URL and text)</li>
+        <li><strong>Developer Mode</strong> &mdash; Shows a debug panel below the embed with bridge activity logs</li>
+    </ul>
+</div>
+
+<!-- Section: Auth Flow -->
+<div class="docs-section" id="auth-flow">
+    <h2>How Authentication Works</h2>
+    <p>The bridge automatically authenticates logged-in WordPress users with your Sidekick Forge embed. Here's the flow:</p>
+
+    <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 12px; padding: 28px; margin: 24px 0;">
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+            <!-- Flow step 1 -->
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="flex-shrink:0; width:40px; height:40px; border-radius:8px; background:rgba(1,164,166,0.15); display:flex; align-items:center; justify-content:center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#01a4a6" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </div>
+                <div>
+                    <div style="color: #e0e0e0; font-size: 14px; font-weight: 500;">User visits page with embed</div>
+                    <div style="color: #777; font-size: 13px;">WordPress detects the user is logged in and loads the bridge JS</div>
+                </div>
+            </div>
+            <div style="margin-left: 20px; border-left: 2px dashed #2a2a2a; height: 12px;"></div>
+            <!-- Flow step 2 -->
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="flex-shrink:0; width:40px; height:40px; border-radius:8px; background:rgba(252,114,68,0.15); display:flex; align-items:center; justify-content:center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fc7244" stroke-width="2"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+                </div>
+                <div>
+                    <div style="color: #e0e0e0; font-size: 14px; font-weight: 500;">Embed requests token via postMessage</div>
+                    <div style="color: #777; font-size: 13px;">The iframe sends <code style="color:#888;">SKF_REQUEST_TOKEN</code> to the parent window</div>
+                </div>
+            </div>
+            <div style="margin-left: 20px; border-left: 2px dashed #2a2a2a; height: 12px;"></div>
+            <!-- Flow step 3 -->
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="flex-shrink:0; width:40px; height:40px; border-radius:8px; background:rgba(139,92,246,0.15); display:flex; align-items:center; justify-content:center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                </div>
+                <div>
+                    <div style="color: #e0e0e0; font-size: 14px; font-weight: 500;">Bridge calls WordPress REST API</div>
+                    <div style="color: #777; font-size: 13px;">Builds HMAC-signed payload with user info, sends to Sidekick Forge backend</div>
+                </div>
+            </div>
+            <div style="margin-left: 20px; border-left: 2px dashed #2a2a2a; height: 12px;"></div>
+            <!-- Flow step 4 -->
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="flex-shrink:0; width:40px; height:40px; border-radius:8px; background:rgba(1,164,166,0.15); display:flex; align-items:center; justify-content:center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#01a4a6" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                </div>
+                <div>
+                    <div style="color: #e0e0e0; font-size: 14px; font-weight: 500;">Session established</div>
+                    <div style="color: #777; font-size: 13px;">Supabase tokens returned to embed, user sees the chat interface automatically</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="docs-callout docs-callout-info">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <div><strong>First-time users</strong> see a "Connect Account" modal before authentication proceeds. Once accepted, the bridge remembers the choice per WordPress user and authenticates silently on subsequent visits.</div>
+    </div>
+
+    <p>For logged-out visitors, the bridge script is not loaded at all &mdash; they see the standard Sidekick Forge login screen in the embed.</p>
+</div>
+
+<!-- Section: Knowledge Sync -->
+<div class="docs-section" id="knowledge-sync">
+    <h2>Knowledge Base Sync</h2>
+    <p>The plugin includes a built-in knowledge base sync tool that imports your WordPress content (posts and pages) into your sidekick's knowledge base.</p>
+
+    <!-- KB sync mockup -->
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Sidekick Forge &mdash; Knowledge Base Sync</span>
+        </div>
+        <div class="docs-screenshot-body">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <span style="color:#fff;font-size:15px;">WordPress Content</span>
+                <div style="display:flex;gap:8px;">
+                    <span class="mock-btn mock-btn-ghost">Select All</span>
+                    <span class="mock-btn mock-btn-primary">Sync Selected (3)</span>
+                </div>
+            </div>
+            <!-- Content rows -->
+            <div class="mock-card" style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+                <div style="width:16px;height:16px;border-radius:3px;border:1px solid #01a4a6;background:#01a4a6;display:flex;align-items:center;justify-content:center;">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div style="flex:1;">
+                    <div style="color:#e0e0e0;font-size:12px;">Getting Started Guide</div>
+                    <div style="color:#555;font-size:10px;">Page &bull; Published Jan 15, 2025</div>
+                </div>
+                <span class="mock-tag" style="background:rgba(1,164,166,0.15);color:#01a4a6;">Synced</span>
+            </div>
+            <div class="mock-card" style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+                <div style="width:16px;height:16px;border-radius:3px;border:1px solid #01a4a6;background:#01a4a6;display:flex;align-items:center;justify-content:center;">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div style="flex:1;">
+                    <div style="color:#e0e0e0;font-size:12px;">Frequently Asked Questions</div>
+                    <div style="color:#555;font-size:10px;">Page &bull; Published Feb 3, 2025</div>
+                </div>
+                <span class="mock-tag" style="background:rgba(1,164,166,0.15);color:#01a4a6;">Synced</span>
+            </div>
+            <div class="mock-card" style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+                <div style="width:16px;height:16px;border-radius:3px;border:1px solid #01a4a6;background:#01a4a6;display:flex;align-items:center;justify-content:center;">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div style="flex:1;">
+                    <div style="color:#e0e0e0;font-size:12px;">Product Pricing &amp; Plans</div>
+                    <div style="color:#555;font-size:10px;">Post &bull; Published Feb 10, 2025</div>
+                </div>
+                <span class="mock-tag" style="background:rgba(252,114,68,0.15);color:#fc7244;">Pending</span>
+            </div>
+            <div class="mock-card" style="display:flex;align-items:center;gap:12px;">
+                <div style="width:16px;height:16px;border-radius:3px;border:1px solid #333;background:transparent;"></div>
+                <div style="flex:1;">
+                    <div style="color:#e0e0e0;font-size:12px;">About Our Team</div>
+                    <div style="color:#555;font-size:10px;">Page &bull; Published Dec 20, 2024</div>
+                </div>
+                <span style="color:#555;font-size:10px;">Not synced</span>
+            </div>
+        </div>
+    </div>
+
+    <h3>How to Sync</h3>
+    <ol>
+        <li>Navigate to <strong>Sidekick Forge &rarr; Knowledge Base</strong> in WordPress admin</li>
+        <li>Click <strong>Load Content</strong> to see your published posts and pages</li>
+        <li>Select the items you want to sync (or click <strong>Select All</strong>)</li>
+        <li>Click <strong>Sync Selected</strong> to start the batch import</li>
+    </ol>
+    <p>Content is sent to Sidekick Forge in batches, where it's chunked, embedded, and indexed for RAG retrieval. The sync status is shown per item so you can track what's been imported.</p>
+</div>
+
+<!-- Section: Developer Mode -->
+<div class="docs-section" id="developer-mode">
+    <h2>Developer Mode</h2>
+    <p>Enable Developer Mode in the plugin settings to see real-time bridge activity below the embed. This is invaluable for debugging authentication issues.</p>
+
+    <!-- Dev mode mockup -->
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Developer Mode &mdash; Debug Panel</span>
+        </div>
+        <div class="docs-screenshot-body" style="padding:0;">
+            <!-- Fake embed area -->
+            <div style="background:#0a0a0a;padding:24px;text-align:center;border-bottom:1px solid #222;">
+                <div style="color:#888;font-size:12px;margin-bottom:8px;">Sidekick Forge Embed</div>
+                <div style="display:inline-flex;align-items:center;gap:3px;height:30px;">
+                    <div style="width:3px;height:12px;background:#01a4a6;border-radius:1px;opacity:0.5;"></div>
+                    <div style="width:3px;height:18px;background:#01a4a6;border-radius:1px;opacity:0.7;"></div>
+                    <div style="width:3px;height:24px;background:#01a4a6;border-radius:1px;"></div>
+                    <div style="width:3px;height:16px;background:#01a4a6;border-radius:1px;opacity:0.6;"></div>
+                    <div style="width:3px;height:20px;background:#01a4a6;border-radius:1px;opacity:0.8;"></div>
+                </div>
+                <div style="color:#666;font-size:11px;margin-top:8px;">Connected &bull; Voice mode active</div>
+            </div>
+            <!-- Debug panel -->
+            <div style="background:#0d1117;padding:16px 20px;font-family:'SF Mono','Fira Code',monospace;font-size:11px;line-height:1.8;">
+                <div style="color:#fc7244;font-weight:600;margin-bottom:8px;">Sidekick Forge Bridge (Developer Mode)</div>
+                <div style="color:#555;">[12:34:01]</div>
+                <div style="color:#01a4a6;">Bridge initialized. Allowed origins: https://sidekickforge.com</div>
+                <div style="color:#555;">[12:34:02]</div>
+                <div style="color:#888;">Received SKF_REQUEST_TOKEN from iframe</div>
+                <div style="color:#555;">[12:34:02]</div>
+                <div style="color:#888;">Requesting Supabase session from WordPress REST API...</div>
+                <div style="color:#555;">[12:34:03]</div>
+                <div style="color:#01a4a6;">Received session payload.</div>
+                <div style="color:#555;">[12:34:03]</div>
+                <div style="color:#01a4a6;">Token sent to embed. <span style="color:rgba(1,164,166,0.5);">&#10003;</span></div>
+            </div>
+        </div>
+    </div>
+
+    <p>The debug panel shows:</p>
+    <ul>
+        <li>Bridge initialization and allowed origins</li>
+        <li>Token request/response flow</li>
+        <li>Session payload data (when received)</li>
+        <li>Any errors that occur during the exchange</li>
+    </ul>
+</div>
+
+<!-- Section: Troubleshooting -->
+<div class="docs-section" id="troubleshooting">
+    <h2>Troubleshooting</h2>
+
+    <h3>"Connect Now" appears for logged-out visitors</h3>
+    <p>Update to plugin version 0.7.3 or later. Earlier versions loaded the bridge for all visitors. Version 0.7.3+ only loads the bridge when a WordPress user is logged in.</p>
+
+    <h3>Bridge times out (no session established)</h3>
+    <ul>
+        <li>Verify the <strong>API Endpoint</strong> is correct and reachable</li>
+        <li>Check that the <strong>Shared Secret</strong> matches the value configured in Sidekick Forge</li>
+        <li>Ensure the embed origin (e.g., <code style="color: #01a4a6;">https://sidekickforge.com</code>) is in the <strong>Allowed Origins</strong> list</li>
+        <li>Enable Developer Mode to see detailed error messages</li>
+    </ul>
+
+    <h3>"Failed to create user" error</h3>
+    <p>This typically occurs when the user lookup hits pagination limits. Update your Sidekick Forge backend to v2.9.4+ which includes paginated user lookup and automatic retry.</p>
+
+    <h3>Embed shows login screen despite being logged into WordPress</h3>
+    <ul>
+        <li>Check that the plugin is activated and configured</li>
+        <li>Verify you're using the shortcode or that the bridge script is loading (check browser DevTools &rarr; Network for <code>sidekick-forge-bridge.js</code>)</li>
+        <li>Clear any page caching (WP Super Cache, Cloudflare, etc.)</li>
+    </ul>
+</div>
+
+<div class="docs-nav-footer">
+    <a href="/admin/docs/embedding" class="docs-nav-link">
+        <span class="label">Previous</span>
+        <span class="title">&larr; Embedding Your Sidekick</span>
+    </a>
+    <a href="/admin/docs/monitoring" class="docs-nav-link next">
+        <span class="label">Next</span>
+        <span class="title">Monitoring & Conversations &rarr;</span>
+    </a>
+</div>
+
+{% endblock %}

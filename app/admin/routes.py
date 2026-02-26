@@ -1227,6 +1227,7 @@ async def get_all_agents() -> List[Dict[str, Any]]:
                         "slug": agent.slug,
                         "name": agent.name,
                         "description": getattr(agent, 'description', ''),
+                        "agent_image": getattr(agent, 'agent_image', '') or '',
                         "client_id": agent.client_id,
                         "client_name": client_map.get(agent.client_id, client.name),
                         "status": "active" if getattr(agent, 'active', getattr(agent, 'enabled', True)) else "inactive",
@@ -3334,7 +3335,7 @@ async def agent_preview_modal(
         
         modal_html = f"""
         <div class=\"fixed inset-0 bg-black/80 flex items-center justify-center z-50\">
-          <div class=\"bg-dark-surface border border-dark-border rounded-lg w-full max-w-3xl h-[80vh] flex flex-col\">
+          <div class=\"bg-dark-surface border border-dark-border rounded-lg w-full max-w-4xl h-[90vh] flex flex-col\">
             <div class=\"flex items-center justify-between p-3 border-b border-dark-border\">
               <h3 class=\"text-dark-text text-sm\">Preview Sidekick</h3>
               <button class=\"px-3 py-1 text-sm border border-dark-border rounded\" hx-on:click=\"document.getElementById('modal-container').innerHTML=''\">Close</button>
@@ -5669,3 +5670,47 @@ async def update_document_access(
     except Exception as e:
         logger.error(f"Failed to update document access: {e}")
         return {"success": False, "message": str(e)}
+
+
+# ── Documentation routes ──────────────────────────────────────────────────────
+
+@router.get("/docs", response_class=HTMLResponse)
+async def docs_index(request: Request):
+    """Docs landing – redirects to Getting Started."""
+    return RedirectResponse(url="/admin/docs/getting-started", status_code=302)
+
+@router.get("/docs/getting-started", response_class=HTMLResponse)
+async def docs_getting_started(request: Request):
+    return templates.TemplateResponse("admin/docs/getting_started.html", {"request": request})
+
+@router.get("/docs/embedding", response_class=HTMLResponse)
+async def docs_embedding(request: Request):
+    return templates.TemplateResponse("admin/docs/embedding.html", {"request": request})
+
+@router.get("/docs/managing", response_class=HTMLResponse)
+async def docs_managing(request: Request):
+    return templates.TemplateResponse("admin/docs/managing.html", {"request": request})
+
+@router.get("/docs/abilities", response_class=HTMLResponse)
+async def docs_abilities(request: Request):
+    return templates.TemplateResponse("admin/docs/abilities.html", {"request": request})
+
+@router.get("/docs/knowledge-base", response_class=HTMLResponse)
+async def docs_knowledge_base(request: Request):
+    return templates.TemplateResponse("admin/docs/knowledge_base_guide.html", {"request": request})
+
+@router.get("/docs/wordpress", response_class=HTMLResponse)
+async def docs_wordpress(request: Request):
+    return templates.TemplateResponse("admin/docs/wordpress.html", {"request": request})
+
+@router.get("/docs/monitoring", response_class=HTMLResponse)
+async def docs_monitoring(request: Request):
+    return templates.TemplateResponse("admin/docs/monitoring_guide.html", {"request": request})
+
+@router.get("/docs/billing", response_class=HTMLResponse)
+async def docs_billing(request: Request):
+    return templates.TemplateResponse("admin/docs/billing.html", {"request": request})
+
+@router.get("/docs/troubleshooting", response_class=HTMLResponse)
+async def docs_troubleshooting(request: Request):
+    return templates.TemplateResponse("admin/docs/troubleshooting.html", {"request": request})

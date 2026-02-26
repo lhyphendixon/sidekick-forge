@@ -1,0 +1,195 @@
+{% extends "admin/docs/base_docs.html" %}
+
+{% set doc_title = "Troubleshooting" %}
+
+{% block docs_content %}
+
+<div class="docs-breadcrumb">
+    <a href="/admin/docs">Docs</a>
+    <span>/</span>
+    <span>Troubleshooting</span>
+</div>
+
+<div class="docs-hero">
+    <h1>Troubleshooting</h1>
+    <p>Quick fixes for common issues. If you don't find your answer here, reach out to our support team.</p>
+</div>
+
+<div class="docs-toc">
+    <h4>On this page</h4>
+    <a href="#voice-issues">Voice & Audio Issues</a>
+    <a href="#embed-issues">Embed & Display Issues</a>
+    <a href="#knowledge-issues">Knowledge Base Issues</a>
+    <a href="#response-quality">Response Quality</a>
+    <a href="#account-issues">Account & Billing Issues</a>
+    <a href="#getting-help">Getting Help</a>
+</div>
+
+<!-- Section: Voice Issues -->
+<div class="docs-section" id="voice-issues">
+    <h2>Voice & Audio Issues</h2>
+
+    <div style="margin: 16px 0;">
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"My microphone isn't working in the embed"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                <p>The most common cause is a missing <code>allow</code> attribute on the iframe. Make sure your embed code includes:</p>
+                <div class="docs-code" style="margin:10px 0;">allow=<span class="string">"microphone; camera"</span></div>
+                <p>Without this, the browser blocks microphone access inside iframes. Also ensure the page is served over <strong>HTTPS</strong> &mdash; browsers don't allow microphone access on insecure pages.</p>
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"The voice sounds robotic or unnatural"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                Try switching to a different voice from the sidekick detail page. Cartesia Sonic voices tend to sound the most natural for conversational use. You can preview voices before selecting. If you're using BYOK, make sure your TTS API key is valid and your account has sufficient credits.
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"There's a long delay before the sidekick responds"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                Response latency depends on the LLM provider. For voice conversations, we recommend Cerebras or Groq for the lowest latency. If you're using OpenAI or Anthropic, responses may take slightly longer because these models prioritize depth over speed. If using <a href="/admin/docs/getting-started#inference">Sidekick Forge Inference</a>, the optimized defaults are already configured for lowest latency.
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"The sidekick interrupts me while I'm still talking"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                Turn detection is handled by the speech-to-text model. In noisy environments, background sounds can be misinterpreted as speech endings. Try using a headset or moving to a quieter space. The system also adapts over the course of a conversation.
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Embed Issues -->
+<div class="docs-section" id="embed-issues">
+    <h2>Embed & Display Issues</h2>
+
+    <div style="margin: 16px 0;">
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"The embed shows a blank page or loading spinner"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                Check that your embed URL is correct. The format is: <code>https://sidekickforge.com/embed/{client_id}/{sidekick_slug}</code>. Verify both the client ID and slug match what's shown on your sidekick detail page. Also check that the sidekick is enabled (not disabled).
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"The embed doesn't load on my WordPress site"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                If you're using the Sidekick Forge Connect plugin, make sure your API credentials are entered in the plugin settings and the bridge auth is working. Check <strong>Settings &rarr; Sidekick Forge Connect</strong> in your WordPress admin. If using a raw iframe, ensure your hosting allows iframes and the <code>X-Frame-Options</code> header isn't blocking the embed.
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"The chat looks cut off or too small on mobile"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                The embed is fully responsive, but it needs a minimum height to display properly. Set <code>min-height: 600px</code> on the iframe or container. For voice mode, we recommend at least 600px height. See the <a href="/admin/docs/embedding#iframe-embed">Embedding guide</a> for recommended sizes by mode.
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Knowledge Issues -->
+<div class="docs-section" id="knowledge-issues">
+    <h2>Knowledge Base Issues</h2>
+
+    <div style="margin: 16px 0;">
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"My document is stuck on 'Processing'"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                Large documents (especially PDFs with many pages) can take several minutes to process. If a document has been processing for more than 10 minutes, try deleting it and re-uploading. Make sure the file isn't corrupted and is within your plan's size limits (5MB for Adventurer, 50MB for Champion).
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"My sidekick ignores my uploaded documents"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                First, confirm the document status is "Indexed" (not "Processing"). Then check that the document is assigned to the correct sidekick &mdash; by default documents are available to all sidekicks, but if you've restricted access, the sidekick may not see it. Finally, try asking the question using similar language to what appears in the document. See the <a href="/admin/docs/knowledge-base#troubleshooting">Knowledge Base Guide</a> for more tips.
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"Citations link to the wrong document"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                This usually happens when multiple documents cover overlapping topics. The system retrieves the most semantically similar chunks, which may come from an unexpected document. Consolidate overlapping content into a single authoritative source, or restrict document access per sidekick.
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Response Quality -->
+<div class="docs-section" id="response-quality">
+    <h2>Response Quality</h2>
+
+    <div style="margin: 16px 0;">
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"My sidekick gives answers that are too long / too short"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                This is controlled by the system prompt. Add explicit length guidance: <em>"Keep responses under 3 sentences unless the user asks for more detail"</em> or <em>"Provide thorough, detailed explanations with examples."</em> The system prompt is the most effective way to control response length and style.
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"My sidekick answers questions it shouldn't"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                Set clear boundaries in the system prompt. For example: <em>"You only answer questions about our products and services. For personal advice, legal questions, or medical questions, politely explain that you can't help with those topics and suggest they consult a professional."</em>
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"My sidekick makes up information"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                This is called "hallucination" and happens when the AI doesn't have enough context to answer accurately. Two solutions: (1) Upload more relevant documents to the <a href="/admin/docs/knowledge-base">Knowledge Base</a> so the sidekick has real information to reference. (2) Add a system prompt instruction like: <em>"If you don't have enough information to answer accurately, say so honestly rather than guessing."</em>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Account Issues -->
+<div class="docs-section" id="account-issues">
+    <h2>Account & Billing Issues</h2>
+
+    <div style="margin: 16px 0;">
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; margin-bottom: 10px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"I can't log into the admin panel"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                Make sure you're using the correct URL for your environment. If you've forgotten your password, use the password reset link on the login page. If your account was recently created, check your email for a confirmation link.
+            </div>
+        </div>
+
+        <div style="background: rgba(20,20,20,0.6); border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px;">
+            <div style="color: #e0e0e0; font-weight: 600; margin-bottom: 6px;">"I'm seeing 'limit exceeded' but I just upgraded"</div>
+            <div style="color: #888; font-size: 13px; line-height: 1.7;">
+                After upgrading, it may take a few minutes for the new limits to propagate. If you're still seeing the warning after 15 minutes, try logging out and back in. Your usage counter may also need to reset at the start of the next billing period.
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Getting Help -->
+<div class="docs-section" id="getting-help">
+    <h2>Getting Help</h2>
+    <p>If you can't find a solution here:</p>
+
+    <ul>
+        <li>Review the other docs pages &mdash; the <a href="/admin/docs/knowledge-base">Knowledge Base Guide</a> and <a href="/admin/docs/managing">Managing Your Sidekick</a> cover many common configuration questions</li>
+        <li>Check the <a href="/admin/docs/monitoring">Monitoring Dashboard</a> for usage-related issues</li>
+        <li>Contact our support team for assistance</li>
+    </ul>
+
+    <div class="docs-callout docs-callout-tip">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+        <div><strong>When contacting support:</strong> Include your sidekick name, the specific behavior you're seeing, and what you expected instead. Screenshots of the issue are always helpful.</div>
+    </div>
+</div>
+
+<div class="docs-nav-footer">
+    <a href="/admin/docs/billing" class="docs-nav-link">
+        <span class="label">Previous</span>
+        <span class="title">&larr; Billing & Plans</span>
+    </a>
+    <div></div>
+</div>
+
+{% endblock %}

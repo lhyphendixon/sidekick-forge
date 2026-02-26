@@ -73,6 +73,10 @@ class ToolRegistry:
                     ft = self._build_code_tool(t)
                 elif ttype == "asana":
                     ft = self._build_asana_tool(t)
+                elif ttype == "content_catalyst":
+                    ft = self._build_content_catalyst_tool(t)
+                elif ttype == "image_catalyst":
+                    ft = self._build_image_catalyst_tool(t)
                 else:
                     self._logger.warning(f"Unsupported tool type '{ttype}' for slug={slug}; skipping")
                     continue
@@ -893,3 +897,156 @@ class ToolRegistry:
             setattr(_invoke_with_context, "__livekit_tool_info", getattr(original_tool, "__livekit_tool_info"))
 
         return _invoke_with_context
+
+    def _build_content_catalyst_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Content Catalyst tool for multi-phase article generation."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "content_catalyst"
+        cfg = dict(t.get("config") or {})
+        # LLM-optimized description for function tool schema (NOT the user-facing DB description).
+        # Must be unambiguous so the LLM never confuses this with image-catalyst.
+        description = (
+            "Generate a WRITTEN article, blog post, essay, or long-form TEXT content. "
+            "ONLY use this tool when the user wants WRITTEN TEXT — e.g. 'write an article', "
+            "'draft a blog post', 'compose an essay'. "
+            "NEVER use this tool for images, pictures, thumbnails, banners, photos, or any "
+            "visual content — use the image-catalyst tool for those instead."
+        )
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_widget": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Set to true to trigger the Content Catalyst widget UI",
+                    },
+                    "suggested_topic": {
+                        "type": "string",
+                        "description": "Optional topic suggestion from the conversation to pre-fill in the widget",
+                    },
+                    "source_type": {
+                        "type": "string",
+                        "enum": ["text", "url", "mp3", "topic", "audio"],
+                        "description": "Source type for content generation: 'text' or 'topic' for topic-based, 'url' for URL-based, 'mp3' or 'audio' for audio transcription",
+                    },
+                    "source_content": {
+                        "type": "string",
+                        "description": "The source content - topic text, URL, or audio reference",
+                    },
+                    "target_word_count": {
+                        "type": "integer",
+                        "description": "Target word count for the generated article (e.g., 500, 1000, 2000)",
+                    },
+                    "style_prompt": {
+                        "type": "string",
+                        "description": "Writing style instructions or preferences",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            """Trigger the Content Catalyst widget UI for user configuration."""
+            try:
+                self._logger.info("🎨 Content Catalyst widget trigger invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+
+            suggested_topic = kwargs.get("suggested_topic", "") or kwargs.get("source_content", "")
+            source_type = kwargs.get("source_type", "topic")
+            source_content = kwargs.get("source_content", "")
+            target_word_count = kwargs.get("target_word_count")
+            style_prompt = kwargs.get("style_prompt", "")
+
+            widget_trigger = {
+                "widget_type": "content_catalyst",
+                "suggested_topic": suggested_topic,
+                "source_type": source_type,
+                "source_content": source_content,
+                "target_word_count": target_word_count,
+                "style_prompt": style_prompt,
+                "message": "Opening Content Catalyst configuration...",
+            }
+
+            self._emit_tool_result(
+                slug=slug,
+                tool_type="content_catalyst",
+                success=True,
+                output="Widget triggered",
+                raw_output=widget_trigger,
+            )
+
+            return f"WIDGET_TRIGGER:content_catalyst:{suggested_topic}"
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_image_catalyst_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Image Catalyst tool for AI image generation."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "image-catalyst"
+        # LLM-optimized description for function tool schema (NOT the user-facing DB description).
+        # Must be unambiguous so the LLM always picks this for visual/image requests.
+        description = (
+            "Create, generate, or make an IMAGE, picture, photo, thumbnail, banner, or any "
+            "VISUAL content using AI. Use this tool whenever the user wants any kind of visual "
+            "or graphic created — including thumbnails, promotional images, photos, artwork, "
+            "illustrations, or designs. NEVER use content_catalyst for visual content."
+        )
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_widget": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Set to true to trigger the Image Catalyst widget UI",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Description of the image to generate",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["general", "thumbnail"],
+                        "description": "Image generation mode: 'general' for creative imagery, 'thumbnail' for polished marketing images",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            try:
+                self._logger.info("🖼️ Image Catalyst widget trigger invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+
+            prompt = kwargs.get("prompt", "")
+            mode = kwargs.get("mode", "general")
+
+            widget_trigger = {
+                "widget_type": "image_catalyst",
+                "prompt": prompt,
+                "mode": mode,
+                "message": "Opening Image Catalyst...",
+            }
+
+            self._emit_tool_result(
+                slug=slug,
+                tool_type="image_catalyst",
+                success=True,
+                output="Widget triggered",
+                raw_output=widget_trigger,
+            )
+
+            return f"WIDGET_TRIGGER:image_catalyst:{prompt}"
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)

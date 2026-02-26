@@ -1,0 +1,261 @@
+<!-- Step 7: API Keys -->
+<div class="space-y-8">
+    <!-- BYOK Disabled: Using Platform Keys -->
+    <template x-if="!clientSettings.bring_your_own_keys">
+        <div class="text-center space-y-6">
+            <div class="space-y-3">
+                <h1 class="text-4xl md:text-5xl font-light text-white">
+                    You're all set!
+                </h1>
+                <p class="text-dark-text-secondary text-lg max-w-md mx-auto">
+                    Your sidekick will use platform-provided API keys.
+                </p>
+            </div>
+
+            <div class="max-w-md mx-auto">
+                <div class="glass-container rounded-xl p-8 space-y-4">
+                    <!-- Platform Keys Icon -->
+                    <div class="flex justify-center">
+                        <div class="w-16 h-16 rounded-full bg-brand-teal/20 flex items-center justify-center">
+                            <svg class="w-8 h-8 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                            </svg>
+                        </div>
+                    </div>
+
+                    <div class="text-center">
+                        <h3 class="text-lg font-medium text-white mb-2">Platform Keys Enabled</h3>
+                        <p class="text-sm text-dark-text-secondary">
+                            No need to configure API keys. Your usage will be tracked against your
+                            <span class="text-brand-teal capitalize" x-text="clientSettings.tier"></span> plan quota.
+                        </p>
+                    </div>
+
+                    <!-- What's Included -->
+                    <div class="pt-4 border-t border-white/10 space-y-3">
+                        <p class="text-xs text-dark-text-muted uppercase tracking-wider">Included Services</p>
+                        <div class="grid grid-cols-2 gap-2 text-sm">
+                            <div class="flex items-center gap-2 text-dark-text-secondary">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                </svg>
+                                <span>Cerebras LLM</span>
+                            </div>
+                            <div class="flex items-center gap-2 text-dark-text-secondary">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                </svg>
+                                <span>Cartesia Voice</span>
+                            </div>
+                            <div class="flex items-center gap-2 text-dark-text-secondary">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                </svg>
+                                <span>SiliconFlow Embed</span>
+                            </div>
+                            <div class="flex items-center gap-2 text-dark-text-secondary">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                </svg>
+                                <span>Reranking</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- BYOK Option for eligible tiers -->
+                <div x-show="clientSettings.can_bring_own_keys" class="mt-4 text-center">
+                    <p class="text-xs text-dark-text-muted">
+                        Want to use your own API keys?
+                        <a href="/admin/settings" class="text-brand-teal hover:underline">
+                            Enable in Account Settings
+                        </a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- BYOK Enabled: Show API Key Form -->
+    <template x-if="clientSettings.bring_your_own_keys">
+        <div class="space-y-8">
+            <div class="text-center space-y-3">
+                <h1 class="text-4xl md:text-5xl font-light text-white">
+                    Connect your services
+                </h1>
+                <p class="text-dark-text-secondary text-lg">
+                    Enter API keys for the services you've selected
+                </p>
+            </div>
+
+            <div class="max-w-xl mx-auto space-y-6">
+                <!-- Required Keys Based on Config -->
+                <div class="glass-container rounded-xl p-6 space-y-5">
+                    <div class="flex items-center gap-2 text-brand-teal mb-4">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 012 2 1 1 0 102 0 4 4 0 00-4-4z" clip-rule="evenodd"></path>
+                        </svg>
+                        <h3 class="font-medium">Required API Keys</h3>
+                    </div>
+
+                    <!-- Cartesia API Key (for default STT/TTS) -->
+                    <div x-show="stepData.config_mode === 'default' || stepData.advanced_config.stt_provider === 'cartesia' || stepData.advanced_config.tts_provider === 'cartesia'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">Cartesia API Key</span>
+                            <a href="https://cartesia.ai" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.cartesia"
+                            placeholder="sk_cart_..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+
+                    <!-- Cerebras API Key (for default LLM) -->
+                    <div x-show="stepData.config_mode === 'default' || stepData.advanced_config.llm_provider === 'cerebras'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">Cerebras API Key</span>
+                            <a href="https://cloud.cerebras.ai" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.cerebras"
+                            placeholder="csk-..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+
+                    <!-- SiliconFlow API Key (for default embeddings) -->
+                    <div x-show="stepData.config_mode === 'default' || stepData.advanced_config.embedding_provider === 'siliconflow'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">SiliconFlow API Key</span>
+                            <a href="https://siliconflow.cn" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.siliconflow"
+                            placeholder="sf-..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+
+                    <!-- OpenAI API Key (if selected) -->
+                    <div x-show="stepData.advanced_config.stt_provider === 'openai' || stepData.advanced_config.tts_provider === 'openai' || stepData.advanced_config.llm_provider === 'openai' || stepData.advanced_config.embedding_provider === 'openai'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">OpenAI API Key</span>
+                            <a href="https://platform.openai.com/api-keys" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.openai"
+                            placeholder="sk-..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+
+                    <!-- Anthropic API Key (if selected) -->
+                    <div x-show="stepData.advanced_config.llm_provider === 'anthropic'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">Anthropic API Key</span>
+                            <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.anthropic"
+                            placeholder="sk-ant-..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+
+                    <!-- Deepgram API Key (if selected for STT) -->
+                    <div x-show="stepData.advanced_config.stt_provider === 'deepgram'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">Deepgram API Key</span>
+                            <a href="https://console.deepgram.com" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.deepgram"
+                            placeholder="..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+
+                    <!-- ElevenLabs API Key (if selected for TTS) -->
+                    <div x-show="stepData.advanced_config.tts_provider === 'elevenlabs'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">ElevenLabs API Key</span>
+                            <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.elevenlabs"
+                            placeholder="..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+
+                    <!-- Groq API Key (if selected for LLM) -->
+                    <div x-show="stepData.advanced_config.llm_provider === 'groq'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">Groq API Key</span>
+                            <a href="https://console.groq.com/keys" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.groq"
+                            placeholder="gsk_..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+
+                    <!-- Cohere API Key (if selected for embeddings) -->
+                    <div x-show="stepData.advanced_config.embedding_provider === 'cohere'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">Cohere API Key</span>
+                            <a href="https://dashboard.cohere.com/api-keys" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.cohere"
+                            placeholder="..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+                </div>
+
+                <!-- Security Note -->
+                <div class="flex items-start gap-3 p-4 bg-dark-elevated/50 rounded-lg border border-white/5">
+                    <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                    </svg>
+                    <div class="text-sm">
+                        <p class="text-white font-medium">Your keys are encrypted</p>
+                        <p class="text-dark-text-muted mt-1">
+                            API keys are stored securely and encrypted at rest. They're only used to power your sidekick.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Skip Option -->
+                <div class="text-center">
+                    <button
+                        @click="stepData.api_keys_confirmed = false; nextStep()"
+                        class="text-sm text-dark-text-muted hover:text-dark-text-secondary transition">
+                        Skip for now (configure later in settings)
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>

@@ -1,0 +1,244 @@
+version: '3.8'
+
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${APP_NAME:-sidekick-forge}-fastapi
+    user: root
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - DEVELOPMENT_MODE=false
+      - REDIS_HOST=redis
+      - DATABASE_URL=${DATABASE_URL}
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - APP_NAME=${APP_NAME}
+      - PLATFORM_NAME=${PLATFORM_NAME}
+      # Platform Supabase credentials
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_ACCESS_TOKEN=${SUPABASE_ACCESS_TOKEN}
+      - SUPABASE_ORG_ID=${SUPABASE_ORG_ID}
+      - SUPABASE_DEFAULT_REGION=${SUPABASE_DEFAULT_REGION}
+      - SUPABASE_DEFAULT_PLAN=${SUPABASE_DEFAULT_PLAN}
+      # Asana OAuth configuration
+      - ASANA_OAUTH_CLIENT_ID=${ASANA_OAUTH_CLIENT_ID}
+      - ASANA_OAUTH_CLIENT_SECRET=${ASANA_OAUTH_CLIENT_SECRET}
+      - ASANA_OAUTH_REDIRECT_URI=${ASANA_OAUTH_REDIRECT_URI}
+      - ASANA_TOKEN_PREFERRED_STORE=${ASANA_TOKEN_PREFERRED_STORE}
+      - ASANA_TOKEN_MIRROR_STORES=${ASANA_TOKEN_MIRROR_STORES}
+      # LiveKit credentials  
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      # Agent name for staging (must match agent-worker)
+      - AGENT_NAME=sidekick-agent-staging-local
+      - LIVEKIT_AGENT_NAME=sidekick-agent-staging-local
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      # Perplexity platform key
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
+      # HelpScout OAuth configuration
+      - HELPSCOUT_OAUTH_CLIENT_ID=${HELPSCOUT_OAUTH_CLIENT_ID}
+      - HELPSCOUT_OAUTH_CLIENT_SECRET=${HELPSCOUT_OAUTH_CLIENT_SECRET}
+      - HELPSCOUT_OAUTH_REDIRECT_URI=${HELPSCOUT_OAUTH_REDIRECT_URI}
+      - HELPSCOUT_TOKEN_PREFERRED_STORE=${HELPSCOUT_TOKEN_PREFERRED_STORE:-platform}
+      - HELPSCOUT_TOKEN_REFRESH_MARGIN_SECONDS=${HELPSCOUT_TOKEN_REFRESH_MARGIN_SECONDS:-300}
+      # Mailchimp audience
+      - MAILCHIMP_API_KEY=${MAILCHIMP_API_KEY:-}
+      - MAILCHIMP_LIST_ID=${MAILCHIMP_LIST_ID:-}
+      - DOCUMENT_PROCESSOR_MAX_CONCURRENCY=2
+      - DOCUMENT_PROCESSOR_MAX_CHUNKS=250
+      - DOCUMENT_PROCESSOR_MAX_FILE_MB=${DOCUMENT_PROCESSOR_MAX_FILE_MB:-100}
+      - WORDPRESS_BRIDGE_SECRET=${WORDPRESS_BRIDGE_SECRET:-}
+      - WORDPRESS_BRIDGE_MAX_SKEW=${WORDPRESS_BRIDGE_MAX_SKEW:-300}
+      - ENABLE_LIVEKIT_TEXT_DISPATCH=true
+      # Firecrawl self-hosted URL for web scraping
+      - FIRECRAWL_URL=${FIRECRAWL_URL:-http://firecrawl:3002}
+      # Platform Cartesia API key for voice samples
+      - CARTESIA_API_KEY=sk_car_NFNsJHGzFXxB7SCngUHn4W
+      # Platform Silicon Flow API key for avatar generation
+      - SILICONFLOW_API_KEY=sk-ngwoarcooydaeipeqbgvrxwnahbinyjutmfvbigmdirhmioa
+    volumes:
+      - ./app:/app/app
+      - ./logs:/app/logs
+      - ./app/static:/app/static
+      - ./.env:/app/.env:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - platform-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${APP_NAME:-sidekick-forge}-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - platform-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: ${APP_NAME:-sidekick-forge}-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+      - ./app/static:/app/static:ro
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - platform-network
+
+  agent-worker:
+    build:
+      context: ./docker/agent
+      dockerfile: Dockerfile
+    image: ${APP_NAME:-sidekick-forge}/agent-runtime:latest
+    restart: always
+    command: python /app/entrypoint.py  # Use original entrypoint
+    volumes:
+      - ./docker/agent/entrypoint.py:/app/entrypoint.py:ro
+      - ./docker/agent/sidekick_agent.py:/app/sidekick_agent.py:ro
+      - ./docker/agent/context.py:/app/context.py:ro
+      - ./docker/agent/config_validator.py:/app/config_validator.py:ro
+      - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
+      - ./docker/agent/citations_service.py:/app/citations_service.py:ro
+      - ./docker/agent/tool_registry.py:/app/tool_registry.py:ro
+      - ./docker/agent/wizard_tasks.py:/app/wizard_tasks.py:ro
+      - ./docker/agent/models:/app/models:ro
+      - ./app:/app/app:ro
+    environment:
+      - LIVEKIT_URL=${LIVEKIT_URL:-wss://litebridge-hw6srhvi.livekit.cloud}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      # Platform API URL for avatar image resolution
+      - PLATFORM_API_URL=https://${DOMAIN_NAME}
+      # Agent configuration
+      - AGENT_NAME=sidekick-agent-staging-local
+      - ENABLE_PROACTIVE_GREETING=true
+      # Supabase configuration for API key fallback
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      # API keys will be loaded from Supabase client configurations
+      # Only pass empty values to ensure no test keys are used
+      - ASANA_TOKEN_PREFERRED_STORE=${ASANA_TOKEN_PREFERRED_STORE}
+      - ASANA_TOKEN_MIRROR_STORES=${ASANA_TOKEN_MIRROR_STORES}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      - CARTESIA_API_KEY=${CARTESIA_API_KEY:-}
+      - REPLICATE_API_KEY=${REPLICATE_API_KEY:-}
+      - DEEPINFRA_API_KEY=${DEEPINFRA_API_KEY:-}
+      - NOVITA_API_KEY=${NOVITA_API_KEY:-}
+      - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-}
+      - JINA_API_KEY=${JINA_API_KEY:-}
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY:-}
+      - SPEECHIFY_API_KEY=${SPEECHIFY_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - COHERE_API_KEY=${COHERE_API_KEY:-}
+      # Ken Burns image generation (RunWare.ai)
+      - RUNWARE_API_KEY=${RUNWARE_API_KEY:-}
+      # Security keys (needed for Settings validation and OAuth state signing)
+      - SECRET_KEY=${SECRET_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      # Asana OAuth (needed for token refresh inside abilities)
+      - ASANA_OAUTH_CLIENT_ID=${ASANA_OAUTH_CLIENT_ID}
+      - ASANA_OAUTH_CLIENT_SECRET=${ASANA_OAUTH_CLIENT_SECRET}
+      - ASANA_OAUTH_REDIRECT_URI=${ASANA_OAUTH_REDIRECT_URI}
+      - ASANA_OAUTH_SCOPES=${ASANA_OAUTH_SCOPES}
+      # HelpScout OAuth (needed for token refresh inside abilities)
+      - HELPSCOUT_OAUTH_CLIENT_ID=${HELPSCOUT_OAUTH_CLIENT_ID}
+      - HELPSCOUT_OAUTH_CLIENT_SECRET=${HELPSCOUT_OAUTH_CLIENT_SECRET}
+      - HELPSCOUT_OAUTH_REDIRECT_URI=${HELPSCOUT_OAUTH_REDIRECT_URI}
+      - HELPSCOUT_TOKEN_PREFERRED_STORE=${HELPSCOUT_TOKEN_PREFERRED_STORE:-platform}
+      - HELPSCOUT_TOKEN_REFRESH_MARGIN_SECONDS=${HELPSCOUT_TOKEN_REFRESH_MARGIN_SECONDS:-300}
+      - VOICE_ITEM_COMMIT_FALLBACK=false
+      # RAG context settings - increase results and lower threshold for better retrieval
+      - CONTEXT_MAX_KNOWLEDGE_RESULTS=${CONTEXT_MAX_KNOWLEDGE_RESULTS:-10}
+      - CONTEXT_MATCH_THRESHOLD=${CONTEXT_MATCH_THRESHOLD:-0.3}
+      # BGE Local Service URL (for local embeddings/reranking)
+      - BGE_SERVICE_URL=${BGE_SERVICE_URL:-http://bge-service:8090}
+      # Firecrawl self-hosted URL for web scraping
+      - FIRECRAWL_URL=${FIRECRAWL_URL:-http://firecrawl:3002}
+    networks:
+      - platform-network
+
+  # Firecrawl Self-Hosted Web Scraping Service (OPTIONAL)
+  # Note: The scrape_url tool has a built-in fallback scraper.
+  # Firecrawl is optional and provides enhanced JS rendering support.
+  # To enable: docker compose up -d firecrawl
+  # firecrawl:
+  #   image: trieve/firecrawl:latest
+  #   container_name: ${APP_NAME:-sidekick-forge}-firecrawl
+  #   ports:
+  #     - "3002:3002"
+  #   environment:
+  #     - PORT=3002
+  #     - HOST=0.0.0.0
+  #     - NUM_WORKERS_PER_QUEUE=2
+  #     - REDIS_URL=redis://redis:6379
+  #     - REDIS_RATE_LIMIT_URL=redis://redis:6379
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped
+  #   networks:
+  #     - platform-network
+
+  # BGE Local Embedding & Reranking Service
+  # Provides on-premise BGE-M3 embeddings and BGE-reranker-v2-m3 reranking
+  bge-service:
+    build:
+      context: ./docker/bge-service
+      dockerfile: Dockerfile
+    container_name: ${APP_NAME:-sidekick-forge}-bge-service
+    ports:
+      - "8090:8090"
+    environment:
+      - BGE_DEVICE=${BGE_DEVICE:-cpu}
+      - BGE_M3_ENABLED=${BGE_M3_ENABLED:-true}
+      - BGE_RERANKER_ENABLED=${BGE_RERANKER_ENABLED:-true}
+      - BGE_M3_MODEL=${BGE_M3_MODEL:-BAAI/bge-m3}
+      - BGE_RERANKER_MODEL=${BGE_RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      - BGE_MAX_BATCH_SIZE=${BGE_MAX_BATCH_SIZE:-32}
+    volumes:
+      - bge-models:/app/models
+    restart: unless-stopped
+    networks:
+      - platform-network
+    # Resource limits for CPU mode
+    deploy:
+      resources:
+        limits:
+          memory: 10G
+        reservations:
+          memory: 6G
+
+volumes:
+  bge-models:
+  redis-data:
+
+networks:
+  platform-network:
+    name: ${APP_NAME:-sidekick-forge}-network
+    driver: bridge

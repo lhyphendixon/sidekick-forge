@@ -1,0 +1,161 @@
+{% extends "admin/docs/base_docs.html" %}
+
+{% set doc_title = "Managing Your Sidekick" %}
+
+{% block docs_content %}
+
+<div class="docs-breadcrumb">
+    <a href="/admin/docs">Docs</a>
+    <span>/</span>
+    <span>Managing Your Sidekick</span>
+</div>
+
+<div class="docs-hero">
+    <h1>Managing Your Sidekick</h1>
+    <p>Your sidekick is live &mdash; now learn how to fine-tune its personality, swap voices, update abilities, and keep it performing at its best.</p>
+</div>
+
+<div class="docs-toc">
+    <h4>On this page</h4>
+    <a href="#detail-page">The Sidekick Detail Page</a>
+    <a href="#editing-identity">Editing Name & Description</a>
+    <a href="#system-prompt">Refining the System Prompt</a>
+    <a href="#voice-settings">Changing Voice & LLM</a>
+    <a href="#abilities">Managing Abilities</a>
+    <a href="#avatar">Updating the Avatar</a>
+    <a href="#preview">Previewing Changes</a>
+    <a href="#usage-stats">Understanding Usage Stats</a>
+</div>
+
+<!-- Section: Detail Page -->
+<div class="docs-section" id="detail-page">
+    <h2>The Sidekick Detail Page</h2>
+    <p>After creating your sidekick, the detail page is your control center. To get there, navigate to <strong>Sidekicks</strong> and click on the sidekick you want to manage.</p>
+
+    <div class="docs-screenshot">
+        <div class="docs-screenshot-bar">
+            <div class="docs-screenshot-dot red"></div>
+            <div class="docs-screenshot-dot yellow"></div>
+            <div class="docs-screenshot-dot green"></div>
+            <span>Sidekick Detail &mdash; Configuration</span>
+        </div>
+        <img src="/static/images/docs/sidekick-detail.png" alt="Sidekick Detail Page" style="width:100%;display:block;">
+    </div>
+
+    <p>From here you can edit every aspect of your sidekick's configuration. Changes take effect immediately &mdash; no need to redeploy or restart anything.</p>
+</div>
+
+<!-- Section: Editing Identity -->
+<div class="docs-section" id="editing-identity">
+    <h2>Editing Name & Description</h2>
+    <p>Your sidekick's <strong>name</strong> is what appears in the chat header and embed UI. The <strong>description</strong> appears below the name and helps users understand what the sidekick can help with.</p>
+
+    <p>The <strong>slug</strong> is the URL-friendly version of the name (e.g., "my-support-agent"). This is part of your embed URL, so changing it will update the embed URL as well. If you've already embedded your sidekick somewhere, update the embed code after changing the slug.</p>
+
+    <div class="docs-callout docs-callout-info">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <div>Changes to name and description are reflected immediately in the embed. Users who refresh the page will see the updated information.</div>
+    </div>
+</div>
+
+<!-- Section: System Prompt -->
+<div class="docs-section" id="system-prompt">
+    <h2>Refining the System Prompt</h2>
+    <p>The system prompt is the most important configuration option. It tells your sidekick who it is, how to behave, and what boundaries to follow. You can edit it at any time from the detail page.</p>
+
+    <h3>Tips for effective prompts</h3>
+    <ul>
+        <li><strong>Be specific about identity:</strong> <em>"You are Luna, a customer support specialist for Acme Corp"</em> works better than <em>"You are a helpful assistant"</em></li>
+        <li><strong>Set tone guidelines:</strong> <em>"Respond in a warm, conversational tone. Keep answers under 3 sentences unless the user asks for more detail."</em></li>
+        <li><strong>Define boundaries:</strong> <em>"You only answer questions about our products and services. For anything else, politely redirect the user to our website."</em></li>
+        <li><strong>Include key facts:</strong> <em>"Our business hours are 9am-5pm EST, Monday through Friday. Our return policy allows 30-day returns on all items."</em></li>
+    </ul>
+
+    <div class="docs-callout docs-callout-tip">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+        <div><strong>Pro Tip:</strong> Use the AI-assisted prompt generator in the wizard to create a strong starting point, then refine from the detail page as you test and learn what works best for your audience.</div>
+    </div>
+</div>
+
+<!-- Section: Voice Settings -->
+<div class="docs-section" id="voice-settings">
+    <h2>Changing Voice & LLM</h2>
+    <p>You can change your sidekick's voice and language model at any time. These changes take effect on the next conversation &mdash; active conversations will continue with the current settings.</p>
+
+    <h3>Voice</h3>
+    <p>Select a text-to-speech voice from your configured provider (Cartesia, ElevenLabs, or Speechify). You can preview voices before committing. Consider your audience &mdash; a warm, casual voice works well for consumer-facing sidekicks, while a clear, professional voice suits business applications.</p>
+
+    <h3>Language Model (LLM)</h3>
+    <p>The LLM determines how smart and fast your sidekick is. If you're using <a href="/admin/docs/getting-started#inference">Sidekick Forge Inference</a>, the optimized defaults are already selected. If you're using BYOK (Bring Your Own Keys), you can choose from:</p>
+    <ul>
+        <li><strong>Cerebras</strong> &mdash; Best for voice chat (ultra-low latency)</li>
+        <li><strong>Groq</strong> &mdash; Great for voice chat (fast with strong reasoning)</li>
+        <li><strong>OpenAI GPT-4o</strong> &mdash; Best for complex text conversations</li>
+        <li><strong>Anthropic Claude</strong> &mdash; Excellent for nuanced, safety-conscious responses</li>
+        <li><strong>DeepInfra</strong> &mdash; Open-source models at competitive pricing</li>
+    </ul>
+
+    <div class="docs-callout docs-callout-info">
+        <svg class="docs-callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <div><strong>For voice conversations:</strong> Latency matters most. Cerebras and Groq keep response times under 500ms so conversations feel natural. OpenAI and Anthropic are more capable but slightly slower &mdash; better suited for text-only chat.</div>
+    </div>
+</div>
+
+<!-- Section: Abilities -->
+<div class="docs-section" id="abilities">
+    <h2>Managing Abilities</h2>
+    <p>You can add or remove abilities from your sidekick at any time. Go to the <strong>Abilities</strong> page to see all available tools and toggle them on or off for each sidekick.</p>
+
+    <p>When you enable a new ability, it becomes available in the next conversation. You don't need to update your embed code or restart anything.</p>
+
+    <p>For a detailed guide on each ability, see <a href="/admin/docs/abilities">Abilities & Tools</a>.</p>
+</div>
+
+<!-- Section: Avatar -->
+<div class="docs-section" id="avatar">
+    <h2>Updating the Avatar</h2>
+    <p>Your sidekick's avatar appears in the chat header and alongside messages. Upload a custom image from the detail page &mdash; square images (at least 200x200px) work best. The avatar is displayed as a circle in most contexts.</p>
+
+    <p>If your sidekick uses video mode, the avatar image is also used as the visual representation during video conversations (animated with the Ken Burns effect).</p>
+</div>
+
+<!-- Section: Preview -->
+<div class="docs-section" id="preview">
+    <h2>Previewing Changes</h2>
+    <p>After making changes, use the <strong>Preview</strong> button on the detail page to test your sidekick immediately. The preview supports all three chat modes:</p>
+
+    <ul>
+        <li><strong>Text</strong> &mdash; Type a message and see how your sidekick responds with the updated configuration</li>
+        <li><strong>Voice</strong> &mdash; Start a voice conversation to hear the new voice and test conversational flow</li>
+        <li><strong>Video</strong> &mdash; Test the video mode with avatar animation</li>
+    </ul>
+
+    <p>Preview sessions use the same infrastructure as production conversations, so what you see in preview is exactly what your users will experience.</p>
+</div>
+
+<!-- Section: Usage Stats -->
+<div class="docs-section" id="usage-stats">
+    <h2>Understanding Usage Stats</h2>
+    <p>The detail page shows usage statistics for each sidekick:</p>
+
+    <ul>
+        <li><strong>Voice minutes</strong> &mdash; Total time spent in voice conversations this billing period</li>
+        <li><strong>Text messages</strong> &mdash; Number of text messages exchanged</li>
+        <li><strong>Embedding chunks</strong> &mdash; Knowledge base chunks used in responses</li>
+    </ul>
+
+    <p>For a comprehensive view across all your sidekicks, see the <a href="/admin/docs/monitoring">Monitoring Dashboard</a>.</p>
+</div>
+
+<div class="docs-nav-footer">
+    <a href="/admin/docs/getting-started" class="docs-nav-link">
+        <span class="label">Previous</span>
+        <span class="title">&larr; Getting Started</span>
+    </a>
+    <a href="/admin/docs/abilities" class="docs-nav-link next">
+        <span class="label">Next</span>
+        <span class="title">Abilities & Tools &rarr;</span>
+    </a>
+</div>
+
+{% endblock %}

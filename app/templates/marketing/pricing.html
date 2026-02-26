@@ -4,191 +4,385 @@
 
 {% block content %}
 <!-- Hero -->
-<section class="bg-brand-dark-elevated py-24">
+<section class="py-24">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
         <h1 class="text-5xl md:text-6xl font-bold text-white mb-6">
-            Simple, Transparent <span class="gradient-text">Pricing</span>
+            Choose Your <span class="gradient-text">Adventure</span>
         </h1>
         <p class="text-xl text-gray-400 max-w-2xl mx-auto">
-            Choose the plan that fits your journey. Start free, scale as you grow.
+            From solo entrepreneurs to enterprise teams, we have the perfect tier for your journey.
         </p>
     </div>
 </section>
 
 <!-- Pricing Cards -->
-<section class="py-24 bg-brand-dark">
+<section class="py-12 pb-24">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="grid md:grid-cols-3 gap-8">
-            
-            <!-- Starter Plan -->
-            <div class="bg-brand-dark-elevated border border-gray-800 rounded-2xl p-8 hover-lift">
-                <div class="mb-6">
-                    <h3 class="text-2xl font-bold text-white mb-2">Starter</h3>
-                    <p class="text-gray-400">Perfect for solo entrepreneurs just getting started</p>
+
+        <!-- Genesis Launch Discount Banner -->
+        <div class="mb-12 mx-auto max-w-2xl">
+            <div class="relative rounded-xl overflow-hidden" style="background: linear-gradient(135deg, rgba(1,164,166,0.12) 0%, rgba(139,92,246,0.12) 50%, rgba(252,114,68,0.12) 100%); border: 1px solid rgba(1,164,166,0.25);">
+                <div class="px-6 py-4 text-center">
+                    <div class="flex items-center justify-center gap-2 mb-1">
+                        <svg class="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                        <span class="text-white font-semibold text-lg">Genesis Launch Discount</span>
+                        <svg class="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                    </div>
+                    <p class="text-gray-300 text-sm">Use code <span class="inline-block font-mono font-bold text-white bg-white/10 px-3 py-0.5 rounded-md border border-white/20">GENESIS</span> at checkout for an exclusive discount as one of our first users.</p>
                 </div>
-                <div class="mb-8">
+            </div>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-8">
+
+            <!-- Adventurer Tier -->
+            <div class="glass-card rounded-2xl p-8 hover-lift relative overflow-hidden">
+                <!-- Tier accent line -->
+                <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-tier-adventurer to-[#00c8ca]"></div>
+
+                <div class="mb-6">
+                    <div class="flex items-center gap-3 mb-3">
+                        <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-tier-adventurer/20 to-[#00c8ca]/20 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-tier-adventurer" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                        </div>
+                        <h3 class="text-2xl font-bold tier-adventurer-text">Adventurer</h3>
+                    </div>
+                    <p class="text-gray-400">Perfect for solo entrepreneurs starting their AI journey</p>
+                </div>
+
+                <div class="mb-6">
                     <div class="flex items-baseline">
-                        <span class="text-5xl font-bold text-white">$29</span>
+                        <span class="text-5xl font-bold text-white">$49</span>
                         <span class="text-gray-400 ml-2">/month</span>
                     </div>
+                    <p class="text-sm text-tier-adventurer mt-1">or $470/year (save 2 months)</p>
                 </div>
+
                 <ul class="space-y-4 mb-8">
                     <li class="flex items-start">
-                        <svg class="w-6 h-6 text-brand-teal mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <svg class="w-5 h-5 text-tier-adventurer mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-gray-300">1 AI sidekick</span>
+                        <span class="text-gray-300"><strong class="text-white">1</strong> AI Sidekick</span>
                     </li>
                     <li class="flex items-start">
-                        <svg class="w-6 h-6 text-brand-teal mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <svg class="w-5 h-5 text-tier-adventurer mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-gray-300">1,000 tasks/month</span>
+                        <span class="text-gray-300"><strong class="text-white">Unlimited</strong> Text Chat</span>
                     </li>
                     <li class="flex items-start">
-                        <svg class="w-6 h-6 text-brand-teal mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <svg class="w-5 h-5 text-tier-adventurer mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-gray-300">Basic integrations</span>
+                        <span class="text-gray-300"><strong class="text-white">400 min</strong> Voice Chat/month</span>
                     </li>
                     <li class="flex items-start">
-                        <svg class="w-6 h-6 text-brand-teal mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <svg class="w-5 h-5 text-tier-adventurer mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-gray-300">Email support</span>
+                        <span class="text-gray-300"><strong class="text-white">Unlimited</strong> Knowledge Docs</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-5 h-5 text-tier-adventurer mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span class="text-gray-300">Embeddable Widget</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-5 h-5 text-tier-adventurer mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span class="text-gray-300">BYOK Option (no overage)</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-5 h-5 text-gray-600 mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span class="text-gray-500">Video Avatar Chat</span>
                     </li>
                 </ul>
-                <a href="/signup?plan=starter" 
-                   class="block w-full bg-transparent border-2 border-brand-teal text-brand-teal hover:bg-brand-teal hover:text-white text-center px-6 py-3 rounded-lg font-semibold transition">
-                    Get Started
+                <p class="text-xs text-gray-500 mb-6 text-center">$0.05/min overage for voice/video</p>
+
+                <a href="/checkout?plan=adventurer"
+                   class="block w-full bg-transparent border-2 border-tier-adventurer/50 text-tier-adventurer hover:bg-tier-adventurer/20 hover:border-tier-adventurer text-center px-6 py-3 rounded-lg font-semibold transition">
+                    Start Your Journey
                 </a>
             </div>
-            
-            <!-- Professional Plan (Featured) -->
-            <div class="bg-gradient-to-br from-brand-teal to-brand-orange border-2 border-brand-teal rounded-2xl p-8 hover-lift relative transform scale-105">
-                <div class="absolute top-0 right-0 bg-brand-salmon text-white text-xs font-bold px-3 py-1 rounded-bl-lg rounded-tr-lg">
-                    POPULAR
-                </div>
-                <div class="mb-6">
-                    <h3 class="text-2xl font-bold text-white mb-2">Professional</h3>
-                    <p class="text-white/90">For growing businesses ready to scale</p>
-                </div>
-                <div class="mb-8">
-                    <div class="flex items-baseline">
-                        <span class="text-5xl font-bold text-white">$99</span>
-                        <span class="text-white/80 ml-2">/month</span>
+
+            <!-- Champion Tier (Featured) -->
+            <div class="relative">
+                <!-- Glow effect -->
+                <div class="absolute -inset-1 bg-gradient-to-r from-tier-champion to-[#ff9066] rounded-2xl blur-lg opacity-30"></div>
+
+                <div class="glass-card rounded-2xl p-8 hover-lift relative overflow-hidden border-tier-champion/30">
+                    <!-- Tier accent line -->
+                    <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-tier-champion to-[#ff9066]"></div>
+
+                    <!-- Popular badge -->
+                    <div class="absolute top-4 right-4 bg-gradient-to-r from-tier-champion to-[#ff9066] text-white text-xs font-bold px-3 py-1 rounded-full">
+                        MOST POPULAR
                     </div>
+
+                    <div class="mb-6">
+                        <div class="flex items-center gap-3 mb-3">
+                            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-tier-champion/20 to-[#ff9066]/20 flex items-center justify-center">
+                                <svg class="w-6 h-6 text-tier-champion" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"></path>
+                                </svg>
+                            </div>
+                            <h3 class="text-2xl font-bold tier-champion-text">Champion</h3>
+                        </div>
+                        <p class="text-gray-400">For growing teams ready to scale with dedicated power</p>
+                    </div>
+
+                    <div class="mb-6">
+                        <div class="flex items-baseline">
+                            <span class="text-5xl font-bold text-white">$199</span>
+                            <span class="text-gray-400 ml-2">/month</span>
+                        </div>
+                        <p class="text-sm text-tier-champion mt-1">or $1,990/year (save 2 months)</p>
+                    </div>
+
+                    <ul class="space-y-4 mb-8">
+                        <li class="flex items-start">
+                            <svg class="w-5 h-5 text-tier-champion mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="text-gray-300"><strong class="text-white">5</strong> AI Sidekicks</span>
+                        </li>
+                        <li class="flex items-start">
+                            <svg class="w-5 h-5 text-tier-champion mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="text-gray-300"><strong class="text-white">Unlimited</strong> Text Chat</span>
+                        </li>
+                        <li class="flex items-start">
+                            <svg class="w-5 h-5 text-tier-champion mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="text-gray-300"><strong class="text-white">2,000 min</strong> Voice & Video/month</span>
+                        </li>
+                        <li class="flex items-start">
+                            <svg class="w-5 h-5 text-tier-champion mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="text-gray-300"><strong class="text-white">Unlimited</strong> Knowledge Docs</span>
+                        </li>
+                        <li class="flex items-start">
+                            <svg class="w-5 h-5 text-tier-champion mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="text-gray-300">AI Video Avatar (BitHuman)</span>
+                        </li>
+                        <li class="flex items-start">
+                            <svg class="w-5 h-5 text-tier-champion mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="text-gray-300">BYOK Option (no overage)</span>
+                        </li>
+                        <li class="flex items-start">
+                            <svg class="w-5 h-5 text-tier-champion mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="text-gray-300">Priority Email Support</span>
+                        </li>
+                    </ul>
+                    <p class="text-xs text-gray-500 mb-6 text-center">$0.04/min overage for voice/video</p>
+
+                    <a href="/checkout?plan=champion"
+                       class="block w-full bg-gradient-to-r from-tier-champion to-[#ff9066] hover:from-[#e85a2f] hover:to-tier-champion text-white text-center px-6 py-3 rounded-lg font-semibold transition shadow-lg shadow-tier-champion/25">
+                        Become a Champion
+                    </a>
                 </div>
-                <ul class="space-y-4 mb-8">
-                    <li class="flex items-start">
-                        <svg class="w-6 h-6 text-white mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                        </svg>
-                        <span class="text-white">3 AI sidekicks</span>
-                    </li>
-                    <li class="flex items-start">
-                        <svg class="w-6 h-6 text-white mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                        </svg>
-                        <span class="text-white">10,000 tasks/month</span>
-                    </li>
-                    <li class="flex items-start">
-                        <svg class="w-6 h-6 text-white mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                        </svg>
-                        <span class="text-white">All integrations</span>
-                    </li>
-                    <li class="flex items-start">
-                        <svg class="w-6 h-6 text-white mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                        </svg>
-                        <span class="text-white">Priority support</span>
-                    </li>
-                    <li class="flex items-start">
-                        <svg class="w-6 h-6 text-white mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                        </svg>
-                        <span class="text-white">Custom workflows</span>
-                    </li>
-                </ul>
-                <a href="/signup?plan=professional" 
-                   class="block w-full bg-white text-brand-teal hover:bg-gray-100 text-center px-6 py-3 rounded-lg font-semibold transition shadow-xl">
-                    Get Started
-                </a>
             </div>
-            
-            <!-- Enterprise Plan -->
-            <div class="bg-brand-dark-elevated border border-gray-800 rounded-2xl p-8 hover-lift">
+
+            <!-- Paragon Tier -->
+            <div class="glass-card rounded-2xl p-8 hover-lift relative overflow-hidden">
+                <!-- Tier accent line -->
+                <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-tier-paragon to-[#f8847a]"></div>
+
                 <div class="mb-6">
-                    <h3 class="text-2xl font-bold text-white mb-2">Enterprise</h3>
-                    <p class="text-gray-400">For teams that need custom solutions</p>
+                    <div class="flex items-center gap-3 mb-3">
+                        <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-tier-paragon/20 to-[#f8847a]/20 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-tier-paragon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path>
+                            </svg>
+                        </div>
+                        <h3 class="text-2xl font-bold tier-paragon-text">Paragon</h3>
+                    </div>
+                    <p class="text-gray-400">White-glove bespoke solutions for enterprise teams</p>
                 </div>
+
                 <div class="mb-8">
                     <div class="flex items-baseline">
                         <span class="text-5xl font-bold text-white">Custom</span>
                     </div>
+                    <p class="text-sm text-tier-paragon mt-1">Sovereign stack</p>
                 </div>
+
                 <ul class="space-y-4 mb-8">
                     <li class="flex items-start">
-                        <svg class="w-6 h-6 text-brand-teal mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <svg class="w-5 h-5 text-tier-paragon mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-gray-300">Unlimited sidekicks</span>
+                        <span class="text-gray-300"><strong class="text-white">Everything</strong> in Champion</span>
                     </li>
                     <li class="flex items-start">
-                        <svg class="w-6 h-6 text-brand-teal mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <svg class="w-5 h-5 text-tier-paragon mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-gray-300">Unlimited tasks</span>
+                        <span class="text-gray-300">Custom AI Model Training</span>
                     </li>
                     <li class="flex items-start">
-                        <svg class="w-6 h-6 text-brand-teal mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <svg class="w-5 h-5 text-tier-paragon mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-gray-300">Custom integrations</span>
+                        <span class="text-gray-300">Dedicated Success Manager</span>
                     </li>
                     <li class="flex items-start">
-                        <svg class="w-6 h-6 text-brand-teal mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <svg class="w-5 h-5 text-tier-paragon mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-gray-300">Dedicated support</span>
+                        <span class="text-gray-300">Custom Integrations & API</span>
                     </li>
                     <li class="flex items-start">
-                        <svg class="w-6 h-6 text-brand-teal mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <svg class="w-5 h-5 text-tier-paragon mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-gray-300">SLA & security</span>
+                        <span class="text-gray-300">SLA & Enterprise Security</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-5 h-5 text-tier-paragon mr-3 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span class="text-gray-300">On-premise Deployment Option</span>
                     </li>
                 </ul>
-                <a href="/contact?subject=enterprise" 
-                   class="block w-full bg-transparent border-2 border-brand-teal text-brand-teal hover:bg-brand-teal hover:text-white text-center px-6 py-3 rounded-lg font-semibold transition">
-                    Contact Sales
+
+                <a href="/contact?subject=paragon"
+                   class="block w-full bg-transparent border-2 border-tier-paragon/50 text-tier-paragon hover:bg-tier-paragon/20 hover:border-tier-paragon text-center px-6 py-3 rounded-lg font-semibold transition">
+                    Contact Us
                 </a>
             </div>
         </div>
-        
+
+        <!-- Feature Comparison -->
+        <div class="mt-24">
+            <h2 class="text-3xl font-bold text-white text-center mb-12">Compare Features</h2>
+            <div class="glass-container rounded-2xl overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead>
+                            <tr class="border-b border-white/10">
+                                <th class="text-left px-6 py-4 text-gray-400 font-medium">Feature</th>
+                                <th class="text-center px-6 py-4">
+                                    <span class="tier-adventurer-text font-bold">Adventurer</span>
+                                </th>
+                                <th class="text-center px-6 py-4">
+                                    <span class="tier-champion-text font-bold">Champion</span>
+                                </th>
+                                <th class="text-center px-6 py-4">
+                                    <span class="tier-paragon-text font-bold">Paragon</span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-white/5">
+                            <tr>
+                                <td class="px-6 py-4 text-gray-300">AI Sidekicks</td>
+                                <td class="px-6 py-4 text-center text-gray-400">1</td>
+                                <td class="px-6 py-4 text-center text-white font-medium">5</td>
+                                <td class="px-6 py-4 text-center text-white font-medium">Unlimited</td>
+                            </tr>
+                            <tr>
+                                <td class="px-6 py-4 text-gray-300">Text Chat</td>
+                                <td class="px-6 py-4 text-center text-tier-adventurer">Unlimited</td>
+                                <td class="px-6 py-4 text-center text-tier-champion">Unlimited</td>
+                                <td class="px-6 py-4 text-center text-tier-paragon">Unlimited</td>
+                            </tr>
+                            <tr>
+                                <td class="px-6 py-4 text-gray-300">Voice/Video Minutes</td>
+                                <td class="px-6 py-4 text-center text-gray-400">400/mo</td>
+                                <td class="px-6 py-4 text-center text-white font-medium">2,000/mo</td>
+                                <td class="px-6 py-4 text-center text-white font-medium">Negotiated</td>
+                            </tr>
+                            <tr>
+                                <td class="px-6 py-4 text-gray-300">Video Avatar Chat</td>
+                                <td class="px-6 py-4 text-center"><svg class="w-5 h-5 text-gray-600 mx-auto" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg></td>
+                                <td class="px-6 py-4 text-center"><svg class="w-5 h-5 text-tier-champion mx-auto" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg></td>
+                                <td class="px-6 py-4 text-center"><svg class="w-5 h-5 text-tier-paragon mx-auto" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg></td>
+                            </tr>
+                            <tr>
+                                <td class="px-6 py-4 text-gray-300">Overage Rate</td>
+                                <td class="px-6 py-4 text-center text-gray-400">$0.05/min</td>
+                                <td class="px-6 py-4 text-center text-gray-400">$0.04/min</td>
+                                <td class="px-6 py-4 text-center text-tier-paragon">Included</td>
+                            </tr>
+                            <tr>
+                                <td class="px-6 py-4 text-gray-300">BYOK Option</td>
+                                <td class="px-6 py-4 text-center"><svg class="w-5 h-5 text-tier-adventurer mx-auto" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg></td>
+                                <td class="px-6 py-4 text-center"><svg class="w-5 h-5 text-tier-champion mx-auto" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg></td>
+                                <td class="px-6 py-4 text-center"><svg class="w-5 h-5 text-tier-paragon mx-auto" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg></td>
+                            </tr>
+                            <tr>
+                                <td class="px-6 py-4 text-gray-300">Knowledge Documents</td>
+                                <td class="px-6 py-4 text-center text-tier-adventurer">Unlimited</td>
+                                <td class="px-6 py-4 text-center text-tier-champion">Unlimited</td>
+                                <td class="px-6 py-4 text-center text-tier-paragon">Unlimited</td>
+                            </tr>
+                            <tr>
+                                <td class="px-6 py-4 text-gray-300">Infrastructure</td>
+                                <td class="px-6 py-4 text-center text-gray-400">Shared</td>
+                                <td class="px-6 py-4 text-center text-tier-champion">Dedicated</td>
+                                <td class="px-6 py-4 text-center text-tier-paragon">Sovereign</td>
+                            </tr>
+                            <tr>
+                                <td class="px-6 py-4 text-gray-300">Support</td>
+                                <td class="px-6 py-4 text-center text-gray-400">Community</td>
+                                <td class="px-6 py-4 text-center text-tier-champion">Priority Email</td>
+                                <td class="px-6 py-4 text-center text-tier-paragon">Dedicated Manager</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- FAQ Section -->
         <div class="mt-24 max-w-3xl mx-auto">
             <h2 class="text-3xl font-bold text-white text-center mb-12">Frequently Asked Questions</h2>
             <div class="space-y-6">
-                <div class="bg-brand-dark-elevated border border-gray-800 rounded-lg p-6">
-                    <h3 class="text-xl font-semibold text-white mb-3">Can I switch plans later?</h3>
+                <div class="glass-card rounded-xl p-6">
+                    <h3 class="text-xl font-semibold text-white mb-3">Can I upgrade my tier later?</h3>
                     <p class="text-gray-400">
-                        Absolutely! You can upgrade or downgrade your plan at any time. Changes take effect immediately.
+                        Absolutely! You can upgrade from Adventurer to Champion at any time. Your data will be seamlessly
+                        migrated to your own dedicated infrastructure, and you'll gain immediate access to all Champion features.
                     </p>
                 </div>
-                <div class="bg-brand-dark-elevated border border-gray-800 rounded-lg p-6">
-                    <h3 class="text-xl font-semibold text-white mb-3">What counts as a "task"?</h3>
+                <div class="glass-card rounded-xl p-6">
+                    <h3 class="text-xl font-semibold text-white mb-3">What's the difference between shared and dedicated infrastructure?</h3>
                     <p class="text-gray-400">
-                        A task is any action your sidekick completes - from sending an email to generating a report. 
-                        Most users find the Professional plan offers plenty of headroom.
+                        Adventurer tier runs on our shared cloud infrastructure, which is perfect for getting started.
+                        Champion and Paragon tiers get their own dedicated database and resources, providing better
+                        performance, data isolation, and the ability to scale without limits.
                     </p>
                 </div>
-                <div class="bg-brand-dark-elevated border border-gray-800 rounded-lg p-6">
-                    <h3 class="text-xl font-semibold text-white mb-3">Is there a free trial?</h3>
+                <div class="glass-card rounded-xl p-6">
+                    <h3 class="text-xl font-semibold text-white mb-3">What is a "Sovereign Stack" in Paragon?</h3>
                     <p class="text-gray-400">
-                        We're currently in early access with limited slots. Sign up to join the waitlist and 
-                        get exclusive early bird pricing when we launch.
+                        Paragon clients get complete infrastructure sovereignty - including the option for on-premise
+                        deployment, custom security configurations, and full control over where your data lives.
+                        Perfect for enterprises with strict compliance requirements.
+                    </p>
+                </div>
+                <div class="glass-card rounded-xl p-6">
+                    <h3 class="text-xl font-semibold text-white mb-3">Do you offer custom AI model training?</h3>
+                    <p class="text-gray-400">
+                        Custom model fine-tuning is available exclusively for Paragon clients. We work with you to
+                        train AI models specifically on your domain, voice, and brand to create truly unique sidekicks
+                        that sound and think like your team.
                     </p>
                 </div>
             </div>
@@ -197,20 +391,27 @@
 </section>
 
 <!-- CTA -->
-<section class="py-24 bg-brand-dark-elevated">
+<section class="py-24">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <h2 class="text-4xl font-bold text-white mb-6">
-            Ready to <span class="gradient-text">Get Started</span>?
-        </h2>
-        <p class="text-xl text-gray-400 mb-8">
-            Join mission-driven entrepreneurs building the future.
-        </p>
-        <a href="/signup" 
-           class="inline-block bg-brand-teal hover:bg-brand-teal/90 text-white px-8 py-4 rounded-lg font-semibold text-lg transition btn-glow">
-            Get Early Access
-        </a>
+        <div class="glass-container rounded-2xl p-12">
+            <h2 class="text-4xl font-bold text-white mb-6">
+                Ready to Begin Your <span class="gradient-text">Adventure</span>?
+            </h2>
+            <p class="text-xl text-gray-400 mb-8">
+                Join forward-thinking entrepreneurs and teams building the future with AI sidekicks.
+            </p>
+            <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                <a href="/signup"
+                   class="inline-block bg-gradient-to-r from-tier-champion to-[#ff9066] hover:from-[#e85a2f] hover:to-tier-champion text-white px-8 py-4 rounded-lg font-semibold text-lg transition shadow-lg shadow-tier-champion/25">
+                    Get Started Today
+                </a>
+                <a href="/contact"
+                   class="inline-block bg-transparent border-2 border-white/20 text-white hover:bg-white/10 px-8 py-4 rounded-lg font-semibold text-lg transition">
+                    Talk to Sales
+                </a>
+            </div>
+        </div>
     </div>
 </section>
 
 {% endblock %}
-

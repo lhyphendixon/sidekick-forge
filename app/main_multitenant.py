@@ -138,10 +138,16 @@ from app.api.v1 import (
     conversations_proxy,
     documents_proxy,
     text_chat_proxy,
-    knowledge_base
+    knowledge_base,
+    content_catalyst,
+    image_catalyst
 )
 from app.api import embed as embed_router
-from app.marketing import routes as marketing_routes
+try:
+    from app.marketing import routes as marketing_routes
+except Exception as _mkt_err:
+    marketing_routes = None
+    logging.getLogger("sidekick_forge").error(f"Failed to load marketing routes: {_mkt_err}")
 from app.api import admin_preview_standalone
 
 # Mount multi-tenant routes
@@ -167,12 +173,15 @@ app.include_router(conversations_proxy.router, prefix="/api/v1", tags=["conversa
 app.include_router(documents_proxy.router, prefix="/api/v1", tags=["documents"])
 app.include_router(text_chat_proxy.router, prefix="/api/v1", tags=["text-chat"])
 app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-base"])
+app.include_router(content_catalyst.router, prefix="/api/v1", tags=["content-catalyst"])
+app.include_router(image_catalyst.router, prefix="/api/v1", tags=["image-catalyst"])
 app.include_router(embed_router.router)
 # Expose admin preview helper endpoints (used by preview modal)
 app.include_router(admin_preview_standalone.router)
 
 # Marketing site routes (must be before WordPress to catch root path)
-app.include_router(marketing_routes.router)
+if marketing_routes is not None:
+    app.include_router(marketing_routes.router)
 
 # Mount static files
 static_dir_candidates = [

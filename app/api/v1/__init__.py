@@ -24,6 +24,8 @@ from .voice_transcripts import router as voice_transcripts_router
 from .wordpress import router as wordpress_router
 from .wordpress_sites import router as wordpress_sites_router
 from .diagnostics import router as diagnostics_router
+from .content_catalyst import router as content_catalyst_router
+from .image_catalyst import router as image_catalyst_router
 
 # Create main API router
 api_router = APIRouter(prefix="/v1")
@@ -49,5 +51,7 @@ api_router.include_router(voice_transcripts_router)
 api_router.include_router(wordpress_router)
 api_router.include_router(wordpress_sites_router)
 api_router.include_router(diagnostics_router)
+api_router.include_router(content_catalyst_router)
+api_router.include_router(image_catalyst_router)
 
 __all__ = ["api_router"]

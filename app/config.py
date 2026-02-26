@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     cartesia_api_key: Optional[str] = Field(None)
     deepgram_api_key: Optional[str] = Field(None)
     
+    # Image Generation (RunWare.ai)
+    runware_api_key: Optional[str] = Field(None)
+    runware_default_model: str = Field(default="runware:100@1")
+
     # Tool Webhooks (n8n integration)
     n8n_text_webhook_url: Optional[str] = Field(None)
     n8n_rag_webhook_url: Optional[str] = Field(None)
@@ -114,6 +118,10 @@ class Settings(BaseSettings):
     perplexity_mcp_port: int = Field(default=8081)
     perplexity_mcp_host: str = Field(default="perplexity-mcp")
     perplexity_mcp_network: Optional[str] = Field(default=None)
+
+    # Mailchimp audience/newsletter
+    mailchimp_api_key: Optional[str] = Field(default=None)
+    mailchimp_list_id: Optional[str] = Field(default=None)
 
     # Asana OAuth configuration
     asana_oauth_client_id: Optional[str] = Field(default=None)
@@ -184,6 +192,10 @@ class Settings(BaseSettings):
     @property
     def perplexity_mcp_server_url(self) -> str:
         return f"http://{self.perplexity_mcp_host}:{self.perplexity_mcp_port}/mcp/sse"
+
+    @property
+    def mailchimp_is_configured(self) -> bool:
+        return bool(self.mailchimp_api_key and self.mailchimp_list_id)
 
     @property
     def mailjet_is_configured(self) -> bool:

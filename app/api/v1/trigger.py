@@ -946,6 +946,16 @@ async def handle_voice_trigger(
     appended_sections = _apply_tool_prompt_sections(agent_context, tools_payload)
     
     # Ensure the room exists (create if it doesn't)
+    # Use lightweight room metadata to stay under LiveKit's 64KB limit.
+    # Heavy config (dataset_ids, tools, system_prompt, api_keys) goes via dispatch job metadata.
+    _voice_room_meta = {
+        "agent_name": settings.livekit_agent_name,
+        "agent_slug": agent.slug,
+        "user_id": request.user_id,
+        "mode": "voice",
+        "client_id": agent_context.get("client_id"),
+        "conversation_id": agent_context.get("conversation_id"),
+    }
     room_start = time.time()
     room_info = await ensure_livekit_room_exists(
         backend_livekit,
@@ -953,7 +963,7 @@ async def handle_voice_trigger(
         agent_name=settings.livekit_agent_name,
         agent_slug=agent.slug,
         user_id=request.user_id,
-        agent_config=agent_context,
+        agent_config=_voice_room_meta,
         enable_agent_dispatch=False
     )
     room_duration = time.time() - room_start
@@ -1187,6 +1197,17 @@ async def handle_text_trigger_via_livekit(
 
     agent_context["user_message"] = request.message
 
+    # Lightweight room metadata to stay under LiveKit's 64KB limit.
+    # Heavy config (dataset_ids, tools, system_prompt, api_keys) goes via dispatch job metadata.
+    _room_meta = {
+        "agent_name": settings.livekit_agent_name,
+        "agent_slug": agent.slug,
+        "user_id": request.user_id,
+        "mode": "text",
+        "client_id": agent_context.get("client_id"),
+        "conversation_id": agent_context.get("conversation_id"),
+    }
+
     reused_room = False
     if request.conversation_id:
         text_room_name, room_info, reused_room = await _get_or_create_text_room(
@@ -1194,7 +1215,7 @@ async def handle_text_trigger_via_livekit(
             conversation_id=client_conversation_id,
             agent_slug=agent.slug,
             user_id=request.user_id,
-            agent_context=agent_context,
+            agent_context=_room_meta,
         )
     else:
         text_room_name = f"text-{client_conversation_id}-{uuid.uuid4().hex[:8]}"
@@ -1204,7 +1225,7 @@ async def handle_text_trigger_via_livekit(
             agent_name=settings.livekit_agent_name,
             agent_slug=agent.slug,
             user_id=request.user_id,
-            agent_config=agent_context,
+            agent_config=_room_meta,
             enable_agent_dispatch=True,
         )
 
@@ -1222,7 +1243,7 @@ async def handle_text_trigger_via_livekit(
         agent_context=agent_context,
     )
 
-    response_text, citations, tool_results = await _poll_for_text_response(
+    response_text, citations, tool_results, widget = await _poll_for_text_response(
         backend_livekit,
         text_room_name,
     )
@@ -1283,7 +1304,7 @@ async def handle_text_trigger_via_livekit(
         except Exception as store_err:
             logger.error(f"Failed to store unified text conversation turn: {store_err}")
 
-    return {
+    result = {
         "mode": "text_via_livekit",
         "message_received": request.message,
         "user_id": request.user_id,
@@ -1305,6 +1326,9 @@ async def handle_text_trigger_via_livekit(
             "tts": normalized_tts,
         },
     }
+    if widget:
+        result["widget"] = widget
+    return result
 
 
 async def handle_text_trigger(
@@ -1932,8 +1956,11 @@ async def _poll_for_text_response(
     *,
     timeout: float = 90.0,  # Increased from 30s to 90s to allow for LLM streaming
     poll_interval: float = 0.3,  # Slightly slower polling to reduce overhead
-) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Poll LiveKit room metadata until the text worker returns a final response."""
+) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Poll LiveKit room metadata until the text worker returns a final response.
+
+    Returns (text_response, citations, tool_results, widget).
+    """
     start_time = time.time()
 
     while time.time() - start_time < timeout:
@@ -1962,7 +1989,8 @@ async def _poll_for_text_response(
         if text_response and streaming_flag is not True:
             citations = metadata.get("citations") or []
             tool_results = metadata.get("tool_results") or []
-            return text_response, citations, tool_results
+            widget = metadata.get("widget")
+            return text_response, citations, tool_results, widget
 
         await asyncio.sleep(poll_interval)
 
@@ -2029,12 +2057,17 @@ async def poll_for_text_response_streaming(
         if text_response and streaming_flag is not True:
             citations = metadata.get("citations") or []
             tool_results = metadata.get("tool_results") or []
-            yield {
+            result = {
                 "done": True,
                 "full_text": text_response,
                 "citations": citations,
                 "tool_results": tool_results,
             }
+            # Forward widget trigger if present (Content Catalyst, etc.)
+            widget = metadata.get("widget")
+            if widget:
+                result["widget"] = widget
+            yield result
             return
 
         await asyncio.sleep(poll_interval)

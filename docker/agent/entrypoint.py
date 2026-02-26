@@ -19,8 +19,8 @@ from datetime import datetime
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2025-12-09T20:15:25Z"
-AGENT_BUILD_HASH = "v1.5.9-fix-rerank-none"
+AGENT_BUILD_VERSION = "2026-02-26T17:55:10Z"
+AGENT_BUILD_HASH = "fix-tool-descriptions-llm-optimized"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
@@ -333,6 +333,17 @@ async def _merge_and_update_room_metadata(
             merged = existing or {}
             merged.update(payload)
 
+            # Strip heavy config fields to stay under LiveKit's 64KB metadata limit.
+            # These were delivered via dispatch job metadata and are not needed in
+            # the room metadata (which is only used to stream results back).
+            for _heavy_key in (
+                "dataset_ids", "tools", "tools_config", "tool_prompt_sections",
+                "system_prompt", "api_keys", "embedding", "rerank",
+                "voice_settings", "webhooks", "context",
+                "supabase_url", "supabase_anon_key", "supabase_service_role_key",
+            ):
+                merged.pop(_heavy_key, None)
+
             await lk_client.room.update_room_metadata(
                 livekit_api.UpdateRoomMetadataRequest(
                     room=room_name,
@@ -382,92 +393,231 @@ async def _run_text_mode_interaction(
         logger.warning("Text-mode citation prefetch failed: %s", cite_err)
 
     # Call LLM directly (no TTS) to avoid LiveKit TTS failures in text-only mode
+    detected_tool_calls: List[Dict[str, Any]] = []
     try:
-        # Build ChatContext (matches what voice path uses)
+        # Build ChatContext with system prompt + user message
         chat_ctx = llm.ChatContext()
+        # Include the agent's system prompt so the LLM sees persona & tool instructions
+        agent_instructions = getattr(agent, "instructions", None) or ""
+        if agent_instructions:
+            chat_ctx.add_message(role="system", content=agent_instructions)
         chat_ctx.add_message(role="user", content=user_message)
 
-        llm_result = agent.llm.chat(chat_ctx=chat_ctx)
+        # Gather registered tools for native function calling
+        agent_tools = list(
+            getattr(agent, "_built_tools", None)
+            or getattr(agent, "tools", [])
+            or []
+        )
+        logger.info(
+            "📝 TEXT-MODE: LLM call with %d tools, system_prompt=%d chars",
+            len(agent_tools), len(agent_instructions),
+        )
+
+        llm_stream = agent.llm.chat(
+            chat_ctx=chat_ctx,
+            tools=agent_tools if agent_tools else None,
+        )
         response_text = ""
 
-        # Streaming path: accumulate deltas and emit BATCHED partial metadata
-        # to avoid per-token API calls which cause massive delays
+        # Stream the response: accumulate text + tool calls, emit batched UI updates
         stream_chunks: List[str] = []
-        chunk_size_env = os.getenv("TEXT_STREAM_CHUNK_SIZE")
-        chunk_size = int(chunk_size_env) if chunk_size_env and chunk_size_env.isdigit() else 80
-        # Batch updates: only emit metadata every N tokens to reduce API overhead
         stream_batch_size = int(os.getenv("TEXT_STREAM_BATCH_SIZE", "50"))
-        if hasattr(llm_result, "__aiter__"):
-            assembled = ""
-            chunk_index = 0
-            last_update_index = 0
-            async for chunk in llm_result:
-                delta = None
+        assembled = ""
+        chunk_index = 0
+        last_update_index = 0
+        _streaming_tool_calls: List[Any] = []
+
+        async for chunk in llm_stream:
+            # Collect text content
+            delta = getattr(chunk.delta, "content", None) if chunk.delta else None
+
+            # Collect tool calls
+            if chunk.delta and chunk.delta.tool_calls:
+                _streaming_tool_calls.extend(chunk.delta.tool_calls)
+
+            if not delta:
+                continue
+
+            delta = str(delta)
+            assembled += delta
+            stream_chunks.append(delta)
+            chunk_index += 1
+
+            # Emit partial stream updates for UI - BATCHED to reduce API overhead
+            if chunk_index - last_update_index >= stream_batch_size:
+                last_update_index = chunk_index
                 try:
-                    if hasattr(chunk, "delta") and getattr(chunk.delta, "content", None):
-                        delta = chunk.delta.content
-                    elif hasattr(chunk, "message") and getattr(chunk.message, "content", None):
-                        delta = chunk.message.content
-                    elif hasattr(chunk, "content"):
-                        delta = getattr(chunk, "content")
-                    elif isinstance(chunk, str):
-                        delta = chunk
+                    await _merge_and_update_room_metadata(
+                        room_name=room.name,
+                        payload={
+                            "mode": "text",
+                            "conversation_id": conversation_id,
+                            "text_response_partial": assembled,
+                            "text_response_stream": list(stream_chunks),
+                            "text_stream_token": delta,
+                            "streaming": True,
+                            "stream_progress": {"current": chunk_index},
+                        },
+                        logger=logger,
+                        retries=1,
+                    )
+                except Exception as partial_err:
+                    logger.debug(f"Streaming metadata update skipped: {partial_err}")
+
+        response_text = assembled.strip()
+
+        # Convert FunctionToolCall objects to detected_tool_calls dicts
+        for tc in _streaming_tool_calls:
+            tool_name = getattr(tc, "name", None)
+            tool_args = getattr(tc, "arguments", "{}")
+            if isinstance(tool_args, str):
+                try:
+                    tool_args = json.loads(tool_args) if tool_args else {}
                 except Exception:
-                    delta = None
-
-                if not delta:
-                    continue
-
-                delta = str(delta)
-                assembled += delta
-                stream_chunks.append(delta)
-                chunk_index += 1
-
-                # Emit partial stream updates for UI - BATCHED to reduce API overhead
-                # Only update every stream_batch_size tokens
-                if chunk_index - last_update_index >= stream_batch_size:
-                    last_update_index = chunk_index
-                    try:
-                        await _merge_and_update_room_metadata(
-                            room_name=room.name,
-                            payload={
-                                "mode": "text",
-                                "conversation_id": conversation_id,
-                                "text_response_partial": assembled,
-                                "text_response_stream": list(stream_chunks),
-                                "text_stream_token": delta,
-                                "streaming": True,
-                                "stream_progress": {
-                                    "current": chunk_index,
-                                },
-                            },
-                            logger=logger,
-                            retries=1,
-                        )
-                    except Exception as partial_err:
-                        logger.debug(f"Streaming metadata update skipped: {partial_err}")
-
-            response_text = assembled.strip()
-        else:
-            # Non-streaming response object
-            llm_response = llm_result
-            text = None
-            if hasattr(llm_response, "message") and getattr(llm_response.message, "content", None):
-                text = llm_response.message.content
-            elif hasattr(llm_response, "content"):
-                text = getattr(llm_response, "content")
-            elif hasattr(llm_response, "choices") and llm_response.choices:
-                choice = llm_response.choices[0]
-                msg = getattr(choice, "message", None)
-                if msg and getattr(msg, "content", None):
-                    text = msg.content
-            response_text = (text or "").strip()
+                    tool_args = {}
+            if tool_name and not any(t["name"] == tool_name for t in detected_tool_calls):
+                detected_tool_calls.append({"name": tool_name, "arguments": tool_args or {}})
+                logger.info(f"🧰 TEXT-MODE: Detected tool call: {tool_name} args={tool_args}")
     except Exception as llm_err:
         logger.error(f"Direct LLM call failed in text mode: {type(llm_err).__name__}: {llm_err}")
         raise
 
-    citations = list(getattr(agent, "_current_citations", []) or [])
+    # Process detected tool calls (native function calling)
     tool_results: List[Dict[str, Any]] = []
+    widget_trigger = None
+
+    # Widget tool names that trigger frontend widgets, not backend execution
+    _WIDGET_TOOL_NAMES = {"content_catalyst", "lingua", "image-catalyst", "image_catalyst", "print-ready", "print_ready"}
+
+    # Execute non-widget tools detected via native function calling
+    agent_tools = list(getattr(agent, "_built_tools", None) or getattr(agent, "tools", []) or [])
+
+    # Build tool lookup
+    tool_lookup = {}
+    for t in agent_tools:
+        tool_name_candidate = None
+        info_obj = getattr(t, "info", None)
+        if info_obj and hasattr(info_obj, "name"):
+            tool_name_candidate = info_obj.name
+        if not tool_name_candidate:
+            tool_info = getattr(t, "__livekit_raw_tool_info", None)
+            if tool_info and hasattr(tool_info, "name"):
+                tool_name_candidate = tool_info.name
+        if not tool_name_candidate:
+            tool_info = getattr(t, "__livekit_tool_info", None)
+            if tool_info and hasattr(tool_info, "name"):
+                tool_name_candidate = tool_info.name
+        if not tool_name_candidate and hasattr(t, "name"):
+            tool_name_candidate = t.name
+        if tool_name_candidate:
+            tool_lookup[tool_name_candidate] = t
+
+    logger.info(f"🧰 TEXT-MODE: Tool lookup keys: {list(tool_lookup.keys())} from {len(agent_tools)} tools")
+
+    for tc in detected_tool_calls:
+        tool_name = tc.get("name")
+        tool_args = tc.get("arguments", {})
+
+        # Skip widget triggers - handled separately below
+        if tool_name in _WIDGET_TOOL_NAMES:
+            continue
+
+        tool_fn = tool_lookup.get(tool_name)
+        if not tool_fn:
+            logger.warning(f"🧰 TEXT-MODE: Tool '{tool_name}' not found in registered tools")
+            continue
+
+        logger.info(f"🧰 TEXT-MODE: Executing tool '{tool_name}' with args: {tool_args}")
+        try:
+            inner_fn = getattr(tool_fn, '_func', None)
+            if inner_fn is not None and callable(inner_fn):
+                if asyncio.iscoroutinefunction(inner_fn):
+                    tool_output = await inner_fn(**tool_args)
+                else:
+                    result = inner_fn(**tool_args)
+                    tool_output = await result if asyncio.iscoroutine(result) else result
+            elif asyncio.iscoroutinefunction(tool_fn):
+                tool_output = await tool_fn(**tool_args)
+            else:
+                result = tool_fn(**tool_args)
+                tool_output = await result if asyncio.iscoroutine(result) else result
+
+            logger.info(f"🧰 TEXT-MODE: Tool '{tool_name}' returned: {str(tool_output)[:200]}...")
+            tool_results.append({"tool": tool_name, "success": True, "output": tool_output})
+
+            # Re-call LLM with tool result using collect() for clean non-streaming aggregation
+            chat_ctx.add_message(role="assistant", content=response_text or "I'll check that for you.")
+            chat_ctx.add_message(
+                role="user",
+                content=f"[Tool Result for {tool_name}]:\n{tool_output}\n\nPlease provide a helpful response based on this information."
+            )
+            followup = await agent.llm.chat(chat_ctx=chat_ctx, tools=None).collect()
+            if followup.text:
+                response_text = followup.text
+                logger.info(f"🧰 TEXT-MODE: Got followup response ({len(response_text)} chars)")
+
+        except Exception as tool_err:
+            logger.error(f"🧰 TEXT-MODE: Tool '{tool_name}' execution failed: {tool_err}")
+            tool_results.append({"tool": tool_name, "success": False, "error": str(tool_err)})
+
+    # Check for widget triggers from native function calling
+    _WIDGET_DEFAULT_MESSAGES = {
+        "content_catalyst": "I'll help you create an article. Please configure your preferences in the Content Catalyst widget below.",
+        "image_catalyst": "I'll help you generate an image. Please configure your preferences in the Image Catalyst widget below.",
+        "image-catalyst": "I'll help you generate an image. Please configure your preferences in the Image Catalyst widget below.",
+    }
+    for tc in detected_tool_calls:
+        tc_name = tc.get("name", "")
+        # Normalize slug to check: "image-catalyst" → "image_catalyst"
+        tc_name_normalized = tc_name.replace("-", "_")
+        if tc_name in _WIDGET_TOOL_NAMES or tc_name_normalized in _WIDGET_TOOL_NAMES:
+            args = tc.get("arguments", {})
+            logger.info(f"🎨 TEXT-MODE: Processing widget tool call '{tc_name}': {args}")
+            widget_trigger = {
+                "type": tc_name_normalized,
+                "config": args,
+                "message": args.get("message") or f"Opening {tc_name} widget...",
+            }
+            if not response_text:
+                response_text = _WIDGET_DEFAULT_MESSAGES.get(tc_name, _WIDGET_DEFAULT_MESSAGES.get(tc_name_normalized, f"Please use the {tc_name} widget below."))
+            logger.info(f"🎨 TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
+            break
+
+    # Fallback: check for JSON tool call in LLM text response (for models without native function calling)
+    if not widget_trigger:
+        import re
+        json_match = re.search(r'```json\s*(\{.*?"tool".*?\})\s*```', response_text, re.DOTALL)
+        if not json_match:
+            # Check for any widget tool name in JSON
+            _widget_pattern = "|".join(re.escape(n) for n in _WIDGET_TOOL_NAMES)
+            json_match = re.search(r'(\{[^{}]*"tool"\s*:\s*"(?:' + _widget_pattern + r')"[^{}]*\})', response_text, re.DOTALL)
+
+        if json_match:
+            try:
+                tool_call_json = json.loads(json_match.group(1))
+                tool_name = tool_call_json.get("tool", "")
+                tool_name_normalized = tool_name.replace("-", "_")
+                tool_args = tool_call_json.get("args", {})
+
+                if tool_name in _WIDGET_TOOL_NAMES or tool_name_normalized in _WIDGET_TOOL_NAMES:
+                    logger.info(f"🎨 TEXT-MODE: Detected widget '{tool_name}' via JSON fallback: {tool_args}")
+                    widget_trigger = {
+                        "type": tool_name_normalized,
+                        "config": tool_args,
+                        "message": f"Opening {tool_name} widget...",
+                    }
+                    # Clean up the JSON block from response text
+                    response_text = re.sub(r'```json\s*\{.*?"tool".*?\}\s*```', '', response_text, flags=re.DOTALL)
+                    response_text = re.sub(r'\{[^{}]*"tool"\s*:\s*"' + re.escape(tool_name) + r'"[^{}]*\}', '', response_text)
+                    response_text = response_text.strip()
+                    if not response_text:
+                        response_text = _WIDGET_DEFAULT_MESSAGES.get(tool_name, _WIDGET_DEFAULT_MESSAGES.get(tool_name_normalized, f"Please use the {tool_name} widget below."))
+                    logger.info(f"🎨 TEXT-MODE: Widget trigger prepared (JSON fallback): {widget_trigger}")
+            except json.JSONDecodeError as e:
+                logger.debug(f"🔧 TEXT-MODE: JSON parse failed for potential tool call: {e}")
+
+    citations = list(getattr(agent, "_current_citations", []) or [])
 
     if collector:
         try:
@@ -475,12 +625,7 @@ async def _run_text_mode_interaction(
         except Exception:
             pass
 
-    # NOTE: Removed redundant "simulated chunking" loop that was causing massive delays
-    # Real streaming updates already happen during LLM generation above
-
     # Truncate citations for LiveKit metadata (65KB limit)
-    # Keep only top 15 citations and truncate content to 500 chars each
-    # Make a deep copy to avoid modifying the original citations
     metadata_citations = []
     for citation in (citations[:15] if citations else []):
         if isinstance(citation, dict):
@@ -506,7 +651,17 @@ async def _run_text_mode_interaction(
         ),
         "streaming": False,
         "generated_at": datetime.utcnow().isoformat(),
+        # Clear out streaming data from previous partial updates
+        "text_response_partial": None,
+        "text_stream_token": None,
+        "stream_progress": None,
     }
+
+    # Add widget trigger if present (for Content Catalyst and other widget-based abilities)
+    if widget_trigger:
+        payload["widget"] = widget_trigger
+        logger.info(f"🎨 TEXT-MODE: Adding widget trigger to payload: {widget_trigger}")
+
     # Persist response via LiveKit server metadata so the API can poll it
     await _merge_and_update_room_metadata(
         room_name=room.name,

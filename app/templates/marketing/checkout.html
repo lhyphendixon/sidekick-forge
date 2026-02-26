@@ -1,0 +1,590 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Checkout - Sidekick Forge{% endblock %}
+
+{% block content %}
+<section class="py-16 min-h-screen">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl md:text-5xl font-bold text-white mb-4">
+                Complete Your <span class="gradient-text">Order</span>
+            </h1>
+            <p class="text-xl text-gray-400">
+                You're one step away from forging your AI sidekick
+            </p>
+        </div>
+
+        {% if canceled %}
+        <!-- Payment Canceled Banner -->
+        <div class="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 mb-8">
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path>
+                </svg>
+                <span class="text-yellow-400 font-medium">Payment Canceled</span>
+            </div>
+            <p class="text-yellow-300/80 text-sm mt-1">
+                Your payment was canceled. You can try again when you're ready.
+            </p>
+        </div>
+        {% endif %}
+
+        <!-- Genesis Launch Discount Banner -->
+        <div class="mb-8 mx-auto">
+            <div class="relative rounded-xl overflow-hidden" style="background: linear-gradient(135deg, rgba(1,164,166,0.12) 0%, rgba(139,92,246,0.12) 50%, rgba(252,114,68,0.12) 100%); border: 1px solid rgba(1,164,166,0.25);">
+                <div class="px-6 py-4 text-center">
+                    <div class="flex items-center justify-center gap-2 mb-1">
+                        <svg class="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                        <span class="text-white font-semibold text-lg">Genesis Launch Discount</span>
+                        <svg class="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                    </div>
+                    <p class="text-gray-300 text-sm">Enter code <span class="inline-block font-mono font-bold text-white bg-white/10 px-3 py-0.5 rounded-md border border-white/20">GENESIS</span> in the coupon field below for an exclusive launch discount.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid lg:grid-cols-5 gap-8">
+            <!-- Order Form (3 cols) -->
+            <div class="lg:col-span-3">
+                <div class="glass-container rounded-2xl p-8">
+                    <form id="checkout-form" class="space-y-6">
+
+                        <!-- Tier Selection -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-3">Select Your Tier *</label>
+                            <div class="space-y-3" x-data="{ selectedTier: '{{ selected_tier }}' }">
+                                <!-- Adventurer -->
+                                <label class="block cursor-pointer">
+                                    <input type="radio" name="tier" value="adventurer" class="sr-only peer"
+                                           x-model="selectedTier" {% if selected_tier == 'adventurer' %}checked{% endif %}>
+                                    <div class="glass-card rounded-xl p-4 border-2 border-transparent peer-checked:border-green-500 transition">
+                                        <div class="flex items-center justify-between">
+                                            <div class="flex items-center gap-3">
+                                                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500/20 to-emerald-400/20 flex items-center justify-center">
+                                                    <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                                                    </svg>
+                                                </div>
+                                                <div>
+                                                    <span class="text-white font-semibold">Adventurer</span>
+                                                    <p class="text-gray-500 text-sm">1 Sidekick, 400 min voice/mo, unlimited text</p>
+                                                </div>
+                                            </div>
+                                            <span class="text-white font-bold">$49/mo</span>
+                                        </div>
+                                    </div>
+                                </label>
+
+                                <!-- Champion -->
+                                <label class="block cursor-pointer">
+                                    <input type="radio" name="tier" value="champion" class="sr-only peer"
+                                           x-model="selectedTier" {% if selected_tier == 'champion' or not selected_tier %}checked{% endif %}>
+                                    <div class="glass-card rounded-xl p-4 border-2 border-transparent peer-checked:border-blue-500 transition relative">
+                                        <div class="absolute -top-2 right-4 bg-gradient-to-r from-blue-500 to-cyan-400 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                                            POPULAR
+                                        </div>
+                                        <div class="flex items-center justify-between">
+                                            <div class="flex items-center gap-3">
+                                                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500/20 to-cyan-400/20 flex items-center justify-center">
+                                                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"></path>
+                                                    </svg>
+                                                </div>
+                                                <div>
+                                                    <span class="text-white font-semibold">Champion</span>
+                                                    <p class="text-gray-500 text-sm">5 Sidekicks, 2,000 min voice & video/mo, unlimited text</p>
+                                                </div>
+                                            </div>
+                                            <span class="text-white font-bold">$199/mo</span>
+                                        </div>
+                                    </div>
+                                </label>
+
+                                <!-- Paragon -->
+                                <label class="block cursor-pointer">
+                                    <input type="radio" name="tier" value="paragon" class="sr-only peer"
+                                           x-model="selectedTier" {% if selected_tier == 'paragon' %}checked{% endif %}>
+                                    <div class="glass-card rounded-xl p-4 border-2 border-transparent peer-checked:border-purple-500 transition">
+                                        <div class="flex items-center justify-between">
+                                            <div class="flex items-center gap-3">
+                                                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500/20 to-pink-500/20 flex items-center justify-center">
+                                                    <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path>
+                                                    </svg>
+                                                </div>
+                                                <div>
+                                                    <span class="text-white font-semibold">Paragon</span>
+                                                    <p class="text-gray-500 text-sm">Enterprise, Custom Training</p>
+                                                </div>
+                                            </div>
+                                            <span class="text-white font-bold">Custom</span>
+                                        </div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Account Information -->
+                        <div class="border-t border-white/10 pt-6">
+                            <h3 class="text-lg font-semibold text-white mb-4">Account Information</h3>
+                            <div class="grid md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300 mb-2">First Name *</label>
+                                    <input type="text" name="first_name" required
+                                           class="w-full bg-black/30 border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                           placeholder="Jane">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300 mb-2">Last Name *</label>
+                                    <input type="text" name="last_name" required
+                                           class="w-full bg-black/30 border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                           placeholder="Doe">
+                                </div>
+                            </div>
+                            <div class="mt-4">
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Email Address *</label>
+                                <input type="email" name="email" required
+                                       class="w-full bg-black/30 border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                       placeholder="jane@example.com">
+                            </div>
+                            <div class="mt-4">
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Company Name</label>
+                                <input type="text" name="company"
+                                       class="w-full bg-black/30 border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                       placeholder="Your Company">
+                            </div>
+
+                            <!-- Password Fields -->
+                            <div class="grid md:grid-cols-2 gap-4 mt-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300 mb-2">Password *</label>
+                                    <input type="password" name="password" required minlength="8"
+                                           class="w-full bg-black/30 border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                           placeholder="Min 8 characters">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300 mb-2">Confirm Password *</label>
+                                    <input type="password" name="password_confirm" required minlength="8"
+                                           class="w-full bg-black/30 border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                           placeholder="Confirm password">
+                                </div>
+                            </div>
+                            <p class="text-gray-500 text-sm mt-2">Password must be at least 8 characters long.</p>
+                        </div>
+
+                        <!-- Coupon Code -->
+                        <div class="border-t border-white/10 pt-6">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Coupon Code</label>
+                            <div class="flex gap-2">
+                                <input type="text" name="coupon_code" id="coupon-code"
+                                       class="flex-1 bg-black/30 border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent uppercase"
+                                       placeholder="Enter coupon code">
+                                <button type="button" id="apply-coupon-btn"
+                                        class="px-4 py-3 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium transition">
+                                    Apply
+                                </button>
+                            </div>
+                            <div id="coupon-result" class="mt-2"></div>
+                        </div>
+
+                        <!-- Secure Payment Notice -->
+                        <div class="border-t border-white/10 pt-6">
+                            <div class="flex items-center gap-3 mb-4">
+                                <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                                </svg>
+                                <div>
+                                    <h3 class="text-lg font-semibold text-white">Secure Payment</h3>
+                                    <p class="text-gray-500 text-sm">Powered by Stripe - Your card details are never stored on our servers</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Result Container -->
+                        <div id="checkout-result"></div>
+
+                        <!-- Submit Button -->
+                        <button type="submit" id="checkout-button"
+                                class="w-full bg-gradient-to-r from-blue-500 to-cyan-400 hover:from-blue-600 hover:to-cyan-500 text-white px-6 py-4 rounded-lg font-semibold text-lg transition shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                            <span id="checkout-spinner" class="hidden">
+                                <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                            </span>
+                            <span id="button-text">Continue to Payment</span>
+                        </button>
+
+                        <p class="text-xs text-gray-500 text-center">
+                            By completing this order, you agree to our
+                            <a href="/terms" class="text-blue-400 hover:underline">Terms of Service</a> and
+                            <a href="/privacy" class="text-blue-400 hover:underline">Privacy Policy</a>.
+                        </p>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Order Summary (2 cols) -->
+            <div class="lg:col-span-2">
+                <div class="glass-card rounded-2xl p-6 sticky top-24" x-data="orderSummary()">
+                    <h3 class="text-lg font-semibold text-white mb-4">Order Summary</h3>
+
+                    <div class="space-y-4 mb-6" x-show="tier">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="text-white font-medium" x-text="tierName"></p>
+                                <p class="text-gray-500 text-sm">Monthly subscription</p>
+                            </div>
+                            <span class="text-white font-bold" x-text="tierPrice"></span>
+                        </div>
+                    </div>
+
+                    <div class="border-t border-white/10 pt-4 mb-6">
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-400">Subtotal</span>
+                            <span class="text-white" x-text="tierPrice"></span>
+                        </div>
+                        <div id="discount-row" class="hidden flex justify-between items-center mt-2">
+                            <span class="text-green-400">Discount</span>
+                            <span id="discount-amount" class="text-green-400">-$0</span>
+                        </div>
+                        <div class="flex justify-between items-center mt-2">
+                            <span class="text-gray-400">Tax</span>
+                            <span class="text-gray-400">Calculated at billing</span>
+                        </div>
+                    </div>
+
+                    <div class="border-t border-white/10 pt-4">
+                        <div class="flex justify-between items-center">
+                            <span class="text-white font-semibold">Due Today</span>
+                            <span id="due-today" class="text-2xl font-bold text-white" x-text="tierPrice"></span>
+                        </div>
+                        <p id="recurring-text" class="text-gray-500 text-sm mt-2">
+                            Then <span x-text="tierPrice"></span>/month
+                        </p>
+                    </div>
+
+                    <!-- Features included -->
+                    <div class="mt-6 pt-6 border-t border-white/10">
+                        <h4 class="text-sm font-medium text-gray-300 mb-3">What's included:</h4>
+                        <ul class="space-y-2 text-sm" x-show="tier === 'adventurer'">
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                1 AI Sidekick
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                Unlimited Text Chat
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                400 min Voice Chat/month
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                10 Knowledge Docs
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                BYOK Option Available
+                            </li>
+                        </ul>
+                        <ul class="space-y-2 text-sm" x-show="tier === 'champion'">
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                5 AI Sidekicks
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                Unlimited Text Chat
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                2,000 min Voice & Video/month
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                Unlimited Knowledge Docs
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                BYOK Option Available
+                            </li>
+                        </ul>
+                        <ul class="space-y-2 text-sm" x-show="tier === 'paragon'">
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-purple-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                Everything in Champion
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-purple-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                Custom AI Training
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-purple-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                Dedicated Success Manager
+                            </li>
+                            <li class="flex items-center gap-2 text-gray-400">
+                                <svg class="w-4 h-4 text-purple-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>
+                                Enterprise Security & SLA
+                            </li>
+                        </ul>
+                    </div>
+
+                    <!-- Guarantee -->
+                    <div class="mt-6 pt-6 border-t border-white/10">
+                        <div class="flex items-center gap-3 text-gray-400 text-sm">
+                            <svg class="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                            </svg>
+                            <div>
+                                <p class="text-white font-medium">30-Day Money Back Guarantee</p>
+                                <p class="text-gray-500">No questions asked</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<script>
+// Coupon state
+let appliedCoupon = null;
+let discountPercent = 0;
+
+const tierPricesNumeric = {
+    'adventurer': 49,
+    'champion': 199,
+    'paragon': 0
+};
+
+function orderSummary() {
+    return {
+        tier: '{{ selected_tier or "champion" }}',
+        get tierName() {
+            const names = {
+                'adventurer': 'Adventurer',
+                'champion': 'Champion',
+                'paragon': 'Paragon'
+            };
+            return names[this.tier] || 'Champion';
+        },
+        get tierPrice() {
+            const prices = {
+                'adventurer': '$49',
+                'champion': '$199',
+                'paragon': 'Custom'
+            };
+            return prices[this.tier] || '$199';
+        },
+        init() {
+            // Watch for tier changes
+            document.querySelectorAll('input[name="tier"]').forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    this.tier = e.target.value;
+                    updatePriceDisplay();
+                });
+            });
+        }
+    };
+}
+
+function updatePriceDisplay() {
+    const tier = document.querySelector('input[name="tier"]:checked')?.value || 'champion';
+    const basePrice = tierPricesNumeric[tier] || 199;
+    const discount = Math.round(basePrice * discountPercent / 100);
+    const finalPrice = basePrice - discount;
+
+    const discountRow = document.getElementById('discount-row');
+    const discountAmount = document.getElementById('discount-amount');
+    const dueToday = document.getElementById('due-today');
+    const recurringText = document.getElementById('recurring-text');
+    const buttonText = document.getElementById('button-text');
+
+    if (discountPercent > 0 && tier !== 'paragon') {
+        discountRow.classList.remove('hidden');
+        discountRow.classList.add('flex');
+        discountAmount.textContent = `-$${discount}`;
+        dueToday.textContent = finalPrice === 0 ? 'FREE' : `$${finalPrice}`;
+
+        if (discountPercent === 100) {
+            recurringText.innerHTML = '<span class="text-green-400">First month free!</span>';
+            buttonText.textContent = 'Complete Free Checkout';
+        } else {
+            recurringText.innerHTML = `Then $${basePrice}/month`;
+            buttonText.textContent = 'Continue to Payment';
+        }
+    } else {
+        discountRow.classList.add('hidden');
+        discountRow.classList.remove('flex');
+        dueToday.textContent = tier === 'paragon' ? 'Custom' : `$${basePrice}`;
+        recurringText.innerHTML = `Then $${basePrice}/month`;
+        buttonText.textContent = 'Continue to Payment';
+    }
+}
+
+// Coupon validation
+document.getElementById('apply-coupon-btn').addEventListener('click', async function() {
+    const couponInput = document.getElementById('coupon-code');
+    const couponResult = document.getElementById('coupon-result');
+    const couponCode = couponInput.value.trim().toUpperCase();
+
+    if (!couponCode) {
+        couponResult.innerHTML = `
+            <p class="text-yellow-400 text-sm">Please enter a coupon code.</p>
+        `;
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/coupon/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coupon_code: couponCode })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.valid) {
+            appliedCoupon = couponCode;
+            discountPercent = data.discount_percent;
+            couponInput.value = couponCode;
+            couponInput.disabled = true;
+            document.getElementById('apply-coupon-btn').disabled = true;
+            document.getElementById('apply-coupon-btn').textContent = 'Applied';
+
+            couponResult.innerHTML = `
+                <div class="flex items-center gap-2 text-green-400 text-sm">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
+                    </svg>
+                    ${data.message || `${data.discount_percent}% discount applied!`}
+                </div>
+            `;
+
+            updatePriceDisplay();
+        } else {
+            appliedCoupon = null;
+            discountPercent = 0;
+            couponResult.innerHTML = `
+                <p class="text-red-400 text-sm">${data.error || 'Invalid coupon code.'}</p>
+            `;
+            updatePriceDisplay();
+        }
+    } catch (error) {
+        console.error('Coupon validation error:', error);
+        couponResult.innerHTML = `
+            <p class="text-red-400 text-sm">Failed to validate coupon. Please try again.</p>
+        `;
+    }
+});
+
+// Stripe Checkout Integration
+document.getElementById('checkout-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const form = e.target;
+    const button = document.getElementById('checkout-button');
+    const spinner = document.getElementById('checkout-spinner');
+    const buttonText = document.getElementById('button-text');
+    const resultDiv = document.getElementById('checkout-result');
+
+    // Get form data
+    const formData = new FormData(form);
+    const tier = formData.get('tier');
+
+    // Add coupon if applied
+    if (appliedCoupon) {
+        formData.set('coupon_code', appliedCoupon);
+    }
+
+    // Handle Paragon tier (contact sales)
+    if (tier === 'paragon') {
+        window.location.href = '/contact?subject=Paragon%20Tier%20Inquiry';
+        return;
+    }
+
+    // Validate passwords match
+    const password = formData.get('password');
+    const passwordConfirm = formData.get('password_confirm');
+    if (password !== passwordConfirm) {
+        resultDiv.innerHTML = `
+            <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
+                <p class="text-red-400 font-medium">Passwords don't match</p>
+                <p class="text-red-300 text-sm mt-2">Please ensure both password fields match.</p>
+            </div>
+        `;
+        return;
+    }
+
+    // Validate password length
+    if (password.length < 8) {
+        resultDiv.innerHTML = `
+            <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
+                <p class="text-red-400 font-medium">Password too short</p>
+                <p class="text-red-300 text-sm mt-2">Password must be at least 8 characters.</p>
+            </div>
+        `;
+        return;
+    }
+
+    // Show loading state
+    button.disabled = true;
+    spinner.classList.remove('hidden');
+
+    // Check if this is a free checkout (100% discount)
+    const isFreeCheckout = discountPercent === 100;
+    buttonText.textContent = isFreeCheckout ? 'Creating your account...' : 'Redirecting to payment...';
+    resultDiv.innerHTML = '';
+
+    try {
+        // Use different endpoint for free checkout
+        const endpoint = isFreeCheckout ? '/api/checkout/free' : '/api/stripe/create-checkout-session';
+
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            if (isFreeCheckout && data.success) {
+                // Free checkout successful - redirect to success page
+                window.location.href = data.redirect_url || '/checkout/success?free=true';
+            } else if (data.checkout_url) {
+                // Redirect to Stripe Checkout
+                window.location.href = data.checkout_url;
+            } else {
+                throw new Error('Unexpected response');
+            }
+        } else {
+            // Show error
+            resultDiv.innerHTML = `
+                <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
+                    <p class="text-red-400 font-medium">Error</p>
+                    <p class="text-red-300 text-sm mt-2">${data.error || 'Failed to process checkout. Please try again.'}</p>
+                </div>
+            `;
+            button.disabled = false;
+            spinner.classList.add('hidden');
+            buttonText.textContent = isFreeCheckout ? 'Complete Free Checkout' : 'Continue to Payment';
+        }
+    } catch (error) {
+        console.error('Checkout error:', error);
+        resultDiv.innerHTML = `
+            <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
+                <p class="text-red-400 font-medium">Connection Error</p>
+                <p class="text-red-300 text-sm mt-2">Failed to connect to payment service. Please try again.</p>
+            </div>
+        `;
+        button.disabled = false;
+        spinner.classList.add('hidden');
+        buttonText.textContent = isFreeCheckout ? 'Complete Free Checkout' : 'Continue to Payment';
+    }
+});
+</script>
+{% endblock %}
