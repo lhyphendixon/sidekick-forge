@@ -40,6 +40,7 @@ class TriggerMode(str, Enum):
     """Agent trigger modes"""
     VOICE = "voice"
     TEXT = "text"
+    VIDEO = "video"
 
 
 class TriggerAgentRequest(BaseModel):
@@ -49,7 +50,7 @@ class TriggerAgentRequest(BaseModel):
     client_id: Optional[str] = Field(None, description="Client ID (auto-detected if not provided)")
     
     # Mode and content
-    mode: TriggerMode = Field(..., description="Trigger mode: voice or text")
+    mode: TriggerMode = Field(..., description="Trigger mode: voice, video, or text")
     message: Optional[str] = Field(None, description="Text message (required for text mode)")
     
     # Voice mode parameters
@@ -102,7 +103,10 @@ async def trigger_agent(request: TriggerAgentRequest, raw_request: Request) -> T
         # Validate mode-specific requirements
         if request.mode == TriggerMode.VOICE and not request.room_name:
             raise HTTPException(status_code=400, detail="room_name is required for voice mode")
-        
+
+        if request.mode == TriggerMode.VIDEO and not request.room_name:
+            raise HTTPException(status_code=400, detail="room_name is required for video mode")
+
         if request.mode == TriggerMode.TEXT and not request.message:
             raise HTTPException(status_code=400, detail="message is required for text mode")
         
@@ -175,9 +179,11 @@ async def trigger_agent(request: TriggerAgentRequest, raw_request: Request) -> T
         api_keys = await agent_service.get_client_api_keys(client_id)
         
         # Process based on mode
-        if request.mode == TriggerMode.VOICE:
+        if request.mode in (TriggerMode.VOICE, TriggerMode.VIDEO):
+            # Video mode uses the same LiveKit infrastructure as voice mode
+            # The difference is that video tracks are enabled on the client side
             result = await handle_voice_trigger(request, agent, client_info, api_keys, platform_client)
-        else:  # TEXT mode
+        elif request.mode == TriggerMode.TEXT:
             if settings.enable_livekit_text_dispatch:
                 logger.info("🔄 ENABLE_LIVEKIT_TEXT_DISPATCH=true -> routing multi-tenant text request via LiveKit worker")
                 result = await handle_text_trigger_via_livekit(request, agent, platform_client, api_keys)
@@ -389,8 +395,11 @@ async def handle_voice_trigger(
     except Exception:
         pass
 
+    # Return mode as provided (voice or video - both use LiveKit)
+    actual_mode = request.mode.value if hasattr(request.mode, 'value') else str(request.mode)
+
     return {
-        "mode": "voice",
+        "mode": actual_mode,
         "room_name": request.room_name,
         "platform": request.platform,
         "conversation_id": client_conversation_id,
@@ -405,7 +414,7 @@ async def handle_voice_trigger(
             "status": "automatic",
             "message": "Agent will be automatically dispatched when participant joins"
         },
-        "status": "voice_agent_triggered"
+        "status": f"{actual_mode}_agent_triggered"
     }
 
 

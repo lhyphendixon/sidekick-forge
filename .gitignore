@@ -152,3 +152,4 @@ yarn-error.log*
 secrets/
 credentials/
 *.secret.backup-untracked/
+.applied_migrations

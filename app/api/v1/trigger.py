@@ -355,21 +355,52 @@ async def _build_agent_context_for_dispatch(
             )
 
     embedding_cfg: Dict[str, Any] = {}
-    if getattr(client, "additional_settings", None) and client.additional_settings.get("embedding"):
-        embedding_cfg = client.additional_settings.get("embedding", {})
-    elif client.settings and getattr(client.settings, "embedding", None):
+
+    # Try client.settings.embedding first (ClientInDB from client_service_supabase)
+    if client.settings and getattr(client.settings, "embedding", None):
+        emb_obj = client.settings.embedding
         try:
-            embedding_cfg = client.settings.embedding.dict()
-        except Exception:
-            embedding_cfg = dict(client.settings.embedding) if isinstance(client.settings.embedding, dict) else {}
-    # Fallback: if embedding config is still empty, derive a safe default so the context manager can initialize
-    if not embedding_cfg:
-        embedding_cfg = {
-            "provider": "siliconflow",
-            "document_model": "Qwen/Qwen3-Embedding-0.6B",
-            "conversation_model": "Qwen/Qwen3-Embedding-0.6B",
-            "dimension": 1024,
-        }
+            # Pydantic v2+
+            if hasattr(emb_obj, "model_dump"):
+                embedding_cfg = emb_obj.model_dump()
+            elif hasattr(emb_obj, "dict"):
+                embedding_cfg = emb_obj.dict()
+            elif isinstance(emb_obj, dict):
+                embedding_cfg = emb_obj
+            else:
+                embedding_cfg = {}
+            if embedding_cfg.get("provider"):
+                logger.info(f"Using embedding config from client.settings.embedding: provider={embedding_cfg.get('provider')}, model={embedding_cfg.get('document_model')}")
+        except Exception as e:
+            logger.warning(f"Failed to extract embedding from client.settings.embedding: {e}")
+            embedding_cfg = {}
+
+    # Try client.settings.additional_settings.embedding (PlatformClient stores embedding here)
+    if not embedding_cfg.get("provider"):
+        settings_add = getattr(client.settings, "additional_settings", None) if client.settings else None
+        if settings_add and isinstance(settings_add, dict) and settings_add.get("embedding"):
+            embedding_cfg = settings_add.get("embedding", {})
+            if embedding_cfg.get("provider"):
+                logger.info(f"Using embedding config from client.settings.additional_settings: provider={embedding_cfg.get('provider')}, model={embedding_cfg.get('document_model')}")
+
+    # Try client.additional_settings.embedding (direct attribute on some client models)
+    if not embedding_cfg.get("provider"):
+        _add_settings = getattr(client, "additional_settings", None)
+        if _add_settings and isinstance(_add_settings, dict) and _add_settings.get("embedding"):
+            embedding_cfg = _add_settings.get("embedding", {})
+            logger.info(f"Using embedding config from client.additional_settings: provider={embedding_cfg.get('provider')}, model={embedding_cfg.get('document_model')}")
+
+    # NO FALLBACK - fail explicitly if embedding config is missing
+    if not embedding_cfg or not embedding_cfg.get("provider"):
+        # Log what we found to help debug
+        settings_emb = getattr(client.settings, 'embedding', None) if client.settings else None
+        settings_add = getattr(client.settings, 'additional_settings', None) if client.settings else None
+        client_add = getattr(client, 'additional_settings', None)
+        logger.error(f"Embedding config missing for client {client.id}. settings.embedding={settings_emb}, settings.additional_settings={settings_add}, additional_settings={client_add}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Embedding configuration missing for client {client.id}. Configure embedding.provider in client's additional_settings."
+        )
 
     tools_config = _extract_agent_tools_config(agent)
     api_keys_map = _extract_api_keys(client)
@@ -665,6 +696,7 @@ class TriggerMode(str, Enum):
     """Agent trigger modes"""
     VOICE = "voice"
     TEXT = "text"
+    VIDEO = "video"
 
 
 class TriggerAgentRequest(BaseModel):
@@ -672,9 +704,9 @@ class TriggerAgentRequest(BaseModel):
     # Agent identification
     agent_slug: str = Field(..., description="Slug of the agent to trigger")
     client_id: Optional[str] = Field(None, description="Client ID (auto-detected if not provided)")
-    
+
     # Mode and content
-    mode: TriggerMode = Field(..., description="Trigger mode: voice or text")
+    mode: TriggerMode = Field(..., description="Trigger mode: voice, video, or text")
     message: Optional[str] = Field(None, description="Text message (required for text mode)")
     
     # Voice mode parameters
@@ -722,7 +754,10 @@ async def trigger_agent(
         # Validate mode-specific requirements
         if request.mode == TriggerMode.VOICE and not request.room_name:
             raise HTTPException(status_code=400, detail="room_name is required for voice mode")
-        
+
+        if request.mode == TriggerMode.VIDEO and not request.room_name:
+            raise HTTPException(status_code=400, detail="room_name is required for video mode")
+
         if request.mode == TriggerMode.TEXT and not request.message:
             raise HTTPException(status_code=400, detail="message is required for text mode")
         
@@ -768,8 +803,8 @@ async def trigger_agent(
         
         tools_service = ToolsService(agent_service.client_service)
 
-        # Process based on mode
-        if request.mode == TriggerMode.VOICE:
+        # Process based on mode (VIDEO uses same handler as VOICE - both use LiveKit rooms)
+        if request.mode in (TriggerMode.VOICE, TriggerMode.VIDEO):
             result = await handle_voice_trigger(request, agent, client, tools_service)
             # Enforce no-fallback: conversation_id must be present in result
             try:
@@ -1368,22 +1403,59 @@ async def handle_text_trigger(
     logger.info(f"Agent voice_settings: {agent.voice_settings}")
     logger.info(f"Using LLM provider: {llm_provider}, model: {llm_model}")
     
-    # Prepare metadata for context
-    # Check for embedding config in both locations (additional_settings first, then settings)
-    embedding_cfg = {}
-    additional_settings = getattr(client, "additional_settings", None)
-    if not additional_settings and getattr(client, "settings", None):
-        additional_settings = getattr(client.settings, "additional_settings", None)
+    # Prepare metadata for context - extract embedding config
+    embedding_cfg: Dict[str, Any] = {}
 
-    if isinstance(additional_settings, dict) and additional_settings.get("embedding"):
-        embedding_cfg = additional_settings.get("embedding", {})
-    elif client.settings and hasattr(client.settings, 'embedding') and client.settings.embedding:
-        embedding_cfg = client.settings.embedding.dict()
-    
+    # Try client.settings.embedding first (ClientInDB from client_service_supabase)
+    if client.settings and getattr(client.settings, "embedding", None):
+        emb_obj = client.settings.embedding
+        try:
+            # Pydantic v2+
+            if hasattr(emb_obj, "model_dump"):
+                embedding_cfg = emb_obj.model_dump()
+            elif hasattr(emb_obj, "dict"):
+                embedding_cfg = emb_obj.dict()
+            elif isinstance(emb_obj, dict):
+                embedding_cfg = emb_obj
+            else:
+                embedding_cfg = {}
+            if embedding_cfg.get("provider"):
+                logger.info(f"Voice mode: Using embedding config from client.settings.embedding: provider={embedding_cfg.get('provider')}, model={embedding_cfg.get('document_model')}")
+        except Exception as e:
+            logger.warning(f"Voice mode: Failed to extract embedding from client.settings.embedding: {e}")
+            embedding_cfg = {}
+
+    # Try client.settings.additional_settings.embedding (PlatformClient stores embedding here)
+    if not embedding_cfg.get("provider"):
+        settings_add = getattr(client.settings, "additional_settings", None) if client.settings else None
+        if settings_add and isinstance(settings_add, dict) and settings_add.get("embedding"):
+            embedding_cfg = settings_add.get("embedding", {})
+            if embedding_cfg.get("provider"):
+                logger.info(f"Voice mode: Using embedding config from client.settings.additional_settings: provider={embedding_cfg.get('provider')}, model={embedding_cfg.get('document_model')}")
+
+    # Try client.additional_settings.embedding (direct attribute on some client models)
+    if not embedding_cfg.get("provider"):
+        additional_settings = getattr(client, "additional_settings", None)
+        if additional_settings and isinstance(additional_settings, dict) and additional_settings.get("embedding"):
+            embedding_cfg = additional_settings.get("embedding", {})
+            logger.info(f"Voice mode: Using embedding config from client.additional_settings: provider={embedding_cfg.get('provider')}, model={embedding_cfg.get('document_model')}")
+
+    # NO FALLBACK - fail explicitly if embedding config is missing
+    if not embedding_cfg or not embedding_cfg.get("provider"):
+        settings_emb = getattr(client.settings, 'embedding', None) if client.settings else None
+        settings_add = getattr(client.settings, 'additional_settings', None) if client.settings else None
+        client_add = getattr(client, 'additional_settings', None)
+        logger.error(f"Voice mode: Embedding config missing for client {client.id}. settings.embedding={settings_emb}, settings.additional_settings={settings_add}, additional_settings={client_add}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Embedding configuration missing for client {client.id}. Configure embedding.provider in client's additional_settings."
+        )
+
     # Rerank settings for voice/worker metadata
     rerank_cfg = {}
-    if isinstance(additional_settings, dict) and additional_settings.get("rerank"):
-        rerank_cfg = additional_settings.get("rerank", {}) or {}
+    _add_settings_rerank = getattr(client, "additional_settings", None)
+    if isinstance(_add_settings_rerank, dict) and _add_settings_rerank.get("rerank"):
+        rerank_cfg = _add_settings_rerank.get("rerank", {}) or {}
     else:
         try:
             if client.settings and hasattr(client.settings, 'rerank') and client.settings.rerank:
@@ -1415,22 +1487,48 @@ async def handle_text_trigger(
         metadata["dataset_ids"] = agent_dataset_ids
         logger.info(f"📚 Added dataset_ids for {agent.slug}: {len(agent_dataset_ids)} documents")
     
-    # Get API keys from client configuration
+    # Get API keys - check if client uses platform keys (Sidekick Forge Inference)
     api_keys = {}
-    if client.settings and client.settings.api_keys:
-        api_keys = {
-            "openai_api_key": client.settings.api_keys.openai_api_key,
-            "groq_api_key": client.settings.api_keys.groq_api_key,
-            "cerebras_api_key": getattr(client.settings.api_keys, 'cerebras_api_key', None),
-            "deepgram_api_key": client.settings.api_keys.deepgram_api_key,
-            "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key,
-            "cartesia_api_key": client.settings.api_keys.cartesia_api_key,
-            "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None),
-            "novita_api_key": client.settings.api_keys.novita_api_key,
-            "cohere_api_key": client.settings.api_keys.cohere_api_key,
-            "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key,
-            "jina_api_key": client.settings.api_keys.jina_api_key,
-        }
+    uses_platform_keys = getattr(client, 'uses_platform_keys', None)
+
+    # If uses_platform_keys is None or True, use platform keys
+    if uses_platform_keys is not False:
+        # Get platform API keys from the platform_api_keys table
+        try:
+            from app.services.usage_tracking import platform_key_service
+            await platform_key_service.initialize()
+
+            platform_key_names = [
+                "cerebras_api_key", "cartesia_api_key", "siliconflow_api_key",
+                "deepgram_api_key", "openai_api_key", "groq_api_key",
+                "elevenlabs_api_key", "novita_api_key", "cohere_api_key", "jina_api_key"
+            ]
+            for key_name in platform_key_names:
+                key_value = await platform_key_service.get_platform_key(key_name)
+                if key_value:
+                    api_keys[key_name] = key_value
+            logger.info(f"🔑 Using platform API keys for client {client.id} ({len(api_keys)} keys loaded)")
+        except Exception as e:
+            logger.warning(f"Failed to load platform keys, falling back to client keys: {e}")
+            uses_platform_keys = False  # Fall back to client keys
+
+    # If explicitly using BYOK or platform keys failed, use client's own keys
+    if uses_platform_keys is False:
+        if client.settings and client.settings.api_keys:
+            api_keys = {
+                "openai_api_key": client.settings.api_keys.openai_api_key,
+                "groq_api_key": client.settings.api_keys.groq_api_key,
+                "cerebras_api_key": getattr(client.settings.api_keys, 'cerebras_api_key', None),
+                "deepgram_api_key": client.settings.api_keys.deepgram_api_key,
+                "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key,
+                "cartesia_api_key": client.settings.api_keys.cartesia_api_key,
+                "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None),
+                "novita_api_key": client.settings.api_keys.novita_api_key,
+                "cohere_api_key": client.settings.api_keys.cohere_api_key,
+                "siliconflow_api_key": client.settings.api_keys.siliconflow_api_key,
+                "jina_api_key": client.settings.api_keys.jina_api_key,
+            }
+        logger.info(f"🔑 Using client's own API keys (BYOK mode) for client {client.id}")
     metadata["api_keys"] = api_keys
 
     recent_rows: List[Dict[str, Any]] = []
@@ -1842,7 +1940,7 @@ async def dispatch_agent_job(
             "user_id": user_id,
             # Include embedding configuration from client's additional_settings
             "embedding": context_snapshot.get("embedding")
-            or (client.additional_settings.get("embedding", {}) if client.additional_settings else {}),
+            or (client.additional_settings.get("embedding", {}) if getattr(client, "additional_settings", None) else {}),
             # Include dataset_ids for RAG context (document IDs for this agent)
             "dataset_ids": context_dataset_ids,
             "api_keys": api_keys_map,

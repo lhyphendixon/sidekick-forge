@@ -701,13 +701,16 @@
             <div class="p-6">
                 <div class="space-y-6">
                     <!-- Avatar Provider Selection -->
+                    {% set vs = agent.voice_settings if agent.voice_settings else {} %}
+                    {% set avatar_prov = vs.get('avatar_provider', '') if vs is mapping else '' %}
+                    {% set video_prov = vs.get('video_provider', '') if vs is mapping else '' %}
                     <div>
                         <label class="block text-sm font-medium text-dark-text mb-2">Avatar Provider</label>
                         <select id="avatarProvider" onchange="toggleAvatarProviderSettings()" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
-                            <option value="bithuman" {% if agent.voice_settings.avatar_provider == 'bithuman' or not agent.voice_settings.avatar_provider %}selected{% endif %}>Bithuman</option>
-                            <option value="beyondpresence" {% if agent.voice_settings.avatar_provider == 'beyondpresence' %}selected{% endif %}>Beyond Presence</option>
-                            <option value="liveavatar" {% if agent.voice_settings.avatar_provider == 'liveavatar' %}selected{% endif %}>HeyGen LiveAvatar</option>
-                            <option value="ken_burns" {% if agent.voice_settings.avatar_provider == 'ken_burns' or agent.voice_settings.video_provider == 'ken_burns' %}selected{% endif %}>Ken Burns (AI Generated Images)</option>
+                            <option value="bithuman" {% if avatar_prov == 'bithuman' or (not avatar_prov and not video_prov) %}selected{% endif %}>Bithuman</option>
+                            <option value="beyondpresence" {% if avatar_prov == 'beyondpresence' %}selected{% endif %}>Beyond Presence</option>
+                            <option value="liveavatar" {% if avatar_prov == 'liveavatar' %}selected{% endif %}>HeyGen LiveAvatar</option>
+                            <option value="ken_burns" {% if avatar_prov == 'ken_burns' or video_prov == 'ken_burns' %}selected{% endif %}>Ken Burns (AI Generated Images)</option>
                         </select>
                         <p class="text-xs text-dark-text-secondary mt-2">
                             Choose your video provider. Avatar providers require API keys; Ken Burns uses AI-generated imagery.
@@ -715,11 +718,11 @@
                     </div>
 
                     <!-- Bithuman Settings (Local mode only - requires .imx model) -->
-                    <div id="bithumanSettings" {% if agent.voice_settings.avatar_provider and agent.voice_settings.avatar_provider != 'bithuman' %}style="display: none;"{% endif %}>
+                    <div id="bithumanSettings" {% if avatar_prov and avatar_prov != 'bithuman' %}style="display: none;"{% endif %}>
                         <!-- IMX Model Path (required) -->
                         <div class="mb-6">
                             <label class="block text-sm font-medium text-dark-text mb-2">IMX Model Path <span class="text-red-500">*</span></label>
-                            <input type="text" id="avatarModelPath" value="{{ agent.voice_settings.avatar_model_path or '/app/models/farah_qubit.imx' }}"
+                            <input type="text" id="avatarModelPath" value="{{ vs.get('avatar_model_path', '/app/models/farah_qubit.imx') if vs is mapping else '/app/models/farah_qubit.imx' }}"
                                    class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
                                    placeholder="/app/models/your_avatar.imx">
                             <p class="text-xs text-dark-text-secondary mt-2">
@@ -731,8 +734,9 @@
                         <div class="mb-6">
                             <label class="block text-sm font-medium text-dark-text mb-2">Animation Style</label>
                             <select id="avatarModelType" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
-                                <option value="expression" {% if agent.voice_settings.avatar_model_type == 'expression' or not agent.voice_settings.avatar_model_type %}selected{% endif %}>Expression (Dynamic emotions)</option>
-                                <option value="essence" {% if agent.voice_settings.avatar_model_type == 'essence' %}selected{% endif %}>Essence (Consistent style)</option>
+                                {% set model_type = vs.get('avatar_model_type', '') if vs is mapping else '' %}
+                                <option value="expression" {% if model_type == 'expression' or not model_type %}selected{% endif %}>Expression (Dynamic emotions)</option>
+                                <option value="essence" {% if model_type == 'essence' %}selected{% endif %}>Essence (Consistent style)</option>
                             </select>
                             <p class="text-xs text-dark-text-secondary mt-2">
                                 <strong>Expression:</strong> Dynamic facial expressions that respond to conversation tone.<br>
@@ -752,10 +756,10 @@
                     </div>
 
                     <!-- Beyond Presence Settings -->
-                    <div id="beyondPresenceSettings" {% if agent.voice_settings.avatar_provider != 'beyondpresence' %}style="display: none;"{% endif %}>
+                    <div id="beyondPresenceSettings" {% if avatar_prov != 'beyondpresence' %}style="display: none;"{% endif %}>
                         <div class="mb-6">
                             <label class="block text-sm font-medium text-dark-text mb-2">Avatar ID</label>
-                            <input type="text" id="beyondPresenceAvatarId" value="{{ agent.voice_settings.avatar_id or '' }}"
+                            <input type="text" id="beyondPresenceAvatarId" value="{{ vs.get('avatar_id', '') if vs is mapping else '' }}"
                                    class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
                                    placeholder="e.g., anna_professional">
                             <p class="text-xs text-dark-text-secondary mt-2">
@@ -774,10 +778,10 @@
                     </div>
 
                     <!-- HeyGen LiveAvatar Settings -->
-                    <div id="liveavatarSettings" {% if agent.voice_settings.avatar_provider != 'liveavatar' %}style="display: none;"{% endif %}>
+                    <div id="liveavatarSettings" {% if avatar_prov != 'liveavatar' %}style="display: none;"{% endif %}>
                         <div class="mb-6">
                             <label class="block text-sm font-medium text-dark-text mb-2">Avatar ID</label>
-                            <input type="text" id="liveavatarAvatarId" value="{{ agent.voice_settings.liveavatar_avatar_id or '' }}"
+                            <input type="text" id="liveavatarAvatarId" value="{{ vs.get('liveavatar_avatar_id', '') if vs is mapping else '' }}"
                                    class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
                                    placeholder="e.g., avatar_abc123">
                             <p class="text-xs text-dark-text-secondary mt-2">
@@ -796,16 +800,20 @@
                     </div>
 
                     <!-- Ken Burns (AI Generated Images) Settings -->
-                    <div id="kenburnsSettings" {% if agent.voice_settings.avatar_provider != 'ken_burns' and agent.voice_settings.video_provider != 'ken_burns' %}style="display: none;"{% endif %}>
+                    {% set kb_style = vs.get('kenburns_style', '') if vs is mapping else '' %}
+                    {% set kb_duration = vs.get('kenburns_duration', 20) if vs is mapping else 20 %}
+                    {% set kb_interval = vs.get('kenburns_auto_interval', 15) if vs is mapping else 15 %}
+                    {% set kb_starting = vs.get('kenburns_starting_image', '') if vs is mapping else '' %}
+                    <div id="kenburnsSettings" {% if avatar_prov != 'ken_burns' and video_prov != 'ken_burns' %}style="display: none;"{% endif %}>
                         <!-- Visual Style Preset -->
                         <div class="mb-6">
                             <label class="block text-sm font-medium text-dark-text mb-2">Visual Style</label>
                             <select id="kenburnsStylePreset" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
-                                <option value="cinematic" {% if agent.voice_settings.kenburns_style == 'cinematic' or not agent.voice_settings.kenburns_style %}selected{% endif %}>Cinematic (dramatic lighting, film-like)</option>
-                                <option value="futuristic" {% if agent.voice_settings.kenburns_style == 'futuristic' %}selected{% endif %}>Futuristic (sci-fi, neon accents)</option>
-                                <option value="realistic" {% if agent.voice_settings.kenburns_style == 'realistic' %}selected{% endif %}>Realistic (photorealistic, natural)</option>
-                                <option value="artistic" {% if agent.voice_settings.kenburns_style == 'artistic' %}selected{% endif %}>Artistic (painterly, vibrant)</option>
-                                <option value="documentary" {% if agent.voice_settings.kenburns_style == 'documentary' %}selected{% endif %}>Documentary (informative, clear)</option>
+                                <option value="cinematic" {% if kb_style == 'cinematic' or not kb_style %}selected{% endif %}>Cinematic (dramatic lighting, film-like)</option>
+                                <option value="futuristic" {% if kb_style == 'futuristic' %}selected{% endif %}>Futuristic (sci-fi, neon accents)</option>
+                                <option value="realistic" {% if kb_style == 'realistic' %}selected{% endif %}>Realistic (photorealistic, natural)</option>
+                                <option value="artistic" {% if kb_style == 'artistic' %}selected{% endif %}>Artistic (painterly, vibrant)</option>
+                                <option value="documentary" {% if kb_style == 'documentary' %}selected{% endif %}>Documentary (informative, clear)</option>
                             </select>
                             <p class="text-xs text-dark-text-secondary mt-2">
                                 The visual style applied to AI-generated images during conversation.
@@ -816,12 +824,12 @@
                         <div class="mb-6">
                             <label class="block text-sm font-medium text-dark-text mb-2">Animation Duration</label>
                             <select id="kenburnsAnimationDuration" class="w-full md:w-1/2 px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text">
-                                <option value="5" {% if agent.voice_settings.kenburns_duration == 5 %}selected{% endif %}>5 seconds (very fast)</option>
-                                <option value="10" {% if agent.voice_settings.kenburns_duration == 10 %}selected{% endif %}>10 seconds (fast)</option>
-                                <option value="15" {% if agent.voice_settings.kenburns_duration == 15 %}selected{% endif %}>15 seconds</option>
-                                <option value="20" {% if agent.voice_settings.kenburns_duration == 20 or not agent.voice_settings.kenburns_duration %}selected{% endif %}>20 seconds (default)</option>
-                                <option value="30" {% if agent.voice_settings.kenburns_duration == 30 %}selected{% endif %}>30 seconds (slow)</option>
-                                <option value="45" {% if agent.voice_settings.kenburns_duration == 45 %}selected{% endif %}>45 seconds (very slow)</option>
+                                <option value="5" {% if kb_duration == 5 %}selected{% endif %}>5 seconds (very fast)</option>
+                                <option value="10" {% if kb_duration == 10 %}selected{% endif %}>10 seconds (fast)</option>
+                                <option value="15" {% if kb_duration == 15 %}selected{% endif %}>15 seconds</option>
+                                <option value="20" {% if kb_duration == 20 or not kb_duration %}selected{% endif %}>20 seconds (default)</option>
+                                <option value="30" {% if kb_duration == 30 %}selected{% endif %}>30 seconds (slow)</option>
+                                <option value="45" {% if kb_duration == 45 %}selected{% endif %}>45 seconds (very slow)</option>
                             </select>
                             <p class="text-xs text-dark-text-secondary mt-2">
                                 How long each Ken Burns pan/zoom animation takes before looping or transitioning.
@@ -831,10 +839,10 @@
                         <!-- Auto Image Generation Interval -->
                         <div class="mb-6">
                             <label class="block text-sm font-medium text-dark-text mb-2">
-                                Image Refresh Interval: <span id="kenburnsAutoIntervalValue">{{ agent.voice_settings.kenburns_auto_interval or 15 }}</span> seconds
+                                Image Refresh Interval: <span id="kenburnsAutoIntervalValue">{{ kb_interval }}</span> seconds
                             </label>
                             <input type="range" id="kenburnsAutoInterval" min="5" max="60" step="5"
-                                   value="{{ agent.voice_settings.kenburns_auto_interval or 15 }}"
+                                   value="{{ kb_interval }}"
                                    oninput="document.getElementById('kenburnsAutoIntervalValue').textContent = this.value"
                                    class="w-full md:w-1/2 h-2 bg-dark-border rounded-lg appearance-none cursor-pointer accent-purple-500">
                             <div class="flex justify-between text-xs text-dark-text-secondary w-full md:w-1/2 mt-1">
@@ -850,7 +858,7 @@
                         <div class="mb-6">
                             <label class="block text-sm font-medium text-dark-text mb-2">Starting Image (Optional)</label>
                             <!-- Hidden input to store the URL -->
-                            <input type="hidden" id="kenburnsStartingImage" value="{{ agent.voice_settings.kenburns_starting_image or '' }}">
+                            <input type="hidden" id="kenburnsStartingImage" value="{{ kb_starting }}">
 
                             <!-- Drag and drop upload area -->
                             <div id="kenburnsStartingImageDropzone"
@@ -859,8 +867,8 @@
 
                                 <!-- Preview or placeholder -->
                                 <div id="kenburnsStartingImagePreview" class="absolute inset-0 flex items-center justify-center">
-                                    {% if agent.voice_settings.kenburns_starting_image %}
-                                    <img src="{{ agent.voice_settings.kenburns_starting_image }}" alt="Starting image" class="w-full h-full object-cover">
+                                    {% if kb_starting %}
+                                    <img src="{{ kb_starting }}" alt="Starting image" class="w-full h-full object-cover">
                                     {% else %}
                                     <div class="text-center p-4">
                                         <svg class="w-12 h-12 mx-auto text-dark-text-secondary mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -878,7 +886,7 @@
                                 </div>
 
                                 <!-- Remove button (shown when image exists) -->
-                                {% if agent.voice_settings.kenburns_starting_image %}
+                                {% if kb_starting %}
                                 <button type="button" id="kenburnsStartingImageRemove"
                                         onclick="event.stopPropagation(); removeKenburnsStartingImage();"
                                         class="absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 rounded-full text-white transition-colors">
@@ -1595,7 +1603,9 @@ function initPersonalityEngine() {
 }
 
 async function saveAgent() {
-    console.log('saveAgent() function called');
+    console.log('=== SAVE AGENT CALLED ===');
+    // DEBUG: Show immediate alert to confirm function is called
+    console.log('saveAgent function started at:', new Date().toISOString());
     
     const form = document.getElementById('agentForm');
     console.log('Form found:', form);
@@ -1885,7 +1895,12 @@ async function saveAgent() {
     console.log('Full update data:', updateData);
     
     console.log('About to send fetch request to:', `/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/update`);
-    
+    console.log('Update data being sent:', JSON.stringify(updateData, null, 2));
+    console.log('video_chat_enabled value:', updateData.video_chat_enabled);
+    console.log('voice_settings.avatar_provider:', updateData.voice_settings?.avatar_provider);
+    console.log('voice_settings.video_provider:', updateData.voice_settings?.video_provider);
+    console.log('voice_settings.cartesia_emotions_enabled:', updateData.voice_settings?.cartesia_emotions_enabled);
+
     const adminToken = getCookie('admin_token');
     console.log('Admin token found:', adminToken ? 'yes' : 'no');
     

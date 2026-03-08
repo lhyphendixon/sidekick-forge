@@ -20,11 +20,12 @@ logger = logging.getLogger(__name__)
 
 class RemoteEmbedder:
     """Simple client for remote embedding services"""
-    
-    def __init__(self, provider: str, api_key: str, model: str = None):
+
+    def __init__(self, provider: str, api_key: str, model: str = None, dimensions: int = None):
         self.provider = provider
         self.api_key = api_key
         self.model = model
+        self.dimensions = dimensions
         self.client = httpx.AsyncClient(timeout=30.0)
         
     async def create_embedding(self, text: str) -> List[float]:
@@ -44,21 +45,25 @@ class RemoteEmbedder:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
+
         if not self.model:
             raise ValueError("No model specified for SiliconFlow embeddings")
-            
+
         data = {
             "model": self.model,
             "input": text
         }
-        
+
+        # Add dimensions parameter if specified (required for models like Qwen3-Embedding-4B)
+        if self.dimensions:
+            data["dimensions"] = self.dimensions
+
         response = await self.client.post(
             "https://api.siliconflow.com/v1/embeddings",
             headers=headers,
             json=data
         )
-        
+
         if response.status_code == 200:
             result = response.json()
             if 'data' in result and len(result['data']) > 0:
@@ -166,9 +171,14 @@ class AgentContextManager:
         api_key = self.api_keys.get(api_key_name)
         if not api_key:
             raise ValueError(f"No API key found for embedding provider {provider}. Required key: {api_key_name}")
-        
-        logger.info(f"Initializing {provider} embedder with model: {model or 'default'}")
-        return RemoteEmbedder(provider, api_key, model)
+
+        # Get dimensions from config (required for models like Qwen3-Embedding-4B)
+        dimensions = embedding_config.get('dimension') or embedding_config.get('dimensions')
+        if dimensions:
+            dimensions = int(dimensions)
+
+        logger.info(f"Initializing {provider} embedder with model: {model or 'default'}, dimensions: {dimensions or 'default'}")
+        return RemoteEmbedder(provider, api_key, model, dimensions)
     
     def _detect_schema(self):
         """

@@ -24,8 +24,11 @@ class WordPressSiteBase(BaseModel):
         v = re.sub(r'^https?://', '', v)
         # Remove trailing slash
         v = v.rstrip('/')
-        # Basic domain validation
-        if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?\.[a-zA-Z]{2,}', v):
+        # Basic domain validation - allow multiple subdomains (e.g., sub.domain.example.com)
+        # Each label: starts with alphanumeric, can contain hyphens, ends with alphanumeric
+        # Must have at least one dot and a TLD of 2+ chars
+        domain_pattern = r'^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+        if not re.match(domain_pattern, v):
             raise ValueError("Invalid domain format")
         return v.lower()
 

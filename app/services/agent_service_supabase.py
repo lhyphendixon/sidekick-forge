@@ -126,6 +126,7 @@ class AgentService:
             tools_config=tools_config,
             channels=channels,
             rag_results_limit=agent_data.get("rag_results_limit", 5),
+            sound_settings=agent_data.get("sound_settings") or {},
         )
     
     async def get_agent(self, client_id: str, agent_slug: str) -> Optional[Agent]:
@@ -381,9 +382,9 @@ class AgentService:
             if update_dict:
                 update_dict["updated_at"] = datetime.utcnow().isoformat()
                 
-                # Remove fields that might not exist in the table
-                update_dict.pop("tools_config", None)  # Remove if not in table schema
-                update_dict.pop("channels", None)      # Channels are stored inside tools_config, not as a column
+                # Note: tools_config IS a valid column - do NOT remove it
+                # Channels are stored inside tools_config, not as a separate column
+                update_dict.pop("channels", None)
                 
                 # Ensure voice_settings is a plain dict (let Supabase handle JSONB)
                 if "voice_settings" in update_dict and update_dict["voice_settings"]:
@@ -412,6 +413,16 @@ class AgentService:
                 # Debug: log update payload
                 try:
                     logger.info(f"[agents.update] client={client_id} slug={agent_slug} payload_keys={list(update_dict.keys())}")
+                    # Log specific fields we're interested in
+                    if "video_chat_enabled" in update_dict:
+                        logger.info(f"[agents.update] video_chat_enabled={update_dict['video_chat_enabled']}")
+                    if "voice_settings" in update_dict:
+                        vs = update_dict["voice_settings"]
+                        if isinstance(vs, dict):
+                            logger.info(f"[agents.update] voice_settings keys: {list(vs.keys())}")
+                            logger.info(f"[agents.update] voice_settings.avatar_provider={vs.get('avatar_provider')}")
+                            logger.info(f"[agents.update] voice_settings.video_provider={vs.get('video_provider')}")
+                            logger.info(f"[agents.update] voice_settings.cartesia_emotions_enabled={vs.get('cartesia_emotions_enabled')}")
                 except Exception:
                     pass
 

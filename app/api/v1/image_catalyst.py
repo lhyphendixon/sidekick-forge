@@ -154,6 +154,7 @@ async def upload_reference_image(
     Stored in Supabase storage. Returns a signed URL valid for 1 hour.
     Supported formats: PNG, JPG, JPEG, WEBP. Max size: 10MB.
     """
+    logger.info(f"[ImageCatalyst Upload] Starting upload for client_id={client_id}, filename={file.filename}, content_type={file.content_type}")
     try:
         # Validate file type
         content_type = file.content_type or ''
@@ -173,7 +174,11 @@ async def upload_reference_image(
             )
 
         # Get client's Supabase for storage
+        logger.info(f"[ImageCatalyst Upload] Getting Supabase client for {client_id}")
         client_sb = await client_service.get_client_supabase_client(client_id, auto_sync=False)
+        if not client_sb:
+            logger.error(f"[ImageCatalyst Upload] No Supabase client found for {client_id}")
+            raise HTTPException(status_code=500, detail="Could not connect to client storage")
 
         # Generate unique filename
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -242,7 +247,7 @@ async def upload_reference_image(
         except HTTPException:
             raise
         except Exception as storage_error:
-            logger.error(f"Storage upload failed: {storage_error}")
+            logger.error(f"[ImageCatalyst Upload] Storage upload failed: {storage_error}", exc_info=True)
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to upload file: {str(storage_error)}"
@@ -251,7 +256,7 @@ async def upload_reference_image(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Reference image upload failed: {e}")
+        logger.error(f"[ImageCatalyst Upload] Reference image upload failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

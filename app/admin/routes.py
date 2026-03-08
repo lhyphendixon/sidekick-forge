@@ -4,6 +4,7 @@ from fastapi.templating import Jinja2Templates
 from typing import Dict, Any, List, Optional, Set
 import redis.asyncio as aioredis
 import redis
+import base64
 import json
 import logging
 import os
@@ -223,7 +224,7 @@ async def resolve_document_client(document_id: str, admin_user: Dict[str, Any]) 
 
     for cid in scoped_ids:
         try:
-            supabase = await document_processor._get_client_supabase(cid)
+            supabase = await document_processor._get_client_supabase_client(cid)
             if not supabase:
                 continue
             result = (
@@ -334,7 +335,14 @@ async def login_page(request: Request):
 @router.get("/reset-password", response_class=HTMLResponse)
 async def reset_password_page(request: Request):
     """Password reset page"""
-    return templates.TemplateResponse("admin/reset-password.html", {"request": request})
+    return templates.TemplateResponse(
+        "admin/reset-password.html",
+        {
+            "request": request,
+            "supabase_url": settings.supabase_url,
+            "supabase_anon_key": settings.supabase_anon_key,
+        },
+    )
 
 @router.post("/login")
 async def login(request: Request):
@@ -505,7 +513,25 @@ async def users_page(request: Request, user: Dict[str, Any] = Depends(get_admin_
     except Exception:
         clients_ctx = []
     from app.config import settings
-    return templates.TemplateResponse("admin/users.html", {"request": request, "user": user, "users": enriched, "clients": clients_ctx, "supabase_url": settings.supabase_url, "supabase_anon_key": settings.supabase_anon_key})
+    # Pagination variables for template (currently showing all users without pagination)
+    total_users = len(enriched)
+    page = 1
+    per_page = total_users if total_users > 0 else 1
+    total_pages = 1
+    search = ""
+    return templates.TemplateResponse("admin/users.html", {
+        "request": request,
+        "user": user,
+        "users": enriched,
+        "clients": clients_ctx,
+        "supabase_url": settings.supabase_url,
+        "supabase_anon_key": settings.supabase_anon_key,
+        "total_users": total_users,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": total_pages,
+        "search": search,
+    })
 
 @router.post("/users/create")
 async def users_create(request: Request, admin: Dict[str, Any] = Depends(get_admin_user)):
@@ -1258,8 +1284,18 @@ async def dashboard(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Main admin dashboard with HTMX"""
+    # Detect mobile devices and redirect to Sidekicks page
+    user_agent = request.headers.get("user-agent", "").lower()
+    is_mobile = any(mobile_keyword in user_agent for mobile_keyword in [
+        "mobile", "android", "iphone", "ipad", "ipod", "blackberry",
+        "windows phone", "opera mini", "iemobile"
+    ])
+
+    if is_mobile:
+        return RedirectResponse(url="/admin/agents", status_code=302)
+
     summary = await get_system_summary(admin_user)
-    
+
     return templates.TemplateResponse("admin/dashboard.html", {
         "request": request,
         "summary": summary,
@@ -1521,6 +1557,11 @@ async def debug_agent_data(
                 "tools_config": agent.get("tools_config", {}),
                 "show_citations": agent.get("show_citations", True),
                 "rag_results_limit": agent.get("rag_results_limit", 5),
+                # Chat mode toggles
+                "voice_chat_enabled": agent.get("voice_chat_enabled", True),
+                "text_chat_enabled": agent.get("text_chat_enabled", True),
+                "video_chat_enabled": agent.get("video_chat_enabled", False),
+                "sound_settings": agent.get("sound_settings", {}),
                 "client_id": client_id,
                 "client_name": client.get("name", "Unknown") if isinstance(client, dict) else (getattr(client, 'name', 'Unknown') if client else "Unknown")
             }
@@ -1541,6 +1582,11 @@ async def debug_agent_data(
                 "tools_config": agent.tools_config or {},
                 "show_citations": getattr(agent, 'show_citations', True),
                 "rag_results_limit": getattr(agent, "rag_results_limit", 5),
+                # Chat mode toggles
+                "voice_chat_enabled": getattr(agent, "voice_chat_enabled", True),
+                "text_chat_enabled": getattr(agent, "text_chat_enabled", True),
+                "video_chat_enabled": getattr(agent, "video_chat_enabled", False),
+                "sound_settings": getattr(agent, "sound_settings", {}),
                 "client_id": client_id,
                 "client_name": client.name if client else "Unknown"
             }
@@ -1825,6 +1871,310 @@ async def admin_asana_oauth_callback(
     return HTMLResponse(success_markup)
 
 
+# ============================================================================
+# HelpScout OAuth Endpoints
+# ============================================================================
+# NOTE: HelpScout credentials and tokens are stored in the PLATFORM database
+# in the client_helpscout_connections table (which has oauth_client_id and
+# oauth_client_secret columns for credentials, plus token fields).
+
+HELPSCOUT_AUTH_URL = "https://secure.helpscout.net/authentication/authorizeClientApplication"
+HELPSCOUT_TOKEN_URL = "https://api.helpscout.net/v2/oauth2/token"
+
+
+def _get_platform_supabase():
+    """Get the platform Supabase client."""
+    from app.integrations.supabase_client import supabase_manager
+    return supabase_manager.admin_client
+
+
+@router.post("/api/helpscout/credentials")
+async def admin_save_helpscout_credentials(
+    request: Request,
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Save HelpScout OAuth app credentials for a client."""
+    ensure_client_access(client_id, admin_user)
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    oauth_client_id = body.get("oauth_client_id", "").strip()
+    oauth_client_secret = body.get("oauth_client_secret", "").strip()
+
+    if not oauth_client_id or not oauth_client_secret:
+        raise HTTPException(status_code=400, detail="Both oauth_client_id and oauth_client_secret are required")
+
+    platform_sb = _get_platform_supabase()
+
+    # Check if record exists
+    try:
+        existing = platform_sb.table("client_helpscout_connections").select("client_id").eq("client_id", client_id).limit(1).execute()
+
+        if existing.data:
+            # Update existing record with new credentials
+            platform_sb.table("client_helpscout_connections").update({
+                "oauth_client_id": oauth_client_id,
+                "oauth_client_secret": oauth_client_secret,
+                "updated_at": datetime.utcnow().isoformat(),
+            }).eq("client_id", client_id).execute()
+        else:
+            # Insert new record - access_token needs a placeholder since it has NOT NULL constraint
+            platform_sb.table("client_helpscout_connections").insert({
+                "client_id": client_id,
+                "oauth_client_id": oauth_client_id,
+                "oauth_client_secret": oauth_client_secret,
+                "access_token": "",  # Placeholder - will be replaced after OAuth
+                "updated_at": datetime.utcnow().isoformat(),
+            }).execute()
+    except Exception as exc:
+        logger.error(f"Failed to store HelpScout credentials: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to store credentials: {exc}")
+
+    return {"success": True}
+
+
+@router.get("/api/helpscout/connection")
+async def admin_helpscout_status(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Check HelpScout connection status for a client."""
+    ensure_client_access(client_id, admin_user)
+
+    platform_sb = _get_platform_supabase()
+
+    has_tokens = False
+    has_credentials = False
+    connection_info = {}
+
+    try:
+        result = platform_sb.table("client_helpscout_connections").select("*").eq("client_id", client_id).limit(1).execute()
+        if result.data:
+            row = result.data[0]
+            has_tokens = bool(row.get("access_token"))
+            has_credentials = bool(row.get("oauth_client_id"))
+            connection_info = {
+                "updated_at": row.get("updated_at"),
+                "expires_at": row.get("expires_at"),
+            }
+    except Exception as exc:
+        logger.warning(f"Failed to check HelpScout status: {exc}")
+
+    return {
+        "connected": has_tokens,
+        "has_credentials": has_credentials,
+        **connection_info,
+    }
+
+
+@router.delete("/api/helpscout/connection")
+async def admin_disconnect_helpscout(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Disconnect HelpScout for a client (clears tokens but keeps credentials)."""
+    ensure_client_access(client_id, admin_user)
+
+    platform_sb = _get_platform_supabase()
+
+    try:
+        # Clear tokens but keep oauth credentials
+        platform_sb.table("client_helpscout_connections").update({
+            "access_token": None,
+            "refresh_token": None,
+            "token_type": None,
+            "expires_at": None,
+            "extra": None,
+            "updated_at": datetime.utcnow().isoformat(),
+        }).eq("client_id", client_id).execute()
+    except Exception as exc:
+        logger.warning(f"Failed to disconnect HelpScout: {exc}")
+
+    return {"success": True}
+
+
+@router.get("/api/helpscout/oauth/start")
+async def admin_helpscout_oauth_start(
+    request: Request,
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Start HelpScout OAuth flow."""
+    ensure_client_access(client_id, admin_user)
+
+    platform_sb = _get_platform_supabase()
+
+    # Get stored OAuth credentials from platform DB
+    oauth_client_id = None
+
+    try:
+        result = platform_sb.table("client_helpscout_connections").select("oauth_client_id").eq("client_id", client_id).limit(1).execute()
+        if result.data:
+            oauth_client_id = result.data[0].get("oauth_client_id")
+    except Exception as exc:
+        logger.warning(f"Failed to get HelpScout credentials: {exc}")
+
+    if not oauth_client_id:
+        raise HTTPException(status_code=400, detail="HelpScout OAuth credentials not configured. Please enter your App ID and Secret first.")
+
+    # Build state parameter
+    import secrets
+    import hashlib
+    import hmac
+    import time
+
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    nonce = secrets.token_hex(8)
+    timestamp = str(int(time.time()))
+    raw = f"{client_id}:{user_id}:{timestamp}:{nonce}"
+    signature = hmac.new(settings.secret_key.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    state = base64.urlsafe_b64encode(f"{raw}:{signature}".encode()).decode()
+
+    # Build redirect URI
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.netloc)
+    redirect_uri = f"{scheme}://{host}/admin/oauth/helpscout/callback"
+
+    # Build authorization URL
+    from urllib.parse import urlencode
+    params = {
+        "client_id": oauth_client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "state": state,
+    }
+    authorization_url = f"{HELPSCOUT_AUTH_URL}?{urlencode(params)}"
+
+    return {"authorization_url": authorization_url}
+
+
+@router.get("/oauth/helpscout/callback")
+async def admin_helpscout_oauth_callback(
+    request: Request,
+    code: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+):
+    """Handle HelpScout OAuth callback."""
+    import hashlib
+    import hmac
+    import time
+    import httpx
+
+    if error:
+        return HTMLResponse(f"<p>HelpScout returned an error: {error}</p>", status_code=400)
+
+    if not state:
+        return HTMLResponse("<p>Missing state parameter.</p>", status_code=400)
+
+    # Parse and validate state
+    try:
+        decoded = base64.urlsafe_b64decode(state.encode()).decode()
+        parts = decoded.split(":")
+        if len(parts) != 5:
+            raise ValueError("Invalid state format")
+        client_id, user_id, timestamp_str, nonce, signature = parts
+
+        raw = f"{client_id}:{user_id}:{timestamp_str}:{nonce}"
+        expected_sig = hmac.new(settings.secret_key.encode(), raw.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected_sig, signature):
+            raise ValueError("State signature mismatch")
+
+        if time.time() - int(timestamp_str) > 900:
+            raise ValueError("State expired")
+
+    except Exception as exc:
+        return HTMLResponse(f"<p>Invalid state parameter: {exc}</p>", status_code=400)
+
+    if not code:
+        return HTMLResponse("<p>Missing authorization code.</p>", status_code=400)
+
+    platform_sb = _get_platform_supabase()
+
+    # Get stored OAuth credentials from platform DB
+    oauth_client_id = None
+    oauth_client_secret = None
+
+    try:
+        result = platform_sb.table("client_helpscout_connections").select("oauth_client_id, oauth_client_secret").eq("client_id", client_id).limit(1).execute()
+        if result.data:
+            oauth_client_id = result.data[0].get("oauth_client_id")
+            oauth_client_secret = result.data[0].get("oauth_client_secret")
+    except Exception as exc:
+        return HTMLResponse(f"<p>Failed to retrieve OAuth credentials: {exc}</p>", status_code=500)
+
+    if not oauth_client_id or not oauth_client_secret:
+        return HTMLResponse("<p>HelpScout OAuth credentials not found.</p>", status_code=400)
+
+    # Build redirect URI (must match the one used in authorization)
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.netloc)
+    redirect_uri = f"{scheme}://{host}/admin/oauth/helpscout/callback"
+
+    # Exchange code for tokens
+    token_payload = {
+        "grant_type": "authorization_code",
+        "client_id": oauth_client_id,
+        "client_secret": oauth_client_secret,
+        "redirect_uri": redirect_uri,
+        "code": code,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as http_client:
+            response = await http_client.post(HELPSCOUT_TOKEN_URL, data=token_payload)
+
+        if response.status_code >= 400:
+            error_detail = response.text
+            try:
+                error_json = response.json()
+                error_detail = error_json.get("error_description") or error_json.get("error") or error_detail
+            except Exception:
+                pass
+            return HTMLResponse(f"<p>Failed to exchange code: {error_detail}</p>", status_code=400)
+
+        tokens = response.json()
+    except Exception as exc:
+        return HTMLResponse(f"<p>Failed to exchange authorization code: {exc}</p>", status_code=500)
+
+    # Store tokens
+    access_token = tokens.get("access_token")
+    refresh_token = tokens.get("refresh_token")
+    expires_in = tokens.get("expires_in")
+
+    expires_at = None
+    if isinstance(expires_in, (int, float)):
+        expires_at = (datetime.utcnow() + timedelta(seconds=int(expires_in))).isoformat()
+
+    # Update tokens in platform DB (keep existing oauth credentials)
+    token_update = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": tokens.get("token_type"),
+        "expires_at": expires_at,
+        "extra": tokens,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+    try:
+        platform_sb.table("client_helpscout_connections").update(token_update).eq("client_id", client_id).execute()
+    except Exception as exc:
+        return HTMLResponse(f"<p>Failed to store HelpScout tokens: {exc}</p>", status_code=500)
+
+    success_markup = (
+        "<script>"
+        "if(window.opener){window.opener.postMessage('helpscout-connected','*');}"
+        "window.close();"
+        "</script>"
+        "<p>HelpScout connected successfully. You can close this window.</p>"
+    )
+    return HTMLResponse(success_markup)
+
+
 @router.post("/api/tools")
 async def admin_create_tool(
     payload: ToolCreate,
@@ -2048,6 +2398,7 @@ async def agent_detail(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Agent detail and configuration page"""
+    logger.info(f"🔍 agent_detail START: client={client_id}, agent={agent_slug}")
     # Subscribers can view detail but not edit; page template handles action buttons
     try:
         ensure_client_or_global_access(client_id, admin_user)
@@ -2081,7 +2432,18 @@ async def agent_detail(
             
             agent = await agent_service.get_agent(client_id, agent_slug)
             client = await client_service.get_client(client_id)
-            
+
+            # Debug: Log raw agent data from service
+            if agent:
+                if isinstance(agent, dict):
+                    raw_vs = agent.get("voice_settings", {})
+                    logger.info(f"🔍 RAW agent voice_settings type: {type(raw_vs)}")
+                    if isinstance(raw_vs, dict):
+                        logger.info(f"🔍 RAW avatar_provider: {raw_vs.get('avatar_provider')}")
+                        logger.info(f"🔍 RAW video_provider: {raw_vs.get('video_provider')}")
+                    else:
+                        logger.info(f"🔍 RAW voice_settings (not dict): {raw_vs}")
+
             if not agent:
                 raise HTTPException(status_code=404, detail=f"Agent {agent_slug} not found in client {client_id}")
         
@@ -2122,11 +2484,40 @@ async def agent_detail(
                 "tools_config": agent.get("tools_config", {}),
                 "show_citations": agent.get("show_citations", True),
                 "rag_results_limit": agent.get("rag_results_limit", 5),
+                # Chat mode toggles
+                "voice_chat_enabled": agent.get("voice_chat_enabled", True),
+                "text_chat_enabled": agent.get("text_chat_enabled", True),
+                "video_chat_enabled": agent.get("video_chat_enabled", False),
+                "sound_settings": agent.get("sound_settings", {}),
                 "client_id": client_id,
                 "client_name": client.get("name", "Unknown") if isinstance(client, dict) else (getattr(client, 'name', 'Unknown') if client else "Unknown")
             }
+            # Debug: Log sound_settings being passed to template (dict format)
+            logger.info(f"🔊 [agent_detail-dict] sound_settings for template: {agent_data.get('sound_settings')}")
         else:
             # Object format - original service
+            # Convert voice_settings Pydantic model to dict for template compatibility
+            vs = agent.voice_settings
+            if hasattr(vs, 'dict'):
+                voice_settings_dict = vs.dict()
+            elif hasattr(vs, 'model_dump'):
+                voice_settings_dict = vs.model_dump()
+            elif isinstance(vs, dict):
+                voice_settings_dict = vs
+            else:
+                voice_settings_dict = {}
+
+            # Same for webhooks
+            wh = agent.webhooks
+            if hasattr(wh, 'dict'):
+                webhooks_dict = wh.dict()
+            elif hasattr(wh, 'model_dump'):
+                webhooks_dict = wh.model_dump()
+            elif isinstance(wh, dict):
+                webhooks_dict = wh
+            else:
+                webhooks_dict = {}
+
             agent_data = {
                 "id": agent.id,
                 "slug": agent.slug,
@@ -2138,15 +2529,24 @@ async def agent_detail(
                 "enabled": agent.enabled,
                 "created_at": agent.created_at.isoformat() if hasattr(agent.created_at, 'isoformat') else str(agent.created_at),
                 "updated_at": agent.updated_at.isoformat() if hasattr(agent.updated_at, 'isoformat') else str(agent.updated_at),
-                "voice_settings": agent.voice_settings,
-                "webhooks": agent.webhooks,
+                "voice_settings": voice_settings_dict,
+                "webhooks": webhooks_dict,
                 "tools_config": agent.tools_config or {},
                 "show_citations": getattr(agent, 'show_citations', True),
                 "rag_results_limit": getattr(agent, "rag_results_limit", 5),
+                # Chat mode toggles
+                "voice_chat_enabled": getattr(agent, "voice_chat_enabled", True),
+                "text_chat_enabled": getattr(agent, "text_chat_enabled", True),
+                "video_chat_enabled": getattr(agent, "video_chat_enabled", False),
+                "sound_settings": getattr(agent, "sound_settings", {}),
                 "client_id": client_id,
                 "client_name": client.name if client else "Unknown"
             }
-        
+
+        # Debug: Log sound_settings being passed to template
+        logger.info(f"🔊 [agent_detail] sound_settings for template: {agent_data.get('sound_settings')}")
+        logger.info(f"[admin] Rendering agent_detail for {client_id}/{agent_slug}")
+
         # Provide configuration for template - pull from agent's voice_settings first
         voice_settings_data = agent_data.get("voice_settings", {})
         
@@ -2231,7 +2631,17 @@ async def agent_detail(
         
         try:
             logger.info(f"Preparing template response with agent_data: {type(agent_data)}")
-            
+
+            # Debug: Log voice_settings before cleaning
+            vs_debug = agent_data.get("voice_settings", {})
+            logger.info(f"🔍 DEBUG agent_data['voice_settings'] type: {type(vs_debug)}")
+            if isinstance(vs_debug, dict):
+                logger.info(f"🔍 DEBUG voice_settings keys: {list(vs_debug.keys())}")
+                logger.info(f"🔍 DEBUG avatar_provider: {vs_debug.get('avatar_provider')}")
+                logger.info(f"🔍 DEBUG video_provider: {vs_debug.get('video_provider')}")
+            else:
+                logger.info(f"🔍 DEBUG voice_settings value: {vs_debug}")
+
             # Clean up agent_data to remove any problematic values
             cleaned_agent_data = {}
             for key, value in agent_data.items():
@@ -2243,6 +2653,17 @@ async def agent_detail(
                 except (TypeError, ValueError):
                     # Replace problematic values with strings
                     cleaned_agent_data[key] = str(value) if value is not None else ""
+
+            # Debug: Log sound_settings after cleaning
+            logger.info(f"🔊 [agent_detail] agent_data.sound_settings: {agent_data.get('sound_settings')}")
+            logger.info(f"🔊 [agent_detail] cleaned_agent_data.sound_settings: {cleaned_agent_data.get('sound_settings')}")
+
+            # Debug: Log cleaned voice_settings
+            vs_cleaned = cleaned_agent_data.get("voice_settings", {})
+            logger.info(f"🔍 DEBUG cleaned voice_settings type: {type(vs_cleaned)}")
+            if isinstance(vs_cleaned, dict):
+                logger.info(f"🔍 DEBUG cleaned avatar_provider: {vs_cleaned.get('avatar_provider')}")
+                logger.info(f"🔍 DEBUG cleaned video_provider: {vs_cleaned.get('video_provider')}")
             
             # Always use the full template now - placeholder logic completely removed
             # The following code block is completely disabled  
@@ -2297,6 +2718,13 @@ async def agent_detail(
                 "latest_config_json": latest_config_json,
                 "has_config_updates": bool(agent_config) if agent_config else False
             }
+
+            # Final debug before rendering template
+            final_vs = cleaned_agent_data.get("voice_settings", {})
+            logger.info(f"✅ FINAL template_data['agent']['voice_settings']: {final_vs}")
+            logger.info(f"✅ FINAL avatar_provider: {final_vs.get('avatar_provider') if isinstance(final_vs, dict) else 'NOT_DICT'}")
+            logger.info(f"✅ FINAL video_provider: {final_vs.get('video_provider') if isinstance(final_vs, dict) else 'NOT_DICT'}")
+
             return templates.TemplateResponse("admin/agent_detail.html", template_data)
         except Exception as template_error:
             logger.error(f"Template rendering error: {template_error}")
@@ -3317,22 +3745,6 @@ async def agent_preview_modal(
                     }
             """ % (client_supabase_access_json, client_supabase_refresh_json)
         
-        # Add development banner if in dev mode
-        dev_banner = ""
-        import os
-        if os.getenv("ENVIRONMENT", "development") == "development" and client_user_id:
-            # Redact sensitive parts of IDs for display
-            client_id_display = f"{client_id[:8]}..."
-            client_user_display = f"{client_user_id[:8]}..."
-            dev_banner = f"""
-            <div class=\"bg-yellow-900/50 border border-yellow-700 p-2 text-xs text-yellow-200\">
-              <span class=\"font-semibold\">DEV MODE:</span> 
-              Preview as client_user: <code>{client_user_display}</code> | 
-              Client: <code>{client_id_display}</code> | 
-              JWT expires: 15 min
-            </div>
-            """
-        
         modal_html = f"""
         <div class=\"fixed inset-0 bg-black/80 flex items-center justify-center z-50\">
           <div class=\"bg-dark-surface border border-dark-border rounded-lg w-full max-w-4xl h-[90vh] flex flex-col\">
@@ -3340,7 +3752,6 @@ async def agent_preview_modal(
               <h3 class=\"text-dark-text text-sm\">Preview Sidekick</h3>
               <button class=\"px-3 py-1 text-sm border border-dark-border rounded\" hx-on:click=\"document.getElementById('modal-container').innerHTML=''\">Close</button>
             </div>
-            {dev_banner}
             <div class=\"flex-1\">
               <iframe id=\"embedFrame\" src=\"{iframe_src}\" allow=\"microphone; camera\" referrerpolicy=\"strict-origin-when-cross-origin\" style=\"border:0;width:100%;height:100%\"></iframe>
             </div>
@@ -4549,6 +4960,120 @@ async def upload_agent_image(
     }
 
 
+@router.post("/api/upload-avatar")
+async def upload_avatar_image(
+    request: Request,
+    file: UploadFile = File(...),
+    agent_id: str = Form(None),
+    client_id: str = Form(None),
+    upload_type: str = Form("avatar"),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """
+    Upload an avatar or starting image to Supabase Storage.
+    Used for Ken Burns starting images, agent avatars, etc.
+    Returns a signed URL that can be stored in agent settings.
+    """
+    if client_id:
+        ensure_client_or_global_access(client_id, admin_user)
+
+    if not file:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+
+    try:
+        contents = await file.read()
+    except Exception as exc:
+        logger.error("Failed to read uploaded avatar: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to read uploaded file") from exc
+
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    # Max 10MB for avatars/starting images
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image exceeds 10 MB limit")
+
+    # Determine file extension
+    suffix = ".png"
+    if file.filename:
+        original_suffix = Path(file.filename).suffix.lower()
+        if original_suffix in [".png", ".jpg", ".jpeg", ".webp", ".gif"]:
+            suffix = original_suffix
+    elif "jpeg" in content_type or "jpg" in content_type:
+        suffix = ".jpg"
+    elif "webp" in content_type:
+        suffix = ".webp"
+    elif "gif" in content_type:
+        suffix = ".gif"
+
+    # Generate unique filename
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    unique_id = uuid.uuid4().hex[:8]
+    filename = f"{upload_type}_{timestamp}_{unique_id}{suffix}"
+
+    # Try to upload to Supabase Storage if client_id is provided
+    if client_id:
+        try:
+            from app.core.dependencies import get_client_service
+            client_service = get_client_service()
+            client_sb = await client_service.get_client_supabase_client(client_id, auto_sync=False)
+
+            if client_sb:
+                bucket_name = "avatars"
+                storage_path = f"{upload_type}/{client_id}/{filename}"
+
+                # Try to create bucket if needed
+                try:
+                    client_sb.storage.create_bucket(bucket_name, options={"public": True})
+                except Exception:
+                    pass  # Bucket likely already exists
+
+                # Upload file
+                result = client_sb.storage.from_(bucket_name).upload(
+                    path=storage_path,
+                    file=contents,
+                    file_options={"content-type": content_type or "image/png"}
+                )
+
+                # Get public URL
+                public_url = client_sb.storage.from_(bucket_name).get_public_url(storage_path)
+
+                logger.info(f"Avatar uploaded to Supabase Storage: {public_url}")
+                return {
+                    "success": True,
+                    "url": public_url,
+                    "filename": filename,
+                    "storage": "supabase"
+                }
+        except Exception as e:
+            logger.warning(f"Supabase storage upload failed, falling back to local: {e}")
+
+    # Fallback: store locally in static/images/avatars
+    AVATAR_STORAGE_DIR = Path("/app/app/static/images/avatars")
+    AVATAR_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    destination = AVATAR_STORAGE_DIR / filename
+    try:
+        with destination.open("wb") as buffer:
+            buffer.write(contents)
+    except Exception as exc:
+        logger.error("Failed to persist avatar '%s': %s", filename, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to save uploaded image") from exc
+
+    public_url = f"/static/images/avatars/{filename}"
+    logger.info(f"Avatar uploaded to local storage: {public_url}")
+
+    return {
+        "success": True,
+        "url": public_url,
+        "filename": filename,
+        "storage": "local"
+    }
+
 
 @router.post("/agents/{client_id}/{agent_slug}/update")
 async def admin_update_agent(
@@ -4564,6 +5089,13 @@ async def admin_update_agent(
     try:
         # Parse JSON body
         data = await request.json()
+        logger.info(f"🔧 Agent update request: client={client_id}, agent={agent_slug}")
+        logger.info(f"🔧 Update data keys: {list(data.keys())}")
+        if "video_chat_enabled" in data:
+            logger.info(f"🔧 video_chat_enabled={data.get('video_chat_enabled')}")
+        if "voice_settings" in data:
+            vs = data.get("voice_settings", {})
+            logger.info(f"🔧 voice_settings.cartesia_emotions_enabled={vs.get('cartesia_emotions_enabled')}")
         
         # Get agent and client services
         from app.core.dependencies import get_agent_service, get_client_service
@@ -4580,11 +5112,31 @@ async def admin_update_agent(
         if not client:
             return {"error": "Client not found", "status": 404}
         
-        # Validate API keys if voice_settings are provided
-        if "voice_settings" in data:
+        # Check if client uses platform-provided keys (Sidekick Forge Inference)
+        # Query directly from database to get the authoritative value
+        # Default to True - if not explicitly set to False, use platform keys
+        uses_platform_keys = True
+        try:
+            platform_sb = client_service.supabase
+            client_data = platform_sb.table("clients").select(
+                "uses_platform_keys"
+            ).eq("id", client_id).single().execute()
+
+            if client_data.data:
+                # Only use BYOK (validate keys) if explicitly set to False
+                # None or True = use platform keys (Sidekick Forge Inference) = skip validation
+                if client_data.data.get("uses_platform_keys") is False:
+                    uses_platform_keys = False
+        except Exception as e:
+            logger.warning(f"Could not check uses_platform_keys for client {client_id}: {e}")
+            uses_platform_keys = True  # Safe default
+
+        # Validate API keys if voice_settings are provided AND client is NOT using platform keys
+        # When using Sidekick Forge Inference, platform provides all necessary keys
+        if "voice_settings" in data and not uses_platform_keys:
             voice_settings = data["voice_settings"]
             missing_keys = []
-            
+
             # Define provider to API key mappings
             llm_provider_keys = {
                 "openai": "openai_api_key",
@@ -4593,14 +5145,14 @@ async def admin_update_agent(
                 "deepinfra": "deepinfra_api_key",
                 "replicate": "replicate_api_key"
             }
-            
+
             stt_provider_keys = {
                 "deepgram": "deepgram_api_key",
                 "groq": "groq_api_key",
                 "openai": "openai_api_key",
                 "cartesia": "cartesia_api_key"
             }
-            
+
             tts_provider_keys = {
                 "openai": "openai_api_key",
                 "elevenlabs": "elevenlabs_api_key",
@@ -4608,7 +5160,7 @@ async def admin_update_agent(
                 "speechify": "speechify_api_key",
                 "replicate": "replicate_api_key"
             }
-            
+
             # Check LLM provider
             if "llm_provider" in voice_settings and voice_settings["llm_provider"]:
                 llm_provider = voice_settings["llm_provider"]
@@ -4621,7 +5173,7 @@ async def admin_update_agent(
                             "required_key": required_key,
                             "message": f"LLM provider '{llm_provider}' requires {required_key}"
                         })
-            
+
             # Check STT provider
             if "stt_provider" in voice_settings and voice_settings["stt_provider"]:
                 stt_provider = voice_settings["stt_provider"]
@@ -4634,7 +5186,7 @@ async def admin_update_agent(
                             "required_key": required_key,
                             "message": f"STT provider '{stt_provider}' requires {required_key}"
                         })
-            
+
             # Check TTS provider
             if "tts_provider" in voice_settings and voice_settings["tts_provider"]:
                 tts_provider = voice_settings["tts_provider"]
@@ -4647,7 +5199,7 @@ async def admin_update_agent(
                             "required_key": required_key,
                             "message": f"TTS provider '{tts_provider}' requires {required_key}"
                         })
-            
+
             # If missing keys found, return validation error
             if missing_keys:
                 from fastapi.responses import JSONResponse
@@ -4675,11 +5227,24 @@ async def admin_update_agent(
             tools_config=data.get("tools_config", agent.tools_config),
             show_citations=data.get("show_citations", getattr(agent, 'show_citations', True)),
             rag_results_limit=data.get("rag_results_limit", getattr(agent, "rag_results_limit", 5)),
+            # Chat mode toggles
+            voice_chat_enabled=data.get("voice_chat_enabled", getattr(agent, "voice_chat_enabled", True)),
+            text_chat_enabled=data.get("text_chat_enabled", getattr(agent, "text_chat_enabled", True)),
+            video_chat_enabled=data.get("video_chat_enabled", getattr(agent, "video_chat_enabled", False)),
         )
         
         # Handle voice settings if provided
         if "voice_settings" in data:
-            update_data.voice_settings = VoiceSettings(**data["voice_settings"])
+            logger.info(f"🔧 Incoming voice_settings keys: {list(data['voice_settings'].keys())}")
+            logger.info(f"🔧 avatar_provider from request: {data['voice_settings'].get('avatar_provider')}")
+            logger.info(f"🔧 video_provider from request: {data['voice_settings'].get('video_provider')}")
+            try:
+                update_data.voice_settings = VoiceSettings(**data["voice_settings"])
+                logger.info(f"🔧 VoiceSettings created successfully, avatar_provider: {update_data.voice_settings.avatar_provider}")
+            except Exception as vs_error:
+                logger.error(f"🔧 VoiceSettings creation failed: {vs_error}")
+                # Fall back to storing raw dict
+                update_data.voice_settings = data["voice_settings"]
         
         # Handle webhooks if provided
         if "webhooks" in data:
@@ -4730,9 +5295,30 @@ async def admin_update_agent(
         elif tools_config:
             update_data.tools_config = tools_config
         
-        # Update agent
+        # Handle sound_settings if provided - these are stored directly in the agents table
+        sound_settings = data.get("sound_settings")
+        if sound_settings:
+            logger.info(f"🔊 Processing sound_settings: {sound_settings}")
+
+        # Update agent with regular fields first
         updated_agent = await agent_service.update_agent(client_id, agent_slug, update_data)
-        
+
+        # Update sound_settings directly in the database (separate from AgentUpdate model)
+        if sound_settings and updated_agent:
+            try:
+                client_sb = await client_service.get_client_supabase_client(client_id)
+                if client_sb:
+                    logger.info(f"🔊 Updating sound_settings in DB for {agent_slug}: {sound_settings}")
+                    result = client_sb.table("agents").update({
+                        "sound_settings": sound_settings
+                    }).eq("slug", agent_slug).execute()
+                    logger.info(f"🔊 Updated sound_settings result: {result.data if result else 'no result'}")
+                else:
+                    logger.warning(f"🔊 No Supabase client available for client {client_id}")
+            except Exception as sound_err:
+                logger.error(f"🔊 Failed to update sound_settings: {sound_err}", exc_info=True)
+                # Don't fail the whole update if sound_settings fails
+
         if updated_agent:
             return {"success": True, "message": "Agent updated successfully"}
         else:
@@ -5158,6 +5744,32 @@ async def admin_update_client(
             status_code=303
         )
 
+# UserSense Learning Status Endpoint
+@router.get("/clients/{client_id}/usersense-learning-status")
+async def get_usersense_learning_status(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Get UserSense learning status for a client (stub endpoint)"""
+    try:
+        ensure_client_access(client_id, admin_user)
+        # Currently UserSense learning is not implemented,
+        # return idle status to prevent console errors
+        return {
+            "success": True,
+            "status": {
+                "state": "idle",
+                "progress": 0,
+                "message": "UserSense learning not active"
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to get UserSense learning status for client {client_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
 
 # WordPress Sites Management Endpoints
 @router.get("/clients/{client_id}/wordpress-sites")
@@ -5230,6 +5842,17 @@ async def create_wordpress_site(
             url=f"/admin/clients/{client_id}?error=Failed+to+create+WordPress+site:+{str(e)}",
             status_code=303
         )
+
+
+@router.post("/clients/{client_id}/wordpress-sites/{site_id}/regenerate")
+async def regenerate_wordpress_keys_v2(
+    client_id: str,
+    site_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Regenerate API keys for a WordPress site (new URL pattern)"""
+    # Delegate to the main regenerate function
+    return await regenerate_wordpress_keys(site_id, admin_user)
 
 
 @router.post("/wordpress-sites/{site_id}/regenerate-keys")

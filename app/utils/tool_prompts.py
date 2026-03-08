@@ -7,8 +7,58 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 InstructionSection = Dict[str, Optional[str]]
 
 
-def _extract_instructions(tool: Mapping[str, Any]) -> Optional[str]:
-    """Return the best-effort instruction string for the given tool."""
+def _generate_default_instructions(tool: Mapping[str, Any]) -> str:
+    """Generate basic instructions for a tool that doesn't have explicit instructions.
+
+    This ensures every tool assigned to an agent is discoverable by the LLM,
+    even if the tool creator didn't add system_prompt_instructions.
+    """
+    name = tool.get("name") or tool.get("slug") or "this tool"
+    slug = tool.get("slug") or ""
+    description = tool.get("description") or ""
+    tool_type = tool.get("type") or "tool"
+
+    # Type-specific trigger hints
+    type_hints = {
+        "n8n": "When the user's request matches this tool's purpose, call it immediately to trigger the workflow.",
+        "lingua": "When the user wants to transcribe audio, create subtitles, or translate transcripts, call this tool.",
+        "image_catalyst": "When the user wants to generate, create, or design images, call this tool.",
+        "content_catalyst": "When the user wants to write articles, blog posts, or content, call this tool.",
+        "prediction_market": "When the user asks about probabilities of future events, call this tool.",
+        "print_ready": "When the user wants to print or export a conversation, call this tool.",
+        "documentsense": "When the user wants to analyze, summarize, or extract information from documents, call this tool.",
+        "asana": "When the user wants to manage tasks, create tasks, or check task status, call this tool.",
+        "builtin": "When the user's request relates to this tool's functionality, it will be invoked automatically.",
+    }
+
+    # Build the instruction based on available metadata
+    lines = []
+    lines.append(f"You have access to the {name} tool.")
+
+    if description:
+        lines.append(f"\nDescription: {description}")
+
+    # Add type-specific hint or generic one
+    hint = type_hints.get(tool_type)
+    if hint:
+        lines.append(f"\n{hint}")
+    else:
+        lines.append(f"\nWhen the user's request relates to {name.lower()} functionality, call this tool immediately.")
+
+    lines.append("Do not ask clarifying questions - invoke the tool and let the UI collect any needed details from the user.")
+
+    if slug:
+        lines.append(f"\nTo use this tool, call the `{slug}` function.")
+
+    return "\n".join(lines)
+
+
+def _extract_instructions(tool: Mapping[str, Any], auto_generate: bool = True) -> Optional[str]:
+    """Return the best-effort instruction string for the given tool.
+
+    If auto_generate is True and no explicit instructions are found,
+    generate basic instructions from the tool's metadata.
+    """
     if not isinstance(tool, Mapping):
         return None
 
@@ -40,6 +90,10 @@ def _extract_instructions(tool: Mapping[str, Any]) -> Optional[str]:
             value = metadata.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+
+    # No explicit instructions found - auto-generate if enabled
+    if auto_generate:
+        return _generate_default_instructions(tool)
 
     return None
 

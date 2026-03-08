@@ -129,17 +129,81 @@ class ClientUserSyncRequest(BaseModel):
     password: str
 
 
+# Layout presets for common embed configurations
+LAYOUT_PRESETS = {
+    "fullscreen": {
+        "width": "100vw",
+        "height": "100vh",
+        "min_height": "100vh",
+        "max_height": "none",
+        "padding": "0",
+    },
+    "compact": {
+        "width": "100%",
+        "height": "500px",
+        "min_height": "400px",
+        "max_height": "600px",
+        "padding": "0.5rem",
+    },
+    "standard": {
+        "width": "100%",
+        "height": "100%",
+        "min_height": "min(700px, 95vh)",
+        "max_height": "none",
+        "padding": None,  # Use responsive defaults
+    },
+}
+
+
 @router.get("/embed/{client_id}/{agent_slug}", response_class=HTMLResponse)
 async def embed_sidekick(
     request: Request,
     client_id: str,
     agent_slug: str,
     theme: Optional[str] = "dark",
+    # Dimension parameters
+    width: Optional[str] = None,
+    height: Optional[str] = None,
+    min_height: Optional[str] = None,
+    max_height: Optional[str] = None,
+    layout: Optional[str] = None,  # "fullscreen", "compact", "standard"
 ):
-    # ── Check cache first ────────────────────────────────────────────────
-    cached = _get_cached_embed_config(client_id, agent_slug)
+    # ── Compute effective dimensions ─────────────────────────────────────
+    # Start with standard defaults
+    effective_dims = {
+        "embed_width": "100%",
+        "embed_height": "100%",
+        "embed_min_height": "min(700px, 95vh)",
+        "embed_max_height": "none",
+        "embed_padding": None,  # None = use responsive CSS defaults
+    }
+
+    # Apply layout preset if specified
+    if layout and layout in LAYOUT_PRESETS:
+        preset = LAYOUT_PRESETS[layout]
+        effective_dims["embed_width"] = preset["width"]
+        effective_dims["embed_height"] = preset["height"]
+        effective_dims["embed_min_height"] = preset["min_height"]
+        effective_dims["embed_max_height"] = preset["max_height"]
+        effective_dims["embed_padding"] = preset["padding"]
+
+    # Override with explicit parameters (they take precedence over presets)
+    if width:
+        effective_dims["embed_width"] = width
+    if height:
+        effective_dims["embed_height"] = height
+    if min_height:
+        effective_dims["embed_min_height"] = min_height
+    if max_height:
+        effective_dims["embed_max_height"] = max_height
+
+    # ── Check cache first (include dimensions in cache key) ──────────────
+    dims_key = f"{width}:{height}:{min_height}:{max_height}:{layout}"
+    cached = _get_cached_embed_config(client_id, f"{agent_slug}:{dims_key}")
     if cached:
-        return templates.TemplateResponse("embed/sidekick.html", {**cached, "request": request, "theme": theme})
+        # Merge dimensions into cached data
+        cached_with_dims = {**cached, **effective_dims}
+        return templates.TemplateResponse("embed/sidekick.html", {**cached_with_dims, "request": request, "theme": theme})
 
     # ── Get client record (single direct query for all needed fields) ────
     try:
@@ -182,6 +246,7 @@ async def embed_sidekick(
     agent_id = None
     agent_description = ""
     agent_tools = []
+    sound_settings = {}  # Sound settings for thinking/ambient sounds
     try:
         # Get agent settings from client database (reuse platform_sb from above)
         if client_supabase_url and client_service_key:
@@ -191,17 +256,18 @@ async def embed_sidekick(
                     "id, name, description, agent_image, supertab_enabled, supertab_voice_enabled, "
                     "supertab_text_enabled, supertab_video_enabled, supertab_experience_id, supertab_price, "
                     "supertab_cta, supertab_subscription_experience_id, supertab_subscription_price, "
-                    "voice_chat_enabled, text_chat_enabled, video_chat_enabled"
+                    "voice_chat_enabled, text_chat_enabled, video_chat_enabled, sound_settings"
                 ).eq("slug", agent_slug).maybe_single().execute()
             except Exception:
                 agent_result = client_sb.table("agents").select(
                     "id, name, description, agent_image, supertab_enabled, supertab_experience_id, "
                     "supertab_price, supertab_cta, supertab_subscription_experience_id, "
-                    "supertab_subscription_price, voice_chat_enabled, text_chat_enabled, video_chat_enabled"
+                    "supertab_subscription_price, voice_chat_enabled, text_chat_enabled, video_chat_enabled, sound_settings"
                 ).eq("slug", agent_slug).maybe_single().execute()
 
             if agent_result.data:
                 agent_record = agent_result.data
+                logger.info(f"[embed] Agent record sound_settings: {agent_record.get('sound_settings')}")
                 if agent_record.get("id"):
                     agent_id = str(agent_record.get("id"))
                 if agent_record.get("name"):
@@ -210,6 +276,9 @@ async def embed_sidekick(
                     agent_image = agent_record.get("agent_image")
                 if agent_record.get("description"):
                     agent_description = agent_record.get("description")
+                if agent_record.get("sound_settings"):
+                    sound_settings = agent_record.get("sound_settings")
+                    logger.info(f"[embed] Loaded sound_settings: {sound_settings}")
 
                 # Fetch agent_tools + tool details (2 queries, but second depends on first)
                 if agent_id:
@@ -293,10 +362,14 @@ async def embed_sidekick(
         "voice_chat_enabled": voice_chat_enabled,
         "text_chat_enabled": text_chat_enabled,
         "video_chat_enabled": video_chat_enabled,
+        "sound_settings": sound_settings,
     }
-    _set_cached_embed_config(client_id, agent_slug, tpl_context)
+    _set_cached_embed_config(client_id, f"{agent_slug}:{dims_key}", tpl_context)
 
-    return templates.TemplateResponse("embed/sidekick.html", {**tpl_context, "request": request, "theme": theme})
+    # Merge dimensions into template context
+    tpl_context_with_dims = {**tpl_context, **effective_dims}
+
+    return templates.TemplateResponse("embed/sidekick.html", {**tpl_context_with_dims, "request": request, "theme": theme})
 
 
 @router.post("/api/embed/client-users/sync")

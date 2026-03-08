@@ -59,6 +59,47 @@ class VoiceSettings(BaseModel):
         default=None, description="Default speed hint for Cartesia Sonic-3 emotion tags"
     )
 
+    # Avatar/Video settings
+    avatar_provider: Optional[str] = Field(
+        default=None, description="Avatar provider (bithuman, beyondpresence, liveavatar, ken_burns)"
+    )
+    avatar_model_path: Optional[str] = Field(
+        default=None, description="Path to local IMX model file (Bithuman)"
+    )
+    avatar_image_url: Optional[str] = Field(
+        default=None, description="URL to avatar image (legacy)"
+    )
+    avatar_model_type: Optional[str] = Field(
+        default=None, description="Avatar model type for Bithuman (expression, etc)"
+    )
+    avatar_id: Optional[str] = Field(
+        default=None, description="Avatar ID for Beyond Presence"
+    )
+    liveavatar_avatar_id: Optional[str] = Field(
+        default=None, description="Avatar ID for HeyGen LiveAvatar"
+    )
+    video_provider: Optional[str] = Field(
+        default=None, description="Video provider type (ken_burns, etc)"
+    )
+    kenburns_style: Optional[str] = Field(
+        default=None, description="Ken Burns visual style preset"
+    )
+    kenburns_duration: Optional[int] = Field(
+        default=None, description="Ken Burns animation duration in seconds"
+    )
+    kenburns_auto_interval: Optional[int] = Field(
+        default=None, description="Ken Burns auto-generate interval in seconds"
+    )
+    kenburns_starting_image: Optional[str] = Field(
+        default=None, description="Ken Burns starting image URL"
+    )
+    tts_speed: Optional[float] = Field(
+        default=None, description="TTS playback speed"
+    )
+
+    class Config:
+        extra = "allow"  # Allow extra fields not defined in the model
+
 
 class WebhookSettings(BaseModel):
     """Webhook configuration"""
@@ -96,7 +137,10 @@ class Agent(BaseModel):
     
     # Tools configuration (stored as JSON)
     tools_config: Optional[Dict[str, Any]] = Field(None, description="Agent-specific tools configuration")
-    
+
+    # Sound settings for voice/video chat (thinking sounds, ambient sounds)
+    sound_settings: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Sound settings for thinking and ambient sounds")
+
     # Citations feature flag
     show_citations: bool = Field(default=True, description="Whether to show RAG citations in responses")
 
@@ -158,6 +202,10 @@ class AgentUpdate(BaseModel):
     max_context_messages: Optional[int] = None
     channels: Optional[ChannelSettings] = None
     rag_results_limit: Optional[int] = None
+    # Chat mode toggles
+    voice_chat_enabled: Optional[bool] = None
+    text_chat_enabled: Optional[bool] = None
+    video_chat_enabled: Optional[bool] = None
 
 
 class AgentInDB(Agent):

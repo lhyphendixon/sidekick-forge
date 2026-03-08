@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import unicodedata
@@ -33,6 +34,38 @@ def _normalize_text(value: str) -> str:
     return text
 
 
+def _strip_ssml_tags(text: str) -> str:
+    """
+    Strip Cartesia SSML emotion tags and laughter markers from transcript text.
+
+    These tags are meant for TTS rendering only and should not appear in
+    the displayed transcript.
+
+    Strips:
+    - <emotion value="..." /> (self-closing emotion tags)
+    - <emotion value="...">...</emotion> (wrapping emotion tags, just in case)
+    - [laughter] markers
+    """
+    if not text:
+        return text
+
+    # Strip self-closing emotion tags: <emotion value="..." />
+    text = re.sub(r'<emotion\s+value="[^"]*"\s*/>', '', text)
+
+    # Strip wrapping emotion tags: <emotion value="...">text</emotion>
+    # Just remove the tags, keep the content inside
+    text = re.sub(r'<emotion\s+value="[^"]*">', '', text)
+    text = re.sub(r'</emotion>', '', text)
+
+    # Strip [laughter] markers
+    text = re.sub(r'\[laughter\]', '', text, flags=re.IGNORECASE)
+
+    # Clean up any double spaces left behind
+    text = re.sub(r'  +', ' ', text)
+
+    return text.strip()
+
+
 class SidekickAgent(voice.Agent):
     """
     LiveKit-compliant Agent that injects RAG context at the documented node
@@ -48,25 +81,36 @@ class SidekickAgent(voice.Agent):
         llm=None,
         tts=None,
         vad=None,
+        tools: Optional[List[Any]] = None,
+        chat_ctx=None,  # Initial chat context for conversation history
         context_manager=None,
         user_id: Optional[str] = None,
         client_id: Optional[str] = None,
         agent_config: Optional[Dict[str, Any]] = None,
     ) -> None:
-        super().__init__(instructions=instructions, stt=stt, llm=llm, tts=tts, vad=vad)
+        super().__init__(instructions=instructions, stt=stt, llm=llm, tts=tts, vad=vad, tools=tools, chat_ctx=chat_ctx)
         self._context_manager = context_manager
         self._user_id = user_id
         self._client_id = client_id
         self._agent_config = agent_config or {}
-        
+
         # Citation tracking
         self._current_citations: List[Dict[str, Any]] = []
         self._current_message_id: Optional[str] = None
         self._current_rerank_info: Dict[str, Any] = {}
-        
+        self._current_rag_context: str = ""  # RAG context text for LLM injection
+
         # Feature flag for citations (can be configured per agent)
         self._citations_enabled = self._agent_config.get('show_citations', True)
-        
+        # Wizard mode flag - skip RAG processing entirely
+        self._is_wizard_mode = self._agent_config.get('is_wizard_mode', False)
+
+        # GLM reasoning toggle - disabled by default for fast voice responses
+        # When using GLM-4.7 models, reasoning can be enabled on-demand for complex tasks
+        self._reasoning_enabled: bool = False
+        self._is_glm_model: bool = False
+        self._glm_model_name: str = ""
+
         # Transcript tracking
         self._current_user_transcript = ""
         self._current_assistant_transcript = ""
@@ -76,6 +120,9 @@ class SidekickAgent(voice.Agent):
         self._client_conversation_id = None
         self._agent_id = None
         self._current_turn_id: Optional[str] = None
+        # Separate user turn tracking to persist across pauses until assistant completes
+        # This allows user speech chunks to be merged even if user pauses mid-sentence
+        self._user_turn_id: Optional[str] = None
         self._latest_tool_results: List[Dict[str, Any]] = []
         # Strategy: store final assistant transcript once per turn via session events
         self._suppress_on_assistant_transcript = True
@@ -98,6 +145,19 @@ class SidekickAgent(voice.Agent):
         """Enable text-only mode response capture."""
         self._text_mode_enabled = True
         self._text_response_collector = collector
+
+    def configure_for_glm_model(self, model_name: str) -> None:
+        """
+        Configure agent for GLM model with dynamic reasoning toggle.
+
+        GLM-4.7 supports a reasoning mode that can be enabled/disabled per request.
+        By default, reasoning is DISABLED for fast voice responses.
+        The agent can enable reasoning on-demand for complex tasks via a system tool.
+        """
+        self._is_glm_model = True
+        self._glm_model_name = model_name
+        self._reasoning_enabled = False  # Default: fast responses for voice chat
+        logger.info(f"🧠 GLM model configured ({model_name}), reasoning disabled by default for fast voice responses")
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
@@ -133,15 +193,18 @@ class SidekickAgent(voice.Agent):
                     if last_assistant:
                         assistant_norm = _normalize_text(last_assistant).lower().strip()
                         # Check if the user text is substantially similar to the last assistant response
-                        if assistant_norm and (user_norm in assistant_norm or assistant_norm in user_norm):
-                            logger.info(f"🚫 on_user_turn_completed: Blocking echo - user text matches last assistant: '{user_text_raw[:50]}'")
-                            raise StopResponse()
-                        # Also check common greeting phrases
-                        common_greetings = ['how can i help you', 'hi there', 'hello', 'how may i assist']
-                        for phrase in common_greetings:
-                            if phrase in user_norm and len(user_norm) < len(phrase) + 10:
-                                logger.info(f"🚫 on_user_turn_completed: Blocking echo - matches common greeting: '{user_text_raw[:50]}'")
+                        # Must be a substantial overlap, not just a single word match
+                        if assistant_norm and len(user_norm) > 5:
+                            if user_norm in assistant_norm or assistant_norm in user_norm:
+                                logger.info(f"🚫 on_user_turn_completed: Blocking echo - user text matches last assistant: '{user_text_raw[:50]}'")
                                 raise StopResponse()
+                        # Only block common greeting echoes if user text is EXACTLY the greeting phrase
+                        # (with minor variations). Don't block legitimate user greetings like "Hello?"
+                        # We only want to block if the STT picked up the TTS audio
+                        recent_greeting_text = getattr(recent_greeting, '_recent_greeting_norm', '') if recent_greeting else ''
+                        if recent_greeting_text and user_norm == recent_greeting_text:
+                            logger.info(f"🚫 on_user_turn_completed: Blocking exact greeting echo: '{user_text_raw[:50]}'")
+                            raise StopResponse()
             except StopResponse:
                 raise  # Re-raise to exit
             except Exception as echo_check_err:
@@ -540,12 +603,33 @@ class SidekickAgent(voice.Agent):
         enhanced = re.sub(r'  +', ' ', enhanced)
 
         # =================================================================
-        # PARAGRAPH BREAKS - Every 2 sentences gets a double newline
+        # PARAGRAPH BREAKS - Add visual structure
         # =================================================================
 
-        # Add paragraph breaks after sentence-ending punctuation followed by space and capital
-        # Also handle cases with no space (just punctuation followed by capital)
-        enhanced = re.sub(r'([.!?])\s*([A-Z])', r'\1\n\n\2', enhanced)
+        # Add paragraph breaks after sentence-ending punctuation followed by capital letter OR number
+        # This handles: "...creativity. 3D printing..." and "...market. Apple announced..."
+        enhanced = re.sub(r'([.!?])\s+([A-Z0-9])', r'\1\n\n\2', enhanced)
+
+        # Add paragraph breaks after colons that introduce lists (colon followed by Capitalized word)
+        # Handles: "including: Biomass-based printing" -> "including:\n\nBiomass-based printing"
+        enhanced = re.sub(r'(:\s*)([A-Z][a-z])', r':\n\n\2', enhanced)
+
+        # Add breaks between run-on list items ONLY when followed by multi-word phrases
+        # Pattern: lowercase word (4+ chars) + space + Capitalized phrase (3+ words)
+        # This avoids breaking short phrases like "with AI" or "this 3D"
+        enhanced = re.sub(
+            r'(\b[a-z]{4,})\s+([A-Z][a-z]+(?:\s+[a-z]+){2,})',
+            r'\1\n\n\2',
+            enhanced
+        )
+
+        # Also break before "3D" followed by multi-word description
+        # Only when preceded by longer words (5+ chars) that look like sentence endings
+        enhanced = re.sub(
+            r'(\b[a-z]{5,})\s+(3D\s+[a-z]+\s+[a-z]+)',
+            r'\1\n\n\2',
+            enhanced
+        )
 
         # =================================================================
         # LISTS - Format numbered and bullet lists

@@ -67,7 +67,7 @@
             {% endif %}
           </td>
           <td class="px-4 py-3 text-xs">
-            <button class="px-2 py-1 rounded border border-dark-border hover:border-brand-teal" onclick="openEditUserModal({{ u.id|tojson }}, {{ u.email|tojson }})">Edit</button>
+            <button class="px-2 py-1 rounded border border-dark-border hover:border-brand-teal js-edit-user" data-user-id="{{ u.id }}" data-email="{{ u.email }}">Edit</button>
             <button class="ml-2 px-2 py-1 rounded border border-dark-border hover:border-brand-teal js-set-password" data-user-id="{{ u.id }}" data-email="{{ u.email }}">Set Password</button>
             {% if u.id != user.user_id %}
             <button class="ml-2 px-2 py-1 rounded border border-red-800 text-red-400 hover:border-red-500 hover:text-red-300 js-delete-user" data-user-id="{{ u.id }}" data-email="{{ u.email }}">Delete</button>
@@ -200,7 +200,7 @@
       </div>
     </div>
   </div>
-  </div>
+</div>
 
 <!-- Set Password Modal -->
 <div id="setPasswordModal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
@@ -280,15 +280,28 @@ async function addUser(){
 }
 
 function openEditUserModal(userId, email){
+  console.log('[EditUser] Opening modal for:', userId, email);
   const m=document.getElementById('editUserModal');
-  if(!m) return;
+  if(!m) {
+    console.error('[EditUser] Modal element not found!');
+    return;
+  }
   document.getElementById('editUserId').value = userId;
   document.getElementById('editUserEmail').value = email;
   // Prefill assignments
-  fetch(`/admin/users/${userId}/assignments`).then(async r => {
-    if(!r.ok){ throw new Error(await r.text()); }
+  console.log('[EditUser] Fetching assignments...');
+  fetch(`/admin/users/${userId}/assignments`, {
+    credentials: 'same-origin'  // Ensure cookies are sent
+  }).then(async r => {
+    console.log('[EditUser] Fetch response:', r.status, r.statusText);
+    if(!r.ok){
+      const txt = await r.text();
+      console.error('[EditUser] Fetch failed:', txt);
+      throw new Error(txt);
+    }
     return r.json();
   }).then(data => {
+    console.log('[EditUser] Got assignments:', data);
     const roleSel = document.getElementById('editUserRole');
     const clientSel = document.getElementById('editUserClientIds');
     roleSel.value = data.role_key || 'subscriber';
@@ -300,9 +313,10 @@ function openEditUserModal(userId, email){
     });
     toggleEditClientPicker();
     m.classList.remove('hidden');
+    console.log('[EditUser] Modal shown');
   }).catch(err => {
-    console.error('Failed to load assignments', err);
-    alert('Failed to load user');
+    console.error('[EditUser] Error:', err);
+    alert('Failed to load user: ' + err.message);
   });
 }
 function closeEditUserModal(){
@@ -481,7 +495,19 @@ document.addEventListener('click', async function(e) {
 console.log('[Users page] Script loaded. Functions defined:', {
   openSetPasswordModal: typeof openSetPasswordModal,
   closeSetPasswordModal: typeof closeSetPasswordModal,
-  submitSetPassword: typeof submitSetPassword
+  submitSetPassword: typeof submitSetPassword,
+  openEditUserModal: typeof openEditUserModal
+});
+
+// Edit User button handler via event delegation
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('.js-edit-user');
+  if (!btn) return;
+  console.log('[EditUser] Button clicked via delegation');
+  const userId = btn.getAttribute('data-user-id');
+  const email = btn.getAttribute('data-email');
+  console.log('[EditUser] data:', userId, email);
+  openEditUserModal(userId, email);
 });
 
 // Set Password button handler via event delegation (more robust than inline onclick)

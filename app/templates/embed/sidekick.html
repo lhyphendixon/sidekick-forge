@@ -28,9 +28,32 @@
     }
   </script>
   <style>
+    /* Dynamic embed dimensions via CSS custom properties */
+    :root {
+      --embed-width: {{ embed_width | default('100%') }};
+      --embed-height: {{ embed_height | default('100%') }};
+      --embed-min-height: {{ embed_min_height | default('min(700px, 95vh)') }};
+      --embed-max-height: {{ embed_max_height | default('none') }};
+      {% if embed_padding %}--embed-padding: {{ embed_padding }};{% endif %}
+    }
     html, body { height: 100%; }
     html { background: #000000 !important; }
     body { margin: 0; background: #000000 !important; color:#e0e0e0; height:100%; }
+
+    /* Embed wrapper with dynamic dimensions */
+    .embed-wrapper {
+      box-sizing: border-box;
+    }
+    /* Responsive padding adjustments (when not explicitly set) */
+    {% if not embed_padding %}
+    @media (min-width: 640px) {
+      .embed-wrapper { padding: 0.75rem; }
+    }
+    @media (min-width: 768px) {
+      .embed-wrapper { padding: 1rem; }
+    }
+    {% endif %}
+
     .htmx-indicator { opacity: 0; transition: opacity 300ms ease; }
     .htmx-request .htmx-indicator { opacity: 1; }
     /* Button inline loading */
@@ -161,7 +184,13 @@
       background: #000000 !important;
       background-color: #000000 !important;
     }
-    /* Override prose paragraph spacing for better readability in voice transcripts */
+    /* ===============================================================
+       Prose Typography Styles for Markdown Content
+       (Tailwind CDN doesn't include @tailwindcss/typography plugin)
+       =============================================================== */
+    .prose {
+      line-height: 1.6;
+    }
     .prose p {
       margin-top: 1em;
       margin-bottom: 1em;
@@ -171,6 +200,85 @@
     }
     .prose p:last-child {
       margin-bottom: 0;
+    }
+    .prose strong {
+      font-weight: 600;
+      color: inherit;
+    }
+    .prose ul, .prose ol {
+      margin-top: 0.75em;
+      margin-bottom: 0.75em;
+      padding-left: 1.5em;
+    }
+    .prose li {
+      margin-top: 0.25em;
+      margin-bottom: 0.25em;
+    }
+    .prose ul > li {
+      list-style-type: disc;
+    }
+    .prose ol > li {
+      list-style-type: decimal;
+    }
+    .prose h1, .prose h2, .prose h3, .prose h4 {
+      font-weight: 600;
+      margin-top: 1.25em;
+      margin-bottom: 0.5em;
+      line-height: 1.3;
+    }
+    .prose h1 { font-size: 1.5em; }
+    .prose h2 { font-size: 1.25em; }
+    .prose h3 { font-size: 1.1em; }
+    .prose h4 { font-size: 1em; }
+    .prose blockquote {
+      border-left: 3px solid rgba(1, 164, 166, 0.5);
+      padding-left: 1em;
+      margin-left: 0;
+      margin-right: 0;
+      font-style: italic;
+      color: rgba(255, 255, 255, 0.8);
+    }
+    .prose code {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 0.125em 0.25em;
+      border-radius: 0.25em;
+      font-size: 0.9em;
+    }
+    .prose pre {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 0.75em 1em;
+      border-radius: 0.5em;
+      overflow-x: auto;
+      margin: 1em 0;
+    }
+    .prose pre code {
+      background: transparent;
+      padding: 0;
+    }
+    .prose a {
+      color: #01a4a6;
+      text-decoration: underline;
+    }
+    .prose a:hover {
+      color: #00c5c7;
+    }
+    /* prose-sm adjustments */
+    .prose-sm {
+      font-size: 0.9em;
+    }
+    .prose-sm p {
+      margin-top: 0.75em;
+      margin-bottom: 0.75em;
+    }
+    /* prose-invert - ensure text is light on dark backgrounds */
+    .prose-invert {
+      color: rgba(255, 255, 255, 0.9);
+    }
+    .prose-invert strong {
+      color: #fff;
+    }
+    .prose-invert code {
+      color: #01a4a6;
     }
 
     /* Dark scrollbar styles */
@@ -208,6 +316,24 @@
       border: none;
       width: 100vw;
       height: 100vh;
+    }
+    /* Fallback fullscreen mode for iframes without allowfullscreen */
+    .glass-container.pseudo-fullscreen {
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      right: 0 !important;
+      bottom: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      max-width: none !important;
+      max-height: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border-radius: 0 !important;
+      border: none !important;
+      z-index: 999999 !important;
+      background: #000 !important;
     }
     .glass-surface {
       background: rgba(255, 255, 255, 0.03);
@@ -473,10 +599,16 @@
       border-radius: 12px;
       border: 1px solid rgba(255, 255, 255, 0.05);
       transition: all 0.2s ease;
+      cursor: pointer;
     }
     .ability-item:hover {
       background: rgba(255, 255, 255, 0.08);
       border-color: rgba(1, 164, 166, 0.3);
+      transform: translateY(-1px);
+    }
+    .ability-item:active {
+      transform: translateY(0);
+      background: rgba(1, 164, 166, 0.15);
     }
     .ability-icon {
       width: 36px;
@@ -720,8 +852,8 @@
   <script src="/static/js/kenburns.js?v=20260202c"></script>
 </head>
 <body style="background: #000000;">
-  <div class="w-full p-1.5 sm:p-3 md:p-4 h-full" style="min-height: min(700px, 95vh);">
-    <div class="glass-container rounded-xl sm:rounded-2xl h-full flex flex-col overflow-hidden relative" style="min-height: min(650px, 90vh);">
+  <div class="embed-wrapper w-full h-full" style="width: var(--embed-width); height: var(--embed-height); min-height: var(--embed-min-height); max-height: var(--embed-max-height); padding: {% if embed_padding %}var(--embed-padding){% else %}0.375rem{% endif %};">
+    <div class="glass-container rounded-xl sm:rounded-2xl h-full flex flex-col overflow-hidden relative" style="min-height: calc(var(--embed-min-height) - 1rem);">
       <!-- Initial loading overlay - shown while checking auth -->
       <div id="initialLoader">
         <div class="orbital-loader">
@@ -786,18 +918,9 @@
             <div class="agent-profile agent-profile-clickable" id="agentProfileHeader" onclick="openAgentInfoModal()" title="Click to view sidekick info">
               <span class="agent-profile-name">{{ agent_name }}</span>
               {% if agent_image -%}
-              {%- set img_base = agent_image.rsplit('.', 1)[0] if '.' in agent_image else agent_image -%}
-              {%- set img_dir = img_base.rsplit('/', 1)[0] if '/' in img_base else '' -%}
-              {%- set img_stem = img_base.rsplit('/', 1)[1] if '/' in img_base else img_base -%}
               {%- set proto = request.headers.get('X-Forwarded-Proto', 'https') -%}
-              {%- set origin = proto ~ '://' ~ request.url.netloc %}
-              <picture>
-                <source srcset="{{ origin }}{{ img_dir }}/optimized/{{ img_stem }}.webp" type="image/webp">
-
-                <source srcset="{{ origin }}{{ img_dir }}/optimized/{{ img_stem }}.png" type="image/png">
-
-                <img src="{{ origin }}{{ img_dir }}/optimized/{{ img_stem }}.png" alt="{{ agent_name }}" class="agent-profile-image" loading="lazy" onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';">
-              </picture>
+              {%- set origin = proto ~ '://' ~ request.url.netloc -%}
+              <img src="{{ origin }}{{ agent_image }}" alt="{{ agent_name }}" class="agent-profile-image" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
               <div class="agent-profile-placeholder" style="display: none;">{{ agent_name[0] | upper if agent_name else 'S' }}</div>
               {% else %}
               <div class="agent-profile-placeholder">{{ agent_name[0] | upper if agent_name else 'S' }}</div>
@@ -1094,6 +1217,118 @@
     const VOICE_CHAT_ENABLED = {{ 'true' if voice_chat_enabled else 'false' }};
     const VIDEO_CHAT_ENABLED = {{ 'true' if video_chat_enabled else 'false' }};
     const TEXT_CHAT_ENABLED = {{ 'true' if text_chat_enabled else 'false' }};
+
+    // Sound settings configuration
+    const SOUND_SETTINGS = {
+      thinkingSound: "{{ sound_settings.thinking_sound if sound_settings and sound_settings.thinking_sound else 'none' }}",
+      thinkingVolume: {{ sound_settings.thinking_volume if sound_settings and sound_settings.thinking_volume else 0.3 }},
+      ambientSound: "{{ sound_settings.ambient_sound if sound_settings and sound_settings.ambient_sound else 'none' }}",
+      ambientVolume: {{ sound_settings.ambient_volume if sound_settings and sound_settings.ambient_volume else 0.15 }}
+    };
+
+    // Sound file mappings
+    // Sound files - use absolute URLs based on embed origin (Sidekick Forge server)
+    // The embed is served from Sidekick Forge, so window.location.origin gives us the correct base
+    const SOUND_BASE_URL = window.location.origin;
+    console.log('[sound] SOUND_BASE_URL:', SOUND_BASE_URL);
+    console.log('[sound] SOUND_SETTINGS:', SOUND_SETTINGS);
+    const SOUND_FILES = {
+      thinking: {
+        keyboard: `${SOUND_BASE_URL}/static/sounds/keyboard_typing.mp3`,
+        beta1: `${SOUND_BASE_URL}/static/sounds/thinking_beta1.mp3`
+      },
+      ambient: {
+        office: `${SOUND_BASE_URL}/static/sounds/office_ambience.mp3`,
+        forest: `${SOUND_BASE_URL}/static/sounds/forest_nature.mp3`,
+        city: `${SOUND_BASE_URL}/static/sounds/city_ambience.mp3`,
+        crowded_room: `${SOUND_BASE_URL}/static/sounds/crowded_room.mp3`,
+        skyline_soft_reset: `${SOUND_BASE_URL}/static/sounds/skyline_soft_reset.mp3`
+      }
+    };
+    console.log('[sound] Ambient sound URL:', SOUND_FILES.ambient[SOUND_SETTINGS.ambientSound]);
+    console.log('[sound] Thinking sound URL:', SOUND_FILES.thinking[SOUND_SETTINGS.thinkingSound]);
+
+    // Audio elements for sound playback
+    let thinkingAudio = null;
+    let ambientAudio = null;
+    let isThinkingSoundPlaying = false;
+
+    // Initialize ambient sound (plays continuously during voice chat)
+    function initAmbientSound() {
+      console.log('[sound] initAmbientSound called, ambientSound:', SOUND_SETTINGS.ambientSound);
+      if (SOUND_SETTINGS.ambientSound === 'none' || !SOUND_FILES.ambient[SOUND_SETTINGS.ambientSound]) {
+        console.log('[sound] Ambient sound disabled or not found');
+        return;
+      }
+
+      try {
+        const audioUrl = SOUND_FILES.ambient[SOUND_SETTINGS.ambientSound];
+        console.log('[sound] Creating ambient Audio with URL:', audioUrl);
+        ambientAudio = new Audio(audioUrl);
+        ambientAudio.loop = true;
+        ambientAudio.volume = SOUND_SETTINGS.ambientVolume;
+
+        // Add event listeners for debugging
+        ambientAudio.addEventListener('canplaythrough', () => console.log('[sound] Ambient audio ready to play'));
+        ambientAudio.addEventListener('error', (e) => console.error('[sound] Ambient audio error:', e.target.error));
+        ambientAudio.addEventListener('playing', () => console.log('[sound] Ambient audio is now playing'));
+
+        console.log('[sound] Ambient sound initialized:', SOUND_SETTINGS.ambientSound, 'volume:', SOUND_SETTINGS.ambientVolume);
+      } catch (e) {
+        console.error('[sound] Failed to initialize ambient sound:', e);
+      }
+    }
+
+    // Start ambient sound (call when voice chat begins)
+    function startAmbientSound() {
+      console.log('[sound] startAmbientSound called, ambientAudio:', !!ambientAudio, 'paused:', ambientAudio?.paused);
+      if (ambientAudio && ambientAudio.paused) {
+        ambientAudio.play()
+          .then(() => console.log('[sound] Ambient sound started successfully'))
+          .catch(e => console.error('[sound] Ambient play failed:', e.message, e));
+      }
+    }
+
+    // Stop ambient sound (call when voice chat ends)
+    function stopAmbientSound() {
+      if (ambientAudio && !ambientAudio.paused) {
+        ambientAudio.pause();
+        ambientAudio.currentTime = 0;
+        console.log('[sound] Ambient sound stopped');
+      }
+    }
+
+    // Play thinking sound (call when agent is processing/thinking)
+    function playThinkingSound() {
+      if (SOUND_SETTINGS.thinkingSound === 'none' || !SOUND_FILES.thinking[SOUND_SETTINGS.thinkingSound]) {
+        return;
+      }
+
+      if (isThinkingSoundPlaying) return;
+
+      try {
+        if (!thinkingAudio) {
+          thinkingAudio = new Audio(SOUND_FILES.thinking[SOUND_SETTINGS.thinkingSound]);
+          thinkingAudio.loop = true;
+          thinkingAudio.volume = SOUND_SETTINGS.thinkingVolume;
+        }
+        thinkingAudio.play().catch(e => console.log('[sound] Thinking play failed:', e));
+        isThinkingSoundPlaying = true;
+        console.log('[sound] Thinking sound started');
+      } catch (e) {
+        console.error('[sound] Failed to play thinking sound:', e);
+      }
+    }
+
+    // Stop thinking sound (call when agent finishes thinking)
+    function stopThinkingSound() {
+      if (thinkingAudio && !thinkingAudio.paused) {
+        thinkingAudio.pause();
+        thinkingAudio.currentTime = 0;
+        isThinkingSoundPlaying = false;
+        console.log('[sound] Thinking sound stopped');
+      }
+    }
 
     let supertabClient = null;
     let supertabPurchaseButton = null;
@@ -3667,6 +3902,10 @@ function clearVoiceTranscriptError(){
       scheduleVoiceConnectionMonitor(roomConn);
       reconnectAttempts = 0;
       attachExistingRemoteAudio(roomConn);
+
+      // Initialize and start ambient sound when voice chat connects
+      initAmbientSound();
+      startAmbientSound();
       try {
         let tries = 0;
         const maxTries = 6;
@@ -3844,6 +4083,16 @@ function clearVoiceTranscriptError(){
                   _lastInterimRole = role;
 
                   if (isFinal) {
+                    // Sound handling: When user finishes speaking, start thinking sound
+                    // When assistant starts responding, stop thinking sound
+                    if (role === 'user') {
+                      // User finished speaking - agent will start thinking
+                      playThinkingSound();
+                    } else if (role === 'assistant') {
+                      // Agent is responding - stop thinking sound
+                      stopThinkingSound();
+                    }
+
                     // Check if this speech's final bubble already exists (subsequent
                     // events for the same speech add more final segments)
                     const existingFinal = document.querySelector(`[data-transcript-id="${segmentId}"]`);
@@ -4040,6 +4289,11 @@ function clearVoiceTranscriptError(){
       clearVoiceConnectionMonitor();
       monitorFailures = 0;
       reconnectAttempts = 0;
+
+      // Stop sounds when voice chat ends
+      stopAmbientSound();
+      stopThinkingSound();
+
       try {
         stopVoiceTranscriptStream();
         if (__roomConn) {
@@ -4537,6 +4791,11 @@ function clearVoiceTranscriptError(){
       await __videoRoomConn.connect(server, token);
       try { console.log('[video] connected to room'); } catch {}
 
+      // Initialize and start ambient sound when video chat connects
+      console.log('[sound] Initializing sounds for video chat...');
+      initAmbientSound();
+      startAmbientSound();
+
       // Enable audio playback
       try {
         await __videoRoomConn.startAudio();
@@ -4605,6 +4864,10 @@ function clearVoiceTranscriptError(){
 
       manualVideoEnd = true;
       stopVideoTranscriptStream();
+
+      // Stop sounds when video chat ends
+      stopAmbientSound();
+      stopThinkingSound();
 
       // Hide transcript overlay
       if (transcriptOverlay) transcriptOverlay.classList.add('hidden');
@@ -5351,18 +5614,9 @@ function clearVoiceTranscriptError(){
       <div class="agent-info-header">
         <div class="agent-info-section-label">About this Sidekick</div>
         {% if agent_image -%}
-        {%- set img_base2 = agent_image.rsplit('.', 1)[0] if '.' in agent_image else agent_image -%}
-        {%- set img_dir2 = img_base2.rsplit('/', 1)[0] if '/' in img_base2 else '' -%}
-        {%- set img_stem2 = img_base2.rsplit('/', 1)[1] if '/' in img_base2 else img_base2 -%}
         {%- set proto2 = request.headers.get('X-Forwarded-Proto', 'https') -%}
-        {%- set origin2 = proto2 ~ '://' ~ request.url.netloc %}
-        <picture>
-          <source srcset="{{ origin2 }}{{ img_dir2 }}/optimized/{{ img_stem2 }}.webp" type="image/webp">
-
-          <source srcset="{{ origin2 }}{{ img_dir2 }}/optimized/{{ img_stem2 }}.png" type="image/png">
-
-          <img src="{{ origin2 }}{{ img_dir2 }}/optimized/{{ img_stem2 }}.png" alt="{{ agent_name }}" class="agent-info-avatar" loading="lazy" onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';">
-        </picture>
+        {%- set origin2 = proto2 ~ '://' ~ request.url.netloc -%}
+        <img src="{{ origin2 }}{{ agent_image }}" alt="{{ agent_name }}" class="agent-info-avatar" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
         <div class="agent-info-avatar-placeholder" style="display: none;">{{ agent_name[0] | upper if agent_name else 'S' }}</div>
         {% else %}
         <div class="agent-info-avatar-placeholder">{{ agent_name[0] | upper if agent_name else 'S' }}</div>
@@ -5376,12 +5630,17 @@ function clearVoiceTranscriptError(){
         <div class="agent-info-section-title">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
           Abilities
-          <span class="agent-info-section-hint">— Invoke by simply asking</span>
+          <span class="agent-info-section-hint">— Click to invoke or simply ask</span>
         </div>
         {% if agent_tools and agent_tools|length > 0 %}
         <div class="ability-list">
           {% for tool in agent_tools %}
-          <div class="ability-item">
+          <div class="ability-item"
+               data-tool-slug="{{ tool.slug or tool.id }}"
+               data-tool-name="{{ tool.name }}"
+               data-tool-type="{{ tool.type or 'tool' }}"
+               onclick="triggerAbility(this)"
+               title="Click to use {{ tool.name }}">
             <div class="ability-icon">
               {% if tool.icon_url %}
               <img src="{{ tool.icon_url }}" alt="{{ tool.name }}" onerror="this.parentElement.innerHTML='<svg fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M13 10V3L4 14h7v7l9-11h-7z\'/></svg>'">
@@ -5427,6 +5686,42 @@ function clearVoiceTranscriptError(){
         modal.classList.remove('active');
         document.body.style.overflow = '';
       }
+    }
+
+    /**
+     * Trigger an ability when clicked from the About This Sidekick modal.
+     * Sends a message to the sidekick that will invoke the corresponding tool.
+     * @param {HTMLElement} element - The clicked ability-item element
+     */
+    function triggerAbility(element) {
+      const toolSlug = element.dataset.toolSlug;
+      const toolName = element.dataset.toolName;
+      const toolType = element.dataset.toolType;
+
+      if (!toolSlug || !toolName) {
+        console.warn('[triggerAbility] Missing tool data attributes');
+        return;
+      }
+
+      // Close the modal first
+      closeAgentInfoModal();
+
+      // Make sure chat panel is visible
+      setChatVisible(true);
+
+      // Create a natural message that will trigger the tool
+      // The message format helps the LLM understand the user clicked an ability
+      const message = `[Ability Clicked: ${toolName}] Please use the ${toolName} ability now.`;
+
+      // Put the message in the input field and send it
+      const input = document.getElementById('msg');
+      if (input) {
+        input.value = message;
+        // Trigger the send message function
+        sendMsg();
+      }
+
+      console.log('[triggerAbility] Triggered ability:', { toolSlug, toolName, toolType });
     }
 
     // Close modal on Escape key

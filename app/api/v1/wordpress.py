@@ -258,52 +258,141 @@ def _encode_payload_for_signature(payload: Dict[str, Any]) -> str:
 
 
 async def _fetch_supabase_user_by_email(email: str) -> Optional[Dict[str, Any]]:
-    """Fetch Supabase auth user metadata by email via Admin API."""
+    """Fetch Supabase auth user metadata by email via Admin API.
+
+    Note: Supabase Admin API's email param doesn't filter - it returns all users.
+    We must filter client-side to find the exact email match.
+    """
+    normalized_email = email.lower().strip()
     url = f"{settings.supabase_url.rstrip('/')}/auth/v1/admin/users"
     headers = {
         "apikey": settings.supabase_service_role_key,
         "Authorization": f"Bearer {settings.supabase_service_role_key}",
     }
-    params = {"email": email}
+    # Note: The 'email' param doesn't actually filter in Supabase Admin API
+    # We need to paginate through all users or use a different approach
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url, params=params, headers=headers)
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-        data = response.json()
-        users = []
-        if isinstance(data, dict):
-            users = data.get("users") or data.get("data") or []
-        elif isinstance(data, list):
-            users = data
-        if isinstance(users, list) and users:
-            return users[0]
+        page = 1
+        per_page = 100
+        while True:
+            params = {"page": page, "per_page": per_page}
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(url, params=params, headers=headers)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            data = response.json()
+
+            users = []
+            if isinstance(data, dict):
+                users = data.get("users") or data.get("data") or []
+            elif isinstance(data, list):
+                users = data
+
+            # Find exact email match (case-insensitive)
+            for user in users:
+                user_email = (user.get("email") or "").lower().strip()
+                if user_email == normalized_email:
+                    logger.info("Found exact match for email %s: id=%s", email, user.get("id"))
+                    return user
+
+            # If we got fewer users than per_page, we've reached the end
+            if len(users) < per_page:
+                logger.info("No user found for email %s after checking all pages", email)
+                return None
+
+            page += 1
+            # Safety limit to prevent infinite loops
+            if page > 50:
+                logger.warning("Reached page limit (50) searching for email %s", email)
+                return None
+
     except httpx.HTTPError as exc:
-        logger.warning("Failed to fetch Supabase user by email: %s", exc)
+        logger.warning("Failed to fetch Supabase user by email %s: %s", email, exc)
     return None
 
 
-def _derive_password(payload: Dict[str, Any]) -> str:
-    """Create deterministic password used solely for service-side sign-ins."""
-    raw = f"{settings.wordpress_bridge_secret}:{payload.get('site','')}:{payload.get('wp_user_id')}"
+# DEPRECATED: Password derivation is no longer used.
+# We now use admin API to generate sessions directly without passwords.
+# Keeping for reference only.
+def _derive_password_deprecated(payload: Dict[str, Any], site_secret: str) -> str:
+    """DEPRECATED: Create deterministic password used solely for service-side sign-ins."""
+    raw = f"{site_secret}:{payload.get('site','')}:{payload.get('wp_user_id')}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+async def _get_wordpress_site_by_url(site_url: str) -> Optional[Dict[str, Any]]:
+    """Fetch WordPress site configuration by site URL."""
+    if not site_url:
+        return None
+
+    # Ensure supabase_manager is initialized
+    if not getattr(supabase_manager, "_initialized", False):
+        await supabase_manager.initialize()
+
+    # Normalize the site URL (remove protocol, trailing slashes)
+    normalized_url = site_url.lower().strip()
+    for prefix in ["https://", "http://", "www."]:
+        if normalized_url.startswith(prefix):
+            normalized_url = normalized_url[len(prefix):]
+    normalized_url = normalized_url.rstrip("/")
+
+    try:
+        # Try exact match first
+        result = await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("wordpress_sites")
+            .select("*")
+            .eq("site_url", normalized_url)
+            .eq("is_active", True)
+            .limit(1)
+        )
+        if result and len(result) > 0:
+            return result[0]
+
+        # Try with original URL (in case it was stored differently)
+        result = await supabase_manager.execute_query(
+            supabase_manager.admin_client.table("wordpress_sites")
+            .select("*")
+            .ilike("site_url", f"%{normalized_url}%")
+            .eq("is_active", True)
+            .limit(1)
+        )
+        if result and len(result) > 0:
+            return result[0]
+
+    except Exception as exc:
+        logger.warning("Failed to fetch WordPress site by URL %s: %s", site_url, exc)
+
+    return None
+
+
+def _serialize_value(val: Any) -> Any:
+    """Convert datetime objects to ISO strings for JSON serialization."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.isoformat()
+    if isinstance(val, dict):
+        return {k: _serialize_value(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_serialize_value(item) for item in val]
+    return val
 
 
 def _normalize_user(user_obj: Any) -> Dict[str, Any]:
     if not user_obj:
         return {}
     if isinstance(user_obj, dict):
-        return user_obj
+        return {k: _serialize_value(v) for k, v in user_obj.items()}
     return {
         "id": getattr(user_obj, "id", None),
         "aud": getattr(user_obj, "aud", None),
         "email": getattr(user_obj, "email", None),
         "phone": getattr(user_obj, "phone", None),
         "role": getattr(user_obj, "role", None),
-        "last_sign_in_at": getattr(user_obj, "last_sign_in_at", None),
-        "app_metadata": getattr(user_obj, "app_metadata", None),
-        "user_metadata": getattr(user_obj, "user_metadata", None),
+        "last_sign_in_at": _serialize_value(getattr(user_obj, "last_sign_in_at", None)),
+        "app_metadata": _serialize_value(getattr(user_obj, "app_metadata", None)),
+        "user_metadata": _serialize_value(getattr(user_obj, "user_metadata", None)),
     }
 
 
@@ -357,13 +446,22 @@ async def _upsert_wp_mapping(user_id: str, payload: Dict[str, Any]):
         logger.debug("wordpress_user_mappings upsert skipped or failed: %s", exc)
 
 
-async def _ensure_supabase_user(payload: Dict[str, Any]) -> str:
-    """Ensure a Supabase Auth user exists for the WordPress identity."""
+async def _ensure_supabase_user_no_password(payload: Dict[str, Any]) -> str:
+    """Ensure a Supabase Auth user exists for the WordPress identity.
+
+    This function NEVER modifies passwords. It either:
+    1. Returns an existing user's ID (preserving their password)
+    2. Creates a new user with a random password (they can reset it if needed)
+
+    The WordPress bridge uses admin API to generate sessions directly,
+    so no password synchronization is needed.
+    """
     email = payload.get("email")
     display_name = payload.get("display_name") or email
     roles = payload.get("roles") or []
-    derived_password = _derive_password(payload)
-    metadata = {
+
+    # WordPress-specific metadata (stored separately from platform user data)
+    wp_metadata = {
         "wordpress_user_id": payload.get("wp_user_id"),
         "wordpress_site": payload.get("site"),
         "wordpress_roles": roles,
@@ -375,34 +473,51 @@ async def _ensure_supabase_user(payload: Dict[str, Any]) -> str:
     user_id: Optional[str] = None
 
     if user_record and user_record.get("id"):
+        # User exists - just return their ID, DO NOT modify their password
         user_id = user_record["id"]
-        try:
-            admin_auth.update_user_by_id(
-                user_id,
-                {
-                    "password": derived_password,
-                    "email_confirm": True,
-                    "user_metadata": metadata,
-                },
-            )
-        except Exception as exc:
-            logger.warning("Failed to update Supabase user %s: %s", user_id, exc)
+        logger.info(
+            "WordPress bridge: Found existing user %s (%s) - using their account without password modification",
+            user_id, email
+        )
+
+        # Optionally update WordPress-related metadata (but NOT password)
+        # Only update if this is already a WordPress-linked user or has no platform_role
+        user_metadata = user_record.get("user_metadata") or {}
+        if not user_metadata.get("platform_role"):
+            # Safe to add/update WordPress metadata for non-admin users
+            try:
+                # Merge existing metadata with WordPress metadata
+                merged_metadata = {**user_metadata, **wp_metadata}
+                admin_auth.update_user_by_id(
+                    user_id,
+                    {"user_metadata": merged_metadata}
+                )
+                logger.info("Updated WordPress metadata for user %s", user_id)
+            except Exception as exc:
+                # Non-fatal - user can still authenticate
+                logger.warning("Failed to update WordPress metadata for user %s: %s", user_id, exc)
     else:
+        # No existing user - create a new one with a secure random password
+        # They won't need this password since we use admin API for session generation
+        import secrets
+        random_password = secrets.token_urlsafe(32)
+
         try:
             create_response = admin_auth.create_user(
                 {
                     "email": email,
-                    "password": derived_password,
+                    "password": random_password,  # Random, never used
                     "email_confirm": True,
-                    "user_metadata": metadata,
+                    "user_metadata": wp_metadata,
                 }
             )
             created_user = getattr(create_response, "user", None)
             if created_user:
                 user_id = getattr(created_user, "id", None)
+            logger.info("Created new WordPress-bridged user %s for %s (password NOT synced)", user_id, email)
         except Exception as exc:
             logger.error("Failed to create Supabase user for %s: %s", email, exc)
-            # Attempt to refetch in case of race
+            # Attempt to refetch in case of race condition
             refreshed = await _fetch_supabase_user_by_email(email)
             user_id = refreshed.get("id") if refreshed else None
 
@@ -414,15 +529,132 @@ async def _ensure_supabase_user(payload: Dict[str, Any]) -> str:
     return user_id
 
 
+async def _generate_admin_session(user_id: str, email: str) -> Dict[str, Any]:
+    """Generate a Supabase session for a user using the Admin API.
+
+    This bypasses password authentication entirely - the WordPress payload
+    signature verification serves as the authentication proof.
+
+    Uses the generateLink + verifyOtp pattern recommended by Supabase.
+    Reference: https://github.com/orgs/supabase/discussions/11854
+    """
+    admin_headers = {
+        "apikey": settings.supabase_service_role_key,
+        "Authorization": f"Bearer {settings.supabase_service_role_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Step 1: Generate a magic link (server-side, never sent to user)
+    generate_url = f"{settings.supabase_url.rstrip('/')}/auth/v1/admin/generate_link"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                generate_url,
+                headers=admin_headers,
+                json={
+                    "type": "magiclink",
+                    "email": email,
+                }
+            )
+            response.raise_for_status()
+            link_data = response.json()
+    except httpx.HTTPStatusError as exc:
+        logger.error("Failed to generate magic link for %s: %s - %s", email, exc.response.status_code, exc.response.text)
+        raise HTTPException(status_code=500, detail="Failed to generate session link.")
+    except Exception as exc:
+        logger.error("Failed to generate magic link for %s: %s", email, exc)
+        raise HTTPException(status_code=500, detail="Failed to generate session link.")
+
+    hashed_token = link_data.get("hashed_token")
+    if not hashed_token:
+        logger.error("No hashed_token in generate_link response for %s: %s", email, link_data)
+        raise HTTPException(status_code=500, detail="Failed to generate authentication token.")
+
+    logger.info("Generated magic link token for %s, verifying...", email)
+
+    # Step 2: Verify the token using verifyOtp to get actual session tokens
+    # Use the anon key for this endpoint (it's the public verification endpoint)
+    verify_url = f"{settings.supabase_url.rstrip('/')}/auth/v1/verify"
+    anon_headers = {
+        "apikey": settings.supabase_anon_key,
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                verify_url,
+                headers=anon_headers,
+                json={
+                    "type": "magiclink",
+                    "token_hash": hashed_token,
+                }
+            )
+
+            if response.status_code == 200:
+                session_data = response.json()
+                logger.info("Successfully verified token and got session for %s", email)
+                return session_data
+
+            # Try alternative endpoint format
+            logger.warning("First verify attempt failed (%d), trying alternative...", response.status_code)
+
+            # Some Supabase versions use /verify with GET
+            verify_get_url = f"{settings.supabase_url.rstrip('/')}/auth/v1/verify?token_hash={hashed_token}&type=magiclink"
+            response = await client.get(verify_get_url, headers=anon_headers, follow_redirects=True)
+
+            if response.status_code == 200:
+                session_data = response.json()
+                logger.info("Successfully verified token (GET) and got session for %s", email)
+                return session_data
+
+            # Try with 'token' instead of 'token_hash'
+            response = await client.post(
+                verify_url,
+                headers=anon_headers,
+                json={
+                    "type": "magiclink",
+                    "token": hashed_token,
+                }
+            )
+
+            if response.status_code == 200:
+                session_data = response.json()
+                logger.info("Successfully verified token (token param) for %s", email)
+                return session_data
+
+            logger.error("All verify attempts failed for %s: %d - %s", email, response.status_code, response.text)
+
+    except Exception as exc:
+        logger.error("Failed to verify token for %s: %s", email, exc)
+
+    # If verification fails, we need a fallback
+    # Return user info and let the embed handle auth differently
+    logger.warning("Could not generate full session for %s, returning user info for embed token auth", email)
+
+    # Fetch user record for the response
+    try:
+        user_url = f"{settings.supabase_url.rstrip('/')}/auth/v1/admin/users/{user_id}"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(user_url, headers=admin_headers)
+            response.raise_for_status()
+            user_record = response.json()
+    except Exception:
+        user_record = {"id": user_id, "email": email}
+
+    return {
+        "user": _normalize_user(user_record),
+        "user_id": user_id,
+        "email": email,
+        "auth_method": "wordpress_bridge_fallback",
+        "requires_embed_token": True,  # Signal that embed should use its own token auth
+    }
+
+
+@router.post("/wordpress/session/exchange")
 @router.post("/wordpress/session")
 async def issue_wordpress_session(request: Request):
     """Exchange a signed WordPress session payload for Supabase Auth tokens."""
-    if not settings.wordpress_bridge_secret:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="WordPress session bridge is not configured.",
-        )
-
     try:
         body = await request.json()
     except Exception:
@@ -449,10 +681,28 @@ async def issue_wordpress_session(request: Request):
 
     email = payload.get("email")
     wp_user_id = payload.get("wp_user_id")
+    site_url = payload.get("site")
     if not email or wp_user_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Payload missing required fields.",
+        )
+
+    # Look up the WordPress site to get the shared secret
+    wp_site = await _get_wordpress_site_by_url(site_url)
+    if not wp_site:
+        logger.warning("WordPress site not found for URL: %s", site_url)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"WordPress site not registered: {site_url}",
+        )
+
+    site_secret = wp_site.get("api_secret")
+    if not site_secret:
+        logger.error("WordPress site %s has no api_secret configured", site_url)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="WordPress site has no shared secret configured.",
         )
 
     now = int(time.time())
@@ -464,51 +714,56 @@ async def issue_wordpress_session(request: Request):
 
     encoded_payload = _encode_payload_for_signature(payload)
     expected_signature = hmac.new(
-        settings.wordpress_bridge_secret.encode("utf-8"),
+        site_secret.encode("utf-8"),
         encoded_payload.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
 
+    # Debug logging for signature mismatch
     if not hmac.compare_digest(expected_signature, signature):
+        logger.warning(
+            "Signature mismatch for site %s:\n  received_sig=%s\n  expected_sig=%s\n  payload_encoded_full=%s\n  secret_len=%d",
+            site_url,
+            signature,
+            expected_signature,
+            encoded_payload,
+            len(site_secret) if site_secret else 0
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid payload signature.",
         )
 
-    user_id = await _ensure_supabase_user(payload)
+    # Ensure user exists (without modifying any passwords)
+    user_id = await _ensure_supabase_user_no_password(payload)
 
-    derived_password = _derive_password(payload)
+    # Generate session using admin API (no password needed)
+    logger.info("Generating admin session for WordPress user %s (%s)", user_id, email)
+
     try:
-        login_response = supabase_manager.auth_client.auth.sign_in_with_password(
-            {"email": email, "password": derived_password}
-        )
+        session_data = await _generate_admin_session(user_id, email)
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.error("Failed to create Supabase session for %s: %s", payload["email"], exc)
+        logger.error("Failed to generate admin session for %s: %s", email, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create Supabase session.",
         )
 
-    if not getattr(login_response, "session", None):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Supabase did not return a session.",
-        )
-
-    session_payload = _normalize_session(login_response.session, login_response.user)
-    session_payload["user"]["id"] = session_payload["user"].get("id") or user_id
-
+    # Build response
     debug = {}
     if settings.debug:
         debug = {
             "wp_user_id": payload.get("wp_user_id"),
             "wp_site": payload.get("site"),
             "roles": payload.get("roles"),
+            "auth_method": "admin_api_no_password",
         }
 
-    response_body = session_payload
+    response_body = session_data
     if debug:
-        response_body = {**session_payload, "bridge_debug": debug}
+        response_body = {**session_data, "bridge_debug": debug}
 
     return JSONResponse(response_body)
 

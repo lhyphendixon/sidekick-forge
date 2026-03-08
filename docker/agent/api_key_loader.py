@@ -17,26 +17,39 @@ class APIKeyLoader:
     def load_api_keys(metadata: Dict[str, Any]) -> Dict[str, str]:
         """
         Load API keys following the Dynamic API Key Loading Policy:
-        1. From Supabase (if client_id is available) - PRIMARY SOURCE
-        2. From metadata (if provided in job/room) - SECONDARY SOURCE
-        3. FAIL with clear error if required keys are missing
-        
+        1. Check if client uses platform keys (Sidekick Forge Inference)
+        2. If platform keys: load from platform_api_keys table
+        3. If BYOK: load from client's columns in clients table
+        4. Fall back to metadata if needed
+
         NO FALLBACK to environment variables except for Supabase connection itself
         """
         api_keys = {}
         client_id = metadata.get('client_id')
-        
-        # Try to load from Supabase FIRST (primary source)
-        if client_id:
-            logger.info(f"Loading API keys from Supabase for client {client_id} (primary source)")
-            supabase_keys = APIKeyLoader._load_from_supabase(client_id)
-            if supabase_keys:
-                api_keys = supabase_keys
-                logger.info(f"Successfully loaded {len(api_keys)} API keys from Supabase")
+
+        # First, check if this client uses platform keys (Sidekick Forge Inference)
+        uses_platform_keys = APIKeyLoader._check_uses_platform_keys(client_id)
+
+        if uses_platform_keys:
+            # Load from platform_api_keys table
+            logger.info(f"Client {client_id} uses Sidekick Forge Inference - loading platform keys")
+            api_keys = APIKeyLoader._load_platform_keys()
+            if api_keys:
+                logger.info(f"Successfully loaded {len(api_keys)} platform API keys")
             else:
-                logger.warning(f"Failed to load API keys from Supabase for client {client_id}")
-        
-        # If no Supabase keys or no client_id, try metadata (secondary source)
+                logger.warning("Failed to load platform keys, falling back to metadata")
+        else:
+            # Try to load from client's own columns in Supabase (BYOK mode)
+            if client_id:
+                logger.info(f"Loading API keys from Supabase for client {client_id} (BYOK mode)")
+                supabase_keys = APIKeyLoader._load_from_supabase(client_id)
+                if supabase_keys:
+                    api_keys = supabase_keys
+                    logger.info(f"Successfully loaded {len(api_keys)} API keys from Supabase")
+                else:
+                    logger.warning(f"Failed to load API keys from Supabase for client {client_id}")
+
+        # If no keys yet, try metadata (secondary source)
         if not api_keys and metadata.get('api_keys'):
             logger.info("Loading API keys from metadata (secondary source)")
             api_keys = metadata['api_keys']
@@ -76,10 +89,70 @@ class APIKeyLoader:
             logger.info(f"Missing API keys: {missing_keys}")
         
         return api_keys
-    
+
+    @staticmethod
+    def _check_uses_platform_keys(client_id: str) -> bool:
+        """Check if a client uses platform keys (Sidekick Forge Inference)"""
+        if not client_id:
+            return True  # Default to platform keys
+
+        try:
+            from supabase import create_client, Client
+
+            supabase_url = os.getenv('SUPABASE_URL')
+            supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+
+            if not supabase_url or not supabase_key:
+                return True  # Default to platform keys
+
+            supabase: Client = create_client(supabase_url, supabase_key)
+            result = supabase.table('clients').select('uses_platform_keys').eq('id', client_id).single().execute()
+
+            if result.data:
+                # Only use BYOK (return False) if explicitly set to False
+                # None or True = use platform keys
+                if result.data.get('uses_platform_keys') is False:
+                    return False
+            return True  # Default to platform keys
+        except Exception as e:
+            logger.warning(f"Failed to check uses_platform_keys: {e}")
+            return True  # Default to platform keys
+
+    @staticmethod
+    def _load_platform_keys() -> Dict[str, str]:
+        """Load API keys from the platform_api_keys table"""
+        try:
+            from supabase import create_client, Client
+
+            supabase_url = os.getenv('SUPABASE_URL')
+            supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+
+            if not supabase_url or not supabase_key:
+                logger.error("Supabase credentials not available - cannot load platform keys")
+                return {}
+
+            supabase: Client = create_client(supabase_url, supabase_key)
+            result = supabase.table('platform_api_keys').select('key_name, key_value').eq('is_active', True).execute()
+
+            if result.data:
+                api_keys = {}
+                for row in result.data:
+                    key_name = row.get('key_name')
+                    key_value = row.get('key_value')
+                    if key_name and key_value:
+                        api_keys[key_name] = key_value
+                logger.info(f"Loaded {len(api_keys)} keys from platform_api_keys table")
+                return api_keys
+            else:
+                logger.warning("No platform API keys found in platform_api_keys table")
+                return {}
+        except Exception as e:
+            logger.error(f"Failed to load platform keys: {e}")
+            return {}
+
     @staticmethod
     def _load_from_supabase(client_id: str) -> Dict[str, str]:
-        """Load API keys from Supabase for a specific client"""
+        """Load API keys from Supabase for a specific client (BYOK mode)"""
         try:
             # Import here to avoid circular dependencies
             from supabase import create_client, Client

@@ -832,9 +832,9 @@
                                     Regenerate Shared Secret
                                 </button>
                             </form>
-                            <button type="button" onclick="deleteWordpressSite({{ site.id|tojson }}, {{ client.id|tojson }})" class="px-3 py-1.5 text-sm rounded bg-red-600 hover:bg-red-700 text-white transition-colors">
+                            <a href="javascript:void(0)" id="delete-btn-{{ loop.index }}" data-site-id="{{ site.id }}" data-client-id="{{ client.id }}" class="px-3 py-1.5 text-sm rounded bg-red-600 hover:bg-red-700 text-white transition-colors cursor-pointer inline-block">
                                 Delete
-                            </button>
+                            </a>
                         </div>
                     </div>
 
@@ -1186,7 +1186,7 @@ async function syncAgents() {
     showNotification('success', 'Starting agent sync...');
     
     try {
-        const response = await fetch(`/api/v1/agents/sync?client_id={{ client.id }}`, {
+        const response = await fetch(`/api/v1/agents/sync?client_id=${ {{ client.id|tojson }} }`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'}
         });
@@ -1209,12 +1209,20 @@ async function syncAgents() {
 }
 
 async function deleteWordpressSite(siteId, clientId) {
+    alert('Delete function called! siteId=' + siteId + ', clientId=' + clientId);
+    console.log('deleteWordpressSite called with:', siteId, clientId);
     if (!confirm('Delete this WordPress site? This cannot be undone.')) {
         return;
     }
     try {
-        const res = await fetch(`/admin/wordpress-sites/${siteId}`, { method: 'DELETE' });
+        console.log('Sending DELETE request to:', `/admin/wordpress-sites/${siteId}`);
+        const res = await fetch(`/admin/wordpress-sites/${siteId}`, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+        });
+        console.log('Response status:', res.status);
         const data = await res.json();
+        console.log('Response data:', data);
         if (data.success) {
             showNotification('success', 'WordPress site deleted');
             setTimeout(() => window.location.href = `/admin/clients/${clientId}`, 500);
@@ -1222,6 +1230,7 @@ async function deleteWordpressSite(siteId, clientId) {
             showNotification('error', data.error || 'Failed to delete site');
         }
     } catch (err) {
+        console.error('Delete error:', err);
         showNotification('error', 'Error deleting site: ' + err.message);
     }
 }
@@ -1229,9 +1238,9 @@ async function deleteWordpressSite(siteId, clientId) {
 // =============================================
 // Embedding Migration Modal
 // =============================================
-const originalEmbeddingProvider = '{{ client.settings.get("embedding", {}).get("provider", "openai") }}';
-const originalDocModel = '{{ client.settings.get("embedding", {}).get("document_model", "") }}';
-const originalConvModel = '{{ client.settings.get("embedding", {}).get("conversation_model", "") }}';
+const originalEmbeddingProvider = {{ (client.settings or {}).get("embedding", {}).get("provider", "openai")|tojson }};
+const originalDocModel = {{ (client.settings or {}).get("embedding", {}).get("document_model", "")|tojson }};
+const originalConvModel = {{ (client.settings or {}).get("embedding", {}).get("conversation_model", "")|tojson }};
 let migrationJobId = null;
 let migrationPollInterval = null;
 
@@ -1262,7 +1271,7 @@ function hideMigrationModal() {
 
 // Start embedding migration
 async function startEmbeddingMigration() {
-    const clientId = '{{ client.id }}';
+    const clientId = {{ client.id|tojson }};
 
     try {
         document.getElementById('migrationStartBtn').disabled = true;
@@ -1362,6 +1371,36 @@ document.getElementById('clientForm').addEventListener('submit', function(e) {
         e.preventDefault();
         showMigrationModal();
     }
+});
+
+// Attach delete handlers to all delete buttons using event delegation
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('[id^="delete-btn-"]').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            var siteId = this.getAttribute('data-site-id');
+            var clientId = this.getAttribute('data-client-id');
+            alert('Delete clicked! siteId=' + siteId + ', clientId=' + clientId);
+            if (confirm('Delete this WordPress site? This cannot be undone.')) {
+                fetch('/admin/wordpress-sites/' + siteId, {
+                    method: 'DELETE',
+                    credentials: 'same-origin'
+                })
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        alert('Deleted successfully!');
+                        window.location.href = '/admin/clients/' + clientId;
+                    } else {
+                        alert('Failed to delete: ' + (data.error || 'Unknown error'));
+                    }
+                })
+                .catch(function(err) {
+                    alert('Error: ' + err.message);
+                });
+            }
+        });
+    });
 });
 </script>
 

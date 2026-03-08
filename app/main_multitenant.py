@@ -140,7 +140,9 @@ from app.api.v1 import (
     text_chat_proxy,
     knowledge_base,
     content_catalyst,
-    image_catalyst
+    image_catalyst,
+    wordpress,
+    lingua
 )
 from app.api import embed as embed_router
 try:
@@ -175,6 +177,8 @@ app.include_router(text_chat_proxy.router, prefix="/api/v1", tags=["text-chat"])
 app.include_router(knowledge_base.router, prefix="/api/v1", tags=["knowledge-base"])
 app.include_router(content_catalyst.router, prefix="/api/v1", tags=["content-catalyst"])
 app.include_router(image_catalyst.router, prefix="/api/v1", tags=["image-catalyst"])
+app.include_router(wordpress.router, prefix="/api/v1", tags=["wordpress"])
+app.include_router(lingua.router, prefix="/api/v1", tags=["lingua"])
 app.include_router(embed_router.router)
 # Expose admin preview helper endpoints (used by preview modal)
 app.include_router(admin_preview_standalone.router)

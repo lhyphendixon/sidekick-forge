@@ -28,16 +28,23 @@ def _get_admin_api(url: str, service_role_key: str):
 
 
 def _find_user_by_email(admin_api, email: str) -> Optional[str]:
-    """Return the user_id for a given email if it exists."""
+    """Return the user_id for a given email if it exists.
+
+    SECURITY NOTE: Supabase Admin API's email query param does NOT filter results.
+    We MUST verify the email matches before returning any user ID.
+    """
+    normalized_email = email.lower().strip()
     try:
         response = admin_api._request("GET", "admin/users", query={"email": email})
         if isinstance(response, dict):
             users = response.get("users") or []
-            if users:
-                return users[0].get("id")
+            # SECURITY: Must verify email matches - API returns all users!
+            for user in users:
+                if (user.get("email") or "").lower().strip() == normalized_email:
+                    return user.get("id")
         elif isinstance(response, list):
             for user in response:
-                if (user.get("email") or "").lower() == email.lower():
+                if (user.get("email") or "").lower().strip() == normalized_email:
                     return user.get("id")
     except Exception:
         pass

@@ -17,7 +17,7 @@ from app.integrations.livekit_client import livekit_manager
 # from app.services.container_manager import container_manager
 from app.utils.exceptions import NotFoundError, ServiceUnavailableError
 
-router = APIRouter()
+router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 # Add this Pydantic model for the request body
 class EndSessionRequest(BaseModel):

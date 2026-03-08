@@ -241,11 +241,22 @@ class ImageCatalystWidget extends BaseWidget {
         const formData = new FormData();
         formData.append('file', file);
 
+        // Validate clientId before upload
+        if (!this.config.clientId) {
+            console.error('[ic-widget] No clientId configured!', this.config);
+            alert('Failed to upload reference image: No client ID configured');
+            return;
+        }
+
+        const uploadUrl = `/api/v1/image-catalyst/upload?client_id=${this.config.clientId}`;
+        console.log('[ic-widget] Uploading to:', uploadUrl);
+
         try {
-            const res = await fetch(`/api/v1/image-catalyst/upload?client_id=${this.config.clientId}`, {
+            const res = await fetch(uploadUrl, {
                 method: 'POST',
                 body: formData
             });
+            console.log('[ic-widget] Upload response status:', res.status);
             const data = await res.json();
             if (data.success && data.file_url) {
                 this.uploadedReferenceUrl = data.file_url;
@@ -256,7 +267,7 @@ class ImageCatalystWidget extends BaseWidget {
             }
         } catch (err) {
             console.error('[ic-widget] Upload error:', err);
-            alert('Failed to upload reference image');
+            alert('Failed to upload reference image: ' + (err.message || 'Network error'));
         }
     }
 
