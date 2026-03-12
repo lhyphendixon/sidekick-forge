@@ -47,7 +47,41 @@ warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 fail()    { echo -e "${RED}[FAIL]${NC} $1"; }
 step()    { echo -e "${CYAN}[STEP]${NC} $1"; }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Docker Compose compatibility wrapper
+# Handles both docker-compose (v1.x) and docker compose (v2.x)
+# ══════════════════════════════════════════════════════════════════════════════
+DOCKER_COMPOSE_CMD=""
+
+detect_docker_compose() {
+    if command -v docker-compose &>/dev/null; then
+        # Check if it's the old standalone docker-compose
+        if docker-compose version &>/dev/null; then
+            DOCKER_COMPOSE_CMD="docker-compose"
+            return 0
+        fi
+    fi
+
+    # Check if docker compose (plugin) works
+    if docker compose version &>/dev/null 2>&1; then
+        DOCKER_COMPOSE_CMD="docker compose"
+        return 0
+    fi
+
+    fail "Neither 'docker-compose' nor 'docker compose' found. Please install Docker Compose."
+    exit 1
+}
+
+# Wrapper function for docker-compose commands
+dc() {
+    $DOCKER_COMPOSE_CMD "$@"
+}
+
 cd "$PROJECT_ROOT"
+
+# Detect docker compose command early
+detect_docker_compose
+info "Using Docker Compose command: $DOCKER_COMPOSE_CMD"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 TARGET_TAG=""
@@ -323,7 +357,7 @@ rollback() {
     cd "$PROJECT_ROOT"
     git checkout "$CURRENT_BRANCH" 2>/dev/null || true
     git reset --hard "$PREVIOUS_COMMIT"
-    docker compose up -d --force-recreate 2>/dev/null || true
+    dc up -d --force-recreate 2>/dev/null || true
     fail "Rolled back to commit $(git rev-parse --short $PREVIOUS_COMMIT)"
     [ -d "$BACKUP_DIR" ] && fail "Check logs at: $BACKUP_DIR/deploy.log"
 }
@@ -437,12 +471,37 @@ else
     # Create tracking file if it doesn't exist
     touch "$MIGRATION_TRACKING_FILE"
 
-    # Check for pending migrations
+    # Check for pending migrations (PLATFORM ONLY)
+    # Skip client-specific migrations that mention specific Supabase project IDs
     PENDING_MIGRATIONS=()
+    CLIENT_SPECIFIC_PATTERNS=(
+        "yuowazxcxwhczywurmmw"  # Autonomite client database
+        "embeddings"            # Client-specific embedding migrations
+        "chat_mode_columns"     # Client agent table modifications
+    )
+
     for migration_file in "$MIGRATIONS_DIR"/*.sql; do
         if [ -f "$migration_file" ]; then
             migration_name=$(basename "$migration_file")
-            if ! grep -qF "$migration_name" "$MIGRATION_TRACKING_FILE"; then
+
+            # Skip if already applied
+            if grep -qF "$migration_name" "$MIGRATION_TRACKING_FILE"; then
+                continue
+            fi
+
+            # Skip client-specific migrations
+            is_client_migration=false
+            for pattern in "${CLIENT_SPECIFIC_PATTERNS[@]}"; do
+                if grep -qi "$pattern" "$migration_file"; then
+                    is_client_migration=true
+                    info "Skipping client migration: $migration_name (contains '$pattern')"
+                    # Mark as applied so we don't keep checking it
+                    echo "$migration_name" >> "$MIGRATION_TRACKING_FILE"
+                    break
+                fi
+            done
+
+            if [ "$is_client_migration" = false ]; then
                 PENDING_MIGRATIONS+=("$migration_file")
             fi
         fi
@@ -597,14 +656,14 @@ step "Step 6/10: Building Docker images..."
 
 export COMPOSE_SILENCE_DEPRECATION_WARNINGS=1
 
-if ! docker compose build fastapi 2>&1 | grep -v "variable is not set"; then
+if ! dc build fastapi 2>&1 | grep -v "variable is not set"; then
     fail "FastAPI build failed"
     exit 1
 fi
 success "FastAPI image built"
 
-if docker compose config --services 2>/dev/null | grep -q "agent-worker"; then
-    if ! docker compose build agent-worker 2>&1 | grep -v "variable is not set"; then
+if dc config --services 2>/dev/null | grep -q "agent-worker"; then
+    if ! dc build agent-worker 2>&1 | grep -v "variable is not set"; then
         warn "Agent worker build failed - continuing..."
     else
         success "Agent worker image built"
@@ -617,7 +676,7 @@ step "Step 7/10: Restarting FastAPI..."
 docker stop sidekick-forge-fastapi 2>/dev/null || true
 docker rm sidekick-forge-fastapi 2>/dev/null || true
 
-docker compose up -d --force-recreate --no-deps fastapi 2>&1 | grep -v "variable is not set" || true
+dc up -d --force-recreate --no-deps fastapi 2>&1 | grep -v "variable is not set" || true
 
 info "Waiting for health check..."
 for i in $(seq 1 30); do
@@ -635,11 +694,11 @@ done
 # ── Step 8: Restart agent worker ─────────────────────────────────────────────
 step "Step 8/10: Restarting agent worker..."
 
-if docker compose config --services 2>/dev/null | grep -q "agent-worker"; then
-    docker compose up -d --force-recreate --no-deps agent-worker 2>&1 | grep -v "variable is not set" || true
+if dc config --services 2>/dev/null | grep -q "agent-worker"; then
+    dc up -d --force-recreate --no-deps agent-worker 2>&1 | grep -v "variable is not set" || true
     sleep 8
 
-    if docker compose ps agent-worker 2>/dev/null | grep -qE "Up|running"; then
+    if dc ps agent-worker 2>/dev/null | grep -qE "Up|running"; then
         success "Agent worker is running"
     else
         warn "Agent worker may not have started - check manually"
