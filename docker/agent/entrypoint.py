@@ -20,8 +20,8 @@ from datetime import datetime
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2026-02-15T16:58:42Z"
-AGENT_BUILD_HASH = "yield-before-dbwrite"
+AGENT_BUILD_VERSION = "2026-03-08T03:00:52Z"
+AGENT_BUILD_HASH = "v2.9.11-staging"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api

@@ -98,6 +98,33 @@ async def signup(request: Request):
     )
 
 
+@router.get("/welcome", response_class=HTMLResponse)
+async def welcome(request: Request):
+    """Welcome landing page for business card recipients"""
+    return templates.TemplateResponse(
+        "marketing/welcome.html",
+        {
+            "request": request,
+            "current_year": datetime.now().year
+        }
+    )
+
+
+@router.get("/book-demo", response_class=HTMLResponse)
+async def book_demo(request: Request):
+    """Book a demo page with Cal.com scheduling embed"""
+    import os
+    cal_booking_url = os.environ.get("CAL_COM_BOOKING_URL", "")
+    return templates.TemplateResponse(
+        "marketing/book-demo.html",
+        {
+            "request": request,
+            "current_year": datetime.now().year,
+            "cal_booking_url": cal_booking_url
+        }
+    )
+
+
 @router.get("/checkout", response_class=HTMLResponse)
 async def checkout(request: Request):
     """Checkout page with tier selection"""
@@ -187,7 +214,7 @@ async def submit_early_access(
             <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
                 <p class="text-red-400 font-medium">Error submitting form</p>
                 <p class="text-red-300 text-sm mt-2">
-                    Please try again or contact us directly at hello@sidekickforge.com
+                    Please try again or contact us directly at info@sidekickforge.com
                 </p>
             </div>
             """,
@@ -348,7 +375,7 @@ async def submit_contact(
             <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
                 <p class="text-red-400 font-medium">Error sending message</p>
                 <p class="text-red-300 text-sm mt-2">
-                    Please try again or email us directly at hello@sidekickforge.com
+                    Please try again or email us directly at info@sidekickforge.com
                 </p>
             </div>
             """,
