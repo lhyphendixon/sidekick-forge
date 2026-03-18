@@ -279,13 +279,15 @@ async def upload_mp3(
                 detail="Invalid file type. Only MP3/audio files are accepted."
             )
 
-        # Validate file size (max 100MB)
-        MAX_SIZE = 100 * 1024 * 1024  # 100MB
+        # Validate file size (max 200MB - matches Supabase project setting)
+        MAX_SIZE = 200 * 1024 * 1024  # 200MB
         content = await file.read()
+        file_size_mb = len(content) / (1024 * 1024)
+        logger.info(f"[content-catalyst] Uploading file: {file.filename}, size: {file_size_mb:.1f}MB")
         if len(content) > MAX_SIZE:
             raise HTTPException(
                 status_code=400,
-                detail=f"File too large. Maximum size is 100MB."
+                detail=f"File too large ({file_size_mb:.1f}MB). Maximum upload size is 200MB."
             )
 
         # Get client's Supabase for storage
@@ -334,13 +336,82 @@ async def upload_mp3(
                     detail=f"Storage bucket '{bucket_name}' does not exist in the client's Supabase project. Please create it in Supabase Dashboard → Storage → New Bucket."
                 )
 
-            # Upload file
-            logger.info(f"Uploading file to {bucket_name}/{storage_path}")
-            result = client_sb.storage.from_(bucket_name).upload(
-                path=storage_path,
-                file=content,
-                file_options={"content-type": file.content_type or "audio/mpeg"}
-            )
+            # Upload file - use resumable upload for files > 6MB (Supabase TUS protocol)
+            logger.info(f"Uploading file to {bucket_name}/{storage_path}, size: {file_size_mb:.1f}MB")
+
+            # For files larger than 6MB, we need to use the TUS resumable upload protocol
+            # The standard upload has a 50MB limit at the API gateway level
+            if len(content) > 6 * 1024 * 1024:  # > 6MB
+                logger.info(f"Using resumable upload for large file ({file_size_mb:.1f}MB)")
+                # Use httpx to do a direct TUS upload
+                import httpx
+
+                # Get the Supabase URL and key from the client
+                supabase_url = client_sb.supabase_url
+                supabase_key = client_sb.supabase_key
+
+                # TUS upload endpoint
+                tus_endpoint = f"{supabase_url}/storage/v1/upload/resumable"
+
+                headers = {
+                    "Authorization": f"Bearer {supabase_key}",
+                    "apikey": supabase_key,
+                    "x-upsert": "true",
+                    "upload-length": str(len(content)),
+                    "upload-metadata": f"bucketName {bucket_name},objectName {storage_path},contentType {file.content_type or 'audio/mpeg'}".replace(" ", ""),
+                    "tus-resumable": "1.0.0",
+                }
+
+                # Base64 encode the metadata values
+                import base64
+                bucket_b64 = base64.b64encode(bucket_name.encode()).decode()
+                path_b64 = base64.b64encode(storage_path.encode()).decode()
+                ctype_b64 = base64.b64encode((file.content_type or "audio/mpeg").encode()).decode()
+                headers["upload-metadata"] = f"bucketName {bucket_b64},objectName {path_b64},contentType {ctype_b64}"
+
+                async with httpx.AsyncClient(timeout=300.0) as http_client:
+                    # Step 1: Create upload
+                    create_resp = await http_client.post(tus_endpoint, headers=headers)
+
+                    if create_resp.status_code not in (200, 201):
+                        logger.error(f"TUS create failed: {create_resp.status_code} - {create_resp.text}")
+                        raise Exception(f"Failed to initiate resumable upload: {create_resp.text}")
+
+                    upload_url = create_resp.headers.get("location")
+                    if not upload_url:
+                        raise Exception("No upload URL returned from TUS endpoint")
+
+                    logger.info(f"TUS upload URL: {upload_url}")
+
+                    # Step 2: Upload the content
+                    patch_headers = {
+                        "Authorization": f"Bearer {supabase_key}",
+                        "apikey": supabase_key,
+                        "tus-resumable": "1.0.0",
+                        "upload-offset": "0",
+                        "content-type": "application/offset+octet-stream",
+                    }
+
+                    patch_resp = await http_client.patch(
+                        upload_url,
+                        headers=patch_headers,
+                        content=content
+                    )
+
+                    if patch_resp.status_code not in (200, 204):
+                        logger.error(f"TUS upload failed: {patch_resp.status_code} - {patch_resp.text}")
+                        raise Exception(f"Failed to upload file: {patch_resp.text}")
+
+                    logger.info(f"TUS upload complete: {patch_resp.status_code}")
+                    result = {"path": storage_path}
+            else:
+                # Standard upload for small files
+                result = client_sb.storage.from_(bucket_name).upload(
+                    path=storage_path,
+                    file=content,
+                    file_options={"content-type": file.content_type or "audio/mpeg"}
+                )
+
             logger.info(f"Upload result: {result}")
 
             # Get signed URL (valid for 1 hour)

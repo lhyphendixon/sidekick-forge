@@ -287,17 +287,17 @@
     position: absolute;
     left: 50%;
     top: 50%;
-    transform: translate(-50%, -50%);
     width: 20px;
     height: 20px;
     border: 2px solid rgba(255, 255, 255, 0.3);
     border-top-color: white;
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: cc-spin 0.8s linear infinite;
 }
 
-@keyframes spin {
-    to { transform: translate(-50%, -50%) rotate(360deg); }
+@keyframes cc-spin {
+    0% { transform: translate(-50%, -50%) rotate(0deg); }
+    100% { transform: translate(-50%, -50%) rotate(360deg); }
 }
 
 /* Advanced Options Toggle */
@@ -489,8 +489,13 @@
     border: 2px solid rgba(255, 255, 255, 0.1);
     border-top-color: #01a4a6;
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: cc-picker-spin 0.8s linear infinite;
     margin-bottom: 12px;
+}
+
+@keyframes cc-picker-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
 }
 
 /* Document Picker Empty State */

@@ -16,7 +16,7 @@ import re
 import unicodedata
 import aiohttp
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
@@ -727,6 +727,89 @@ async def _run_text_mode_interaction(
         raise ConfigurationError("Text mode requests require 'user_message' in metadata")
 
     logger.info("📝 Text-only mode: direct LLM path (bypass TTS pipeline)")
+
+    # ===========================================================================
+    # ABILITY CLICK DETECTION: Detect [Ability Clicked: X] patterns and directly
+    # trigger widgets without LLM involvement. This is more reliable than relying
+    # on the LLM to make function calls.
+    # ===========================================================================
+    import re
+    ability_click_match = re.search(r'\[Ability Clicked:\s*([^\]]+)\]', user_message, re.IGNORECASE)
+    if ability_click_match:
+        ability_name = ability_click_match.group(1).strip().upper()
+        logger.info(f"🎯 Detected ability click: '{ability_name}' - bypassing LLM for direct widget trigger")
+
+        widget_trigger = None
+        response_text = ""
+
+        if ability_name in ("IMAGE CATALYST", "IMAGE-CATALYST", "IMAGECATALYST"):
+            widget_trigger = {
+                "type": "image_catalyst",
+                "config": {
+                    "suggested_mode": "general",
+                    "suggested_prompt": "",
+                },
+                "message": "Opening Image Catalyst..."
+            }
+            response_text = "I'll help you create an image. Please configure your preferences in the Image Catalyst widget below."
+            logger.info(f"🖼️ Direct Image Catalyst widget trigger")
+
+        elif ability_name in ("CONTENT CATALYST", "CONTENT-CATALYST", "CONTENTCATALYST"):
+            widget_trigger = {
+                "type": "content_catalyst",
+                "config": {
+                    "suggested_topic": "",
+                    "source_type": "topic",
+                },
+                "message": "Opening Content Catalyst..."
+            }
+            response_text = "I'll help you create content. Please configure your preferences in the Content Catalyst widget below."
+            logger.info(f"📝 Direct Content Catalyst widget trigger")
+
+        elif ability_name in ("LINGUA", "TRANSCRIBE", "TRANSCRIPTION"):
+            widget_trigger = {
+                "type": "lingua",
+                "config": {
+                    "suggested_context": "",
+                },
+                "message": "Opening LINGUA..."
+            }
+            response_text = "I'll help you transcribe your audio. Please upload your file in the LINGUA widget below."
+            logger.info(f"🎵 Direct LINGUA widget trigger")
+
+        elif ability_name in ("PRINT READY", "PRINT-READY", "PRINTREADY"):
+            widget_trigger = {
+                "type": "print_ready",
+                "config": {
+                    "suggested_context": "",
+                },
+                "message": "Opening PrintReady..."
+            }
+            response_text = "I'll help you print or export this conversation. Use the PrintReady widget below."
+            logger.info(f"🖨️ Direct PrintReady widget trigger")
+
+        if widget_trigger:
+            # Build and return the response payload immediately without LLM
+            payload = {
+                "mode": "text",
+                "text_response": response_text,
+                "conversation_id": conversation_id,
+                "streaming": False,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "widget": widget_trigger,
+                "citations": [],
+                "tool_results": [],
+            }
+
+            # Store in room metadata
+            await _merge_and_update_room_metadata(
+                room_name=room.name,
+                payload=payload,
+                logger=logger,
+                retries=2,
+            )
+            logger.info(f"✅ Direct ability widget trigger completed: {widget_trigger['type']}")
+            return payload
 
     # CRITICAL: Clear stale response fields from previous turns to prevent race conditions
     # This ensures the polling API doesn't see old text_response before the new one is ready

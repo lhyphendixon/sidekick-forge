@@ -110,10 +110,10 @@ async def _resolve_effective_user_id(user_id: str, client_id: str) -> str:
         platform_sb = create_client(settings.supabase_url, settings.supabase_service_role_key)
         mapping_result = platform_sb.table("platform_client_user_mappings").select("client_user_id").eq(
             "platform_user_id", user_id
-        ).eq("client_id", client_id).maybe_single().execute()
+        ).eq("client_id", client_id).limit(1).execute()
 
-        if mapping_result.data and mapping_result.data.get("client_user_id"):
-            effective_user_id = mapping_result.data["client_user_id"]
+        if mapping_result.data and len(mapping_result.data) > 0 and mapping_result.data[0].get("client_user_id"):
+            effective_user_id = mapping_result.data[0]["client_user_id"]
             logger.info(f"[embed] Resolved platform user {user_id[:8]}... -> client user {effective_user_id[:8]}...")
             return effective_user_id
     except Exception as mapping_err:
@@ -197,12 +197,19 @@ async def embed_sidekick(
     if max_height:
         effective_dims["embed_max_height"] = max_height
 
+    # ── Compute API base URL from request (needed for both cached and non-cached paths) ──
+    # Handle reverse proxy: check X-Forwarded-Proto header for HTTPS
+    api_base_url = str(request.base_url).rstrip('/')
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
+    if forwarded_proto == "https" and api_base_url.startswith("http://"):
+        api_base_url = "https://" + api_base_url[7:]
+
     # ── Check cache first (include dimensions in cache key) ──────────────
     dims_key = f"{width}:{height}:{min_height}:{max_height}:{layout}"
     cached = _get_cached_embed_config(client_id, f"{agent_slug}:{dims_key}")
     if cached:
-        # Merge dimensions into cached data
-        cached_with_dims = {**cached, **effective_dims}
+        # Merge dimensions and api_base_url into cached data
+        cached_with_dims = {**cached, **effective_dims, "api_base_url": api_base_url}
         return templates.TemplateResponse("embed/sidekick.html", {**cached_with_dims, "request": request, "theme": theme})
 
     # ── Get client record (single direct query for all needed fields) ────
@@ -210,10 +217,19 @@ async def embed_sidekick(
         from supabase import create_client
         client_service = get_client_service()
         platform_sb = client_service.supabase
-        client_result = platform_sb.table("clients").select(
-            "supabase_url, supabase_anon_key, supabase_service_role_key, "
-            "supertab_client_id, tier, stripe_subscription_id, subscription_status"
-        ).eq("id", client_id).maybe_single().execute()
+        try:
+            client_result = platform_sb.table("clients").select(
+                "supabase_url, supabase_anon_key, supabase_service_role_key, "
+                "supertab_client_id, tier, stripe_subscription_id, subscription_status"
+            ).eq("id", client_id).limit(1).execute()
+            # Handle the result - limit(1) returns a list
+            if client_result.data:
+                client_result.data = client_result.data[0]
+            else:
+                client_result.data = None
+        except Exception as db_err:
+            logger.error(f"[embed] Database query failed: {db_err}")
+            raise ValueError(f"Failed to fetch client {client_id}: {db_err}")
 
         if not client_result.data:
             raise ValueError(f"Client {client_id} not found")
@@ -257,13 +273,19 @@ async def embed_sidekick(
                     "supertab_text_enabled, supertab_video_enabled, supertab_experience_id, supertab_price, "
                     "supertab_cta, supertab_subscription_experience_id, supertab_subscription_price, "
                     "voice_chat_enabled, text_chat_enabled, video_chat_enabled, sound_settings"
-                ).eq("slug", agent_slug).maybe_single().execute()
+                ).eq("slug", agent_slug).limit(1).execute()
             except Exception:
                 agent_result = client_sb.table("agents").select(
                     "id, name, description, agent_image, supertab_enabled, supertab_experience_id, "
                     "supertab_price, supertab_cta, supertab_subscription_experience_id, "
                     "supertab_subscription_price, voice_chat_enabled, text_chat_enabled, video_chat_enabled, sound_settings"
-                ).eq("slug", agent_slug).maybe_single().execute()
+                ).eq("slug", agent_slug).limit(1).execute()
+
+            # Handle limit(1) returning a list
+            if agent_result.data and len(agent_result.data) > 0:
+                agent_result.data = agent_result.data[0]
+            else:
+                agent_result.data = None
 
             if agent_result.data:
                 agent_record = agent_result.data
@@ -346,6 +368,8 @@ async def embed_sidekick(
         logger.warning(f"[embed] Failed to fetch agent config: {e}")
 
     # ── Build template context and cache it ──────────────────────────────
+    # Note: api_base_url was computed earlier (before cache check)
+
     tpl_context = {
         "client_id": client_id,
         "agent_id": agent_id,
@@ -363,6 +387,7 @@ async def embed_sidekick(
         "text_chat_enabled": text_chat_enabled,
         "video_chat_enabled": video_chat_enabled,
         "sound_settings": sound_settings,
+        "api_base_url": api_base_url,
     }
     _set_cached_embed_config(client_id, f"{agent_slug}:{dims_key}", tpl_context)
 
@@ -1640,11 +1665,17 @@ async def get_react_embed_connection_details(
             agent_result = client_sb.table("agents").select(
                 "id, name, slug, enabled, voice_settings, system_prompt, "
                 "voice_chat_enabled, text_chat_enabled, video_chat_enabled"
-            ).eq("slug", agent_slug).maybe_single().execute()
+            ).eq("slug", agent_slug).limit(1).execute()
         except Exception:
             agent_result = client_sb.table("agents").select(
                 "id, name, slug, enabled, voice_settings, system_prompt"
-            ).eq("slug", agent_slug).maybe_single().execute()
+            ).eq("slug", agent_slug).limit(1).execute()
+
+        # Handle limit(1) returning a list
+        if agent_result.data and len(agent_result.data) > 0:
+            agent_result.data = agent_result.data[0]
+        else:
+            agent_result.data = None
 
         if not agent_result.data or not agent_result.data.get("enabled", True):
             raise HTTPException(status_code=404, detail="Agent not found or disabled")

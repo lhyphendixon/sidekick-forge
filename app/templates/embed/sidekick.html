@@ -841,11 +841,11 @@
   </script>
   {% endif %}
   <link rel="stylesheet" href="/static/css/citations.css?v=20260210a">
-  <link rel="stylesheet" href="/static/css/widgets.css?v=20260204c">
+  <link rel="stylesheet" href="/static/css/widgets.css?v=20260317b">
   <link rel="stylesheet" href="/static/css/kenburns.css?v=20260206d">
   <script src="/static/js/citations.js?v=20260210a"></script>
   <script src="/static/js/widgets.js?v=20260102c"></script>
-  <script src="/static/js/content-catalyst-widget.js?v=20260204c"></script>
+  <script src="/static/js/content-catalyst-widget.js?v=20260317c"></script>
   <script src="/static/js/lingua-widget.js?v=20260201"></script>
   <script src="/static/js/image-catalyst-widget.js?v=20260226a"></script>
   <script src="/static/js/print-ready-widget.js?v=20260219b"></script>
@@ -1181,6 +1181,7 @@
     const AGENT_ID = "{{ agent_id or '' }}";
     const AGENT_SLUG = "{{ agent_slug }}";
     const AGENT_NAME = {{ agent_name | tojson }};
+    const API_BASE_URL = "{{ api_base_url | default('') }}";  // Server-provided platform URL for API calls
     const SUPABASE_URL = "{{ supabase_url }}";
     const SUPABASE_ANON = "{{ supabase_anon_key }}";
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
@@ -1831,7 +1832,8 @@
         agentName: AGENT_NAME,
         agentSlug: AGENT_SLUG,
         userId: getEffectiveUserId(),
-        conversationId: currentConversationId
+        conversationId: currentConversationId,
+        apiBaseUrl: API_BASE_URL || window.location.origin  // Use server-provided platform URL
       };
 
       // Create widget using registry

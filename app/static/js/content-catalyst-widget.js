@@ -332,7 +332,8 @@ class ContentCatalystWidget extends BaseWidget {
         console.log('[cc-widget] Loading documents for agent:', this.config.agentId);
 
         try {
-            const url = `/api/v1/content-catalyst/documents/${this.config.agentId}?client_id=${this.config.clientId}`;
+            const baseUrl = this.config.apiBaseUrl || window.location.origin;
+            const url = `${baseUrl}/api/v1/content-catalyst/documents/${this.config.agentId}?client_id=${this.config.clientId}`;
             const response = await fetch(url);
 
             if (!response.ok) {
@@ -576,6 +577,7 @@ class ContentCatalystWidget extends BaseWidget {
     async uploadAudioFile() {
         console.log('[cc-widget] uploadAudioFile called');
         console.log('[cc-widget] clientId:', this.config.clientId);
+        console.log('[cc-widget] apiBaseUrl:', this.config.apiBaseUrl);
         console.log('[cc-widget] file:', this.uploadedFile?.name, this.uploadedFile?.size);
 
         this.setPhase('research'); // Show uploading state
@@ -583,7 +585,9 @@ class ContentCatalystWidget extends BaseWidget {
         const formData = new FormData();
         formData.append('file', this.uploadedFile);
 
-        const uploadUrl = `/api/v1/content-catalyst/upload-mp3?client_id=${this.config.clientId}`;
+        // Use apiBaseUrl if provided, otherwise fallback to current origin
+        const baseUrl = this.config.apiBaseUrl || window.location.origin;
+        const uploadUrl = `${baseUrl}/api/v1/content-catalyst/upload-mp3?client_id=${this.config.clientId}`;
         console.log('[cc-widget] Upload URL:', uploadUrl);
 
         try {
@@ -620,7 +624,8 @@ class ContentCatalystWidget extends BaseWidget {
         if (this.config.userId) params.append('user_id', this.config.userId);
         if (this.config.conversationId) params.append('conversation_id', this.config.conversationId);
 
-        const startUrl = `/api/v1/content-catalyst/start?${params}`;
+        const baseUrl = this.config.apiBaseUrl || window.location.origin;
+        const startUrl = `${baseUrl}/api/v1/content-catalyst/start?${params}`;
         console.log('[cc-widget] Start URL:', startUrl);
 
         const response = await fetch(startUrl, {
@@ -666,7 +671,8 @@ class ContentCatalystWidget extends BaseWidget {
                 conversation_id: this.config.conversationId
             });
 
-            const response = await fetch(`/api/v1/content-catalyst/store-result?${params}`, {
+            const baseUrl = this.config.apiBaseUrl || window.location.origin;
+            const response = await fetch(`${baseUrl}/api/v1/content-catalyst/store-result?${params}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

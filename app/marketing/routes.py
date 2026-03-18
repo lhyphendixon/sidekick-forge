@@ -520,6 +520,7 @@ VALID_COUPONS = {
     "STAGING100": {"discount_percent": 100, "message": "100% off - Free checkout!", "staging_only": True},
     "FOUNDER50": {"discount_percent": 50, "message": "50% off - Founder's discount!", "staging_only": False},
     "BETA25": {"discount_percent": 25, "message": "25% off - Beta tester discount!", "staging_only": False},
+    "FNF-COMP": {"discount_percent": 100, "message": "100% off - Friends & Family Comp!", "staging_only": False, "tier_restriction": "adventurer"},
 }
 
 
@@ -535,6 +536,7 @@ async def validate_coupon(request: Request):
     try:
         data = await request.json()
         coupon_code = data.get("coupon_code", "").strip().upper()
+        selected_tier = data.get("tier", "").strip().lower()
 
         if not coupon_code:
             return JSONResponse(
@@ -551,17 +553,26 @@ async def validate_coupon(request: Request):
             )
 
         # Check if coupon is staging-only and we're not on staging
-        is_staging = settings.app_env == "staging" or settings.development_mode
+        is_staging = settings.app_env in ("staging", "development") or settings.debug
         if coupon.get("staging_only") and not is_staging:
             return JSONResponse(
                 content={"valid": False, "error": "This coupon is not valid in production."},
                 status_code=400
             )
 
+        # Check if coupon has a tier restriction
+        tier_restriction = coupon.get("tier_restriction")
+        if tier_restriction and selected_tier and selected_tier != tier_restriction:
+            return JSONResponse(
+                content={"valid": False, "error": f"This coupon is only valid for the {tier_restriction.title()} tier."},
+                status_code=400
+            )
+
         return JSONResponse(content={
             "valid": True,
             "discount_percent": coupon["discount_percent"],
-            "message": coupon["message"]
+            "message": coupon["message"],
+            "tier_restriction": tier_restriction
         })
 
     except Exception as e:
@@ -608,10 +619,18 @@ async def process_free_checkout(
             )
 
         # Check staging-only restriction
-        is_staging = settings.app_env == "staging" or settings.development_mode
+        is_staging = settings.app_env in ("staging", "development") or settings.debug
         if coupon.get("staging_only") and not is_staging:
             return JSONResponse(
                 content={"error": "This coupon is not valid in production."},
+                status_code=400
+            )
+
+        # Check tier restriction
+        tier_restriction = coupon.get("tier_restriction")
+        if tier_restriction and tier.lower() != tier_restriction:
+            return JSONResponse(
+                content={"error": f"This coupon is only valid for the {tier_restriction.title()} tier."},
                 status_code=400
             )
 

@@ -2163,8 +2163,10 @@ async def poll_for_text_response_streaming(
             }
             # Forward widget trigger if present (Content Catalyst, etc.)
             widget = metadata.get("widget")
+            logger.info(f"[poll-streaming] Metadata keys: {list(metadata.keys())}, widget present: {widget is not None}")
             if widget:
                 result["widget"] = widget
+                logger.info(f"[poll-streaming] Widget added to result: {widget.get('type')}")
             yield result
             return
 
