@@ -1358,6 +1358,22 @@ async def client_detail_page(
         else:
             client_dict = client
 
+        # Fetch top-level DB columns not in the Pydantic model (stored as direct columns, not in settings)
+        try:
+            platform_sb = client_service.supabase
+            extra_cols = platform_sb.table("clients").select(
+                "descript_api_key, firecrawl_api_key, uses_platform_keys"
+            ).eq("id", client_id).maybe_single().execute()
+            if extra_cols.data:
+                for col_name in ("descript_api_key", "firecrawl_api_key"):
+                    if extra_cols.data.get(col_name):
+                        client_dict[col_name] = extra_cols.data[col_name]
+                # uses_platform_keys must always be set (even if False)
+                if "uses_platform_keys" in extra_cols.data:
+                    client_dict["uses_platform_keys"] = extra_cols.data["uses_platform_keys"]
+        except Exception as e:
+            logger.warning(f"Could not fetch extra API key columns for client {client_id}: {e}")
+
         # Get agents for this client
         agents = []
         try:
@@ -1476,7 +1492,21 @@ async def agents_page(
         "request": request,
         "agents": agents,
         "clients": clients,
-        "user": admin_user
+        "user": admin_user,
+        "can_create_sidekick": admin_user.get("can_create_sidekick", False),
+        "provisioning_in_progress": False,
+    })
+
+
+@router.get("/wizard/modal", response_class=HTMLResponse)
+async def wizard_modal(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Serve the wizard modal as an HTMX partial."""
+    return templates.TemplateResponse("admin/wizard/wizard_modal.html", {
+        "request": request,
+        "user": admin_user,
     })
 
 
@@ -1869,6 +1899,393 @@ async def admin_asana_oauth_callback(
         "<p>Asana connected successfully. You can close this window.</p>"
     )
     return HTMLResponse(success_markup)
+
+
+# ============================================================================
+# Evernote OAuth Endpoints
+# ============================================================================
+
+def get_evernote_oauth_service():
+    from app.services.evernote_oauth_service import EvernoteOAuthService
+    from app.core.dependencies import get_client_service
+
+    return EvernoteOAuthService(get_client_service())
+
+
+@router.get("/api/clients/{client_id}/evernote/status")
+async def admin_evernote_status(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    service = get_evernote_oauth_service()
+    record = service.get_connection(client_id)
+    if not record:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "updated_at": record.get("updated_at"),
+        "expires_at": record.get("expires_at"),
+    }
+
+
+@router.delete("/api/clients/{client_id}/evernote/disconnect")
+async def admin_evernote_disconnect(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    service = get_evernote_oauth_service()
+    service.disconnect(client_id)
+    return {"success": True}
+
+
+@router.get("/api/evernote/oauth/start")
+async def admin_evernote_oauth_start(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Unable to determine admin user ID for OAuth state.")
+
+    service = get_evernote_oauth_service()
+    try:
+        authorization_url = service.build_authorization_url(client_id, user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"authorization_url": authorization_url}
+
+
+@router.get("/oauth/evernote/callback")
+async def admin_evernote_oauth_callback(
+    request: Request,
+    code: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+):
+    from app.services.evernote_oauth_service import EvernoteOAuthError
+
+    service = get_evernote_oauth_service()
+
+    if error:
+        return HTMLResponse(
+            f"<p>Evernote returned an error: {error}</p>",
+            status_code=400,
+        )
+
+    if not state:
+        return HTMLResponse("<p>Missing state parameter.</p>", status_code=400)
+
+    try:
+        state_data = service.parse_state(state)
+    except EvernoteOAuthError as exc:
+        return HTMLResponse(f"<p>{exc}</p>", status_code=400)
+
+    client_id = state_data.get("client_id")
+    if not client_id:
+        return HTMLResponse("<p>Invalid state payload: missing client reference.</p>", status_code=400)
+
+    if not code:
+        return HTMLResponse("<p>Missing authorization code.</p>", status_code=400)
+
+    try:
+        await service.exchange_code(client_id, code)
+    except EvernoteOAuthError as exc:
+        return HTMLResponse(f"<p>Failed to complete Evernote OAuth: {exc}</p>", status_code=400)
+
+    success_markup = (
+        "<script>"
+        "if(window.opener){window.opener.postMessage('evernote-connected','*');}"
+        "window.close();"
+        "</script>"
+        "<p>Evernote connected successfully. You can close this window.</p>"
+    )
+    return HTMLResponse(success_markup)
+
+
+# ============================================================================
+# Trello Auth Endpoints
+# ============================================================================
+# Trello uses API Key + User Token auth via a redirect-based authorize flow.
+# The token is returned via the return_url as a URL fragment (#token=...).
+# We serve a small HTML page that extracts the token from the fragment and
+# POSTs it to our backend.
+
+def get_trello_auth_service():
+    from app.services.trello_auth_service import TrelloAuthService
+    from app.core.dependencies import get_client_service
+
+    return TrelloAuthService(get_client_service())
+
+
+@router.get("/api/clients/{client_id}/trello/status")
+async def admin_trello_status(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    service = get_trello_auth_service()
+    record = service.get_connection(client_id)
+    if not record:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "member_name": record.get("member_name"),
+        "updated_at": record.get("updated_at"),
+    }
+
+
+@router.delete("/api/clients/{client_id}/trello/disconnect")
+async def admin_trello_disconnect(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    service = get_trello_auth_service()
+    service.disconnect(client_id)
+    return {"success": True}
+
+
+@router.get("/api/trello/oauth/start")
+async def admin_trello_oauth_start(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Unable to determine admin user ID.")
+
+    service = get_trello_auth_service()
+    try:
+        authorization_url = service.build_authorization_url(client_id, user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"authorization_url": authorization_url}
+
+
+@router.get("/oauth/trello/callback")
+async def admin_trello_oauth_callback(request: Request):
+    """Serve a small HTML page that extracts the token from the URL fragment."""
+    # Trello puts the token in the fragment (#token=...), which the browser
+    # doesn't send to the server. So we serve a page with JS that reads the
+    # fragment and POSTs it to our token-save endpoint.
+    html = """<!DOCTYPE html>
+<html><head><title>Connecting Trello...</title></head>
+<body>
+<p id="status">Completing Trello connection...</p>
+<script>
+(function(){
+  var hash = window.location.hash.substring(1);
+  var params = new URLSearchParams(hash);
+  var token = params.get('token');
+  var qs = new URLSearchParams(window.location.search);
+  var state = qs.get('state');
+  if(!token){
+    document.getElementById('status').textContent = 'No token received from Trello.';
+    return;
+  }
+  fetch('/admin/api/trello/oauth/save', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    credentials: 'include',
+    body: JSON.stringify({token: token, state: state})
+  }).then(function(resp){
+    if(resp.ok){
+      if(window.opener){ window.opener.postMessage('trello-connected','*'); }
+      document.getElementById('status').textContent = 'Trello connected! You can close this window.';
+      window.close();
+    } else {
+      resp.text().then(function(t){ document.getElementById('status').textContent = 'Error: ' + t; });
+    }
+  }).catch(function(err){
+    document.getElementById('status').textContent = 'Error: ' + err.message;
+  });
+})();
+</script>
+</body></html>"""
+    return HTMLResponse(html)
+
+
+@router.post("/api/trello/oauth/save")
+async def admin_trello_oauth_save(
+    request: Request,
+):
+    """Receive the Trello token from the callback page JS."""
+    from app.services.trello_auth_service import TrelloAuthError
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body.")
+
+    token = body.get("token", "").strip()
+    state = body.get("state", "").strip()
+
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing token.")
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing state.")
+
+    service = get_trello_auth_service()
+    try:
+        state_data = service.parse_state(state)
+    except TrelloAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    client_id = state_data.get("client_id")
+    if not client_id:
+        raise HTTPException(status_code=400, detail="Invalid state payload.")
+
+    # Optionally verify the token by fetching member info
+    member_name = None
+    try:
+        from app.services.trello_service import TrelloClient
+        tc = TrelloClient(service.api_key, token)
+        me = await tc.get_me()
+        member_name = me.get("fullName") or me.get("username")
+    except Exception as exc:
+        logger.warning("Could not verify Trello token: %s", exc)
+
+    try:
+        service.store_token(client_id, token, member_name=member_name)
+    except TrelloAuthError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"success": True, "member_name": member_name}
+
+
+# ============================================================================
+# Notion Auth Endpoints
+# ============================================================================
+# Notion uses standard OAuth 2.0 Authorization Code Grant.
+# The callback receives a `code` query param which is exchanged server-side
+# for an access token (tokens never expire).
+
+def get_notion_auth_service():
+    from app.services.notion_auth_service import NotionAuthService
+    from app.core.dependencies import get_client_service
+
+    return NotionAuthService(get_client_service())
+
+
+@router.get("/api/clients/{client_id}/notion/status")
+async def admin_notion_status(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    service = get_notion_auth_service()
+    record = service.get_connection(client_id)
+    if not record:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "workspace_name": record.get("workspace_name"),
+        "updated_at": record.get("updated_at"),
+    }
+
+
+@router.delete("/api/clients/{client_id}/notion/disconnect")
+async def admin_notion_disconnect(
+    client_id: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    service = get_notion_auth_service()
+    service.disconnect(client_id)
+    return {"success": True}
+
+
+@router.get("/api/notion/oauth/start")
+async def admin_notion_oauth_start(
+    client_id: str = Query(...),
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    ensure_client_access(client_id, admin_user)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Unable to determine admin user ID.")
+
+    service = get_notion_auth_service()
+    try:
+        authorization_url = service.build_authorization_url(client_id, user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"authorization_url": authorization_url}
+
+
+@router.get("/oauth/notion/callback")
+async def admin_notion_oauth_callback(
+    request: Request,
+    code: str = Query(None),
+    state: str = Query(None),
+    error: str = Query(None),
+):
+    """Handle the Notion OAuth callback (Authorization Code Grant)."""
+    from app.services.notion_auth_service import NotionAuthError
+
+    if error:
+        html = f"""<!DOCTYPE html>
+<html><head><title>Notion Connection Failed</title></head>
+<body><p>Notion authorization failed: {error}</p>
+<script>setTimeout(function(){{ window.close(); }}, 3000);</script>
+</body></html>"""
+        return HTMLResponse(html)
+
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing code or state parameter.")
+
+    service = get_notion_auth_service()
+
+    try:
+        state_data = service.parse_state(state)
+    except NotionAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    client_id = state_data.get("client_id")
+    if not client_id:
+        raise HTTPException(status_code=400, detail="Invalid state payload.")
+
+    try:
+        token_data = await service.exchange_code(code)
+    except NotionAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    access_token = token_data.get("access_token", "")
+    workspace_name = token_data.get("workspace_name")
+    workspace_id = token_data.get("workspace_id")
+    bot_id = token_data.get("bot_id")
+
+    if not access_token:
+        raise HTTPException(status_code=400, detail="No access token received from Notion.")
+
+    try:
+        service.store_connection(
+            client_id,
+            access_token,
+            workspace_name=workspace_name,
+            workspace_id=workspace_id,
+            bot_id=bot_id,
+        )
+    except NotionAuthError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    html = """<!DOCTYPE html>
+<html><head><title>Notion Connected</title></head>
+<body>
+<p id="status">Notion connected! You can close this window.</p>
+<script>
+if(window.opener){ window.opener.postMessage('notion-connected','*'); }
+setTimeout(function(){ window.close(); }, 2000);
+</script>
+</body></html>"""
+    return HTMLResponse(html)
 
 
 # ============================================================================
@@ -2489,6 +2906,7 @@ async def agent_detail(
                 "text_chat_enabled": agent.get("text_chat_enabled", True),
                 "video_chat_enabled": agent.get("video_chat_enabled", False),
                 "sound_settings": agent.get("sound_settings", {}),
+                "email_address": agent.get("email_address") or "",
                 "client_id": client_id,
                 "client_name": client.get("name", "Unknown") if isinstance(client, dict) else (getattr(client, 'name', 'Unknown') if client else "Unknown")
             }
@@ -2539,6 +2957,7 @@ async def agent_detail(
                 "text_chat_enabled": getattr(agent, "text_chat_enabled", True),
                 "video_chat_enabled": getattr(agent, "video_chat_enabled", False),
                 "sound_settings": getattr(agent, "sound_settings", {}),
+                "email_address": getattr(agent, "email_address", "") or "",
                 "client_id": client_id,
                 "client_name": client.name if client else "Unknown"
             }
@@ -5075,6 +5494,96 @@ async def upload_avatar_image(
     }
 
 
+@router.post("/agents/{client_id}/{agent_slug}/toggle-email")
+async def admin_toggle_email(
+    client_id: str,
+    agent_slug: str,
+    request: Request,
+):
+    """Toggle email channel on/off for a sidekick.
+
+    Expects JSON: {"enabled": true/false}
+    When enabling, auto-reserves an @sidekickforge.com address.
+    When disabling, releases the address with a 48-hour hold.
+    """
+    from app.admin.auth import get_admin_user
+    admin_user = await get_admin_user(request)
+    ensure_client_or_global_access(client_id, admin_user)
+
+    try:
+        data = await request.json()
+        enabled = bool(data.get("enabled"))
+
+        from app.core.dependencies import get_agent_service, get_client_service
+        from app.models.client import EmailChannelSettings, ChannelSettings, TelegramChannelSettings
+        from app.models.agent import AgentUpdate
+        from app.services.email_address_service import email_address_service
+
+        agent_service = get_agent_service()
+        agent = await agent_service.get_agent(client_id, agent_slug)
+        if not agent:
+            return JSONResponse(status_code=404, content={"error": "Agent not found"})
+
+        current_email = getattr(agent, "email_address", None)
+        new_email = current_email
+
+        if enabled and not current_email:
+            # Reserve a new email address
+            suggested = await email_address_service.suggest_address(agent_slug)
+            reserved = await email_address_service.reserve(suggested, client_id, agent_slug)
+            if not reserved:
+                return JSONResponse(
+                    status_code=409,
+                    content={"error": f"Could not reserve {suggested}. Try a different slug."},
+                )
+            new_email = suggested
+            logger.info(f"Reserved email {suggested} for {client_id}/{agent_slug}")
+
+        elif not enabled and current_email:
+            # Release the email address (48-hour hold)
+            await email_address_service.release(current_email)
+            new_email = None
+            logger.info(f"Released email {current_email} for {client_id}/{agent_slug}")
+
+        # Build updated channels with email toggle
+        existing_tools = agent.tools_config or {}
+        existing_channels = existing_tools.get("channels", {}) or {}
+
+        # Preserve existing telegram config
+        tg_raw = existing_channels.get("telegram", {})
+        try:
+            tg_cfg = TelegramChannelSettings(**tg_raw) if tg_raw else TelegramChannelSettings()
+        except Exception:
+            tg_cfg = TelegramChannelSettings()
+
+        email_cfg = EmailChannelSettings(enabled=enabled)
+        channels_obj = ChannelSettings(email=email_cfg, telegram=tg_cfg)
+
+        tools_config = dict(existing_tools)
+        tools_config["channels"] = channels_obj.dict()
+
+        update_data = AgentUpdate(
+            tools_config=tools_config,
+            email_address=new_email,
+        )
+        update_data.channels = channels_obj
+
+        updated = await agent_service.update_agent(client_id, agent_slug, update_data)
+
+        if not updated:
+            return JSONResponse(status_code=500, content={"error": "Failed to update agent"})
+
+        return {
+            "success": True,
+            "enabled": enabled,
+            "email_address": new_email or "",
+        }
+
+    except Exception as e:
+        logger.error(f"Error toggling email for {client_id}/{agent_slug}: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @router.post("/agents/{client_id}/{agent_slug}/update")
 async def admin_update_agent(
     client_id: str,
@@ -5250,7 +5759,10 @@ async def admin_update_agent(
         if "webhooks" in data:
             update_data.webhooks = WebhookSettings(**data["webhooks"])
 
-        # Handle channels (Telegram) and enforce token requirement for non-global sidekicks
+        # Handle channels (Email + Telegram) and enforce token requirement for non-global sidekicks
+        from app.models.client import EmailChannelSettings
+        from app.services.email_address_service import email_address_service
+
         existing_tools = {}
         try:
             if hasattr(agent, "tools_config"):
@@ -5261,7 +5773,39 @@ async def admin_update_agent(
             existing_tools = {}
         tools_config = data.get("tools_config") or existing_tools or {}
         channels_payload = data.get("channels") or {}
+
+        # --- Email channel ---
+        email_payload = channels_payload.get("email") if isinstance(channels_payload, dict) else None
+        email_cfg = EmailChannelSettings()
+        if email_payload and isinstance(email_payload, dict):
+            email_enabled = bool(email_payload.get("enabled"))
+            email_cfg = EmailChannelSettings(enabled=email_enabled)
+
+            # Auto-assign email address when enabled and not yet assigned
+            current_email = None
+            if hasattr(agent, "email_address"):
+                current_email = agent.email_address
+            elif isinstance(agent, dict):
+                current_email = agent.get("email_address")
+
+            if email_enabled and not current_email:
+                suggested = await email_address_service.suggest_address(agent_slug)
+                reserved = await email_address_service.reserve(suggested, client_id, agent_slug)
+                if reserved:
+                    update_data.email_address = suggested
+                    logger.info(f"Assigned email address {suggested} to {agent_slug}")
+                else:
+                    logger.warning(f"Could not reserve email address for {agent_slug}")
+
+            # Release email address when disabled
+            if not email_enabled and current_email:
+                await email_address_service.release(current_email)
+                update_data.email_address = None
+                logger.info(f"Released email address {current_email} for {agent_slug}")
+
+        # --- Telegram channel ---
         telegram_payload = channels_payload.get("telegram") if isinstance(channels_payload, dict) else None
+        telegram_cfg = TelegramChannelSettings()
 
         if telegram_payload and isinstance(telegram_payload, dict):
             telegram_enabled = bool(telegram_payload.get("enabled"))
@@ -5285,7 +5829,10 @@ async def admin_update_agent(
                 reply_mode=telegram_payload.get("reply_mode", "auto"),
                 transcribe_voice=bool(telegram_payload.get("transcribe_voice", True)),
             )
-            channels_obj = ChannelSettings(telegram=telegram_cfg)
+
+        # --- Build combined channels object ---
+        if email_payload or telegram_payload:
+            channels_obj = ChannelSettings(email=email_cfg, telegram=telegram_cfg)
             channels_dict = channels_obj.dict()
             if not isinstance(tools_config, dict):
                 tools_config = {}
@@ -5661,7 +6208,8 @@ async def admin_update_client(
                 novita_api_key=form.get("novita_api_key") or (current_api_keys.novita_api_key if hasattr(current_api_keys, 'novita_api_key') else current_api_keys.get('novita_api_key') if isinstance(current_api_keys, dict) else None),
                 cohere_api_key=form.get("cohere_api_key") or (current_api_keys.cohere_api_key if hasattr(current_api_keys, 'cohere_api_key') else current_api_keys.get('cohere_api_key') if isinstance(current_api_keys, dict) else None),
                 siliconflow_api_key=form.get("siliconflow_api_key") or (current_api_keys.siliconflow_api_key if hasattr(current_api_keys, 'siliconflow_api_key') else current_api_keys.get('siliconflow_api_key') if isinstance(current_api_keys, dict) else None),
-                jina_api_key=form.get("jina_api_key") or (current_api_keys.jina_api_key if hasattr(current_api_keys, 'jina_api_key') else current_api_keys.get('jina_api_key') if isinstance(current_api_keys, dict) else None)
+                jina_api_key=form.get("jina_api_key") or (current_api_keys.jina_api_key if hasattr(current_api_keys, 'jina_api_key') else current_api_keys.get('jina_api_key') if isinstance(current_api_keys, dict) else None),
+                descript_api_key=form.get("descript_api_key") or (current_api_keys.descript_api_key if hasattr(current_api_keys, 'descript_api_key') else current_api_keys.get('descript_api_key') if isinstance(current_api_keys, dict) else None)
             ),
             embedding=EmbeddingSettings(
                 provider=form.get("embedding_provider", current_embedding.provider if hasattr(current_embedding, 'provider') else current_embedding.get('provider', 'openai') if current_embedding else 'openai'),
@@ -5709,7 +6257,25 @@ async def admin_update_client(
         
         # Update client
         updated_client = await client_service.update_client(client_id, update_data)
-        
+
+        # Persist top-level DB columns not covered by the Pydantic model
+        direct_col_updates = {}
+        uses_platform_keys_val = form.get("uses_platform_keys")
+        if uses_platform_keys_val is not None:
+            direct_col_updates["uses_platform_keys"] = uses_platform_keys_val.lower() == "true"
+        descript_key_val = form.get("descript_api_key")
+        if descript_key_val is not None:
+            direct_col_updates["descript_api_key"] = descript_key_val or None
+        firecrawl_key_val = form.get("firecrawl_api_key")
+        if firecrawl_key_val is not None:
+            direct_col_updates["firecrawl_api_key"] = firecrawl_key_val or None
+        if direct_col_updates:
+            try:
+                client_service.supabase.table("clients").update(direct_col_updates).eq("id", client_id).execute()
+                logger.info(f"Updated direct columns for client {client_id}: {list(direct_col_updates.keys())}")
+            except Exception as dc_err:
+                logger.warning(f"Failed to update direct columns for client {client_id}: {dc_err}")
+
         # Debug: Log the API keys after update
         logger.info(f"After update - cartesia={updated_client.settings.api_keys.cartesia_api_key if updated_client.settings.api_keys else 'None'}, siliconflow={updated_client.settings.api_keys.siliconflow_api_key if updated_client.settings.api_keys else 'None'}")
         

@@ -726,13 +726,14 @@ class ContentCatalystService:
         """Get run details from database"""
         try:
             platform_sb = await self.get_platform_supabase()
-            result = platform_sb.rpc(
-                "get_content_catalyst_run",
-                {"p_run_id": run_id}
-            ).execute()
+            result = platform_sb.table("content_catalyst_runs") \
+                .select("*") \
+                .eq("id", run_id) \
+                .limit(1) \
+                .execute()
 
             if result.data:
-                return result.data[0] if isinstance(result.data, list) else result.data
+                return result.data[0]
             return None
 
         except Exception as e:
@@ -1433,6 +1434,7 @@ Write the article now, matching the example voice:"""
     ) -> IntegrityReport:
         """
         Integrity Officer phase - Verifies accuracy and sources.
+        Uses Perplexity to fact-check claims that can't be verified against gathered sources.
         """
         start_time = datetime.now(timezone.utc)
 
@@ -1450,12 +1452,23 @@ Write the article now, matching the example voice:"""
 
         prompt = f"""You are an Integrity Officer reviewing articles for factual accuracy.
 
-Review both article drafts against the source materials and identify:
-1. Any claims not supported by the provided sources
-2. Potential factual errors or misrepresentations
-3. Sources that are properly cited
-4. Sources that cannot be verified
-5. Overall factual accuracy assessment
+Your job is to flag ONLY objectively verifiable factual claims that may be incorrect or misleading.
+
+DO NOT flag any of the following:
+- Figures of speech, metaphors, hyperbole, or rhetorical devices (e.g. "I've never felt more alive", "this blew my mind", "a goldmine of opportunity")
+- Personal opinions, feelings, or subjective experiences of the speaker/author
+- Anecdotes or first-person stories — these are the speaker's own account
+- Commonly understood exaggerations used for emphasis
+- Predictions, speculation, or forward-looking statements clearly framed as opinion
+- Stylistic or creative writing choices
+
+ONLY flag claims that:
+- State specific facts, statistics, dates, or numbers that could be wrong
+- Attribute statements or positions to named people/organizations incorrectly
+- Make verifiable scientific, historical, or legal assertions that may be inaccurate
+- Misrepresent data or research findings
+
+Review both article drafts against the source materials.
 
 ARTICLE 1:
 {draft_1.content[:3000]}
@@ -1469,16 +1482,18 @@ SOURCE MATERIALS:
 Respond in JSON format:
 {{
     "draft_1_issues": [
-        {{"claim": "the claim made", "issue": "why it's problematic", "severity": "low|medium|high"}}
+        {{"claim": "the specific factual claim", "issue": "why this may be factually incorrect", "severity": "low|medium|high"}}
     ],
     "draft_2_issues": [...],
-    "sources_verified": ["list of claims that are well-sourced"],
-    "sources_unverifiable": ["claims that lack clear source support"],
+    "sources_verified": ["list of factual claims that are well-sourced"],
+    "sources_unverifiable": ["factual claims that lack clear source support"],
     "factual_accuracy_score": 0.85,
     "recommendations": [
-        "Specific recommendation to improve accuracy"
+        "Specific recommendation to improve factual accuracy"
     ]
-}}"""
+}}
+
+Remember: if it's not a verifiable factual claim, do NOT include it. Err on the side of fewer, higher-quality flags."""
 
         try:
             content = await self._llm_chat(prompt, max_tokens=8000)
@@ -1508,6 +1523,35 @@ Respond in JSON format:
                     else:
                         raise ValueError(f"Failed to parse integrity report JSON: {je}")
 
+                # Use Perplexity to ground-truth ONLY flagged issues
+                all_issues = report_data.get("draft_1_issues", []) + report_data.get("draft_2_issues", [])
+
+                if self.perplexity_api_key and all_issues:
+                    if progress_callback:
+                        progress_callback("integrity", "verifying", "Searching for ground truth on flagged claims...")
+
+                    verified_issues = await self._perplexity_verify_claims(all_issues)
+
+                    if verified_issues:
+                        # Enrich issues and DROP false flags where Perplexity confirms accuracy
+                        for issues_list_key in ("draft_1_issues", "draft_2_issues"):
+                            kept_issues = []
+                            for issue in report_data.get(issues_list_key, []):
+                                claim = issue.get("claim", "")
+                                if claim in verified_issues:
+                                    verification = verified_issues[claim]
+                                    result = verification.get("result", "").upper()
+                                    if result == "ACCURATE":
+                                        # The flag was wrong — Perplexity confirmed the claim is true. Drop it.
+                                        logger.info(f"Integrity: dropping false flag, Perplexity confirmed accurate: {claim[:80]}")
+                                        continue
+                                    issue["perplexity_verified"] = True
+                                    issue["verification_result"] = verification.get("result", "")
+                                    issue["verification_explanation"] = verification.get("explanation", "")
+                                    issue["verification_sources"] = verification.get("sources", [])
+                                kept_issues.append(issue)
+                            report_data[issues_list_key] = kept_issues
+
                 duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
                 logger.info(f"Integrity phase completed in {duration_ms:.1f}ms")
 
@@ -1525,6 +1569,122 @@ Respond in JSON format:
         except Exception as e:
             logger.error(f"Integrity phase failed: {e}")
             raise
+
+    async def _perplexity_verify_claims(
+        self,
+        issues: List[Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Use Perplexity to search for the ground truth on claims flagged by the integrity agent.
+        The goal is to find what is actually true — NOT to confirm the agent's doubt.
+        Claims proven accurate by Perplexity will be dropped as false flags.
+        Returns a dict mapping claim text -> verification result.
+        """
+        if not self.perplexity_api_key:
+            return {}
+
+        claims_to_verify = []
+        for issue in issues:
+            claim = issue.get("claim", "")
+            if claim:
+                claims_to_verify.append(claim)
+
+        if not claims_to_verify:
+            return {}
+
+        # Batch verify — send all claims in a single Perplexity request
+        claims_text = "\n".join(f"{i+1}. {c}" for i, c in enumerate(claims_to_verify[:10]))
+        verify_prompt = f"""I need you to determine the truth about each of the following claims. An AI reviewer flagged these as potentially inaccurate, but the reviewer may have been wrong.
+
+Your job is to search for the actual facts — do NOT assume the claims are wrong. Many of them may turn out to be perfectly accurate.
+
+For each claim, research what is actually true and determine:
+- ACCURATE: The claim is factually correct. The AI reviewer was wrong to flag it.
+- INACCURATE: The claim is genuinely wrong. Explain what the correct fact is.
+- UNVERIFIABLE: Not enough information available to confirm or deny.
+
+You MUST provide source URLs for every determination.
+
+Claims to research:
+{claims_text}
+
+Respond in JSON format:
+{{
+    "verifications": [
+        {{
+            "claim": "the original claim",
+            "result": "ACCURATE|INACCURATE|UNVERIFIABLE",
+            "explanation": "What is actually true, with evidence. If ACCURATE, briefly confirm the fact. If INACCURATE, state the correct information.",
+            "sources": ["https://example.com/source1", "https://example.com/source2"]
+        }}
+    ]
+}}"""
+
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(
+                    "https://api.perplexity.ai/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.perplexity_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "sonar-pro",
+                        "messages": [
+                            {"role": "user", "content": verify_prompt}
+                        ],
+                    }
+                )
+
+                if response.status_code != 200:
+                    logger.error(f"Perplexity verification failed: {response.status_code}")
+                    return {}
+
+                data = response.json()
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                citations = data.get("citations", [])
+                logger.info(f"Perplexity returned {len(citations)} citations: {citations[:5]}")
+
+                # Parse the verification response
+                cleaned = self._clean_llm_json(content)
+                json_match = re.search(r'\{[\s\S]*\}', cleaned)
+                if json_match:
+                    try:
+                        verify_data = json.loads(json_match.group())
+                    except json.JSONDecodeError:
+                        repaired = self._repair_truncated_json(json_match.group())
+                        if repaired:
+                            verify_data = json.loads(repaired)
+                        else:
+                            return {}
+
+                    results = {}
+                    for v in verify_data.get("verifications", []):
+                        claim = v.get("claim", "")
+                        # Match to original claims (fuzzy match by checking containment)
+                        matched_claim = None
+                        for orig in claims_to_verify:
+                            if orig.lower() in claim.lower() or claim.lower() in orig.lower():
+                                matched_claim = orig
+                                break
+                        if matched_claim:
+                            # Perplexity returns sources in the top-level citations array;
+                            # the LLM JSON may echo them or may reference them by index.
+                            # Prefer inline sources if they look like URLs, else use API citations.
+                            inline_sources = [s for s in v.get("sources", []) if isinstance(s, str) and s.startswith("http")]
+                            sources = inline_sources if inline_sources else citations[:3]
+                            logger.info(f"Perplexity verification for '{claim[:60]}': result={v.get('result')}, inline_sources={len(inline_sources)}, using={len(sources)} sources")
+                            results[matched_claim] = {
+                                "result": v.get("result", "UNVERIFIABLE"),
+                                "explanation": v.get("explanation", ""),
+                                "sources": sources,
+                            }
+                    return results
+
+        except Exception as e:
+            logger.error(f"Perplexity claim verification failed: {e}")
+
+        return {}
 
     # =========================================================================
     # PHASE 5: FINAL POLISHER
@@ -1659,12 +1819,13 @@ Output the polished article matching the example voice:"""
         session_id: Optional[str] = None,
         wordpress_urls: Optional[List[str]] = None,
         progress_callback: Optional[callable] = None,
-    ) -> Tuple[str, str, str]:
+    ) -> Dict[str, Any]:
         """
-        Run the complete Content Catalyst pipeline.
+        Run the Content Catalyst pipeline through integrity phase, then pause for human review.
 
         Returns:
-            Tuple of (run_id, article_1, article_2)
+            Dict with run_id, integrity_report, and draft data for review.
+            After review, call resume_from_polishing() to complete.
         """
         try:
             # Create run if not provided
@@ -1752,10 +1913,119 @@ Output the polished article matching the example voice:"""
                 research=research,
                 progress_callback=progress_callback,
             )
+            # Pause here for human review — return integrity report
+            # The frontend will display issues and let the user decide correct/ignore
+            # Then resume via resume_from_polishing()
+            logger.info(f"Content Catalyst run {run_id} paused for integrity review")
+
             await self.update_phase(
                 run_id=run_id,
                 phase=ContentCatalystPhase.INTEGRITY,
                 output=asdict(integrity_report),
+                status="awaiting_review",
+            )
+
+            # Extract transcript if source was audio
+            transcript = None
+            for src in research.session_sources:
+                if src.get("type") == "mp3_transcript":
+                    transcript = src.get("content")
+                    break
+
+            return {
+                "run_id": run_id,
+                "status": "awaiting_review",
+                "integrity_report": asdict(integrity_report),
+                "draft_1": {"content": draft_1.content, "word_count": draft_1.word_count},
+                "draft_2": {"content": draft_2.content, "word_count": draft_2.word_count},
+                "transcript": transcript,
+            }
+
+        except Exception as e:
+            logger.error(f"Content Catalyst pipeline failed: {e}")
+            if run_id:
+                await self.update_phase(
+                    run_id=run_id,
+                    phase=ContentCatalystPhase.INPUT,
+                    output={"error": str(e)},
+                    status="failed",
+                    error=str(e),
+                )
+            raise
+
+    async def resume_from_polishing(
+        self,
+        run_id: str,
+        user_decisions: List[Dict[str, Any]],
+        progress_callback: Optional[callable] = None,
+    ) -> Tuple[str, str, str]:
+        """
+        Resume the pipeline after human integrity review.
+
+        user_decisions: list of {"claim": str, "action": "correct"|"ignore", "draft": 1|2}
+        Items with action="correct" are kept as issues for the polisher to fix.
+        Items with action="ignore" are removed.
+
+        Returns:
+            Tuple of (run_id, article_1, article_2)
+        """
+        try:
+            # Load run data from DB
+            run = await self.get_run(run_id)
+            if not run:
+                raise ValueError(f"Run {run_id} not found")
+
+            # Reconstruct drafts and integrity report from stored phase data
+            draft_output = run.get("draft_output", {})
+            integrity_output = run.get("integrity_output", {})
+
+            d1 = draft_output.get("draft_1", {})
+            d2 = draft_output.get("draft_2", {})
+            draft_1 = ArticleDraft(
+                title=d1.get("title", ""),
+                content=d1.get("content", ""),
+                word_count=d1.get("word_count", 0),
+                sources_cited=d1.get("sources_cited", []),
+            )
+            draft_2 = ArticleDraft(
+                title=d2.get("title", ""),
+                content=d2.get("content", ""),
+                word_count=d2.get("word_count", 0),
+                sources_cited=d2.get("sources_cited", []),
+            )
+
+            # Apply user decisions: filter issues based on correct/ignore
+            # Build sets of ignored claims for fast lookup
+            ignored_claims = set()
+            for decision in user_decisions:
+                if decision.get("action") == "ignore":
+                    ignored_claims.add(decision.get("claim", ""))
+
+            # Filter issues — keep only those the user wants corrected (or not explicitly ignored)
+            draft_1_issues = [
+                issue for issue in integrity_output.get("draft_1_issues", [])
+                if issue.get("claim", "") not in ignored_claims
+            ]
+            draft_2_issues = [
+                issue for issue in integrity_output.get("draft_2_issues", [])
+                if issue.get("claim", "") not in ignored_claims
+            ]
+
+            integrity_report = IntegrityReport(
+                draft_1_issues=draft_1_issues,
+                draft_2_issues=draft_2_issues,
+                sources_verified=integrity_output.get("sources_verified", []),
+                sources_unverifiable=integrity_output.get("sources_unverifiable", []),
+                factual_accuracy_score=integrity_output.get("factual_accuracy_score", 0.0),
+                recommendations=integrity_output.get("recommendations", []),
+            )
+
+            # Reconstruct config from run data
+            config = ContentCatalystConfig(
+                source_type=SourceType(run.get("source_type", "text")),
+                source_content=run.get("source_content", ""),
+                target_word_count=run.get("target_word_count", 1500),
+                style_prompt=run.get("style_prompt"),
             )
 
             # Phase 5: Polishing
@@ -1776,15 +2046,15 @@ Output the polished article matching the example voice:"""
             if progress_callback:
                 progress_callback("complete", "done", "Content Catalyst complete!")
 
-            logger.info(f"Content Catalyst run {run_id} completed successfully")
+            logger.info(f"Content Catalyst run {run_id} completed successfully after review")
             return run_id, article_1, article_2
 
         except Exception as e:
-            logger.error(f"Content Catalyst pipeline failed: {e}")
+            logger.error(f"Resume from polishing failed: {e}")
             if run_id:
                 await self.update_phase(
                     run_id=run_id,
-                    phase=ContentCatalystPhase.INPUT,
+                    phase=ContentCatalystPhase.POLISHING,
                     output={"error": str(e)},
                     status="failed",
                     error=str(e),

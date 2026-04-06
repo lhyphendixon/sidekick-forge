@@ -71,6 +71,10 @@ def build_prediction_market_tool(
     }
 
     async def _invoke(**kwargs: Any) -> str:
+        # v1.5.0 RawFunctionTool passes all LLM args inside a single 'raw_arguments' dict
+        raw_args = kwargs.get("raw_arguments")
+        if isinstance(raw_args, dict):
+            kwargs = {**kwargs, **raw_args}
         query = kwargs.get("query", "")
         limit = kwargs.get("limit", default_limit)
 

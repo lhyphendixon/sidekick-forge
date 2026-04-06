@@ -188,7 +188,9 @@ class APIKeyLoader:
                 'jina_api_key',
                 'perplexity_api_key',
                 # Additional
-                'anthropic_api_key'
+                'anthropic_api_key',
+                # Video/Media providers
+                'descript_api_key',
             ]
             
             columns_str = ', '.join(api_key_columns)

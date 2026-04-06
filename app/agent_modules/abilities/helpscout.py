@@ -979,6 +979,10 @@ def build_helpscout_tool(
     )
 
     async def _invoke(**kwargs: Any) -> Dict[str, Any]:
+        # v1.5.0 RawFunctionTool passes all LLM args inside a single 'raw_arguments' dict
+        raw_args = kwargs.get("raw_arguments")
+        if isinstance(raw_args, dict):
+            kwargs = {**kwargs, **raw_args}
         metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
         user_inquiry = kwargs.get("user_inquiry")
 

@@ -40,6 +40,8 @@
 
     {% set channels = agent.get('tools_config', {}).get('channels', {}) if agent.get('tools_config') else {} %}
     {% set telegram = channels.get('telegram', {}) %}
+    {% set email_channel = channels.get('email', {}) %}
+    {% set agent_email_address = agent.get('email_address', '') or '' %}
     {% set personality_engine = agent_personality if agent_personality else {} %}
     {% set is_global_agent = agent.client_id == 'global' %}
 
@@ -193,84 +195,147 @@
             </div>
         </div>
 
-        <!-- Channels (Coming Soon) -->
-        <div class="relative mb-6">
-            <div class="absolute inset-0 z-10 flex items-center justify-center">
-                <span class="bg-dark-bg/80 text-brand-teal border border-brand-teal/40 px-4 py-2 rounded-full text-sm font-semibold tracking-wide">Coming Soon</span>
-            </div>
-        <div class="bg-dark-surface rounded-lg border border-dark-border opacity-40 pointer-events-none">
-            <div class="border-b border-dark-border px-6 py-4 flex items-center justify-between">
+        <!-- Channels -->
+        <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
+            <div class="border-b border-dark-border px-6 py-4">
                 <h5 class="text-lg font-semibold text-dark-text">Channels</h5>
-                <span class="text-xs text-dark-text-secondary">Telegram</span>
             </div>
-            <div class="p-6 space-y-4">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="flex items-center space-x-2">
-                        <input type="checkbox" id="telegramEnabled"
-                               {% if telegram.get('enabled') %}checked{% endif %}
-                               {% if is_global_agent %}disabled{% endif %}
-                               class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal">
-                        <label for="telegramEnabled" class="text-sm text-dark-text">
-                            Enable Telegram for this sidekick
-                            {% if is_global_agent %}<span class="text-xs text-dark-text-secondary">(uses platform default bot)</span>{% endif %}
-                        </label>
-                    </div>
-                    <div class="flex items-center space-x-2">
-                        <input type="checkbox" id="telegramTranscribeVoice" {% if telegram.get('transcribe_voice', True) %}checked{% endif %} class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal">
-                        <label for="telegramTranscribeVoice" class="text-sm text-dark-text">Transcribe inbound voice notes</label>
-                    </div>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-dark-text mb-2">Bot Token</label>
-                        <div class="relative">
-                            <input type="password" id="telegramBotToken"
-                                   value="{{ telegram.get('bot_token', '') }}"
-                                   {% if is_global_agent %}disabled placeholder="Global sidekicks use platform bot token"{% else %}placeholder="Required when enabled"{% endif %}
-                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
-                            <button type="button" onclick="togglePassword('telegramBotToken')"
-                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
-                                <i class="bi bi-eye"></i>
-                            </button>
+            <div class="p-6 space-y-6">
+
+                <!-- Email Channel -->
+                <div id="emailChannelCard" class="bg-dark-elevated border border-dark-border rounded-lg p-5">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center space-x-3">
+                            <div class="h-10 w-10 rounded-full bg-brand-teal/20 border border-brand-teal/40 flex items-center justify-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-brand-teal" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <span class="text-sm font-semibold text-dark-text">Email</span>
+                                <p class="text-xs text-dark-text-secondary">Allow users to email this sidekick directly.</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span id="emailToggleStatus" class="text-xs text-dark-text-secondary"></span>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="emailEnabled" class="sr-only peer"
+                                       onchange="toggleEmailChannel(this.checked)"
+                                       {% if email_channel.get('enabled') %}checked{% endif %}>
+                                <div class="w-11 h-6 bg-dark-border rounded-full peer peer-checked:bg-brand-teal peer-focus:ring-2 peer-focus:ring-brand-teal/40 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                            </label>
                         </div>
                     </div>
-                    <div>
-                        <label class="block text-sm font-medium text-dark-text mb-2">Webhook Secret (optional)</label>
-                        <div class="relative">
-                            <input type="password" id="telegramWebhookSecret"
-                                   value="{{ telegram.get('webhook_secret', '') }}"
-                                   placeholder="Used to identify this sidekick's bot"
-                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
-                            <button type="button" onclick="togglePassword('telegramWebhookSecret')"
-                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
-                                <i class="bi bi-eye"></i>
-                            </button>
+                    <div id="emailAddressRow" class="flex items-center space-x-3" style="{% if not agent_email_address %}display:none{% endif %}">
+                        <div class="flex-1">
+                            <label class="block text-xs font-medium text-dark-text-secondary mb-1">Sidekick Email Address</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="text" id="emailAddress" readonly
+                                       value="{{ agent_email_address }}"
+                                       placeholder="No email address assigned"
+                                       class="flex-1 px-3 py-2 bg-dark-bg border border-dark-border text-dark-text text-sm rounded-md focus:outline-none cursor-default">
+                                <button type="button" id="emailCopyBtn" onclick="copyEmailAddress()" title="Copy email address"
+                                        class="px-3 py-2 bg-dark-bg border border-dark-border text-dark-text-secondary hover:text-brand-teal rounded-md transition-colors">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-dark-text mb-2">Reply Mode</label>
-                        <select id="telegramReplyMode"
-                                class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
-                            <option value="auto" {% if telegram.get('reply_mode', 'auto') == 'auto' %}selected{% endif %}>Auto (voice replies to voice)</option>
-                            <option value="text" {% if telegram.get('reply_mode') == 'text' %}selected{% endif %}>Always text</option>
-                            <option value="voice_on_voice" {% if telegram.get('reply_mode') == 'voice_on_voice' %}selected{% endif %}>Voice replies only when user sends voice</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-dark-text mb-2">Default Sidekick Slug</label>
-                        <input type="text" id="telegramDefaultAgentSlug" value="{{ telegram.get('default_agent_slug', agent.slug) }}"
-                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
-                        <p class="text-xs text-dark-text-secondary mt-1">Used when routing conversations for this bot.</p>
+                    <div id="emailHintRow" class="mt-2" style="{% if agent_email_address %}display:none{% endif %}">
+                        <p class="text-xs text-dark-text-secondary">Enable to assign <strong>{{ agent.slug }}@mail.sidekickforge.com</strong></p>
                     </div>
                 </div>
-                <p class="text-xs text-dark-text-secondary">
-                    Each sidekick must use its own bot token when Telegram is enabled. Global sidekicks always use the platform default bot.
-                </p>
+
+                <!-- Telegram Channel (Coming Soon) -->
+                <div class="relative">
+                    <div class="absolute inset-0 z-10 flex items-center justify-center">
+                        <span class="bg-dark-bg/80 text-brand-teal border border-brand-teal/40 px-4 py-2 rounded-full text-sm font-semibold tracking-wide">Coming Soon</span>
+                    </div>
+                    <div class="bg-dark-elevated border border-dark-border rounded-lg p-5 opacity-40 pointer-events-none">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center space-x-3">
+                                <div class="h-10 w-10 rounded-full bg-sky-500/20 border border-sky-400/40 flex items-center justify-center">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" class="h-6 w-6 text-sky-400 fill-current">
+                                        <path d="M120 0C53.8 0 0 53.8 0 120s53.8 120 120 120 120-53.8 120-120S186.2 0 120 0zm58.3 83.7l-19.6 92.4c-1.5 6.7-5.7 8.3-11.5 5.2l-31.8-23.5-15.3 14.8c-1.7 1.7-3.1 3.1-6.3 3.1l2.3-32.6 59.4-53.6c2.6-2.3-0.6-3.6-4-1.3l-73.5 46.2-31.7-9.9c-6.9-2.2-7.1-6.9 1.5-10.2l124.1-47.8c5.7-2.1 10.7 1.3 8.9 10.1z"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <span class="text-sm font-semibold text-dark-text">Telegram</span>
+                                    <p class="text-xs text-dark-text-secondary">Connect a Telegram bot to this sidekick.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="flex items-center space-x-2">
+                                <input type="checkbox" id="telegramEnabled"
+                                       {% if telegram.get('enabled') %}checked{% endif %}
+                                       {% if is_global_agent %}disabled{% endif %}
+                                       class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal">
+                                <label for="telegramEnabled" class="text-sm text-dark-text">
+                                    Enable Telegram for this sidekick
+                                    {% if is_global_agent %}<span class="text-xs text-dark-text-secondary">(uses platform default bot)</span>{% endif %}
+                                </label>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <input type="checkbox" id="telegramTranscribeVoice" {% if telegram.get('transcribe_voice', True) %}checked{% endif %} class="w-4 h-4 text-brand-teal border-dark-border rounded focus:ring-brand-teal">
+                                <label for="telegramTranscribeVoice" class="text-sm text-dark-text">Transcribe inbound voice notes</label>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                            <div>
+                                <label class="block text-sm font-medium text-dark-text mb-2">Bot Token</label>
+                                <div class="relative">
+                                    <input type="password" id="telegramBotToken"
+                                           value="{{ telegram.get('bot_token', '') }}"
+                                           {% if is_global_agent %}disabled placeholder="Global sidekicks use platform bot token"{% else %}placeholder="Required when enabled"{% endif %}
+                                           class="w-full px-3 py-2 pr-10 bg-dark-bg border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                                    <button type="button" onclick="togglePassword('telegramBotToken')"
+                                            class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                        <i class="bi bi-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-dark-text mb-2">Webhook Secret (optional)</label>
+                                <div class="relative">
+                                    <input type="password" id="telegramWebhookSecret"
+                                           value="{{ telegram.get('webhook_secret', '') }}"
+                                           placeholder="Used to identify this sidekick's bot"
+                                           class="w-full px-3 py-2 pr-10 bg-dark-bg border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                                    <button type="button" onclick="togglePassword('telegramWebhookSecret')"
+                                            class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                        <i class="bi bi-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                            <div>
+                                <label class="block text-sm font-medium text-dark-text mb-2">Reply Mode</label>
+                                <select id="telegramReplyMode"
+                                        class="w-full px-3 py-2 bg-dark-bg border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                                    <option value="auto" {% if telegram.get('reply_mode', 'auto') == 'auto' %}selected{% endif %}>Auto (voice replies to voice)</option>
+                                    <option value="text" {% if telegram.get('reply_mode') == 'text' %}selected{% endif %}>Always text</option>
+                                    <option value="voice_on_voice" {% if telegram.get('reply_mode') == 'voice_on_voice' %}selected{% endif %}>Voice replies only when user sends voice</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-dark-text mb-2">Default Sidekick Slug</label>
+                                <input type="text" id="telegramDefaultAgentSlug" value="{{ telegram.get('default_agent_slug', agent.slug) }}"
+                                       class="w-full px-3 py-2 bg-dark-bg border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                                <p class="text-xs text-dark-text-secondary mt-1">Used when routing conversations for this bot.</p>
+                            </div>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-4">
+                            Each sidekick must use its own bot token when Telegram is enabled. Global sidekicks always use the platform default bot.
+                        </p>
+                    </div>
+                </div>
+
             </div>
         </div>
-        </div><!-- end Coming Soon wrapper -->
 
         <!-- System Prompt -->
         <div class="bg-dark-surface rounded-lg border border-dark-border mb-6">
@@ -1332,22 +1397,39 @@
 <div id="toolSettingsModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
     <div class="fixed inset-0 bg-black/60 backdrop-blur-sm modal-backdrop cursor-pointer" onclick="closeToolSettingsModal()"></div>
     <div class="relative min-h-screen flex items-center justify-center p-4 pointer-events-none">
-        <div class="relative bg-dark-surface border border-dark-border rounded-xl shadow-2xl w-full max-w-md overflow-hidden pointer-events-auto" onclick="event.stopPropagation()">
-            <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
+        <div class="relative bg-dark-surface border border-dark-border rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden pointer-events-auto flex flex-col" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border flex-shrink-0">
                 <div class="flex items-center gap-3">
                     <div class="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-500 to-orange-500 flex items-center justify-center">
                         <i class="bi bi-gear text-white"></i>
                     </div>
                     <div>
                         <h2 id="toolSettingsModalTitle" class="text-lg font-semibold text-dark-text">Ability Settings</h2>
-                        <p class="text-xs text-dark-text-secondary">Configure visibility and access</p>
+                        <p class="text-xs text-dark-text-secondary">Configure this ability</p>
                     </div>
                 </div>
                 <button onclick="closeToolSettingsModal()" class="text-dark-text-secondary hover:text-dark-text p-2 rounded-lg hover:bg-dark-elevated transition-colors">
                     <i class="bi bi-x-lg"></i>
                 </button>
             </div>
-            <div class="p-6 space-y-4">
+            <div class="p-6 space-y-5 overflow-y-auto flex-1">
+                <!-- Type-specific configuration fields -->
+                <div id="ts_typeFields"></div>
+
+                <!-- Description -->
+                <div>
+                    <label class="text-sm text-dark-text font-medium">Description</label>
+                    <textarea id="ts_description" rows="2" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" placeholder="Ability description..."></textarea>
+                </div>
+
+                <!-- Hidden Instructions -->
+                <div>
+                    <label class="text-sm text-dark-text font-medium">Hidden Instructions <span class="text-dark-text-secondary font-normal">(optional)</span></label>
+                    <textarea id="ts_hidden_instructions" rows="3" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder="System-level instructions appended to the agent's prompt when this ability is active..."></textarea>
+                    <p class="text-xs text-dark-text-secondary mt-1">These instructions are injected into the agent's system prompt. The user never sees them.</p>
+                </div>
+
+                <!-- Admin Only toggle -->
                 <label class="flex items-center gap-3 cursor-pointer">
                     <input type="checkbox" id="toolSettingsAdminOnly" class="w-5 h-5 rounded border-dark-border text-yellow-500 focus:ring-yellow-500 bg-dark-elevated">
                     <div>
@@ -1356,7 +1438,7 @@
                     </div>
                 </label>
             </div>
-            <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border bg-dark-elevated/50">
+            <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border bg-dark-elevated/50 flex-shrink-0">
                 <button onclick="closeToolSettingsModal()" class="px-4 py-2 text-dark-text-secondary hover:text-dark-text transition-colors">Cancel</button>
                 <button onclick="saveToolSettings()" class="btn-primary px-4 py-2 rounded-lg flex items-center">
                     <i class="bi bi-check-lg mr-2"></i> Save
@@ -1525,6 +1607,68 @@ const sttModelOptions = {
     "deepgram": [{ value: "nova-2", label: "Nova 2 (Deepgram)" }],
     "cartesia": [{ value: "ink-whisper", label: "ink-whisper (Cartesia)" }]
 };
+
+function copyEmailAddress() {
+    const field = document.getElementById('emailAddress');
+    if (field && field.value) {
+        navigator.clipboard.writeText(field.value).then(() => {
+            showNotification('success', 'Email address copied to clipboard');
+        });
+    }
+}
+
+async function toggleEmailChannel(enabled) {
+    const toggle = document.getElementById('emailEnabled');
+    const statusEl = document.getElementById('emailToggleStatus');
+    const addressRow = document.getElementById('emailAddressRow');
+    const hintRow = document.getElementById('emailHintRow');
+    const addressInput = document.getElementById('emailAddress');
+
+    // Show saving state
+    toggle.disabled = true;
+    statusEl.textContent = enabled ? 'Activating...' : 'Disabling...';
+
+    try {
+        const resp = await fetch(`/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/toggle-email`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({enabled: enabled})
+        });
+        const result = await resp.json();
+
+        if (!resp.ok || result.error) {
+            // Revert toggle
+            toggle.checked = !enabled;
+            showNotification('error', result.error || 'Failed to toggle email');
+            statusEl.textContent = '';
+            return;
+        }
+
+        // Update UI with the result
+        if (result.email_address) {
+            addressInput.value = result.email_address;
+            addressRow.style.display = '';
+            hintRow.style.display = 'none';
+        } else {
+            addressInput.value = '';
+            addressRow.style.display = 'none';
+            hintRow.style.display = '';
+        }
+
+        statusEl.textContent = '';
+        showNotification('success', enabled
+            ? `Email enabled: ${result.email_address}`
+            : 'Email channel disabled');
+
+    } catch (err) {
+        console.error('Toggle email error:', err);
+        toggle.checked = !enabled;
+        showNotification('error', 'Network error toggling email');
+        statusEl.textContent = '';
+    } finally {
+        toggle.disabled = false;
+    }
+}
 
 function togglePassword(fieldId) {
     const field = document.getElementById(fieldId);
@@ -1733,6 +1877,9 @@ async function saveAgent() {
         assignedToolIds = Array.from(document.querySelectorAll('.tool-card.assigned')).map(el => el.dataset.id);
     } catch {}
 
+    // Channels - Email
+    const emailEnabled = document.getElementById('emailEnabled')?.checked;
+
     // Channels - Telegram
     const telegramEnabled = document.getElementById('telegramEnabled')?.checked;
     const telegramBotToken = document.getElementById('telegramBotToken')?.value?.trim() || '';
@@ -1874,6 +2021,9 @@ async function saveAgent() {
         text_chat_enabled: textChatEnabled,
         video_chat_enabled: videoChatEnabled,
         channels: {
+            email: {
+                enabled: !!emailEnabled
+            },
             telegram: {
                 enabled: !!telegramEnabled,
                 bot_token: agentClientId === 'global' ? null : telegramBotToken || null,
@@ -2057,10 +2207,12 @@ async function loadAssignedTools(){
             const isContentCatalyst = tool.name.toLowerCase().includes('content catalyst') || tool.tool_type === 'content_catalyst';
             const isHelpScout = tool.name.toLowerCase().includes('helpscout') || tool.slug === 'helpscout_tickets' || tool.tool_type === 'helpscout';
             const isImageCatalyst = tool.name.toLowerCase().includes('image catalyst') || tool.tool_type === 'image_catalyst' || tool.slug === 'image-catalyst';
+            const isCampaignScan = tool.slug === 'campaign_scan' || tool.tool_type === 'campaign_scan';
             const userSenseAttr = isUserSense ? 'data-usersense="true"' : '';
             const documentSenseAttr = isDocumentSense ? 'data-documentsense="true"' : '';
             const contentCatalystAttr = isContentCatalyst ? 'data-content-catalyst="true"' : '';
             const helpScoutAttr = isHelpScout ? 'data-helpscout="true"' : '';
+            const campaignScanAttr = isCampaignScan ? 'data-campaign-scan="true"' : '';
 
             // Build action buttons
             let actionButtons = '';
@@ -2122,17 +2274,21 @@ async function loadAssignedTools(){
                 statusBanner = '<div class="helpscout-status-banner px-4 py-2 text-xs text-dark-text-secondary border-t border-dark-border">Checking connection...</div>';
             }
 
+            const assignedIconUrl = tool.icon_url || '/static/images/ability-default.png';
             return `
-            <div class="tool-card assigned bg-dark-elevated border border-dark-border rounded-lg overflow-hidden flex flex-col" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr} ${contentCatalystAttr} ${helpScoutAttr}>
+            <div class="tool-card assigned bg-dark-elevated border border-dark-border rounded-lg overflow-hidden flex flex-col" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr} ${contentCatalystAttr} ${helpScoutAttr} ${campaignScanAttr}>
                 <div class="p-4 flex-1">
                     <div class="flex items-start justify-between">
-                        <div class="flex-1">
+                        <div class="flex items-start gap-3 flex-1 min-w-0">
+                            <img src="${assignedIconUrl}" alt="" class="w-8 h-8 rounded-lg flex-shrink-0 object-contain" onerror="this.src='/static/images/ability-default.png'">
+                            <div class="flex-1 min-w-0">
                             <h6 class="font-medium text-dark-text">${tool.name}</h6>
                             <p class="text-xs text-dark-text-secondary mt-1">${tool.description || 'No description'}</p>
                             <div class="flex gap-2 mt-2">
                                 <span class="px-2 py-0.5 text-xs rounded ${tool.scope === 'global' ? 'bg-brand-teal/20 text-brand-teal' : 'bg-brand-coral/20 text-brand-coral'}">${tool.scope}</span>
                                 <span class="px-2 py-0.5 text-xs rounded ${phaseClass}">${phaseLabel}</span>
                                 ${tool.admin_only ? '<span class="px-2 py-0.5 text-xs rounded bg-yellow-500/20 text-yellow-400">Admin Only</span>' : ''}
+                            </div>
                             </div>
                         </div>
                         ${actionButtons}
@@ -2235,9 +2391,11 @@ function renderToolCard(tool, phase) {
     const isUserSense = tool.name.toLowerCase().includes('usersense');
     const isDocumentSense = tool.name.toLowerCase().includes('documentsense') || tool.slug === 'documentsense' || tool.tool_type === 'documentsense';
     const isHelpScout = tool.name.toLowerCase().includes('helpscout') || tool.slug === 'helpscout_tickets' || tool.tool_type === 'helpscout';
+    const isCampaignScan = tool.slug === 'campaign_scan' || tool.tool_type === 'campaign_scan';
     const userSenseAttr = isUserSense ? 'data-usersense="true"' : '';
     const documentSenseAttr = isDocumentSense ? 'data-documentsense="true"' : '';
     const helpScoutAttr = isHelpScout ? 'data-helpscout="true"' : '';
+    const campaignScanAttr = isCampaignScan ? 'data-campaign-scan="true"' : '';
 
     // Build status banner
     let statusBanner = '';
@@ -2249,17 +2407,21 @@ function renderToolCard(tool, phase) {
         statusBanner = '<div class="helpscout-status-banner hidden"></div>';
     }
 
+    const iconUrl = tool.icon_url || '/static/images/ability-default.png';
     return `
-        <div class="tool-card bg-dark-elevated border border-dark-border rounded-lg overflow-hidden" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr} ${helpScoutAttr}>
+        <div class="tool-card bg-dark-elevated border border-dark-border rounded-lg overflow-hidden" data-id="${tool.id}" data-phase="${phase}" ${userSenseAttr} ${documentSenseAttr} ${helpScoutAttr} ${campaignScanAttr}>
             <div class="p-4">
                 <div class="flex items-start justify-between">
-                    <div class="flex-1">
-                        <h6 class="font-medium text-dark-text">${tool.name}</h6>
-                        <p class="text-xs text-dark-text-secondary mt-1">${tool.description || 'No description'}</p>
-                        <div class="flex gap-2 mt-2">
-                            <span class="px-2 py-0.5 text-xs rounded ${tool.scope === 'global' ? 'bg-brand-teal/20 text-brand-teal' : 'bg-brand-coral/20 text-brand-coral'}">${tool.scope}</span>
-                            <span class="px-2 py-0.5 text-xs rounded ${phaseClass}">${phaseLabel}</span>
-                            ${tool.admin_only ? '<span class="px-2 py-0.5 text-xs rounded bg-yellow-500/20 text-yellow-400">Admin Only</span>' : ''}
+                    <div class="flex items-start gap-3 flex-1 min-w-0">
+                        <img src="${iconUrl}" alt="" class="w-8 h-8 rounded-lg flex-shrink-0 object-contain" onerror="this.src='/static/images/ability-default.png'">
+                        <div class="flex-1 min-w-0">
+                            <h6 class="font-medium text-dark-text">${tool.name}</h6>
+                            <p class="text-xs text-dark-text-secondary mt-1">${tool.description || 'No description'}</p>
+                            <div class="flex gap-2 mt-2">
+                                <span class="px-2 py-0.5 text-xs rounded ${tool.scope === 'global' ? 'bg-brand-teal/20 text-brand-teal' : 'bg-brand-coral/20 text-brand-coral'}">${tool.scope}</span>
+                                <span class="px-2 py-0.5 text-xs rounded ${phaseClass}">${phaseLabel}</span>
+                                ${tool.admin_only ? '<span class="px-2 py-0.5 text-xs rounded bg-yellow-500/20 text-yellow-400">Admin Only</span>' : ''}
+                            </div>
                         </div>
                     </div>
                     <button type="button" onclick="assignTool('${tool.id}', this)" class="ml-2 text-brand-teal hover:text-brand-teal/80 text-sm">
@@ -2274,6 +2436,17 @@ function renderToolCard(tool, phase) {
 
 function assignTool(id, btn){
     const card = btn.closest('.tool-card');
+
+    // Campaign Scan requires the Email channel to be enabled
+    if (card.dataset.campaignScan === 'true') {
+        const emailToggle = document.getElementById('emailEnabled');
+        const emailAddr = document.getElementById('emailAddress')?.value;
+        if (!emailToggle || !emailToggle.checked || !emailAddr) {
+            showNotification('error', 'Campaign Scan requires the Email channel to be enabled. Please enable it in the Channels section above first.');
+            return;
+        }
+    }
+
     card.classList.add('assigned');
 
     const isHelpScout = card.dataset.helpscout === 'true';
@@ -2311,10 +2484,53 @@ function assignTool(id, btn){
             statusBanner.classList.add('px-4', 'py-2', 'text-xs', 'text-dark-text-secondary', 'border-t', 'border-dark-border');
             statusBanner.textContent = 'Checking connection...';
         }
-    } else if (actionBtn) {
-        actionBtn.outerHTML = `<button type="button" onclick="unassignTool('${id}', this)" class="ml-2 text-red-400 hover:text-red-300 text-sm">
-            <i class="bi bi-x-circle"></i> Remove
-        </button>`;
+    } else {
+        // Look up tool data to determine type-specific buttons
+        const toolData = allToolsCache.find(t => t.id === id);
+        const toolType = toolData ? (toolData.tool_type || toolData.type || '') : '';
+        const toolName = toolData ? (toolData.name || '') : '';
+        const toolSlug = toolData ? (toolData.slug || '') : '';
+        const isContentCatalyst = toolType === 'content_catalyst' || toolName.toLowerCase().includes('content catalyst');
+        const isImageCatalyst = toolType === 'image_catalyst' || toolSlug === 'image-catalyst' || toolName.toLowerCase().includes('image catalyst');
+
+        let newButtons = '';
+        if (isContentCatalyst) {
+            newButtons = `
+                <div class="flex flex-col gap-1 ml-2">
+                    <button type="button" onclick="openContentCatalystModal()" class="text-brand-teal hover:text-brand-teal/80 text-sm">
+                        <i class="bi bi-gear"></i> Edit
+                    </button>
+                    <button type="button" onclick="unassignTool('${id}', this)" class="text-red-400 hover:text-red-300 text-sm">
+                        <i class="bi bi-x-circle"></i> Remove
+                    </button>
+                </div>`;
+        } else if (isImageCatalyst) {
+            newButtons = `
+                <div class="flex flex-col gap-1 ml-2">
+                    <button type="button" onclick="openImageCatalystBrandModal()" class="text-brand-teal hover:text-brand-teal/80 text-sm">
+                        <i class="bi bi-gear"></i> Edit
+                    </button>
+                    <button type="button" onclick="unassignTool('${id}', this)" class="text-red-400 hover:text-red-300 text-sm">
+                        <i class="bi bi-x-circle"></i> Remove
+                    </button>
+                </div>`;
+        } else {
+            newButtons = `
+                <div class="flex flex-col gap-1 ml-2">
+                    <button type="button" onclick="openToolSettingsModal('${id}')" class="text-brand-teal hover:text-brand-teal/80 text-sm">
+                        <i class="bi bi-gear"></i> Edit
+                    </button>
+                    <button type="button" onclick="unassignTool('${id}', this)" class="text-red-400 hover:text-red-300 text-sm">
+                        <i class="bi bi-x-circle"></i> Remove
+                    </button>
+                </div>`;
+        }
+
+        if (existingContainer) {
+            existingContainer.outerHTML = newButtons;
+        } else if (actionBtn) {
+            actionBtn.outerHTML = newButtons;
+        }
     }
 
     // Move to assigned grid
@@ -3809,13 +4025,226 @@ function hideImagePreview() {
 // ============================================
 let _toolSettingsId = null;
 
+function _tsEscapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
+}
+
+function _tsRenderTypeFields(toolType, config, toolName) {
+    const wrap = document.getElementById('ts_typeFields');
+    if (!wrap) return;
+    const safeConfig = config || {};
+
+    const isContentCatalyst = toolType === 'content_catalyst' ||
+        (toolName && toolName.toLowerCase().includes('content catalyst'));
+
+    if (isContentCatalyst) {
+        const stylePrompt = _tsEscapeHtml(safeConfig.default_style_prompt || '');
+        const exampleWriting = _tsEscapeHtml(safeConfig.example_writing || '');
+        wrap.innerHTML = `
+        <div class="space-y-4">
+          <div>
+            <label class="text-sm text-dark-text font-medium">Writing Instructions <span class="text-dark-text-secondary font-normal">(optional)</span></label>
+            <textarea id="ts_cc_style_prompt" rows="3" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" placeholder="e.g., Write in a conversational tone. Use concrete examples.">${stylePrompt}</textarea>
+          </div>
+          <div>
+            <label class="text-sm text-dark-text font-medium">Example Article <span class="text-dark-text-secondary font-normal">(optional)</span></label>
+            <textarea id="ts_cc_example_writing" rows="6" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder="Paste a sample article to match its voice and tone...">${exampleWriting}</textarea>
+          </div>
+        </div>`;
+        return;
+    }
+    if (toolType === 'n8n') {
+        const headersJson = safeConfig.headers ? JSON.stringify(safeConfig.headers, null, 2) : '';
+        const payloadJson = safeConfig.default_payload ? JSON.stringify(safeConfig.default_payload, null, 2) : '';
+        const includeContext = safeConfig.include_context !== false;
+        const stripNulls = safeConfig.strip_nulls !== false;
+        const timeoutValue = safeConfig.timeout !== undefined ? safeConfig.timeout : 20;
+        const inquiryField = safeConfig.user_inquiry_field || 'userInquiry';
+        wrap.innerHTML = `
+        <div class="space-y-3">
+          <div>
+            <label class="text-sm text-dark-text font-medium">Webhook URL</label>
+            <input id="ts_n8n_url" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" value="${_tsEscapeHtml(safeConfig.webhook_url || '')}" placeholder="https://example.com/webhook/abc" />
+          </div>
+          <div>
+            <label class="text-sm text-dark-text font-medium">Method</label>
+            <input id="ts_n8n_method" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" value="${_tsEscapeHtml(safeConfig.method || 'POST')}" />
+          </div>
+          <div>
+            <label class="text-sm text-dark-text font-medium">Request Headers (JSON)</label>
+            <textarea id="ts_n8n_headers" rows="3" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder='{"Authorization": "Bearer ..."}'>${_tsEscapeHtml(headersJson)}</textarea>
+          </div>
+          <div>
+            <label class="text-sm text-dark-text font-medium">Default Payload (JSON)</label>
+            <textarea id="ts_n8n_payload" rows="3" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder='{"executionMode": "production"}'>${_tsEscapeHtml(payloadJson)}</textarea>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm text-dark-text font-medium">Timeout (seconds)</label>
+              <input id="ts_n8n_timeout" type="number" min="1" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" value="${timeoutValue}" />
+            </div>
+            <div>
+              <label class="text-sm text-dark-text font-medium">User Inquiry Field</label>
+              <input id="ts_n8n_inquiry_field" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" value="${_tsEscapeHtml(inquiryField)}" />
+            </div>
+          </div>
+          <div class="flex flex-col gap-2">
+            <label class="flex items-center gap-2 text-sm text-dark-text">
+              <input id="ts_n8n_include_context" type="checkbox" class="rounded border-dark-border" ${includeContext ? 'checked' : ''} /> Include session context
+            </label>
+            <label class="flex items-center gap-2 text-sm text-dark-text">
+              <input id="ts_n8n_strip_nulls" type="checkbox" class="rounded border-dark-border" ${stripNulls ? 'checked' : ''} /> Strip null values
+            </label>
+          </div>
+        </div>`;
+        return;
+    }
+    if (toolType === 'asana') {
+        const workspace = _tsEscapeHtml(safeConfig.workspace_gid || '');
+        const assignee = _tsEscapeHtml(safeConfig.default_assignee || '');
+        const projectsJson = safeConfig.projects ? _tsEscapeHtml(JSON.stringify(safeConfig.projects, null, 2)) : '';
+        const defaultAction = _tsEscapeHtml(safeConfig.default_action || 'list');
+        const includeCompleted = safeConfig.list_include_completed === true;
+        wrap.innerHTML = `
+        <div class="space-y-3">
+          <div>
+            <label class="text-sm text-dark-text font-medium">Projects (JSON array)</label>
+            <textarea id="ts_asana_projects" rows="3" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder='["1201234567890"]'>${projectsJson}</textarea>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm text-dark-text font-medium">Workspace GID</label>
+              <input id="ts_asana_workspace" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" value="${workspace}" />
+            </div>
+            <div>
+              <label class="text-sm text-dark-text font-medium">Default Assignee</label>
+              <input id="ts_asana_assignee" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" value="${assignee}" placeholder="me or user gid" />
+            </div>
+          </div>
+          <div>
+            <label class="text-sm text-dark-text font-medium">Default Action</label>
+            <select id="ts_asana_default_action" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm">
+              <option value="list" ${defaultAction === 'list' ? 'selected' : ''}>List tasks</option>
+              <option value="create" ${defaultAction === 'create' ? 'selected' : ''}>Create task</option>
+              <option value="update" ${defaultAction === 'update' ? 'selected' : ''}>Update task</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-2 text-sm text-dark-text">
+            <input id="ts_asana_include_completed" type="checkbox" class="rounded border-dark-border" ${includeCompleted ? 'checked' : ''} /> Include completed tasks
+          </label>
+        </div>`;
+        return;
+    }
+    if (toolType === 'trello') {
+        const boardsJson = safeConfig.boards ? _tsEscapeHtml(JSON.stringify(safeConfig.boards, null, 2)) : '';
+        const defaultAction = _tsEscapeHtml(safeConfig.default_action || 'list');
+        wrap.innerHTML = `
+        <div class="space-y-3">
+          <div>
+            <label class="text-sm text-dark-text font-medium">Scoped Boards (JSON array)</label>
+            <textarea id="ts_trello_boards" rows="3" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text font-mono text-xs" placeholder='[{"id": "abc123", "name": "Marketing"}]'>${boardsJson}</textarea>
+            <p class="text-xs text-dark-text-secondary mt-1">Leave empty to allow access to all boards.</p>
+          </div>
+          <div>
+            <label class="text-sm text-dark-text font-medium">Default Action</label>
+            <select id="ts_trello_default_action" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm">
+              <option value="list" ${defaultAction === 'list' ? 'selected' : ''}>List cards</option>
+              <option value="search" ${defaultAction === 'search' ? 'selected' : ''}>Search</option>
+              <option value="list_boards" ${defaultAction === 'list_boards' ? 'selected' : ''}>List boards</option>
+            </select>
+          </div>
+        </div>`;
+        return;
+    }
+    if (toolType === 'descript') {
+        wrap.innerHTML = `
+        <div class="p-3 bg-dark-elevated border border-dark-border rounded text-sm text-dark-text-secondary">
+          <p class="font-medium text-dark-text mb-1">Descript Connect</p>
+          <p class="text-xs">Clients configure their own Descript API key in Settings. The editing options (filler word removal, silences, Studio Sound, captions, clips) are configured by the user in the widget at runtime.</p>
+        </div>`;
+        return;
+    }
+    // Default: no type-specific fields
+    wrap.innerHTML = '';
+}
+
+function _tsCollectConfig(toolType, toolName) {
+    const isContentCatalyst = toolType === 'content_catalyst' ||
+        (toolName && toolName.toLowerCase().includes('content catalyst'));
+
+    if (isContentCatalyst) {
+        const cfg = {};
+        const sp = document.getElementById('ts_cc_style_prompt');
+        const ew = document.getElementById('ts_cc_example_writing');
+        if (sp && sp.value.trim()) cfg.default_style_prompt = sp.value.trim();
+        if (ew && ew.value.trim()) cfg.example_writing = ew.value.trim();
+        return cfg;
+    }
+    if (toolType === 'n8n') {
+        const webhookUrl = (document.getElementById('ts_n8n_url') || {}).value || '';
+        if (!webhookUrl.trim()) throw new Error('Webhook URL is required for n8n abilities.');
+        let headers = {};
+        const hf = document.getElementById('ts_n8n_headers');
+        if (hf && hf.value.trim()) { try { headers = JSON.parse(hf.value); } catch(e) { throw new Error('Headers JSON is invalid.'); } }
+        let payload = {};
+        const pf = document.getElementById('ts_n8n_payload');
+        if (pf && pf.value.trim()) { try { payload = JSON.parse(pf.value); } catch(e) { throw new Error('Default payload JSON is invalid.'); } }
+        return {
+            webhook_url: webhookUrl.trim(),
+            method: (document.getElementById('ts_n8n_method') || {}).value || 'POST',
+            headers,
+            default_payload: payload,
+            timeout: parseFloat((document.getElementById('ts_n8n_timeout') || {}).value) || 20,
+            user_inquiry_field: (document.getElementById('ts_n8n_inquiry_field') || {}).value || 'userInquiry',
+            include_context: document.getElementById('ts_n8n_include_context') ? document.getElementById('ts_n8n_include_context').checked : true,
+            strip_nulls: document.getElementById('ts_n8n_strip_nulls') ? document.getElementById('ts_n8n_strip_nulls').checked : true,
+        };
+    }
+    if (toolType === 'asana') {
+        const cfg = { oauth_provider: 'asana' };
+        const pf = document.getElementById('ts_asana_projects');
+        if (pf && pf.value.trim()) { try { cfg.projects = JSON.parse(pf.value); } catch(e) { throw new Error('Projects field must be valid JSON.'); } }
+        const w = document.getElementById('ts_asana_workspace');
+        if (w && w.value.trim()) cfg.workspace_gid = w.value.trim();
+        const a = document.getElementById('ts_asana_assignee');
+        if (a && a.value.trim()) cfg.default_assignee = a.value.trim();
+        const da = document.getElementById('ts_asana_default_action');
+        if (da) cfg.default_action = da.value;
+        const ic = document.getElementById('ts_asana_include_completed');
+        cfg.list_include_completed = ic ? ic.checked : false;
+        return cfg;
+    }
+    if (toolType === 'trello') {
+        const cfg = {};
+        const bf = document.getElementById('ts_trello_boards');
+        if (bf && bf.value.trim()) { try { cfg.boards = JSON.parse(bf.value); } catch(e) { throw new Error('Boards field must be valid JSON.'); } }
+        else { cfg.boards = []; }
+        const da = document.getElementById('ts_trello_default_action');
+        cfg.default_action = da ? da.value : 'list';
+        return cfg;
+    }
+    // For types with no special fields, return null (don't override config)
+    return null;
+}
+
 function openToolSettingsModal(toolId) {
     _toolSettingsId = toolId;
-    // Find tool in allToolsCache
     const tool = allToolsCache.find(t => t.id === toolId);
     if (tool) {
         document.getElementById('toolSettingsModalTitle').textContent = tool.name + ' Settings';
         document.getElementById('toolSettingsAdminOnly').checked = !!tool.admin_only;
+        document.getElementById('ts_description').value = tool.description || '';
+
+        // Load hidden instructions from config
+        const cfg = tool.config || {};
+        document.getElementById('ts_hidden_instructions').value =
+            cfg.system_prompt_instructions || cfg.hidden_instructions || cfg.instructions || '';
+
+        // Render type-specific config fields
+        const toolType = tool.tool_type || tool.type || '';
+        _tsRenderTypeFields(toolType, cfg, tool.name);
     }
     document.getElementById('toolSettingsModal').classList.remove('hidden');
 }
@@ -3827,20 +4256,55 @@ function closeToolSettingsModal() {
 
 async function saveToolSettings() {
     if (!_toolSettingsId) return;
-    const adminOnly = document.getElementById('toolSettingsAdminOnly').checked;
     const tool = allToolsCache.find(t => t.id === _toolSettingsId);
+    const toolType = tool ? (tool.tool_type || tool.type || '') : '';
+    const toolName = tool ? (tool.name || '') : '';
     const clientId = tool && tool.client_id ? tool.client_id : {{ agent.client_id|tojson }};
     const qs = clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
+
+    const adminOnly = document.getElementById('toolSettingsAdminOnly').checked;
+    const description = document.getElementById('ts_description').value.trim();
+    const hiddenInstructions = document.getElementById('ts_hidden_instructions').value.trim();
+
+    // Build update payload
+    const update = { admin_only: adminOnly };
+    if (description) update.description = description;
+
+    // Collect type-specific config
+    let config = null;
+    try {
+        config = _tsCollectConfig(toolType, toolName);
+    } catch (err) {
+        alert(err.message);
+        return;
+    }
+
+    // Merge hidden instructions into config
+    if (config !== null || hiddenInstructions) {
+        const existingConfig = (tool && tool.config) ? { ...tool.config } : {};
+        const newConfig = config !== null ? { ...existingConfig, ...config } : { ...existingConfig };
+        if (hiddenInstructions) {
+            newConfig.system_prompt_instructions = hiddenInstructions;
+        } else {
+            delete newConfig.system_prompt_instructions;
+        }
+        update.config = newConfig;
+    }
+
     try {
         const res = await fetch(`${ADMIN_TOOLS_API}/${_toolSettingsId}${qs}`, {
-            method: 'PUT',
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ admin_only: adminOnly })
+            body: JSON.stringify(update)
         });
         if (res.ok) {
             // Update local cache
-            if (tool) tool.admin_only = adminOnly;
+            if (tool) {
+                tool.admin_only = adminOnly;
+                if (description) tool.description = description;
+                if (update.config) tool.config = update.config;
+            }
             closeToolSettingsModal();
             await loadAssignedTools();
         } else {
@@ -3871,7 +4335,7 @@ async function _saveAdminOnly(toolId, adminOnly) {
     const clientId = tool && tool.client_id ? tool.client_id : {{ agent.client_id|tojson }};
     const qs = clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
     await fetch(`${ADMIN_TOOLS_API}/${toolId}${qs}`, {
-        method: 'PUT',
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ admin_only: adminOnly })

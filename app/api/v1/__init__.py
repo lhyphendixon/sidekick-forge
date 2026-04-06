@@ -27,6 +27,9 @@ from .diagnostics import router as diagnostics_router
 from .content_catalyst import router as content_catalyst_router
 from .image_catalyst import router as image_catalyst_router
 from .lingua import router as lingua_router
+from .descript import router as descript_router
+from .campaign_scan import router as campaign_scan_router
+from .wizard import router as wizard_router
 
 # Create main API router
 api_router = APIRouter(prefix="/v1")
@@ -55,5 +58,8 @@ api_router.include_router(diagnostics_router)
 api_router.include_router(content_catalyst_router)
 api_router.include_router(image_catalyst_router)
 api_router.include_router(lingua_router)
+api_router.include_router(descript_router)
+api_router.include_router(campaign_scan_router)
+api_router.include_router(wizard_router)
 
 __all__ = ["api_router"]

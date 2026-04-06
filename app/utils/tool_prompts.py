@@ -28,6 +28,7 @@ def _generate_default_instructions(tool: Mapping[str, Any]) -> str:
         "print_ready": "When the user wants to print or export a conversation, call this tool.",
         "documentsense": "When the user wants to analyze, summarize, or extract information from documents, call this tool.",
         "asana": "When the user wants to manage tasks, create tasks, or check task status, call this tool.",
+        "descript": "When the user wants to edit a video, remove filler words, remove silences, enhance audio, create highlight clips, or apply any video edits, call this tool.",
         "builtin": "When the user's request relates to this tool's functionality, it will be invoked automatically.",
     }
 

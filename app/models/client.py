@@ -57,6 +57,12 @@ class APIKeys(BaseModel):
     siliconflow_api_key: Optional[str] = None
     jina_api_key: Optional[str] = None
 
+    # Integration Tokens
+    evernote_access_token: Optional[str] = None
+
+    # Video/Media Providers
+    descript_api_key: Optional[str] = None
+
 
 class EmbeddingSettings(BaseModel):
     """Embedding configuration"""
@@ -85,9 +91,15 @@ class TelegramChannelSettings(BaseModel):
     transcribe_voice: bool = Field(default=True, description="Transcribe inbound voice notes to text for processing")
 
 
+class EmailChannelSettings(BaseModel):
+    """Email channel configuration for a client."""
+    enabled: bool = Field(default=False, description="Enable email channel for this client")
+
+
 class ChannelSettings(BaseModel):
     """All channel configurations for a client."""
     telegram: TelegramChannelSettings = Field(default_factory=TelegramChannelSettings)
+    email: EmailChannelSettings = Field(default_factory=EmailChannelSettings)
 
 
 class ClientSettings(BaseModel):

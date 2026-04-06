@@ -669,6 +669,12 @@
       background: rgba(255, 255, 255, 0.2);
       color: white;
     }
+    .admin-only-ability {
+      display: none;
+    }
+    body.is-admin .admin-only-ability {
+      display: flex;
+    }
     .no-abilities-message {
       text-align: center;
       color: rgba(255, 255, 255, 0.4);
@@ -841,14 +847,18 @@
   </script>
   {% endif %}
   <link rel="stylesheet" href="/static/css/citations.css?v=20260210a">
-  <link rel="stylesheet" href="/static/css/widgets.css?v=20260317b">
+  <link rel="stylesheet" href="/static/css/widgets.css?v=20260326a">
   <link rel="stylesheet" href="/static/css/kenburns.css?v=20260206d">
   <script src="/static/js/citations.js?v=20260210a"></script>
   <script src="/static/js/widgets.js?v=20260102c"></script>
-  <script src="/static/js/content-catalyst-widget.js?v=20260317c"></script>
+  <script src="/static/js/content-catalyst-widget.js?v=20260326c"></script>
   <script src="/static/js/lingua-widget.js?v=20260201"></script>
-  <script src="/static/js/image-catalyst-widget.js?v=20260226a"></script>
+  <script src="/static/js/image-catalyst-widget.js?v=20260326h"></script>
   <script src="/static/js/print-ready-widget.js?v=20260219b"></script>
+  <script src="/static/js/evernote-widget.js?v=20260318a"></script>
+  <script src="/static/js/trello-widget.js?v=20260318a"></script>
+  <script src="/static/js/descript-widget.js?v=20260327a"></script>
+  <script src="/static/js/campaign-scan-widget.js?v=20260405a"></script>
   <script src="/static/js/kenburns.js?v=20260202c"></script>
 </head>
 <body style="background: #000000;">
@@ -942,9 +952,12 @@
               </div>
             </div>
             <div class="glass-surface border-t-0 border-x-0 rounded-none p-3 sm:p-4">
-              <form onsubmit="return sendMsg(event)" class="flex gap-2 sm:gap-3">
-                <input id="msg" name="message" placeholder="Type a message..." class="flex-1 min-w-0 glass-input text-white rounded-xl px-3 sm:px-4 py-3" autocomplete="off" required />
-                <button type="submit" class="send-btn chat-send-btn">
+              <form onsubmit="return sendMsg(event)" class="flex gap-2 sm:gap-3 items-end">
+                <textarea id="msg" name="message" placeholder="Type a message..." rows="1"
+                  class="flex-1 min-w-0 glass-input text-white rounded-xl px-3 sm:px-4 py-3"
+                  style="resize:none;overflow-y:hidden;min-height:46px;max-height:200px;white-space:pre-wrap"
+                  autocomplete="off" required></textarea>
+                <button type="submit" class="send-btn chat-send-btn" style="margin-bottom:2px">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
                   <span>Send</span>
                 </button>
@@ -1743,11 +1756,22 @@
             addUser(msg.content, false);
           } else if (msg.role === 'assistant') {
             addAssistant(msg.content, msg.citations || [], false);
+            // Also restore widget if this assistant message had one
+            const assistantWidget = msg.metadata?.widget;
+            if (assistantWidget?.type) {
+              const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready', 'lingua', 'image_catalyst', 'evernote', 'trello', 'descript', 'campaign_scan']);
+              if (supportedWidgetTypes.has(assistantWidget.type)) {
+                console.log('[history] Restoring widget from assistant message:', assistantWidget.type);
+                addWidget(assistantWidget.type, {
+                  restoredState: assistantWidget
+                }, false);
+              }
+            }
           } else if (msg.role === 'widget') {
             // Restore known widget state from saved transcripts
             const widgetData = msg.metadata?.widget;
             if (widgetData?.type) {
-              const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready']);
+              const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready', 'lingua', 'image_catalyst', 'evernote', 'trello', 'descript', 'campaign_scan']);
               if (supportedWidgetTypes.has(widgetData.type)) {
                 console.log('[history] Restoring widget:', widgetData.type, widgetData);
                 addWidget(widgetData.type, {
@@ -1919,11 +1943,22 @@
               addUser(msg.content, false);
             } else if (msg.role === 'assistant') {
               addAssistant(msg.content, msg.citations || [], false);
+              // Also restore widget if this assistant message had one
+              const assistantWidget = msg.metadata?.widget;
+              if (assistantWidget?.type) {
+                const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready', 'lingua', 'image_catalyst', 'evernote', 'trello', 'descript', 'campaign_scan']);
+                if (supportedWidgetTypes.has(assistantWidget.type)) {
+                  console.log('[history] Restoring widget from assistant message:', assistantWidget.type);
+                  addWidget(assistantWidget.type, {
+                    restoredState: assistantWidget
+                  }, false);
+                }
+              }
             } else if (msg.role === 'widget') {
               // Restore known widget state from saved transcripts
               const widgetData = msg.metadata?.widget;
               if (widgetData?.type) {
-                const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready']);
+                const supportedWidgetTypes = new Set(['content_catalyst', 'print_ready', 'lingua', 'image_catalyst', 'evernote', 'trello', 'descript', 'campaign_scan']);
                 if (supportedWidgetTypes.has(widgetData.type)) {
                   console.log('[history] Restoring widget:', widgetData.type, widgetData);
                   addWidget(widgetData.type, {
@@ -2670,7 +2705,7 @@ function clearVoiceTranscriptError(){
       if (welcome) welcome.remove();
 
       const wrap = document.createElement('div'); wrap.className='flex justify-end';
-      wrap.innerHTML = `<div class="max-w-[80%] px-4 py-3 rounded-2xl msg-user text-white">${escapeAndLinkify(text)}</div>`;
+      wrap.innerHTML = `<div class="max-w-[80%] px-4 py-3 rounded-2xl msg-user text-white whitespace-pre-wrap">${escapeAndLinkify(text)}</div>`;
       chatMessages.appendChild(wrap);
       if (shouldScroll) scrollBottom();
     }
@@ -2713,7 +2748,7 @@ function clearVoiceTranscriptError(){
       if (evt && evt.preventDefault) evt.preventDefault();
       const ok = await ensureSession(); if (!ok) { setAuthVisible(true); setChatVisible(false); return false; }
       const input = document.getElementById('msg');
-      const text = input.value; if (!text) return false;
+      const text = (input.value || '').trim(); if (!text) return false;
 
       if (requiresSupertabForMode('text') && !hasVoiceEntitlement) {
         // Route users to the voice paywall entrypoint to unlock entitled access.
@@ -2725,6 +2760,8 @@ function clearVoiceTranscriptError(){
       }
 
       input.value = '';
+      input.style.height = 'auto';
+      input.style.overflowY = 'hidden';
 
       // Track if this is the first message in a new conversation
       const wasFirstMessage = isFirstMessage;
@@ -5157,6 +5194,8 @@ function clearVoiceTranscriptError(){
         if (data.access_token) {
           manualToken = data.access_token;
           if (data.client_user_id) { window.__client_user_id = data.client_user_id; }
+          // Admin preview detected — show admin-only abilities
+          document.body.classList.add('is-admin');
           // If refresh_token is provided, set full Supabase session for a seamless experience
           if (data.refresh_token && sb && sb.auth && sb.auth.setSession) {
             try {
@@ -5637,7 +5676,7 @@ function clearVoiceTranscriptError(){
         {% if agent_tools and agent_tools|length > 0 %}
         <div class="ability-list">
           {% for tool in agent_tools %}
-          <div class="ability-item"
+          <div class="ability-item{% if tool.admin_only %} admin-only-ability{% endif %}"
                data-tool-slug="{{ tool.slug or tool.id }}"
                data-tool-name="{{ tool.name }}"
                data-tool-type="{{ tool.type or 'tool' }}"
@@ -5732,6 +5771,37 @@ function clearVoiceTranscriptError(){
         closeAgentInfoModal();
       }
     });
+
+    // Chat textarea: Enter sends, Shift+Enter inserts newline, auto-resize
+    (function() {
+      const msgEl = document.getElementById('msg');
+      if (!msgEl) return;
+
+      function autoResizeMsg() {
+        msgEl.style.height = 'auto';
+        const maxH = document.fullscreenElement || document.querySelector('.glass-container.pseudo-fullscreen') ? 400 : 200;
+        const clamped = Math.min(msgEl.scrollHeight, maxH);
+        msgEl.style.height = clamped + 'px';
+        msgEl.style.overflowY = msgEl.scrollHeight > maxH ? 'auto' : 'hidden';
+      }
+
+      msgEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          if (e.shiftKey) {
+            // Let browser insert newline, then resize
+            requestAnimationFrame(autoResizeMsg);
+          } else {
+            e.preventDefault();
+            sendMsg(e);
+          }
+        }
+      });
+
+      msgEl.addEventListener('input', autoResizeMsg);
+      msgEl.addEventListener('paste', function() {
+        requestAnimationFrame(autoResizeMsg);
+      });
+    })();
   </script>
 </body>
 </html>

@@ -50,9 +50,10 @@ ENV LIVEKIT_URL="wss://dummy.livekit.cloud" \
 # Switch to root to download models with correct permissions
 USER root
 
-# Create cache directories and download turn detector model from HuggingFace
+# Download all plugin model files (turn-detector, Silero VAD, adaptive interruption model)
+# Uses the entrypoint's CLI interface: `python entrypoint.py download-files`
 RUN mkdir -p /app/.cache/huggingface /home/agent/.cache/huggingface && \
-    python -c "from huggingface_hub import snapshot_download; path = snapshot_download('livekit/turn-detector', revision='v1.2.2-en', cache_dir='/app/.cache/huggingface'); print(f'Model downloaded to: {path}')" && \
+    python /app/entrypoint.py download-files && \
     ls -la /app/.cache/huggingface/ && \
     chown -R agent:agent /app /home/agent && \
     chmod -R 777 /app/.cache /home/agent/.cache

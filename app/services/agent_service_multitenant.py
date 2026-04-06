@@ -112,6 +112,7 @@ class AgentService:
             context_retention_minutes=agent_data.get("context_retention_minutes", 30),
             max_context_messages=agent_data.get("max_context_messages", 50),
             rag_results_limit=agent_data.get("rag_results_limit", 5),
+            email_address=agent_data.get("email_address"),
             created_at=created_at,
             updated_at=updated_at
         )

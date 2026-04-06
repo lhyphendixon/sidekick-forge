@@ -1,17 +1,17 @@
+"""Transactional email service for marketing notifications.
+
+Migrated from Mailjet to Mailgun. The class name and public API are preserved
+so that existing callers (marketing routes) continue to work unchanged.
+"""
 from __future__ import annotations
 
-import asyncio
 import logging
 from email.utils import parseaddr
 from html import escape
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    from mailjet_rest import Client  # type: ignore
-except ModuleNotFoundError:
-    Client = None  # type: ignore
-
 from app.config import settings
+from app.integrations.mailgun_client import MailgunClient
 
 logger = logging.getLogger(__name__)
 
@@ -30,59 +30,123 @@ def _parse_recipient(entry: str, fallback_name: str) -> Optional[Dict[str, str]]
 
 
 class MailjetService:
-    """Thin wrapper around Mailjet's transactional email API."""
+    """Transactional email service (now backed by Mailgun).
+
+    Class name kept as MailjetService for backwards compatibility with
+    existing imports in marketing routes.
+    """
 
     def __init__(self) -> None:
-        self._sender_email = settings.mailjet_sender_email
-        self._sender_name = settings.mailjet_sender_name or settings.platform_name
+        self._sender_email = (
+            settings.mailgun_sender_email
+            or settings.mailjet_sender_email
+        )
+        self._sender_name = (
+            settings.mailgun_sender_name
+            or settings.mailjet_sender_name
+            or settings.platform_name
+        )
         self._recipients: List[Dict[str, str]] = []
 
-        if settings.mailjet_notification_recipients:
-            for raw in settings.mailjet_notification_recipients:
-                parsed = _parse_recipient(raw, self._sender_name)
-                if parsed:
-                    self._recipients.append(parsed)
+        recipients_list = settings.mailgun_notification_recipients
+        for raw in recipients_list:
+            parsed = _parse_recipient(raw, self._sender_name)
+            if parsed:
+                self._recipients.append(parsed)
 
-        if Client and settings.mailjet_api_key and settings.mailjet_api_secret:
-            self._client: Optional[Client] = Client(
-                auth=(settings.mailjet_api_key, settings.mailjet_api_secret),
-                version="v3.1",
-            )
-        else:
-            self._client = None
+        self._mailgun = MailgunClient()
 
     @property
     def is_configured(self) -> bool:
-        return bool(self._client and self._sender_email and self._recipients)
+        return bool(self._mailgun.is_configured and self._sender_email and self._recipients)
 
     async def send_submission_notification(self, submission_type: str, submission: Dict[str, Any]) -> bool:
         """Send a marketing submission notification email."""
         if not self.is_configured:
-            logger.debug("Mailjet service not configured; skipping notification for %s", submission_type)
+            logger.debug("Email service not configured; skipping notification for %s", submission_type)
             return False
 
-        payload = self._build_message(submission_type, submission)
-        try:
-            await asyncio.to_thread(self._send, payload)
+        subject, text_body, html_body = self._build_message(submission_type, submission)
+        reply_email = submission.get("email")
+        reply_name = submission.get("full_name") or submission.get("first_name")
+        headers: Dict[str, str] = {}
+        if reply_email:
+            headers["Reply-To"] = f"{reply_name or reply_email} <{reply_email}>"
+
+        success = True
+        for recipient in self._recipients:
+            result = await self._mailgun.send_email(
+                from_addr=self._sender_email,
+                from_name=self._sender_name,
+                to=recipient["Email"],
+                subject=subject,
+                text=text_body,
+                html=html_body,
+                headers=headers if headers else None,
+            )
+            if not result:
+                success = False
+
+        if success:
             logger.info(
-                "Mailjet notification sent for %s submission %s",
+                "Notification sent for %s submission %s",
                 submission_type,
                 submission.get("id"),
             )
-            return True
-        except Exception:
-            logger.exception("Failed to dispatch Mailjet notification")
+        return success
+
+    async def send_order_confirmation_email(
+        self,
+        to_email: str,
+        to_name: str,
+        order_data: Dict[str, Any],
+    ) -> bool:
+        """Send an order confirmation email to a customer."""
+        if not self.is_configured:
+            logger.debug("Email service not configured; skipping order confirmation")
             return False
 
-    def _send(self, payload: Dict[str, Any]) -> None:
-        if not self._client:
-            raise RuntimeError("Mailjet client is not initialized")
-        response = self._client.send.create(data=payload)
-        if response.status_code >= 400:
-            # Mailjet returns JSON body with ErrorIdentifier / ErrorMessage
-            raise RuntimeError(f"Mailjet send failed ({response.status_code}): {response.json()}")
+        subject = f"[{settings.platform_name}] Order Confirmation"
+        text_body = f"Thank you for your order, {to_name}!\n\n"
+        for key, value in order_data.items():
+            text_body += f"{key}: {value}\n"
 
-    def _build_message(self, submission_type: str, submission: Dict[str, Any]) -> Dict[str, Any]:
+        result = await self._mailgun.send_email(
+            from_addr=self._sender_email,
+            from_name=self._sender_name,
+            to=to_email,
+            subject=subject,
+            text=text_body,
+        )
+        return result is not None
+
+    async def send_verification_email(
+        self,
+        to_email: str,
+        verification_code: str,
+        **kwargs: Any,
+    ) -> bool:
+        """Send an email verification code."""
+        if not self.is_configured:
+            logger.debug("Email service not configured; skipping verification email")
+            return False
+
+        subject = f"[{settings.platform_name}] Your Verification Code"
+        text_body = f"Your verification code is: {verification_code}\n\nThis code expires in 10 minutes."
+
+        result = await self._mailgun.send_email(
+            from_addr=self._sender_email,
+            from_name=self._sender_name,
+            to=to_email,
+            subject=subject,
+            text=text_body,
+        )
+        return result is not None
+
+    def _build_message(
+        self, submission_type: str, submission: Dict[str, Any]
+    ) -> Tuple[str, str, str]:
+        """Build subject, text body, and HTML body for a submission notification."""
         friendly_type = self._friendly_type(submission_type)
         subject = f"[{settings.platform_name}] New {friendly_type} submission"
         lines = self._collect_lines(submission_type, submission)
@@ -99,22 +163,7 @@ class MailjetService:
             f"{html_rows}"
             "</table>"
         )
-
-        message: Dict[str, Any] = {
-            "From": {"Email": self._sender_email, "Name": self._sender_name},
-            "To": self._recipients,
-            "Subject": subject,
-            "TextPart": text_body or subject,
-            "HTMLPart": html_body,
-            "CustomID": f"marketing_{submission_type}_{submission.get('id', 'unknown')}",
-        }
-
-        reply_email = submission.get("email")
-        reply_name = submission.get("full_name") or submission.get("first_name")
-        if reply_email:
-            message["ReplyTo"] = {"Email": reply_email, "Name": reply_name or reply_email}
-
-        return {"Messages": [message]}
+        return subject, text_body or subject, html_body
 
     @staticmethod
     def _friendly_type(submission_type: str) -> str:
@@ -154,9 +203,9 @@ class MailjetService:
         if submission_type == "demo":
             add("Priority", submission.get("priority"))
 
-        status = submission.get("status")
-        if status:
-            add("Status", status)
+        status_val = submission.get("status")
+        if status_val:
+            add("Status", status_val)
         priority = submission.get("priority")
         if priority and submission_type != "demo":
             add("Priority", priority)

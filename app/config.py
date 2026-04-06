@@ -97,7 +97,16 @@ class Settings(BaseSettings):
     sentry_dsn: Optional[str] = Field(None)
     prometheus_enabled: bool = Field(default=False)
 
-    # Mailjet transactional email
+    # Mailgun email (inbound + outbound, replaces Mailjet)
+    mailgun_api_key: Optional[str] = Field(default=None)
+    mailgun_domain: str = Field(default="sidekickforge.com")
+    mailgun_base_url: str = Field(default="https://api.mailgun.net")
+    mailgun_webhook_signing_key: Optional[str] = Field(default=None)
+    mailgun_sender_email: Optional[str] = Field(default=None)
+    mailgun_sender_name: Optional[str] = Field(default=None)
+    mailgun_notification_recipients_raw: Optional[str] = Field(default=None)
+
+    # Legacy Mailjet (kept for migration period, will be removed)
     mailjet_api_key: Optional[str] = Field(default=None)
     mailjet_api_secret: Optional[str] = Field(default=None)
     mailjet_sender_email: Optional[str] = Field(default=None)
@@ -131,6 +140,28 @@ class Settings(BaseSettings):
     asana_token_preferred_store: str = Field(default="platform")
     asana_token_mirror_stores: bool = Field(default=False)
     asana_token_refresh_margin_seconds: int = Field(default=300)
+
+    # Evernote OAuth configuration
+    evernote_oauth_client_id: Optional[str] = Field(default=None)
+    evernote_oauth_client_secret: Optional[str] = Field(default=None)
+    evernote_oauth_redirect_uri: Optional[str] = Field(default=None)
+    evernote_oauth_sandbox: bool = Field(default=False)
+    evernote_token_preferred_store: str = Field(default="platform")
+    evernote_token_mirror_stores: bool = Field(default=False)
+    evernote_token_refresh_margin_seconds: int = Field(default=300)
+
+    # Trello configuration
+    trello_api_key: Optional[str] = Field(default=None)
+    trello_app_name: str = Field(default="Sidekick Forge")
+    trello_return_url: Optional[str] = Field(default=None)
+    trello_token_preferred_store: str = Field(default="platform")
+    trello_token_mirror_stores: bool = Field(default=False)
+
+    # Notion OAuth configuration
+    notion_oauth_client_id: Optional[str] = Field(default=None)
+    notion_oauth_client_secret: Optional[str] = Field(default=None)
+    notion_oauth_redirect_uri: Optional[str] = Field(default=None)
+    notion_token_preferred_store: str = Field(default="platform")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -196,6 +227,20 @@ class Settings(BaseSettings):
     @property
     def mailchimp_is_configured(self) -> bool:
         return bool(self.mailchimp_api_key and self.mailchimp_list_id)
+
+    @property
+    def mailgun_is_configured(self) -> bool:
+        return bool(self.mailgun_api_key and self.mailgun_domain)
+
+    @property
+    def mailgun_notification_recipients(self) -> List[str]:
+        raw = self.mailgun_notification_recipients_raw
+        if not raw:
+            raw = os.getenv("MAILGUN_NOTIFICATION_RECIPIENTS")
+        if not raw:
+            # Fall back to legacy Mailjet recipients during migration
+            return self.mailjet_notification_recipients
+        return self._coerce_recipient_list(raw)
 
     @property
     def mailjet_is_configured(self) -> bool:

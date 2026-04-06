@@ -266,6 +266,138 @@ class ImageCatalystService:
             cost=cost_value,
         )
 
+    async def edit(
+        self,
+        *,
+        source_image_url: str,
+        edit_prompt: str,
+        enriched_prompt: Optional[str] = None,
+        client_id: str = "",
+        agent_id: str,
+        user_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        original_run_id: Optional[str] = None,
+    ) -> ImageCatalystResult:
+        """
+        Edit an existing image using Nano Banana 2 Pro (google:4@2).
+
+        Passes the source image as a referenceImage with the edit instructions
+        as the prompt. Uses the thumbnail mode model for high-quality edits.
+        """
+        config = MODEL_CONFIG[ImageMode.THUMBNAIL]
+        model_air = config["model_air"]
+
+        final_width = width or config["default_width"]
+        final_height = height or config["default_height"]
+
+        # Validate dimensions against thumbnail allowed list
+        allowed = config["allowed_dimensions"]
+        if (final_width, final_height) not in allowed:
+            # Find the closest allowed dimension
+            logger.warning(
+                f"Edit dimensions {final_width}x{final_height} not in allowed list, "
+                f"using defaults"
+            )
+            final_width = config["default_width"]
+            final_height = config["default_height"]
+
+        # Create the run record
+        run_id = None
+        try:
+            platform_sb = self._get_platform_supabase()
+            result = platform_sb.rpc("create_image_catalyst_run", {
+                "p_client_id": client_id,
+                "p_agent_id": agent_id,
+                "p_user_id": user_id,
+                "p_conversation_id": conversation_id,
+                "p_session_id": session_id,
+                "p_mode": "thumbnail",
+                "p_prompt": edit_prompt,
+                "p_enriched_prompt": enriched_prompt,
+                "p_model_air": model_air,
+                "p_width": final_width,
+                "p_height": final_height,
+            }).execute()
+            if result.data:
+                run_id = str(result.data)
+        except Exception as e:
+            logger.warning(f"Failed to create image_catalyst_run record for edit: {e}")
+
+        if not run_id:
+            run_id = str(uuid.uuid4())
+
+        # Update status to generating
+        try:
+            platform_sb = self._get_platform_supabase()
+            platform_sb.rpc("update_image_catalyst_status", {
+                "p_run_id": run_id,
+                "p_status": "generating",
+            }).execute()
+        except Exception:
+            pass
+
+        # Generate edited image using Nano Banana 2 with source as reference
+        actual_prompt = enriched_prompt or edit_prompt
+        try:
+            generated = await self.runware.generate_image_advanced(
+                prompt=actual_prompt,
+                model=model_air,
+                width=final_width,
+                height=final_height,
+                reference_images=[source_image_url],
+                include_cost=True,
+            )
+        except RunWareError as e:
+            try:
+                platform_sb = self._get_platform_supabase()
+                platform_sb.rpc("update_image_catalyst_status", {
+                    "p_run_id": run_id,
+                    "p_status": "failed",
+                    "p_error": str(e),
+                }).execute()
+            except Exception:
+                pass
+
+            return ImageCatalystResult(
+                run_id=run_id,
+                status="failed",
+                mode="thumbnail",
+                prompt=edit_prompt,
+                error=str(e),
+            )
+
+        # Save result
+        cost_value = generated.cost or 0.0
+        try:
+            platform_sb = self._get_platform_supabase()
+            platform_sb.rpc("save_image_catalyst_result", {
+                "p_run_id": run_id,
+                "p_output_image_url": generated.image_url,
+                "p_seed": generated.seed,
+                "p_task_uuid": generated.task_uuid,
+                "p_generation_time_ms": generated.generation_time_ms,
+                "p_cost": float(cost_value),
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Failed to save image_catalyst_run edit result: {e}")
+
+        # Track cost
+        await self._track_cost(client_id, agent_id, cost_value)
+
+        return ImageCatalystResult(
+            run_id=run_id,
+            status="complete",
+            mode="thumbnail",
+            prompt=edit_prompt,
+            image_url=generated.image_url,
+            seed=generated.seed,
+            generation_time_ms=generated.generation_time_ms,
+            cost=cost_value,
+        )
+
     async def _track_cost(self, client_id: str, agent_id: str, cost: float):
         """Track generation cost in agent_usage via atomic RPC."""
         if cost <= 0:

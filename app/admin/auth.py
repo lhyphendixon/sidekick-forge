@@ -2,8 +2,11 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Dict, Any, Optional
 import jwt
+import logging
 import os
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 # Security scheme
 security = HTTPBearer()
@@ -176,7 +179,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                     "first_name": "Dev",
                     "full_name": "Dev Admin",
                     "auth_method": "development",
-                    "authenticated_at": datetime.utcnow().isoformat()
+                    "authenticated_at": datetime.utcnow().isoformat(),
+                    "can_create_sidekick": True
                 }
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -201,9 +205,10 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             "first_name": "Dev",
             "full_name": "Dev Admin",
             "auth_method": "development",
-            "authenticated_at": datetime.utcnow().isoformat()
+            "authenticated_at": datetime.utcnow().isoformat(),
+            "can_create_sidekick": True
         }
-    
+
     try:
         # Verify token with Supabase
         from app.integrations.supabase_client import supabase_manager
@@ -324,6 +329,29 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             elif role != 'superadmin':
                 visible_client_ids = tenant_assignments.get('subscriber_client_ids', [])
 
+            # Determine can_create_sidekick based on tier
+            can_create = role == 'superadmin'
+            if not can_create:
+                try:
+                    admin_client = supabase_manager.admin_client
+                    # Check tier for the user's client(s)
+                    client_ids_to_check = visible_client_ids or tenant_assignments.get('admin_client_ids', [])
+                    if client_ids_to_check:
+                        tier_result = admin_client.table('clients').select('tier, max_sidekicks').eq('id', client_ids_to_check[0]).maybe_single().execute()
+                        if tier_result.data:
+                            tier = (tier_result.data.get('tier') or 'adventurer').lower()
+                            max_sk = tier_result.data.get('max_sidekicks')
+                            if tier == 'paragon' or max_sk is None:
+                                can_create = True
+                            else:
+                                # Count existing agents for this client
+                                count_result = admin_client.table('agents').select('id', count='exact').eq('client_id', client_ids_to_check[0]).execute()
+                                current_count = count_result.count if hasattr(count_result, 'count') and count_result.count is not None else len(count_result.data or [])
+                                can_create = current_count < (max_sk or 0)
+                except Exception as tier_err:
+                    logger.warning(f"Failed to check tier for can_create_sidekick: {tier_err}")
+                    can_create = True  # Fail open to avoid blocking users
+
             return {
                 "user_id": user.id,
                 "email": user.email,
@@ -334,7 +362,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                 "authenticated_at": datetime.utcnow().isoformat(),
                 "tenant_assignments": tenant_assignments,
                 "visible_client_ids": visible_client_ids,
-                "is_super_admin": role == 'superadmin'
+                "is_super_admin": role == 'superadmin',
+                "can_create_sidekick": can_create
             }
         else:
             raise HTTPException(
@@ -351,7 +380,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                 "role": "superadmin",
                 "first_name": "Dev",
                 "full_name": "Dev Admin",
-                "auth_method": "development"
+                "auth_method": "development",
+                "can_create_sidekick": True
             }
         
         raise HTTPException(

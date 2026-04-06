@@ -32,6 +32,12 @@ class APIKeys(BaseModel):
     siliconflow_api_key: Optional[str] = None
     jina_api_key: Optional[str] = None
 
+    # Integration Tokens
+    evernote_access_token: Optional[str] = None
+
+    # Video/Media Providers
+    descript_api_key: Optional[str] = None
+
 
 class PlatformSupabaseConfig(BaseModel):
     """Minimal Supabase config for platform clients"""

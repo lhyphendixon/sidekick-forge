@@ -86,7 +86,7 @@ class ContentCatalystWidget extends BaseWidget {
 
                 <!-- Document Selection (default) -->
                 <div class="cc-input-section" data-section="document">
-                    <label class="block text-white/70 text-sm mb-2">Select a knowledge base document</label>
+                    <label class="block text-white/70 text-sm mb-2">Select a knowledge base document (optional)</label>
                     <div class="cc-document-selection">
                         ${this.selectedDocument ? `
                             <div class="cc-selected-document" id="cc-select-document-btn">
@@ -139,6 +139,7 @@ class ContentCatalystWidget extends BaseWidget {
                     <div>
                         <label class="block text-white/70 text-sm mb-2">Word Count</label>
                         <select id="cc-word-count" class="w-full glass-input rounded-xl p-3 text-white">
+                            <option value="500">~500 words</option>
                             <option value="1000">~1,000 words</option>
                             <option value="1500" selected>~1,500 words</option>
                             <option value="2000">~2,000 words</option>
@@ -491,7 +492,7 @@ class ContentCatalystWidget extends BaseWidget {
         console.log('[cc-widget] uploadedFile:', this.uploadedFile);
         console.log('[cc-widget] selectedDocument:', this.selectedDocument);
 
-        const sourceType = this.config.sourceType || 'document';
+        let sourceType = this.config.sourceType || 'document';
         let sourceContent = '';
         let documentId = null;
         let documentTitle = null;
@@ -501,13 +502,18 @@ class ContentCatalystWidget extends BaseWidget {
 
         // Get source content based on type
         if (sourceType === 'document') {
-            if (!this.selectedDocument) {
-                alert('Please select a document');
+            if (this.selectedDocument) {
+                documentId = this.selectedDocument.id;
+                documentTitle = this.selectedDocument.title;
+                sourceContent = `Document: ${documentTitle}`;
+            } else if (textInstructions) {
+                // No document selected — treat as text/topic source using instructions
+                sourceType = 'text';
+                sourceContent = textInstructions;
+            } else {
+                alert('Please select a document or provide instructions');
                 return;
             }
-            documentId = this.selectedDocument.id;
-            documentTitle = this.selectedDocument.title;
-            sourceContent = `Document: ${documentTitle}`;
         } else if (sourceType === 'url') {
             sourceContent = this.element.querySelector('#cc-url-input')?.value?.trim();
             if (!sourceContent) {
@@ -647,13 +653,28 @@ class ContentCatalystWidget extends BaseWidget {
 
         if (data.success) {
             this.runId = data.run_id;
-            this.articles = {
-                article_1: data.article_1,
-                article_2: data.article_2
-            };
-            this.renderCompletePhase();
-            // Store result for persistence
-            await this.storeResult();
+
+            // Store transcript if available (audio source)
+            if (data.transcript) {
+                this.transcript = data.transcript;
+            }
+
+            if (data.status === 'awaiting_review' && data.integrity_report) {
+                // Pipeline paused for human review of integrity issues
+                this.integrityReport = data.integrity_report;
+                this.drafts = { draft_1: data.draft_1, draft_2: data.draft_2 };
+                this.renderIntegrityPhase();
+            } else if (data.article_1 && data.article_2) {
+                // Legacy: pipeline completed in one shot
+                this.articles = {
+                    article_1: data.article_1,
+                    article_2: data.article_2
+                };
+                this.renderCompletePhase();
+                await this.storeResult();
+            } else {
+                throw new Error(data.message || 'Unexpected response');
+            }
         } else {
             throw new Error(data.message || 'Generation failed');
         }
@@ -678,7 +699,8 @@ class ContentCatalystWidget extends BaseWidget {
                 body: JSON.stringify({
                     run_id: this.runId,
                     article_1: this.articles.article_1,
-                    article_2: this.articles.article_2
+                    article_2: this.articles.article_2,
+                    transcript: this.transcript || null
                 })
             });
 
@@ -756,6 +778,188 @@ class ContentCatalystWidget extends BaseWidget {
         });
     }
 
+    renderIntegrityPhase() {
+        this.currentPhase = 'integrity';
+        const report = this.integrityReport;
+        const allIssues = [
+            ...(report.draft_1_issues || []).map(i => ({ ...i, draft: 1 })),
+            ...(report.draft_2_issues || []).map(i => ({ ...i, draft: 2 })),
+        ];
+
+        // Initialize decisions — default all to "correct" (fix them)
+        this.integrityDecisions = allIssues.map(issue => ({
+            claim: issue.claim,
+            draft: issue.draft,
+            action: 'correct',
+        }));
+
+        // Compute accuracy bar color
+        const score = report.factual_accuracy_score || 0;
+        const scorePercent = Math.round(score * 100);
+        const barColor = score >= 0.8 ? '#22c55e' : score >= 0.6 ? '#f59e0b' : '#ef4444';
+
+        this.element.innerHTML = `
+            <div class="cc-header p-4 border-b border-white/10">
+                <div class="flex items-center gap-3">
+                    <div class="cc-icon w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-red-500 flex items-center justify-center text-xl">
+                        🔍
+                    </div>
+                    <div>
+                        <h3 class="text-white font-semibold">Integrity Review</h3>
+                        <p class="text-white/50 text-sm">Review flagged issues before finalizing</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="cc-body p-4 space-y-4" style="max-height: 500px; overflow-y: auto;">
+                <!-- Accuracy Score -->
+                <div class="cc-accuracy-score">
+                    <span class="text-white/70 text-sm">Accuracy Score</span>
+                    <div class="cc-accuracy-bar">
+                        <div class="cc-accuracy-fill" style="width: ${scorePercent}%; background: ${barColor};"></div>
+                    </div>
+                    <span class="text-white font-semibold text-sm">${scorePercent}%</span>
+                </div>
+
+                ${allIssues.length === 0 ? `
+                    <div class="text-center py-6">
+                        <div class="text-3xl mb-2">✅</div>
+                        <p class="text-white/70">No factual issues found!</p>
+                        <p class="text-white/40 text-sm mt-1">Your articles look good to go.</p>
+                    </div>
+                ` : `
+                    <p class="text-white/50 text-xs">For each issue, choose <strong class="text-red-400">Correct</strong> to fix it during polishing, or <strong class="text-green-400">Ignore</strong> to leave as-is.</p>
+
+                    <div class="space-y-3" id="cc-integrity-issues">
+                        ${allIssues.map((issue, index) => {
+                            const severityClass = (issue.severity || 'low').toLowerCase();
+                            const hasVerification = issue.perplexity_verified;
+                            const verificationResult = (issue.verification_result || '').toLowerCase();
+                            const verificationClass = verificationResult === 'accurate' ? 'accurate' :
+                                verificationResult === 'inaccurate' ? 'inaccurate' : 'unverifiable';
+
+                            const sourcesHtml = hasVerification && issue.verification_sources?.length
+                                ? issue.verification_sources.slice(0, 3).map(s => {
+                                    const url = this.escapeHtml(s);
+                                    let domain = '';
+                                    try { domain = new URL(s).hostname.replace('www.', ''); } catch { domain = url.substring(0, 40); }
+                                    return `<a href="${url}" target="_blank" rel="noopener" class="cc-source-link">${domain}</a>`;
+                                }).join('')
+                                : '';
+
+                            return `
+                            <div class="cc-integrity-issue severity-${severityClass}" data-index="${index}">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex items-center gap-2 mb-1 flex-wrap">
+                                            <span class="cc-severity-badge ${severityClass}">${severityClass}</span>
+                                            <span class="text-white/40 text-xs">Draft ${issue.draft}</span>
+                                            ${hasVerification ? `
+                                                <span class="cc-verification-badge ${verificationClass}">
+                                                    ${verificationResult === 'accurate' ? '✓' : verificationResult === 'inaccurate' ? '✗' : '?'} ${verificationResult}
+                                                </span>
+                                            ` : ''}
+                                        </div>
+                                        <p class="text-white/90 text-sm font-medium">${this.escapeHtml(issue.claim || '')}</p>
+                                        <p class="text-white/50 text-xs mt-1">${this.escapeHtml(issue.issue || '')}</p>
+                                        ${issue.verification_explanation ? `<p class="text-amber-400/80 text-xs mt-1"><strong>Ground truth:</strong> ${this.escapeHtml(issue.verification_explanation)}</p>` : ''}
+                                        ${sourcesHtml ? `<div class="cc-source-links">${sourcesHtml}</div>` : ''}
+                                    </div>
+                                </div>
+                                <div class="cc-toggle-switch">
+                                    <button type="button" class="cc-toggle-option active-correct" data-index="${index}" data-action="correct">Correct</button>
+                                    <button type="button" class="cc-toggle-option" data-index="${index}" data-action="ignore">Ignore</button>
+                                </div>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                `}
+            </div>
+
+            <div class="cc-footer p-4 border-t border-white/10">
+                <button type="button" id="cc-integrity-submit" class="w-full py-3 px-6 rounded-xl bg-gradient-to-r from-brand-teal to-brand-salmon text-white font-semibold hover:opacity-90 transition-opacity flex items-center justify-center gap-2">
+                    <span>Continue to Polishing</span>
+                    <span>→</span>
+                </button>
+            </div>
+        `;
+
+        this.bindIntegrityEvents();
+    }
+
+    bindIntegrityEvents() {
+        // Toggle buttons
+        this.element.querySelectorAll('.cc-toggle-option').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const index = parseInt(btn.dataset.index);
+                const action = btn.dataset.action;
+
+                // Update decision
+                if (this.integrityDecisions[index]) {
+                    this.integrityDecisions[index].action = action;
+                }
+
+                // Update toggle UI — find sibling buttons in the same toggle
+                const toggle = btn.closest('.cc-toggle-switch');
+                toggle.querySelectorAll('.cc-toggle-option').forEach(opt => {
+                    opt.classList.remove('active-correct', 'active-ignore');
+                });
+                btn.classList.add(action === 'correct' ? 'active-correct' : 'active-ignore');
+            });
+        });
+
+        // Submit button
+        const submitBtn = this.element.querySelector('#cc-integrity-submit');
+        submitBtn?.addEventListener('click', async () => {
+            submitBtn.classList.add('loading');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span>Polishing articles...</span>';
+            try {
+                await this.resolveIntegrity();
+            } catch (error) {
+                console.error('[cc-widget] Resolve integrity failed:', error);
+                this.renderError(error.message || 'Failed to complete polishing');
+            }
+        });
+    }
+
+    async resolveIntegrity() {
+        const params = new URLSearchParams({
+            client_id: this.config.clientId
+        });
+        if (this.config.agentId) params.append('agent_id', this.config.agentId);
+
+        const baseUrl = this.config.apiBaseUrl || window.location.origin;
+        const url = `${baseUrl}/api/v1/content-catalyst/resolve-integrity?${params}`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                run_id: this.runId,
+                decisions: this.integrityDecisions,
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to resolve integrity');
+        }
+
+        const data = await response.json();
+
+        if (data.success) {
+            this.articles = {
+                article_1: data.article_1,
+                article_2: data.article_2
+            };
+            this.renderCompletePhase();
+            await this.storeResult();
+        } else {
+            throw new Error(data.message || 'Polishing failed');
+        }
+    }
+
     renderCompletePhase() {
         this.currentPhase = 'complete';
         this.element.innerHTML = `
@@ -801,10 +1005,19 @@ class ContentCatalystWidget extends BaseWidget {
                 </div>
             </div>
 
-            <div class="cc-footer p-4 border-t border-white/10 flex gap-3">
-                <button type="button" class="cc-new-btn flex-1 py-2.5 px-4 rounded-xl border border-white/20 text-white/70 hover:bg-white/5 transition-colors">
-                    Generate New
-                </button>
+            <div class="cc-footer p-4 border-t border-white/10">
+                <div class="flex gap-3">
+                    <button type="button" class="cc-new-btn flex-1 py-2.5 px-4 rounded-xl border border-white/20 text-white/70 hover:bg-white/5 transition-colors">
+                        Generate New
+                    </button>
+                </div>
+                ${this.transcript ? `
+                    <div class="mt-3 text-center">
+                        <a href="#" class="cc-download-transcript text-white/40 text-xs hover:text-white/60 transition-colors" style="text-decoration: underline; text-underline-offset: 2px;">
+                            Download audio transcription
+                        </a>
+                    </div>
+                ` : ''}
             </div>
         `;
 
@@ -827,7 +1040,24 @@ class ContentCatalystWidget extends BaseWidget {
         this.element.querySelector('.cc-new-btn')?.addEventListener('click', () => {
             this.articles = null;
             this.runId = null;
+            this.transcript = null;
             this.renderInputPhase();
+        });
+
+        // Download transcript link
+        this.element.querySelector('.cc-download-transcript')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (this.transcript) {
+                const blob = new Blob([this.transcript], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'transcription.txt';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
         });
     }
 

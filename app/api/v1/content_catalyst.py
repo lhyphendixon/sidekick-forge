@@ -41,8 +41,13 @@ class ContentCatalystStartResponse(BaseModel):
     success: bool
     run_id: Optional[str] = None
     message: str
+    status: Optional[str] = None  # "awaiting_review" or "completed"
+    integrity_report: Optional[dict] = None  # Present when awaiting_review
+    draft_1: Optional[dict] = None
+    draft_2: Optional[dict] = None
     article_1: Optional[dict] = None
     article_2: Optional[dict] = None
+    transcript: Optional[str] = None  # Audio transcription when source was MP3
 
 
 class ContentCatalystStatusResponse(BaseModel):
@@ -200,8 +205,8 @@ async def start_content_catalyst(
         # Get the service (pass agent_id for per-agent configuration)
         service = await get_content_catalyst_service(client_id, agent_id=agent_id)
 
-        # Run the pipeline (synchronously for now - can be made async with background_tasks)
-        run_id, article_1, article_2 = await service.run_full_pipeline(
+        # Run pipeline through integrity phase (pauses for human review)
+        result = await service.run_full_pipeline(
             config=config,
             agent_id=agent_id,
             user_id=user_id,
@@ -211,16 +216,80 @@ async def start_content_catalyst(
 
         return ContentCatalystStartResponse(
             success=True,
-            run_id=run_id,
-            message="Content Catalyst completed successfully",
-            article_1={"content": article_1, "word_count": len(article_1.split())},
-            article_2={"content": article_2, "word_count": len(article_2.split())},
+            run_id=result["run_id"],
+            message="Integrity review required — review flagged issues before finalizing",
+            status="awaiting_review",
+            integrity_report=result.get("integrity_report"),
+            draft_1=result.get("draft_1"),
+            draft_2=result.get("draft_2"),
+            transcript=result.get("transcript"),
         )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Content Catalyst failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class IntegrityDecision(BaseModel):
+    """A single user decision on a flagged integrity issue."""
+    claim: str = Field(..., description="The claim text from the integrity report")
+    action: str = Field(..., description="'correct' to fix this issue, 'ignore' to leave as-is")
+    draft: Optional[int] = Field(None, description="Which draft this applies to (1 or 2)")
+
+
+class ResolveIntegrityRequest(BaseModel):
+    """Request to resolve integrity review and continue to polishing."""
+    run_id: str = Field(..., description="The Content Catalyst run ID")
+    decisions: list[IntegrityDecision] = Field(..., description="User decisions for each flagged issue")
+
+
+class ResolveIntegrityResponse(BaseModel):
+    """Response after resolving integrity and completing polishing."""
+    success: bool
+    run_id: str
+    message: str
+    article_1: Optional[dict] = None
+    article_2: Optional[dict] = None
+
+
+@router.post("/resolve-integrity", response_model=ResolveIntegrityResponse)
+async def resolve_integrity(
+    request: ResolveIntegrityRequest,
+    client_id: str = Query(...),
+    agent_id: Optional[str] = Query(None),
+    client_service: ClientService = Depends(get_client_service),
+):
+    """
+    Resolve integrity review by submitting user decisions on flagged issues.
+    Items marked 'correct' will be fixed by the polisher.
+    Items marked 'ignore' will be left as-is.
+    Triggers the final polishing phase and returns completed articles.
+    """
+    try:
+        from app.services.content_catalyst_service import get_content_catalyst_service
+
+        service = await get_content_catalyst_service(client_id, agent_id=agent_id)
+
+        # Convert decisions to dicts
+        user_decisions = [d.model_dump() for d in request.decisions]
+
+        run_id, article_1, article_2 = await service.resume_from_polishing(
+            run_id=request.run_id,
+            user_decisions=user_decisions,
+        )
+
+        return ResolveIntegrityResponse(
+            success=True,
+            run_id=run_id,
+            message="Content Catalyst completed successfully",
+            article_1={"content": article_1, "word_count": len(article_1.split())},
+            article_2={"content": article_2, "word_count": len(article_2.split())},
+        )
+
+    except Exception as e:
+        logger.error(f"Resolve integrity failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -487,6 +556,7 @@ class StoreWidgetResultRequest(BaseModel):
     run_id: str = Field(..., description="Content Catalyst run ID")
     article_1: dict = Field(..., description="First article variation")
     article_2: dict = Field(..., description="Second article variation")
+    transcript: Optional[str] = Field(None, description="Source transcript if from audio")
 
 
 @router.post("/store-result")
@@ -508,22 +578,37 @@ async def store_widget_result(
         from supabase import create_client
         client_sb = create_client(client_supabase_url, client_service_key)
 
-        # Store as a new assistant message with widget data in metadata
+        # Build a text summary the agent can reference in future messages
+        article_1_title = request.article_1.get("title", "Article 1") if isinstance(request.article_1, dict) else "Article 1"
+        article_1_content = request.article_1.get("content", "") if isinstance(request.article_1, dict) else str(request.article_1)
+        article_2_title = request.article_2.get("title", "Article 2") if isinstance(request.article_2, dict) else "Article 2"
+        article_2_content = request.article_2.get("content", "") if isinstance(request.article_2, dict) else str(request.article_2)
+
+        context_parts = ["[Content Catalyst completed]"]
+
+        if request.transcript:
+            # Truncate very long transcripts to keep context manageable
+            transcript_text = request.transcript[:8000]
+            if len(request.transcript) > 8000:
+                transcript_text += "\n... (transcript truncated)"
+            context_parts.append(f"\n--- SOURCE TRANSCRIPT ---\n{transcript_text}")
+
+        context_parts.append(f"\n--- ARTICLE 1: {article_1_title} ---\n{article_1_content}")
+        context_parts.append(f"\n--- ARTICLE 2: {article_2_title} ---\n{article_2_content}")
+
+        context_message = "\n".join(context_parts)
+
         widget_data = {
             "type": "content_catalyst",
             "state": "complete",
             "run_id": request.run_id,
-            "articles": {
-                "article_1": request.article_1,
-                "article_2": request.article_2
-            }
         }
 
-        # Insert a widget result message
+        # Insert as an assistant message so the agent sees it in conversation history
         result = client_sb.table("conversation_transcripts").insert({
             "conversation_id": conversation_id,
-            "role": "widget",
-            "content": "",  # No text content, just widget data
+            "role": "assistant",
+            "content": context_message,
             "metadata": {
                 "widget": widget_data,
                 "channel": "text"
@@ -531,7 +616,7 @@ async def store_widget_result(
             "created_at": datetime.utcnow().isoformat()
         }).execute()
 
-        logger.info(f"Stored widget result for conversation {conversation_id}, run {request.run_id}")
+        logger.info(f"Stored Content Catalyst result in conversation history for {conversation_id}, run {request.run_id}")
 
         return {"success": True, "message": "Widget result stored"}
 
@@ -542,7 +627,7 @@ async def store_widget_result(
 
 class DocumentListItem(BaseModel):
     """Document item for Content Catalyst picker."""
-    id: int
+    id: str
     title: str
     created_at: str
     document_type: Optional[str] = None
@@ -591,18 +676,23 @@ async def get_agent_documents(
         documents = []
         if agent_docs_result.data:
             doc_ids = [item.get('document_id') for item in agent_docs_result.data if item.get('document_id')]
-            logger.info(f"Document IDs to fetch: {doc_ids}")
+            logger.info(f"Document IDs to fetch: {len(doc_ids)} IDs")
 
             if doc_ids:
-                # Fetch document details
-                docs_result = client_sb.table('documents') \
-                    .select('id, title, created_at, document_type, processing_status') \
-                    .in_('id', doc_ids) \
-                    .execute()
+                # Batch the .in_() query to avoid Supabase URL length limits
+                BATCH_SIZE = 50
+                all_docs_data = []
+                for i in range(0, len(doc_ids), BATCH_SIZE):
+                    batch = doc_ids[i:i + BATCH_SIZE]
+                    docs_result = client_sb.table('documents') \
+                        .select('id, title, created_at, document_type, processing_status') \
+                        .in_('id', batch) \
+                        .execute()
+                    all_docs_data.extend(docs_result.data or [])
 
-                logger.info(f"Documents fetched: {len(docs_result.data or [])} documents")
+                logger.info(f"Documents fetched: {len(all_docs_data)} documents")
 
-                for doc in (docs_result.data or []):
+                for doc in all_docs_data:
                     # Include all enabled documents - they have content if they're assigned
                     # Statuses: completed, processed, summarizing, chunking, embedding, etc.
                     status = doc.get('processing_status', '')

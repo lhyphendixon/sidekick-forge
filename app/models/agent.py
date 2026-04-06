@@ -144,6 +144,9 @@ class Agent(BaseModel):
     # Citations feature flag
     show_citations: bool = Field(default=True, description="Whether to show RAG citations in responses")
 
+    # Email channel
+    email_address: Optional[str] = Field(default=None, description="Sidekick email address (e.g. slug@sidekickforge.com)")
+
     # Chat mode feature flags
     text_chat_enabled: bool = Field(default=True, description="Whether text chat is enabled")
     voice_chat_enabled: bool = Field(default=True, description="Whether voice chat is enabled")
@@ -202,6 +205,7 @@ class AgentUpdate(BaseModel):
     max_context_messages: Optional[int] = None
     channels: Optional[ChannelSettings] = None
     rag_results_limit: Optional[int] = None
+    email_address: Optional[str] = None
     # Chat mode toggles
     voice_chat_enabled: Optional[bool] = None
     text_chat_enabled: Optional[bool] = None

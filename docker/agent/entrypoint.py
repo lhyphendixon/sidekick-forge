@@ -20,13 +20,14 @@ from datetime import datetime, timezone
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2026-03-08T03:00:52Z"
-AGENT_BUILD_HASH = "v2.9.11-staging"
+AGENT_BUILD_VERSION = "2026-04-05T23:55:55Z"
+AGENT_BUILD_HASH = "fix-campaign-scan-email-in-config"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
 from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voice
 from livekit.agents import BackgroundAudioPlayer, AudioConfig, BuiltinAudioClip
+from livekit.agents import TurnHandlingOptions
 from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
 # bithuman is imported lazily when needed to avoid dependency conflicts
 try:
@@ -721,6 +722,7 @@ async def _run_text_mode_interaction(
     user_message: str,
     collector: Optional[TextResponseCollector],
     conversation_id: str,
+    job_metadata: Optional[Dict[str, Any]] = None,
     timeout: float = 30.0,
 ) -> Dict[str, Any]:
     if not user_message or not user_message.strip():
@@ -787,6 +789,55 @@ async def _run_text_mode_interaction(
             }
             response_text = "I'll help you print or export this conversation. Use the PrintReady widget below."
             logger.info(f"🖨️ Direct PrintReady widget trigger")
+
+        elif ability_name in ("EVERNOTE", "EVERNOTE NOTES", "EVERNOTE-NOTES", "EVERNOTENOTES"):
+            widget_trigger = {
+                "type": "evernote",
+                "config": {
+                    "suggested_query": "",
+                },
+                "message": "Opening Evernote..."
+            }
+            response_text = "I'll help you access your Evernote notes. Use the Evernote widget below to search and browse."
+            logger.info(f"📝 Direct Evernote widget trigger")
+
+        elif ability_name in ("TRELLO", "TRELLO BOARDS", "TRELLO-BOARDS", "TRELLOBOARDS"):
+            widget_trigger = {
+                "type": "trello",
+                "config": {
+                    "suggested_query": "",
+                },
+                "message": "Opening Trello..."
+            }
+            response_text = "I'll help you access your Trello boards. Use the Trello widget below to search."
+            logger.info(f"📋 Direct Trello widget trigger")
+
+        elif ability_name in ("DESCRIPT", "DESCRIPT CONNECT", "DESCRIPT-CONNECT", "DESCRIPTCONNECT", "VIDEO EDITOR"):
+            widget_trigger = {
+                "type": "descript",
+                "config": {
+                    "suggested_instructions": "",
+                },
+                "message": "Opening Descript Connect..."
+            }
+            response_text = "I'll help you edit your video. Upload your video and configure editing preferences in the Descript Connect widget below."
+            logger.info(f"🎬 Direct Descript Connect widget trigger")
+
+        elif ability_name in ("CAMPAIGN SCAN", "CAMPAIGN-SCAN", "CAMPAIGNSCAN", "EMAIL CHECK", "EMAIL REVIEW", "NEWSLETTER CHECK"):
+            agent_email = ""
+            try:
+                agent_email = agent._agent_config.get("email_address", "") or ""
+            except Exception:
+                pass
+            widget_trigger = {
+                "type": "campaign_scan",
+                "config": {
+                    "agent_email": agent_email,
+                },
+                "message": "Opening Campaign Scan..."
+            }
+            response_text = "I'll review your email campaign. Forward the email you'd like me to check to the address shown in the Campaign Scan widget below."
+            logger.info(f"📧 Direct Campaign Scan widget trigger")
 
         if widget_trigger:
             # Build and return the response payload immediately without LLM
@@ -1090,7 +1141,7 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
         tool_args = tc.get("arguments", {})
 
         # Skip widget triggers - these trigger frontend widgets, not backend execution
-        if tool_name in ("content_catalyst", "lingua", "image-catalyst", "print-ready", "print_ready"):
+        if tool_name in ("content_catalyst", "lingua", "image-catalyst", "print-ready", "print_ready", "evernote_notes"):
             continue
 
         # Find the tool function
@@ -1098,6 +1149,10 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
         if not tool_fn:
             logger.warning(f"🧰 TEXT-MODE: Tool '{tool_name}' not found in registered tools. Available: {list(tool_lookup.keys())}")
             continue
+
+        # Inject client metadata for tools that need client context (e.g., Trello, Asana)
+        if "metadata" not in tool_args and isinstance(job_metadata, dict) and job_metadata.get("client_id"):
+            tool_args["metadata"] = {"client_id": job_metadata["client_id"]}
 
         logger.info(f"🧰 TEXT-MODE: Executing tool '{tool_name}' with args: {tool_args}")
 
@@ -1275,6 +1330,53 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
 
                 logger.info(f"🖨️ TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
                 break
+
+    # Check for evernote tool call from native function calling
+    if not widget_trigger:
+        for tc in detected_tool_calls:
+            if tc["name"] in ("evernote_notes", "evernote"):
+                logger.info(f"📝 TEXT-MODE: Processing Evernote tool call: {tc['arguments']}")
+                args = tc["arguments"]
+                suggested_query = args.get("user_inquiry", "")
+
+                widget_trigger = {
+                    "type": "evernote",
+                    "config": {
+                        "suggested_query": suggested_query,
+                    },
+                    "message": "Opening Evernote..."
+                }
+
+                if not response_text:
+                    response_text = "I'll help you access your Evernote notes. Use the Evernote widget below to search and browse."
+
+                logger.info(f"📝 TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
+                break
+
+    # Check for descript tool call from native function calling
+    if not widget_trigger:
+        for tc in detected_tool_calls:
+            if tc["name"] in ("descript_connect", "descript"):
+                logger.info(f"🎬 TEXT-MODE: Processing Descript Connect tool call: {tc['arguments']}")
+                args = tc["arguments"]
+                suggested_instructions = args.get("suggested_instructions", "")
+
+                widget_trigger = {
+                    "type": "descript",
+                    "config": {
+                        "suggested_instructions": suggested_instructions,
+                    },
+                    "message": "Opening Descript Connect..."
+                }
+
+                if not response_text:
+                    response_text = "I'll help you edit your video. Upload your video and configure editing preferences in the Descript Connect widget below."
+
+                logger.info(f"🎬 TEXT-MODE: Widget trigger from native function call: {widget_trigger}")
+                break
+
+    # Trello tool calls are executed server-side (not widget triggers).
+    # They go through the normal tool execution path above and return results conversationally.
 
     # NOTE: JSON fallback for tool calls REMOVED per No-Fallback Policy.
     # If the LLM outputs tool calls as JSON text instead of using native function calling,
@@ -2255,7 +2357,9 @@ async def agent_job_handler(ctx: JobContext):
                 or (user_profile.get("full_name") if isinstance(user_profile, dict) and user_profile.get("full_name") else None)
                 or (user_profile.get("name") if isinstance(user_profile, dict) and user_profile.get("name") else None)
             )
-            user_name = _raw_name if (_raw_name and _looks_like_real_name(_raw_name)) else "there"
+            # Use first name only for greetings (more natural/casual)
+            _full_name = _raw_name if (_raw_name and _looks_like_real_name(_raw_name)) else None
+            user_name = _full_name.split()[0] if _full_name and ' ' in _full_name else (_full_name or "there")
             agent_name = metadata.get("name", metadata.get("agent_name", "your AI assistant"))
             
             logger.info(f"📢 Agent will greet user '{user_name}' as '{agent_name}' after session starts")
@@ -2374,7 +2478,7 @@ async def agent_job_handler(ctx: JobContext):
                         logger.info(f"🧰 Built {len(built_tools)} tools successfully")
                         for tool_def in tool_defs:
                             tool_type = tool_def.get("type")
-                            if tool_type not in {"n8n", "asana", "helpscout", "user_overview", "content_catalyst", "documentsense", "lingua", "print_ready"}:
+                            if tool_type not in {"n8n", "asana", "helpscout", "trello", "notion", "user_overview", "content_catalyst", "documentsense", "lingua", "print_ready"}:
                                 continue
                             slug_candidate = tool_def.get("slug") or tool_def.get("name") or tool_def.get("id")
                             if slug_candidate:
@@ -2552,6 +2656,7 @@ async def agent_job_handler(ctx: JobContext):
                         'api_keys': metadata.get("api_keys"),
                         'is_wizard_mode': False,
                         'hosting_type': metadata.get("hosting_type"),
+                        'email_address': metadata.get("email_address", ""),
                     },
                 )
                 # Store registry on agent for text-mode tool execution
@@ -2622,6 +2727,7 @@ async def agent_job_handler(ctx: JobContext):
             base_tool_context: Dict[str, Any] = {
                 "conversation_id": agent._conversation_id,
                 "client_conversation_id": metadata.get("client_conversation_id") or agent._conversation_id,
+                "client_id": metadata.get("client_id"),  # Required by Trello, HelpScout, and other OAuth-based tools
                 "user_id": agent._user_id,
                 "agent_id": metadata.get("agent_id"),  # UUID for update_user_overview tool
                 "agent_slug": metadata.get("agent_slug") or metadata.get("agent_id"),
@@ -2744,27 +2850,24 @@ async def agent_job_handler(ctx: JobContext):
                     stt=stt_plugin,
                     llm=llm_plugin,
                     tts=tts_plugin,
-                    turn_detection=turn_detect or "stt",     # EnglishModel ML turn detector, fallback to STT
                     use_tts_aligned_transcript=False,        # Disable TTS alignment in wizard mode
-                    # WIZARD TURN DETECTION: Be very patient - users give long descriptions
-                    # min_endpointing_delay: Wait this long after silence before considering turn complete
-                    # max_endpointing_delay: Absolute max wait before forcing turn completion
-                    # NOTE: Users often pause while thinking during personality descriptions
-                    min_endpointing_delay=5.0,               # Wait 5 seconds of silence before responding (increased from 3)
-                    max_endpointing_delay=15.0,              # Allow up to 15 seconds for long pauses (increased from 10)
                     preemptive_generation=False,
                     # WIZARD TOOL CALLS: Keep low to force one-question-at-a-time in PersonalityTask
                     # With too many steps, LLM extracts all traits from one answer and skips questions
                     max_tool_steps=10,                       # Needs headroom for: 6 record_* calls + skip_anything_else + confirm_personality per turn
-                    # CRITICAL: Disable interruptions in wizard mode
-                    allow_interruptions=False,               # No interruptions - let replies complete
-                    min_interruption_duration=2.0,           # High threshold if somehow enabled
-                    min_interruption_words=10,               # Require many words to interrupt
-                    resume_false_interruption=False,
-                    false_interruption_timeout=None,         # No false interruption handling
-                    # CRITICAL: Discard audio while agent is speaking to prevent echo
-                    # This fixes the issue where STT picks up agent's own TTS output
-                    discard_audio_if_uninterruptible=True    # Discard audio during agent speech (prevents echo)
+                    # v1.5.0 TurnHandlingOptions: consolidated endpointing + interruption config
+                    turn_handling=TurnHandlingOptions(
+                        turn_detection=turn_detect or "stt",  # EnglishModel ML turn detector, fallback to STT
+                        endpointing={
+                            "mode": "fixed",                 # Fixed mode — wizard users pause to think
+                            "min_delay": 5.0,                # Wait 5 seconds of silence before responding
+                            "max_delay": 15.0,               # Allow up to 15 seconds for long pauses
+                        },
+                        interruption={
+                            "enabled": False,                # No interruptions in wizard mode
+                            "discard_audio_if_uninterruptible": True,  # Discard audio during agent speech (prevents echo)
+                        },
+                    ),
                 )
                 # Mark session as wizard mode for interrupt handler
                 session._allow_interruptions = False
@@ -2776,25 +2879,25 @@ async def agent_job_handler(ctx: JobContext):
                     tts=tts_plugin,
                     # NOTE: Tools are passed to SidekickAgent constructor only
                     # Do NOT pass tools here - causes "duplicate function name" error
-                    # PRIMARY: EnglishModel ML-based turn detection with STT fallback
-                    # ML model evaluates whether transcript looks like a complete utterance
-                    turn_detection=turn_detect or "stt",
                     # TTS-aligned transcriptions disabled - using TextOutputOptions with sync_transcription=False instead
-                    # This avoids duplicate transcription issues and segment synchronization problems
                     use_tts_aligned_transcript=False,        # Disabled to prevent duplicates with TextOutputOptions
-                    # Endpointing parameters (still used as safety bounds even with STT turn detection)
-                    min_endpointing_delay=0.8,               # Buffer after STT END_OF_SPEECH before committing
-                    max_endpointing_delay=4.0,               # Max wait before forcing turn completion
                     # PREEMPTIVE GENERATION: Disabled - was causing issues with tool call follow-up
-                    # When enabled, the second LLM call after tool execution returns empty
                     preemptive_generation=False,
-                    # Interruption settings that prevent scheduler from getting stuck
-                    allow_interruptions=True,
-                    min_interruption_duration=0.5,           # Avoid accidental interruptions
-                    min_interruption_words=0,                # Duration-based, not word-based
-                    resume_false_interruption=False,         # CRITICAL: Never try to resume - treat all interruptions as final
-                    false_interruption_timeout=2.0,          # Standard timeout for false interruption detection
-                    discard_audio_if_uninterruptible=True   # Always discard audio on interruption
+                    # v1.5.0 TurnHandlingOptions: consolidated endpointing + interruption config
+                    turn_handling=TurnHandlingOptions(
+                        turn_detection=turn_detect or "stt",  # EnglishModel ML-based turn detection with STT fallback
+                        endpointing={
+                            "mode": "dynamic",               # Adapts to conversation rhythm (replaces fixed 0.8s)
+                            "min_delay": 0.5,                # Dynamic minimum after END_OF_SPEECH
+                            "max_delay": 4.0,                # Max wait before forcing turn completion
+                        },
+                        interruption={
+                            "enabled": True,
+                            "mode": "adaptive",              # ML-based: rejects backchannels, coughs, background noise
+                            "discard_audio_if_uninterruptible": True,  # Always discard audio on interruption
+                            # Auto-resumes playback on false interruptions (replaces resume_false_interruption workaround)
+                        },
+                    ),
                 )
             logger.info("✅ AgentSession created with %s tools available to LLM", len(built_tools))
             # Preserve the TTS plugin reference for text-mode diagnostics
@@ -3867,6 +3970,7 @@ async def agent_job_handler(ctx: JobContext):
                         user_message=user_message or "",
                         collector=text_response_collector,
                         conversation_id=agent._conversation_id,
+                        job_metadata=metadata,
                     )
                     logger.info(f"✅ Text-only interaction completed with response length {len(payload.get('text_response', ''))}")
                 finally:
@@ -4229,12 +4333,13 @@ async def agent_job_handler(ctx: JobContext):
                 def _on_assistant_stopped():
                     logger.info("🔇 assistant_stopped_speaking")
 
-                @session.on("metrics_collected")
-                def _on_metrics(metrics):
+                @session.on("session_usage_updated")
+                def _on_usage(ev):
                     try:
-                        logger.info(f"📈 metrics_collected: {metrics}")
+                        for usage in ev.usage.model_usage:
+                            logger.info(f"📈 usage: {usage.provider}/{usage.model}: {usage}")
                     except Exception:
-                        logger.info("📈 metrics_collected (unserializable)")
+                        logger.info("📈 session_usage_updated (unserializable)")
 
                 @session.on("function_tools_executed")
                 def _on_tools_executed(ev):

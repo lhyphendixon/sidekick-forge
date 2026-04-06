@@ -80,6 +80,8 @@ services:
       # RAG context settings
       - CONTEXT_MAX_KNOWLEDGE_RESULTS=${CONTEXT_MAX_KNOWLEDGE_RESULTS:-10}
       - CONTEXT_MATCH_THRESHOLD=${CONTEXT_MATCH_THRESHOLD:-0.3}
+      # LiveKit agent log level (v1.5.0+): debug, info, warning, error
+      - LIVEKIT_LOG_LEVEL=${LIVEKIT_LOG_LEVEL:-info}
     volumes:
       - ./docker/agent/entrypoint.py:/app/entrypoint.py:ro
       - ./docker/agent/sidekick_agent.py:/app/sidekick_agent.py:ro

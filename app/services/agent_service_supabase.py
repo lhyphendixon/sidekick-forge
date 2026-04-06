@@ -8,7 +8,7 @@ import logging
 import json
 
 from app.models.agent import Agent, AgentCreate, AgentUpdate, VoiceSettings, WebhookSettings
-from app.models.client import ChannelSettings, TelegramChannelSettings
+from app.models.client import ChannelSettings, TelegramChannelSettings, EmailChannelSettings
 from app.services.client_service_supabase import ClientService
 
 logger = logging.getLogger(__name__)
@@ -125,6 +125,7 @@ class AgentService:
             updated_at=updated_at,
             tools_config=tools_config,
             channels=channels,
+            email_address=agent_data.get("email_address"),
             rag_results_limit=agent_data.get("rag_results_limit", 5),
             sound_settings=agent_data.get("sound_settings") or {},
         )

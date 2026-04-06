@@ -79,6 +79,15 @@ class CostSummaryResponse(BaseModel):
     per_agent: List[Dict[str, Any]]
 
 
+class ImageCatalystEditRequest(BaseModel):
+    """Request to edit a previously generated image."""
+    source_image_url: str = Field(..., description="URL of the image to edit")
+    edit_prompt: str = Field(..., min_length=1, max_length=32000, description="Edit instructions")
+    width: Optional[int] = Field(None, description="Image width (defaults to original)")
+    height: Optional[int] = Field(None, description="Image height (defaults to original)")
+    original_run_id: Optional[str] = Field(None, description="Run ID of the original generation")
+
+
 class StoreResultRequest(BaseModel):
     """Request to store Image Catalyst result in conversation."""
     run_id: str = Field(..., description="Image Catalyst run ID")
@@ -194,14 +203,22 @@ async def upload_reference_image(
             try:
                 result = client_sb.storage.create_bucket(
                     bucket_name,
-                    options={"public": False}
+                    options={"public": True}
                 )
                 logger.info(f"Created bucket '{bucket_name}': {result}")
                 bucket_created = True
             except Exception as e:
                 error_str = str(e).lower()
                 if "already exists" in error_str or "duplicate" in error_str:
-                    logger.debug(f"Bucket '{bucket_name}' already exists")
+                    logger.debug(f"Bucket '{bucket_name}' already exists, ensuring public")
+                    # Ensure existing bucket is public (needed for Runware access)
+                    try:
+                        client_sb.storage.update_bucket(
+                            bucket_name,
+                            options={"public": True}
+                        )
+                    except Exception as ub_err:
+                        logger.debug(f"Could not update bucket to public: {ub_err}")
                     bucket_created = True
                 else:
                     logger.warning(f"Could not create bucket '{bucket_name}': {e}")
@@ -228,21 +245,18 @@ async def upload_reference_image(
             )
             logger.info(f"Upload result: {result}")
 
-            # Get signed URL (valid for 1 hour)
-            signed_url = client_sb.storage.from_(bucket_name).create_signed_url(
-                path=storage_path,
-                expires_in=3600
-            )
+            # Get public URL (bucket is public so Runware can fetch it)
+            public_url = client_sb.storage.from_(bucket_name).get_public_url(storage_path)
 
-            if signed_url and signed_url.get("signedURL"):
+            if public_url:
                 return ImageUploadResponse(
                     success=True,
-                    file_url=signed_url["signedURL"],
+                    file_url=public_url,
                     file_path=storage_path,
                     message="Reference image uploaded successfully"
                 )
             else:
-                raise HTTPException(status_code=500, detail="Failed to generate signed URL")
+                raise HTTPException(status_code=500, detail="Failed to generate public URL")
 
         except HTTPException:
             raise
@@ -404,6 +418,84 @@ async def get_cost_summary(
 
     except Exception as e:
         logger.error(f"Failed to get cost summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/edit", response_model=ImageCatalystStartResponse)
+async def edit_image(
+    request: ImageCatalystEditRequest,
+    client_id: str = Query(...),
+    agent_id: str = Query(...),
+    user_id: Optional[str] = Query(None),
+    conversation_id: Optional[str] = Query(None),
+    session_id: Optional[str] = Query(None),
+    client_service: ClientService = Depends(get_client_service),
+):
+    """
+    Edit a previously generated image using Nano Banana 2 (thumbnail mode).
+
+    Passes the source image as a reference image with the edit instructions.
+    Only supported for thumbnail/promotional mode (Nano Banana 2 Pro).
+    """
+    try:
+        client = await client_service.get_client(client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+        from app.config import settings as app_settings
+        if not app_settings.runware_api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="RunWare API key not configured. Image Catalyst requires a RunWare API key."
+            )
+
+        from app.services.image_catalyst_service import ImageCatalystService
+
+        # Fetch brand style config and enrich edit prompt
+        brand_config = await _get_brand_style_config(client_service, client_id, agent_id)
+        enriched_prompt = _enrich_prompt_with_brand_style(request.edit_prompt, brand_config)
+
+        service = ImageCatalystService()
+        result = await service.edit(
+            source_image_url=request.source_image_url,
+            edit_prompt=request.edit_prompt,
+            enriched_prompt=enriched_prompt if enriched_prompt != request.edit_prompt else None,
+            client_id=client_id,
+            agent_id=agent_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            session_id=session_id,
+            width=request.width,
+            height=request.height,
+            original_run_id=request.original_run_id,
+        )
+
+        if result.status == "failed":
+            return ImageCatalystStartResponse(
+                success=False,
+                run_id=result.run_id,
+                status="failed",
+                message=f"Image editing failed: {result.error}",
+                error=result.error,
+            )
+
+        return ImageCatalystStartResponse(
+            success=True,
+            run_id=result.run_id,
+            status="complete",
+            message="Image edited successfully",
+            image_url=result.image_url,
+            seed=result.seed,
+            generation_time_ms=result.generation_time_ms,
+            cost=result.cost,
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Image Catalyst edit failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -257,11 +257,13 @@ async def auth_exception_handler(request: Request, exc):
 # Include webhook routers
 from app.api.webhooks import livekit_router, supabase_router
 from app.api.webhooks.telegram import router as telegram_router
+from app.api.webhooks.email import router as email_router
 from app.api.embed import router as embed_router
 
 app.include_router(livekit_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(telegram_router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(email_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(embed_router)
 
 # Lightweight debug endpoint to verify resolved LiveKit configuration quickly

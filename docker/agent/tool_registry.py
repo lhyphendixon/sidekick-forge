@@ -15,7 +15,27 @@ import aiohttp
 from typing import Any, Dict, List, Callable, Optional
 import logging
 from livekit.agents import llm
-from livekit.agents.llm.tool_context import function_tool as lk_function_tool, ToolError
+from livekit.agents.llm.tool_context import function_tool as _lk_function_tool_orig, ToolError
+
+
+def lk_function_tool(*args: Any, **kwargs: Any) -> Any:
+    """Wrapper around livekit's function_tool that handles the v1.5.0 RawFunctionTool
+    raw_arguments unwrapping. When raw_schema is used, the SDK passes all LLM arguments
+    inside a single 'raw_arguments' dict instead of spreading them as kwargs."""
+    raw_schema = kwargs.get("raw_schema")
+    original_decorator = _lk_function_tool_orig(*args, **kwargs)
+    if raw_schema is None:
+        return original_decorator
+
+    def _wrapping_decorator(func: Any) -> Any:
+        @functools.wraps(func)
+        async def _unwrap_raw_args(**kw: Any) -> Any:
+            raw_args = kw.get("raw_arguments")
+            if isinstance(raw_args, dict):
+                kw = {**kw, **raw_args}
+            return await func(**kw)
+        return original_decorator(_unwrap_raw_args)
+    return _wrapping_decorator
 
 # Import ability modules separately from OAuth services so abilities can work
 # even if OAuth services fail to import (e.g., due to Settings validation in container)
@@ -77,6 +97,74 @@ except Exception as exc:  # pragma: no cover - agent runtime runs standalone
     )
     build_prediction_market_tool = None
     PredictionMarketConfigError = None  # type: ignore
+
+
+# Evernote ability module
+try:
+    from app.agent_modules.abilities.evernote import (  # type: ignore
+        EvernoteAbilityConfigError,
+        build_evernote_tool,
+    )
+except Exception as exc:  # pragma: no cover - agent runtime runs standalone
+    logging.getLogger(__name__).warning(
+        "Failed to import Evernote ability module: %s", exc,
+    )
+    build_evernote_tool = None
+    EvernoteAbilityConfigError = None  # type: ignore
+
+# Evernote OAuth service (optional)
+try:
+    from app.services.evernote_oauth_service import EvernoteOAuthService  # type: ignore
+except Exception as exc:  # pragma: no cover
+    logging.getLogger(__name__).debug(
+        "Evernote OAuth service not available (expected in container): %s", exc,
+    )
+    EvernoteOAuthService = None  # type: ignore
+
+# Trello ability module
+try:
+    from app.agent_modules.abilities.trello import (  # type: ignore
+        TrelloAbilityConfigError,
+        build_trello_tool,
+    )
+except Exception as exc:  # pragma: no cover - agent runtime runs standalone
+    logging.getLogger(__name__).warning(
+        "Failed to import Trello ability module: %s", exc,
+    )
+    build_trello_tool = None
+    TrelloAbilityConfigError = None  # type: ignore
+
+# Trello auth service (optional)
+try:
+    from app.services.trello_auth_service import TrelloAuthService  # type: ignore
+except Exception as exc:  # pragma: no cover
+    logging.getLogger(__name__).debug(
+        "Trello auth service not available (expected in container): %s", exc,
+    )
+    TrelloAuthService = None  # type: ignore
+
+
+# Notion ability module
+try:
+    from app.agent_modules.abilities.notion import (  # type: ignore
+        NotionAbilityConfigError,
+        build_notion_tool,
+    )
+except Exception as exc:  # pragma: no cover
+    logging.getLogger(__name__).warning(
+        "Failed to import Notion ability module: %s", exc,
+    )
+    build_notion_tool = None
+    NotionAbilityConfigError = None  # type: ignore
+
+# Notion auth service (optional)
+try:
+    from app.services.notion_auth_service import NotionAuthService  # type: ignore
+except Exception as exc:  # pragma: no cover
+    logging.getLogger(__name__).debug(
+        "Notion auth service not available (expected in container): %s", exc,
+    )
+    NotionAuthService = None  # type: ignore
 
 
 def _is_glm_reasoning_model(model_name: str) -> bool:
@@ -183,6 +271,14 @@ class ToolRegistry:
                     ft = self._build_print_ready_tool(t)
                 elif ttype == "scrape_url":
                     ft = self._build_scrape_url_tool(t)
+                elif ttype == "evernote":
+                    ft = self._build_evernote_tool(t)
+                elif ttype == "trello":
+                    ft = self._build_trello_tool(t)
+                elif ttype == "notion":
+                    ft = self._build_notion_tool(t)
+                elif ttype == "descript":
+                    ft = self._build_descript_tool(t)
                 elif ttype == "builtin":
                     # Handle built-in tools by mapping slug to appropriate builder
                     ft = self._build_builtin_tool(t)
@@ -368,6 +464,9 @@ Note: Reasoning mode increases response quality but takes longer. Only enable it
         elif slug in ("print_ready", "print-ready", "printready"):
             self._logger.info(f"🔧 Mapping builtin '{slug}' to print_ready tool")
             return self._build_print_ready_tool(t)
+        elif slug in ("descript_connect", "descript", "video_editor"):
+            self._logger.info(f"🔧 Mapping builtin '{slug}' to descript tool")
+            return self._build_descript_tool(t)
         else:
             self._logger.warning(f"⚠️ Unknown builtin tool slug '{slug}'; skipping")
             return None
@@ -2049,6 +2148,68 @@ Do NOT use this for general knowledge questions - only for document-specific que
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
 
+    def _build_descript_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Descript Connect tool for AI-powered video editing."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "descript_connect"
+        cfg = dict(t.get("config") or {})
+        description = t.get("description") or (
+            "Trigger the Descript Connect video editing widget. "
+            "When the user wants to edit a video, remove filler words, remove silences, "
+            "enhance audio, create highlight clips, or apply any video/audio edits, use this tool. "
+            "Also use this tool when the user mentions 'Descript' by name. "
+            "The user will upload their video and configure editing preferences "
+            "directly in the widget interface. "
+            "Call this tool immediately when video editing is mentioned — do not ask clarifying questions."
+        )
+
+        raw_schema = {
+            "name": slug,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_widget": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Set to true to trigger the Descript Connect widget UI",
+                    },
+                    "suggested_instructions": {
+                        "type": "string",
+                        "description": "Optional editing instructions inferred from the conversation",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+
+        async def _invoke_raw(**kwargs: Any) -> str:
+            """Trigger the Descript Connect widget UI for video editing."""
+            try:
+                self._logger.info("Descript Connect widget trigger invoked", extra={"args": kwargs})
+            except Exception:
+                pass
+
+            suggested_instructions = kwargs.get("suggested_instructions", "")
+
+            widget_trigger = {
+                "widget_type": "descript",
+                "suggested_instructions": suggested_instructions,
+                "message": "Opening Descript Connect...",
+            }
+
+            self._emit_tool_result(
+                slug=slug,
+                tool_type="descript",
+                success=True,
+                output="Widget triggered",
+                raw_output=widget_trigger,
+            )
+
+            return f"WIDGET_TRIGGER:descript:{suggested_instructions}"
+
+        return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
     def _build_print_ready_tool(self, t: Dict[str, Any]) -> Any:
         """Build the PrintReady tool for transcript printing/export."""
         slug = t.get("slug") or t.get("name") or t.get("id") or "print-ready"
@@ -2449,3 +2610,308 @@ Do NOT use this for general knowledge questions - only for document-specific que
         )
 
         return output
+
+    # ------------------------------------------------------------------
+    # Evernote
+    # ------------------------------------------------------------------
+
+    def _build_evernote_tool(self, t: Dict[str, Any]) -> Any:
+        slug = t.get("slug") or t.get("name") or t.get("id") or "evernote_notes"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            for key in (slug, t.get("id"), t.get("name")):
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        # Resolve access token
+        access_token = merged_cfg.get("access_token")
+        key_name = merged_cfg.get("access_token_key") or merged_cfg.get("api_key_name") or "evernote_access_token"
+        if not access_token and key_name:
+            access_token = self._api_keys.get(key_name)
+        if not access_token and key_name:
+            env_candidate = os.getenv(str(key_name).upper())
+            if env_candidate:
+                access_token = env_candidate
+        if access_token:
+            merged_cfg["access_token"] = access_token
+
+        # Build OAuth service
+        oauth_service = None
+        if EvernoteOAuthService is not None:
+            try:
+                from app.core.dependencies import get_client_service
+                client_service = get_client_service()
+                platform_client = self._platform_supabase or getattr(client_service, "supabase", None)
+                oauth_service = EvernoteOAuthService(
+                    client_service,
+                    primary_supabase=self._primary_supabase,
+                    platform_supabase=platform_client,
+                )
+            except Exception:
+                oauth_service = None
+
+        if build_evernote_tool is None:
+            self._logger.warning("Evernote ability module not available; skipping")
+            return None
+
+        try:
+            return build_evernote_tool(t, merged_cfg, oauth_service=oauth_service)
+        except Exception as exc:
+            message = f"Evernote ability is not ready: {exc}"
+            self._logger.warning("Evernote ability could not be built", extra={"slug": slug, "reason": str(exc)})
+
+            async def _misconfigured_tool(**_: Any) -> Dict[str, str]:
+                return {"error": message, "slug": slug}
+
+            description = t.get("description") or "Evernote integration is not configured yet."
+            return lk_function_tool(
+                raw_schema={
+                    "name": slug,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_inquiry": {
+                                "type": "string",
+                                "description": "Latest user request describing the desired Evernote action.",
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional session metadata.",
+                                "additionalProperties": True,
+                            },
+                        },
+                        "required": ["user_inquiry"],
+                    },
+                }
+            )(_misconfigured_tool)
+
+    # ------------------------------------------------------------------
+    # Trello
+    # ------------------------------------------------------------------
+
+    def _build_trello_tool(self, t: Dict[str, Any]) -> Any:
+        slug = t.get("slug") or t.get("name") or t.get("id") or "trello_boards"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            for key in (slug, t.get("id"), t.get("name")):
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        # Resolve user token
+        user_token = merged_cfg.get("user_token")
+        key_name = merged_cfg.get("token_key") or "trello_user_token"
+        if not user_token and key_name:
+            user_token = self._api_keys.get(key_name)
+        if not user_token and key_name:
+            env_candidate = os.getenv(str(key_name).upper())
+            if env_candidate:
+                user_token = env_candidate
+        if user_token:
+            merged_cfg["user_token"] = user_token
+
+        # Resolve API key (platform-level)
+        api_key = merged_cfg.get("api_key") or os.getenv("TRELLO_API_KEY")
+        if api_key:
+            merged_cfg["api_key"] = api_key
+
+        # Build auth service
+        auth_service = None
+        if TrelloAuthService is not None:
+            try:
+                from app.core.dependencies import get_client_service
+                client_service = get_client_service()
+                platform_client = self._platform_supabase or getattr(client_service, "supabase", None)
+                auth_service = TrelloAuthService(
+                    client_service,
+                    primary_supabase=self._primary_supabase,
+                    platform_supabase=platform_client,
+                )
+                self._logger.info("Trello auth service initialized: platform=%s primary=%s",
+                                  bool(platform_client), bool(self._primary_supabase))
+            except Exception as exc:
+                self._logger.warning("Trello auth service init failed: %s", exc)
+                auth_service = None
+
+        if build_trello_tool is None:
+            self._logger.warning("Trello ability module not available; skipping")
+            return None
+
+        # Inject client_id from runtime context into metadata for voice-mode calls
+        # (text-mode manually passes metadata, but voice-mode only passes user_inquiry)
+        runtime_ctx_ref = self._runtime_context
+
+        def _wrap_trello_with_runtime_ctx(raw_tool: Any) -> Any:
+            """Wrap the Trello lk_function_tool to inject client_id from runtime context."""
+            original_func = getattr(raw_tool, "_func", None) or getattr(raw_tool, "execute", None)
+            if original_func is None:
+                return raw_tool
+
+            async def _patched_invoke(**kwargs: Any) -> Any:
+                metadata = kwargs.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                # Merge client_id from runtime context if not already present
+                if not metadata.get("client_id"):
+                    ctx = runtime_ctx_ref.get(slug) or {}
+                    if ctx.get("client_id"):
+                        metadata["client_id"] = ctx["client_id"]
+                        kwargs["metadata"] = metadata
+                return await original_func(**kwargs)
+
+            raw_tool._func = _patched_invoke
+            return raw_tool
+
+        try:
+            tool = build_trello_tool(t, merged_cfg, auth_service=auth_service)
+            return _wrap_trello_with_runtime_ctx(tool)
+        except Exception as exc:
+            message = f"Trello ability is not ready: {exc}"
+            self._logger.warning("Trello ability could not be built", extra={"slug": slug, "reason": str(exc)})
+
+            async def _misconfigured_tool(**_: Any) -> Dict[str, str]:
+                return {"error": message, "slug": slug}
+
+            description = t.get("description") or "Trello integration is not configured yet."
+            return lk_function_tool(
+                raw_schema={
+                    "name": slug,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_inquiry": {
+                                "type": "string",
+                                "description": "Latest user request describing the desired Trello action.",
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional session metadata.",
+                                "additionalProperties": True,
+                            },
+                        },
+                        "required": ["user_inquiry"],
+                    },
+                }
+            )(_misconfigured_tool)
+
+    def _build_notion_tool(self, t: Dict[str, Any]) -> Any:
+        slug = t.get("slug") or t.get("name") or t.get("id") or "notion_workspace"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            for key in (slug, t.get("id"), t.get("name")):
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        # Build auth service
+        auth_service = None
+        if NotionAuthService is not None:
+            try:
+                from app.core.dependencies import get_client_service
+                client_service = get_client_service()
+                platform_client = self._platform_supabase or getattr(client_service, "supabase", None)
+                auth_service = NotionAuthService(
+                    client_service,
+                    primary_supabase=self._primary_supabase,
+                    platform_supabase=platform_client,
+                )
+                self._logger.info("Notion auth service initialized: platform=%s primary=%s",
+                                  bool(platform_client), bool(self._primary_supabase))
+            except Exception as exc:
+                self._logger.warning("Notion auth service init failed: %s", exc)
+                auth_service = None
+
+        if build_notion_tool is None:
+            self._logger.warning("Notion ability module not available; skipping")
+            return None
+
+        # Inject client_id from runtime context for voice-mode calls
+        runtime_ctx_ref = self._runtime_context
+
+        def _wrap_notion_with_runtime_ctx(raw_tool: Any) -> Any:
+            original_func = getattr(raw_tool, "_func", None)
+            if original_func is None:
+                return raw_tool
+
+            async def _patched_invoke(**kwargs: Any) -> Any:
+                metadata = kwargs.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                if not metadata.get("client_id"):
+                    ctx = runtime_ctx_ref.get(slug) or {}
+                    if ctx.get("client_id"):
+                        metadata["client_id"] = ctx["client_id"]
+                        kwargs["metadata"] = metadata
+                return await original_func(**kwargs)
+
+            raw_tool._func = _patched_invoke
+            return raw_tool
+
+        try:
+            tool = build_notion_tool(t, merged_cfg, auth_service=auth_service)
+            return _wrap_notion_with_runtime_ctx(tool)
+        except Exception as exc:
+            message = f"Notion ability is not ready: {exc}"
+            self._logger.warning("Notion ability could not be built", extra={"slug": slug, "reason": str(exc)})
+
+            async def _misconfigured_notion_tool(**_: Any) -> Dict[str, str]:
+                return {"error": message, "slug": slug}
+
+            description = t.get("description") or "Notion integration is not configured yet."
+            return lk_function_tool(
+                raw_schema={
+                    "name": slug,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_inquiry": {
+                                "type": "string",
+                                "description": "Latest user request describing the desired Notion action.",
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional session metadata.",
+                                "additionalProperties": True,
+                            },
+                        },
+                        "required": ["user_inquiry"],
+                    },
+                }
+            )(_misconfigured_notion_tool)

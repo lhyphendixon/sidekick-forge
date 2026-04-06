@@ -1241,6 +1241,7 @@ async def handle_text_trigger_via_livekit(
         "mode": "text",
         "client_id": agent_context.get("client_id"),
         "conversation_id": agent_context.get("conversation_id"),
+        "email_address": getattr(agent, "email_address", None) or "",
     }
 
     reused_room = False
@@ -1480,6 +1481,7 @@ async def handle_text_trigger(
         "rerank": rerank_cfg,
         "rag_results_limit": getattr(agent, "rag_results_limit", None),
         "show_citations": getattr(agent, "show_citations", True),
+        "email_address": getattr(agent, "email_address", None) or "",
     }
     
     agent_dataset_ids: List[Any] = await _resolve_agent_dataset_ids(client.id, agent)
@@ -1951,6 +1953,7 @@ async def dispatch_agent_job(
             ),
             "rerank": context_snapshot.get("rerank"),
             "user_message": context_snapshot.get("user_message"),
+            "email_address": getattr(agent, "email_address", None) or "",
         }
 
         tools_payload = tools if tools is not None else context_snapshot.get("tools") or []

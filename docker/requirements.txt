@@ -17,7 +17,7 @@ redis==5.0.1
 aioredis==2.0.1
 
 # LiveKit
-livekit==1.0.12
+livekit==1.0.13
 
 # HTTP client
 httpx==0.24.1

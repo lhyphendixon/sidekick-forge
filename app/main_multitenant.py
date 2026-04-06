@@ -142,7 +142,10 @@ from app.api.v1 import (
     content_catalyst,
     image_catalyst,
     wordpress,
-    lingua
+    lingua,
+    descript,
+    campaign_scan,
+    wizard
 )
 from app.api import embed as embed_router
 try:
@@ -164,6 +167,9 @@ app.include_router(agents_multitenant.router, prefix="/api/v2", tags=["agents-v2
 app.include_router(clients_multitenant.router, prefix="/api/v2", tags=["clients-v2"])
 
 # Keep existing routes during migration
+# NOTE: campaign_scan must be before conversations/documents to avoid
+# their {conversation_id}/{document_id} catch-all params stealing the route.
+app.include_router(campaign_scan.router, prefix="/api/v1", tags=["campaign-scan"])
 app.include_router(sessions.router, prefix="/api/v1", tags=["sessions"])
 app.include_router(conversations.router, prefix="/api/v1", tags=["conversations"])
 app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
@@ -179,6 +185,8 @@ app.include_router(content_catalyst.router, prefix="/api/v1", tags=["content-cat
 app.include_router(image_catalyst.router, prefix="/api/v1", tags=["image-catalyst"])
 app.include_router(wordpress.router, prefix="/api/v1", tags=["wordpress"])
 app.include_router(lingua.router, prefix="/api/v1", tags=["lingua"])
+app.include_router(descript.router, prefix="/api/v1", tags=["descript"])
+app.include_router(wizard.router, prefix="/api/v1", tags=["wizard"])
 app.include_router(embed_router.router)
 # Expose admin preview helper endpoints (used by preview modal)
 app.include_router(admin_preview_standalone.router)
@@ -223,8 +231,12 @@ async def auth_exception_handler(request: Request, exc):
 
 # Include webhook routers
 from app.api.webhooks import livekit_router, supabase_router
+from app.api.webhooks.telegram import router as telegram_router
+from app.api.webhooks.email import router as email_router
 app.include_router(livekit_router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(supabase_router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(telegram_router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(email_router, prefix="/webhooks", tags=["webhooks"])
 
 # Root endpoint
 @app.get("/", tags=["health"])

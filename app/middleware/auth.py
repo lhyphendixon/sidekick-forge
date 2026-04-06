@@ -35,7 +35,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         "/api/v1/auth/signup",
         "/api/v1/auth/login",
         "/api/v1/wordpress/register",
-        "/webhooks/"
+        "/webhooks/",
+        "/api/v1/campaign-scan/"
     ]
     
     async def dispatch(self, request: Request, call_next):

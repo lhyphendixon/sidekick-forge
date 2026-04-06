@@ -450,6 +450,11 @@ class AsanaToolHandler:
             if task_name:
                 details["task_name"] = task_name
 
+        # Strip project-reference prefixes from task names
+        # e.g. "to L-Dixon Project: edit clips..." → "edit clips..."
+        if "task_name" in details:
+            details["task_name"] = self._strip_project_prefix(details["task_name"])
+
         if "due_on" not in details:
             due_date = self._extract_due_date(message)
             if due_date:
@@ -615,6 +620,39 @@ class AsanaToolHandler:
                     candidate = re.sub(r"^(the|a|an|task)\s+", "", candidate, flags=re.IGNORECASE)
                     return candidate[:120].strip()
         return None
+
+    def _strip_project_prefix(self, task_name: str) -> str:
+        """Remove project-reference prefixes from task names.
+
+        Handles patterns like:
+          "to L-Dixon Project: edit clips..."  → "Edit clips..."
+          "in L-Dixon project: edit clips..."  → "Edit clips..."
+          "to L-Dixon: edit clips..."          → "Edit clips..."
+        """
+        cleaned = task_name
+        # Build pattern from known project names
+        project_names = [p.name for p in self.projects if p.name]
+        if project_names:
+            escaped = [re.escape(name) for name in project_names]
+            names_pattern = "|".join(escaped)
+            # Match: optional "to/in/for" + project name + optional "project" + colon
+            pattern = re.compile(
+                rf"^(?:to|in|for)\s+(?:{names_pattern})\s*(?:project)?\s*:\s*",
+                re.IGNORECASE,
+            )
+            cleaned = pattern.sub("", cleaned)
+        # Also handle generic "to <Words> Project:" pattern even if project name not configured
+        cleaned = re.sub(
+            r"^(?:to|in|for)\s+\S+(?:\s+\S+)?\s+project\s*:\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = cleaned.strip()
+        # Capitalize first letter if it was lowered by the prefix removal
+        if cleaned and cleaned[0].islower():
+            cleaned = cleaned[0].upper() + cleaned[1:]
+        return cleaned or task_name
 
     @staticmethod
     def _extract_new_name(message: str) -> Optional[str]:
@@ -1155,6 +1193,10 @@ def build_asana_tool(
     )
 
     async def _invoke(**kwargs: Any) -> Dict[str, Any]:
+        # v1.5.0 RawFunctionTool passes all LLM args inside a single 'raw_arguments' dict
+        raw_args = kwargs.get("raw_arguments")
+        if isinstance(raw_args, dict):
+            kwargs = {**kwargs, **raw_args}
         metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
         user_inquiry = kwargs.get("user_inquiry")
         if not isinstance(user_inquiry, str) or not user_inquiry.strip():

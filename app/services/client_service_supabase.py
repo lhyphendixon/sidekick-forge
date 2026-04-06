@@ -278,6 +278,8 @@ class ClientService:
                     update_dict["cerebras_api_key"] = api_keys.cerebras_api_key
                 if api_keys.perplexity_api_key is not None:
                     update_dict["perplexity_api_key"] = api_keys.perplexity_api_key
+                if api_keys.descript_api_key is not None:
+                    update_dict["descript_api_key"] = api_keys.descript_api_key
                 # Note: anthropic_api_key is not in the APIKeys model
             
             # Note: We don't have a settings column in the platform database

@@ -113,8 +113,8 @@
             <img src="{{ agent.agent_image }}" alt="{{ agent.name }}" class="solo-avatar absolute inset-0 w-full h-full object-contain pointer-events-none" style="object-position: center top;{% if not is_solo %} display:none;{% endif %}">
             {% endif %}
 
-            <!-- Gradient overlay for readability - inset to create image border effect -->
-            <div class="absolute bg-gradient-to-t from-black/80 via-black/30 to-black/5 rounded-lg" style="inset: 2px;"></div>
+            <!-- Gradient overlay for readability -->
+            <div class="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent rounded-xl"></div>
 
             {% if not has_image %}
             <!-- Default avatar silhouette when no image -->
@@ -129,19 +129,13 @@
             <!-- Content container -->
             <div class="relative z-10 flex flex-col h-full p-5">
 
-                <!-- Top section with status badge -->
-                <div class="flex justify-end mb-auto">
-                    <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium backdrop-blur-sm shadow-md shadow-black/50 {% if agent.enabled %}bg-brand-teal/30 text-brand-teal border border-brand-teal/40{% else %}bg-black/40 text-gray-400 border border-gray-600/40{% endif %}">
-                        {% if agent.enabled %}Active{% else %}Inactive{% endif %}
-                    </span>
-                </div>
+                <div class="mb-auto"></div>
 
                 <!-- Bottom content area -->
                 <div class="mt-auto space-y-4">
                     <!-- Agent info -->
                     <div>
                         <h3 class="text-xl font-semibold text-white mb-1 drop-shadow-lg">{{ agent.name }}</h3>
-                        <p class="text-sm text-brand-teal font-medium drop-shadow">{{ agent.client_name }}</p>
                         {% if agent.description %}
                         <p class="text-sm text-gray-300 mt-2 line-clamp-2 drop-shadow">{{ agent.description[:120] }}{% if agent.description|length > 120 %}...{% endif %}</p>
                         {% endif %}
@@ -149,21 +143,20 @@
 
                     <!-- Action buttons -->
                     <div class="space-y-2">
-                        {% if user.role in ['superadmin','admin'] %}
-                        <div class="flex justify-between items-center mb-3">
-                            <a href="/admin/agents/{{ agent.client_id }}/{{ agent.slug }}"
-                               class="text-brand-teal hover:text-white text-sm font-medium transition-colors drop-shadow">
-                                Edit
-                            </a>
-                            <button onclick='confirmDeleteAgent({{ agent.client_id|tojson }}, {{ agent.slug|tojson }}, {{ agent.name|tojson }})'
-                                    class="text-brand-salmon hover:text-white text-sm font-medium transition-colors drop-shadow">
-                                Delete
-                            </button>
-                        </div>
-                        {% endif %}
 
                         {% if agent.client_id %}
                         <div class="flex gap-2">
+                            <!-- Embed code button -->
+                            <button hx-get="/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/embed-code"
+                                    hx-target="#modal-container"
+                                    hx-swap="innerHTML"
+                                    class="px-3 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center border border-white/10 text-white bg-black/40 hover:bg-black/55 backdrop-blur-sm"
+                                    title="Copy Embed Code">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                                </svg>
+                            </button>
+                            <!-- Connect button -->
                             <button hx-get="/admin/agents/preview/{{ agent.client_id }}/{{ agent.slug }}"
                                     hx-target="#modal-container"
                                     hx-swap="innerHTML"
@@ -173,15 +166,36 @@
                                 </svg>
                                 Connect
                             </button>
-                            <button hx-get="/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/embed-code"
-                                    hx-target="#modal-container"
-                                    hx-swap="innerHTML"
-                                    class="px-3 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center border border-white/20 text-white hover:bg-white/10 backdrop-blur-sm"
-                                    title="Copy Embed Code">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
-                                </svg>
-                            </button>
+                            <!-- More menu -->
+                            {% if user.role in ['superadmin','admin'] %}
+                            <div class="relative">
+                                <button onclick="toggleMoreMenu(this)"
+                                        class="px-3 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center border border-white/10 text-white bg-black/40 hover:bg-black/55 backdrop-blur-sm"
+                                        title="More options">
+                                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                        <circle cx="12" cy="5" r="1.5"/>
+                                        <circle cx="12" cy="12" r="1.5"/>
+                                        <circle cx="12" cy="19" r="1.5"/>
+                                    </svg>
+                                </button>
+                                <div class="more-menu hidden absolute right-0 bottom-full mb-2 w-36 rounded-lg border border-dark-border bg-dark-elevated shadow-xl shadow-black/40 overflow-hidden z-50">
+                                    <a href="/admin/agents/{{ agent.client_id }}/{{ agent.slug }}"
+                                       class="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-200 hover:bg-white/10 transition-colors">
+                                        <svg class="w-4 h-4 text-brand-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                        </svg>
+                                        Edit
+                                    </a>
+                                    <button onclick='confirmDeleteAgent({{ agent.client_id|tojson }}, {{ agent.slug|tojson }}, {{ agent.name|tojson }})'
+                                            class="flex items-center gap-2 w-full text-left px-4 py-2.5 text-sm text-brand-salmon hover:bg-white/10 transition-colors">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                        </svg>
+                                        Delete
+                                    </button>
+                                </div>
+                            </div>
+                            {% endif %}
                         </div>
                         {% else %}
                         <button disabled
@@ -874,6 +888,26 @@ async function addAgent() {
     } catch (error) {
         console.error('Request error:', error);
         alert('Error creating agent: ' + error.message);
+    }
+}
+
+function toggleMoreMenu(btn) {
+    const menu = btn.nextElementSibling;
+    const isOpen = !menu.classList.contains('hidden');
+    // Close all other open menus first
+    document.querySelectorAll('.more-menu').forEach(m => m.classList.add('hidden'));
+    if (!isOpen) {
+        menu.classList.remove('hidden');
+        // Close on outside click
+        setTimeout(() => {
+            const close = (e) => {
+                if (!btn.contains(e.target) && !menu.contains(e.target)) {
+                    menu.classList.add('hidden');
+                    document.removeEventListener('click', close);
+                }
+            };
+            document.addEventListener('click', close);
+        }, 0);
     }
 }
 

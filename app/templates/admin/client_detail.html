@@ -580,6 +580,19 @@
                         </div>
                         <p class="mt-1 text-xs text-dark-text-secondary">Required for scraping websites in Knowledge Base. Get one at <a href="https://firecrawl.dev" target="_blank" class="text-brand-teal hover:underline">firecrawl.dev</a></p>
                     </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Descript API Key</label>
+                        <div class="relative">
+                            <input type="password" id="descriptKey" name="descript_api_key"
+                                   value="{{ client.descript_api_key or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('descriptKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                        <p class="mt-1 text-xs text-dark-text-secondary">Required for Descript Connect video editing. Create a token in Descript app under Settings &gt; API tokens.</p>
+                    </div>
                 </div>
             </div>
         </div>

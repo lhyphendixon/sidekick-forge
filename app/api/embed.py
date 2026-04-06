@@ -309,17 +309,19 @@ async def embed_sidekick(
                         tool_ids = [r["tool_id"] for r in (agent_tools_result.data or [])]
 
                         if tool_ids:
-                            tools_result = platform_sb.table("tools").select("name, slug, description, icon_url, execution_phase, admin_only").in_("id", tool_ids).eq("enabled", True).execute()
+                            tools_result = platform_sb.table("tools").select("name, slug, description, icon_url, execution_phase, admin_only, type").in_("id", tool_ids).eq("enabled", True).execute()
                             if tools_result.data:
                                 agent_tools = [
                                     {
                                         "name": t.get("name", ""),
                                         "slug": t.get("slug", ""),
+                                        "type": t.get("type", ""),
                                         "description": t.get("description", ""),
-                                        "icon_url": t.get("icon_url", "")
+                                        "icon_url": t.get("icon_url", ""),
+                                        "admin_only": bool(t.get("admin_only")),
                                     }
                                     for t in tools_result.data
-                                    if t.get("execution_phase") == "active" and not t.get("admin_only")
+                                    if t.get("execution_phase") == "active"
                                 ]
                     except Exception as tools_err:
                         logger.warning(f"[embed] Failed to fetch agent tools: {tools_err}")
@@ -674,6 +676,7 @@ async def embed_text_stream(
                     "mode": "text",
                     "client_id": agent_context.get("client_id"),
                     "conversation_id": agent_context.get("conversation_id"),
+                    "email_address": getattr(agent, "email_address", None) or "",
                 }
                 await trigger_api.ensure_livekit_room_exists(
                     backend_livekit,
