@@ -520,7 +520,8 @@ VALID_COUPONS = {
     "STAGING100": {"discount_percent": 100, "message": "100% off - Free checkout!", "staging_only": True},
     "FOUNDER50": {"discount_percent": 50, "message": "50% off - Founder's discount!", "staging_only": False},
     "BETA25": {"discount_percent": 25, "message": "25% off - Beta tester discount!", "staging_only": False},
-    "FNF-COMP": {"discount_percent": 100, "message": "100% off - Friends & Family Comp!", "staging_only": False, "tier_restriction": "adventurer"},
+    "FNF-COMP": {"discount_percent": 100, "message": "100% off - Friends & Family Comp! Free forever.", "staging_only": False, "tier_restriction": "adventurer"},
+    "GENESIS": {"discount_percent": 0, "message": "Genesis launch pricing applied!", "staging_only": False, "custom_prices": {"adventurer": 29, "champion": 149}},
 }
 
 
@@ -568,12 +569,16 @@ async def validate_coupon(request: Request):
                 status_code=400
             )
 
-        return JSONResponse(content={
+        response_data = {
             "valid": True,
             "discount_percent": coupon["discount_percent"],
             "message": coupon["message"],
-            "tier_restriction": tier_restriction
-        })
+            "tier_restriction": tier_restriction,
+        }
+        if coupon.get("custom_prices"):
+            response_data["custom_prices"] = coupon["custom_prices"]
+
+        return JSONResponse(content=response_data)
 
     except Exception as e:
         logger.error(f"Error validating coupon: {e}")
@@ -689,25 +694,29 @@ async def process_free_checkout(
             else:
                 raise Exception("Failed to create user in Supabase Auth")
 
-            # Send verification email via resend endpoint (generate_link doesn't send emails)
+            # Send verification email via Mailjet (same flow as paid checkout)
             try:
-                import httpx
-                resend_response = httpx.post(
-                    f"{settings.supabase_url}/auth/v1/resend",
-                    headers={
-                        "apikey": settings.supabase_anon_key,
-                        "Content-Type": "application/json"
+                verification_token = _generate_verification_token()
+                token_data = {
+                    "user_id": user_id,
+                    "token": verification_token,
+                    "email": email,
+                    "expires_at": (datetime.utcnow() + timedelta(hours=24)).isoformat(),
+                }
+                supabase.table("email_verification_tokens").insert(token_data).execute()
+
+                verification_url = f"https://{settings.domain_name}/verify-email?token={verification_token}"
+                await mailjet_service.send_order_confirmation_email(
+                    to_email=email,
+                    to_name=full_name,
+                    order_data={
+                        "order_number": order_number,
+                        "tier_name": tier_name,
+                        "price": 0,
                     },
-                    json={
-                        "type": "signup",
-                        "email": email
-                    },
-                    timeout=10.0
+                    verification_url=verification_url,
                 )
-                if resend_response.status_code == 200:
-                    logger.info(f"Sent verification email to: {email}")
-                else:
-                    logger.warning(f"Resend API returned {resend_response.status_code}: {resend_response.text}")
+                logger.info(f"Sent verification email to: {email}")
             except Exception as email_error:
                 logger.warning(f"Failed to send verification email: {email_error}")
                 # Continue anyway - user can request resend
@@ -1391,6 +1400,7 @@ async def create_stripe_checkout_session(
     password: str = Form(...),
     password_confirm: str = Form(...),
     company: Optional[str] = Form(None),
+    coupon_code: Optional[str] = Form(None),
 ):
     """
     Create a Stripe Checkout Session for tier purchase.
@@ -1403,6 +1413,16 @@ async def create_stripe_checkout_session(
         # Validate tier
         if tier not in TIER_PRICES:
             tier = "champion"
+
+        # Check for coupon with custom pricing
+        price_override_cents = None
+        if coupon_code:
+            coupon_code = coupon_code.strip().upper()
+            coupon = VALID_COUPONS.get(coupon_code)
+            if coupon and coupon.get("custom_prices"):
+                custom_price = coupon["custom_prices"].get(tier)
+                if custom_price is not None:
+                    price_override_cents = custom_price * 100
 
         # Validate passwords match
         if password != password_confirm:
@@ -1460,7 +1480,9 @@ async def create_stripe_checkout_session(
             cancel_url=cancel_url,
             metadata={
                 "pending_checkout_id": pending_id,
-            }
+                **({"coupon_code": coupon_code} if coupon_code else {}),
+            },
+            price_override_cents=price_override_cents,
         )
 
         # Update pending checkout with session ID

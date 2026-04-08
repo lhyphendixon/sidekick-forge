@@ -150,7 +150,15 @@
      hx-get="/admin/partials/monitoring/usage-cards{% if selected_client_id %}?client_id={{ selected_client_id }}{% endif %}"
      hx-trigger="load, every 60s"
      hx-swap="innerHTML">
-    {% include "admin/partials/monitoring/usage_cards.html" %}
+    {% if usage_data is defined %}
+        {% include "admin/partials/monitoring/usage_cards.html" %}
+    {% else %}
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 animate-pulse">
+            <div class="bg-dark-surface rounded-lg border border-dark-border p-6 h-32"></div>
+            <div class="bg-dark-surface rounded-lg border border-dark-border p-6 h-32"></div>
+            <div class="bg-dark-surface rounded-lg border border-dark-border p-6 h-32"></div>
+        </div>
+    {% endif %}
 </div>
 
 <!-- Main Grid -->

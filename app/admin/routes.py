@@ -1284,6 +1284,10 @@ async def dashboard(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Main admin dashboard with HTMX"""
+    # Non-superadmin users go straight to their sidekicks page
+    if admin_user.get("role") != "superadmin":
+        return RedirectResponse(url="/admin/agents", status_code=302)
+
     # Detect mobile devices and redirect to Sidekicks page
     user_agent = request.headers.get("user-agent", "").lower()
     is_mobile = any(mobile_keyword in user_agent for mobile_keyword in [

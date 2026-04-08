@@ -70,6 +70,27 @@ class StripeService:
         """Get the Stripe publishable key for frontend use"""
         return self._publishable_key or os.getenv("STRIPE_PUBLISHABLE_KEY", "")
 
+    def _get_or_create_product(self, tier: str) -> str:
+        """Get or create a Stripe Product for a tier. Returns the product ID."""
+        self._ensure_initialized()
+
+        config = TIER_CONFIG.get(tier)
+        if not config:
+            raise ValueError(f"Invalid tier: {tier}")
+
+        products = stripe.Product.search(
+            query=f"metadata['tier']:'{tier}' AND active:'true'"
+        )
+        if products.data:
+            return products.data[0].id
+
+        product = stripe.Product.create(
+            name=f"Sidekick Forge - {config['name']}",
+            description=config["description"],
+            metadata={"tier": tier},
+        )
+        return product.id
+
     def _get_or_create_price(self, tier: str) -> str:
         """
         Get or create a Stripe Price for a tier.
@@ -140,6 +161,7 @@ class StripeService:
         success_url: str = None,
         cancel_url: str = None,
         metadata: Optional[Dict[str, Any]] = None,
+        price_override_cents: Optional[int] = None,
     ) -> Tuple[str, str]:
         """
         Create a Stripe Checkout Session for subscription purchase.
@@ -153,8 +175,20 @@ class StripeService:
         if not config or config["price_cents"] <= 0:
             raise ValueError(f"Invalid tier for checkout: {tier}")
 
-        # Get or create the price for this tier
-        price_id = self._get_or_create_price(tier)
+        if price_override_cents is not None:
+            # Create an ad-hoc recurring price for coupon-based custom pricing
+            product_id = self._get_or_create_product(tier)
+            price = stripe.Price.create(
+                product=product_id,
+                unit_amount=price_override_cents,
+                currency="usd",
+                recurring={"interval": "month"},
+            )
+            price_id = price.id
+            logger.info(f"Created custom price {price_id} for tier {tier}: ${price_override_cents/100}")
+        else:
+            # Get or create the standard price for this tier
+            price_id = self._get_or_create_price(tier)
 
         # Build metadata for webhook processing
         session_metadata = {

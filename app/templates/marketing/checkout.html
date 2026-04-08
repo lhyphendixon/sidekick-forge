@@ -354,6 +354,7 @@
 // Coupon state
 let appliedCoupon = null;
 let discountPercent = 0;
+let customPrices = null;
 
 const tierPricesNumeric = {
     'adventurer': 49,
@@ -395,8 +396,6 @@ function orderSummary() {
 function updatePriceDisplay() {
     const tier = document.querySelector('input[name="tier"]:checked')?.value || 'champion';
     const basePrice = tierPricesNumeric[tier] || 199;
-    const discount = Math.round(basePrice * discountPercent / 100);
-    const finalPrice = basePrice - discount;
 
     const discountRow = document.getElementById('discount-row');
     const discountAmount = document.getElementById('discount-amount');
@@ -404,14 +403,26 @@ function updatePriceDisplay() {
     const recurringText = document.getElementById('recurring-text');
     const buttonText = document.getElementById('button-text');
 
-    if (discountPercent > 0 && tier !== 'paragon') {
+    // Custom pricing coupon (e.g. GENESIS)
+    if (customPrices && customPrices[tier] !== undefined && tier !== 'paragon') {
+        const customPrice = customPrices[tier];
+        const savings = basePrice - customPrice;
+        discountRow.classList.remove('hidden');
+        discountRow.classList.add('flex');
+        discountAmount.textContent = `-$${savings}`;
+        dueToday.textContent = customPrice === 0 ? 'FREE' : `$${customPrice}`;
+        recurringText.innerHTML = `<span class="text-green-400">Launch pricing — $${customPrice}/month</span>`;
+        buttonText.textContent = 'Continue to Payment';
+    } else if (discountPercent > 0 && tier !== 'paragon') {
+        const discount = Math.round(basePrice * discountPercent / 100);
+        const finalPrice = basePrice - discount;
         discountRow.classList.remove('hidden');
         discountRow.classList.add('flex');
         discountAmount.textContent = `-$${discount}`;
         dueToday.textContent = finalPrice === 0 ? 'FREE' : `$${finalPrice}`;
 
         if (discountPercent === 100) {
-            recurringText.innerHTML = '<span class="text-green-400">First month free!</span>';
+            recurringText.innerHTML = '<span class="text-green-400">Completely free — no charges ever.</span>';
             buttonText.textContent = 'Complete Free Checkout';
         } else {
             recurringText.innerHTML = `Then $${basePrice}/month`;
@@ -451,6 +462,7 @@ document.getElementById('apply-coupon-btn').addEventListener('click', async func
         if (response.ok && data.valid) {
             appliedCoupon = couponCode;
             discountPercent = data.discount_percent;
+            customPrices = data.custom_prices || null;
             couponInput.value = couponCode;
             couponInput.disabled = true;
             document.getElementById('apply-coupon-btn').disabled = true;
@@ -469,6 +481,7 @@ document.getElementById('apply-coupon-btn').addEventListener('click', async func
         } else {
             appliedCoupon = null;
             discountPercent = 0;
+            customPrices = null;
             couponResult.innerHTML = `
                 <p class="text-red-400 text-sm">${data.error || 'Invalid coupon code.'}</p>
             `;
