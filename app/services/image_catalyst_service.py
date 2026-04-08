@@ -8,12 +8,15 @@ AI image generation with two modes:
 Supports reference images, cost tracking per-client and per-agent.
 """
 
+import base64
 import logging
 import uuid
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from enum import Enum
+
+import httpx
 
 from app.config import settings
 from app.services.runware_service import (
@@ -24,6 +27,38 @@ from app.services.runware_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def url_to_base64(url: str) -> Optional[str]:
+    """
+    Download an image from URL and convert to base64 data URI.
+
+    This is needed because external APIs (like Runware) cannot access
+    signed Supabase URLs directly. We download the image ourselves and
+    send it as base64.
+
+    Returns: data URI string like "data:image/png;base64,iVBORw0KGgo..."
+             or None if download fails
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+
+            # Determine content type from response or URL
+            content_type = response.headers.get("content-type", "image/png")
+            # Strip any charset or extra params
+            if ";" in content_type:
+                content_type = content_type.split(";")[0].strip()
+
+            # Encode to base64
+            b64_data = base64.b64encode(response.content).decode("utf-8")
+
+            # Return as data URI
+            return f"data:{content_type};base64,{b64_data}"
+    except Exception as e:
+        logger.error(f"Failed to convert URL to base64: {e}")
+        return None
 
 
 class ImageMode(str, Enum):
@@ -192,6 +227,18 @@ class ImageCatalystService:
 
         # Generate the image (use enriched prompt if available)
         actual_prompt = enriched_prompt or prompt
+
+        # Convert reference image URL to base64 if provided
+        # This is needed because Runware cannot access signed Supabase URLs
+        reference_image_b64 = None
+        if reference_image_url:
+            logger.info(f"Converting reference image to base64...")
+            reference_image_b64 = await url_to_base64(reference_image_url)
+            if reference_image_b64:
+                logger.info("Reference image converted to base64 successfully")
+            else:
+                logger.warning("Failed to convert reference image to base64, proceeding without it")
+
         try:
             if mode == ImageMode.THUMBNAIL:
                 generated = await self.runware.generate_image_advanced(
@@ -199,17 +246,24 @@ class ImageCatalystService:
                     model=model_air,
                     width=final_width,
                     height=final_height,
-                    reference_images=[reference_image_url] if reference_image_url else None,
+                    reference_images=[reference_image_b64] if reference_image_b64 else None,
                     seed=seed,
                     include_cost=True,
                 )
             else:
+                # FLUX.2 Dev (runware:400@1) does NOT support seedImage for image-to-image
+                # If user provided a reference image in General mode, warn them and proceed without it
+                if reference_image_b64:
+                    logger.warning(
+                        f"Reference images not supported for General mode (FLUX.2 Dev). "
+                        f"Use Thumbnail mode with google:4@2 for image-to-image generation."
+                    )
                 generated = await self.runware.generate_image_advanced(
                     prompt=actual_prompt,
                     model=model_air,
                     width=final_width,
                     height=final_height,
-                    seed_image=reference_image_url if reference_image_url else None,
+                    seed_image=None,  # FLUX.2 Dev doesn't support seedImage
                     strength=strength or config.get("default_strength", 0.75),
                     steps=steps or config.get("default_steps", 28),
                     cfg_scale=cfg_scale if cfg_scale is not None else config.get("default_cfg_scale", 3.5),

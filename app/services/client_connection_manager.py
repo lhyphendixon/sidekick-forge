@@ -48,28 +48,13 @@ class ClientConnectionManager:
         # Cache for client configurations to reduce database queries
         self._client_cache: Dict[str, Dict[str, Any]] = {}
     
-    def get_client_db_client(self, client_id: UUID) -> Client:
-        """
-        Get a Supabase client configured for a specific tenant's database.
-        
-        This is the PRIMARY method that all services should use to get
-        a database connection for client-specific operations.
-        
-        Args:
-            client_id: The UUID of the client
-            
-        Returns:
-            A configured Supabase client for the tenant's database
-            
-        Raises:
-            ClientConfigurationError: If client not found or credentials missing
-        """
+    def _get_validated_client_config(self, client_id: UUID) -> dict:
+        """Load and validate client config, returning the config dict."""
         client_id_str = str(client_id)
-        
-        # Check cache first
+
         if client_id_str not in self._client_cache:
             self._load_client_config(client_id)
-        
+
         client_config = self._client_cache[client_id_str]
 
         status = (client_config.get('provisioning_status') or 'ready').lower()
@@ -78,7 +63,17 @@ class ClientConnectionManager:
                 raise ClientConfigurationError(
                     f"Client {client_id} is not ready (provisioning_status={status})."
                 )
-            status = (client_config.get('provisioning_status') or 'ready').lower()
+
+        # Shared-hosting clients use the platform database
+        hosting_type = (client_config.get('hosting_type') or 'dedicated').lower()
+        if hosting_type == 'shared':
+            # For shared clients, the credentials should already point to
+            # the platform DB (set during provisioning).  If they're missing
+            # for any reason, fall through to the validation error below so
+            # the operator gets a clear message.
+            if not client_config.get('supabase_url'):
+                client_config['supabase_url'] = self.platform_url
+                client_config['supabase_service_role_key'] = self.platform_key
 
         # Validate required credentials
         if not client_config.get('supabase_url') or not client_config.get('supabase_service_role_key'):
@@ -86,12 +81,52 @@ class ClientConnectionManager:
                 f"Client {client_id} does not have database credentials configured. "
                 f"Please configure Supabase URL and service role key for this client."
             )
-        
-        # Create and return client connection
+
+        return client_config
+
+    def get_client_db_client(self, client_id: UUID) -> Client:
+        """
+        Get a Supabase client configured for a specific tenant's database.
+
+        This is the PRIMARY method that all services should use to get
+        a database connection for client-specific operations.
+
+        For shared-hosting (Adventurer) clients the returned client points
+        at the platform database.  Tenant isolation is enforced via
+        client_id columns on shared tables.
+
+        Args:
+            client_id: The UUID of the client
+
+        Returns:
+            A configured Supabase client for the tenant's database
+
+        Raises:
+            ClientConfigurationError: If client not found or credentials missing
+        """
+        client_config = self._get_validated_client_config(client_id)
+
         return create_client(
             client_config['supabase_url'],
             client_config['supabase_service_role_key']
         )
+
+    def get_client_db_client_with_info(self, client_id: UUID):
+        """
+        Get a Supabase client along with hosting metadata.
+
+        Returns:
+            Tuple of (supabase_client, hosting_type, client_config)
+        """
+        client_config = self._get_validated_client_config(client_id)
+        hosting_type = (client_config.get('hosting_type') or 'dedicated').lower()
+
+        db_client = create_client(
+            client_config['supabase_url'],
+            client_config['supabase_service_role_key']
+        )
+
+        return db_client, hosting_type, client_config
     
     def _load_client_config(self, client_id: UUID) -> None:
         """

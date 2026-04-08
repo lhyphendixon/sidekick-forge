@@ -272,4 +272,73 @@ class ProvisioningWorker:
         await asyncio.to_thread(_update)
 
 
-__all__ = ["ProvisioningWorker", "ProvisioningJob"]
+async def provision_client_by_tier(
+    client_id: str,
+    tier: str,
+    platform_db,
+) -> None:
+    """Provision a client based on their tier.
+
+    - **shared** (Adventurer): Points the client at the platform database so
+      they share the same Supabase project.  Tenant isolation is enforced via
+      ``client_id`` columns on shared tables.
+    - **dedicated** (Champion / Paragon): Enqueues a ``supabase_project`` job
+      for the :class:`ProvisioningWorker` to create a new Supabase project.
+    """
+    from app.services.tier_features import ClientTier, TIER_FEATURES, HostingType
+
+    tier_enum = ClientTier(tier)
+    tier_config = TIER_FEATURES.get(tier_enum, {})
+    hosting = tier_config.get("hosting_type", HostingType.DEDICATED)
+
+    now_iso = datetime.utcnow().isoformat()
+
+    if hosting == HostingType.SHARED:
+        # Shared-tier clients use the platform database directly.
+        platform_url = os.getenv("SUPABASE_URL")
+        platform_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        platform_anon = os.getenv("SUPABASE_ANON_KEY")
+
+        if not platform_url or not platform_key:
+            raise RuntimeError(
+                "Platform database credentials not available for shared provisioning"
+            )
+
+        platform_db.table("clients").update({
+            "supabase_url": platform_url,
+            "supabase_service_role_key": platform_key,
+            "supabase_anon_key": platform_anon,
+            "hosting_type": "shared",
+            "provisioning_status": "ready",
+            "provisioning_started_at": now_iso,
+            "provisioning_completed_at": now_iso,
+            "provisioning_error": None,
+        }).eq("id", client_id).execute()
+
+        logger.info(
+            "Shared-tier client %s provisioned on platform database", client_id
+        )
+    else:
+        # Dedicated-tier clients get their own Supabase project via the worker.
+        platform_db.table("clients").update({
+            "hosting_type": "dedicated",
+            "provisioning_status": "queued",
+            "provisioning_started_at": now_iso,
+            "provisioning_error": None,
+        }).eq("id", client_id).execute()
+
+        platform_db.table("client_provisioning_jobs").upsert({
+            "client_id": client_id,
+            "job_type": "supabase_project",
+            "attempts": 0,
+            "claimed_at": None,
+            "last_error": None,
+        }, on_conflict="client_id,job_type").execute()
+
+        logger.info(
+            "Dedicated-tier client %s queued for Supabase project creation",
+            client_id,
+        )
+
+
+__all__ = ["ProvisioningWorker", "ProvisioningJob", "provision_client_by_tier"]

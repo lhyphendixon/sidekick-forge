@@ -458,6 +458,7 @@ class WizardCompletionService:
             return {"success": False, "error": "Sidekick name is required"}
 
         slug = step_data.get("slug") or self._generate_slug(name)
+        slug = await self._ensure_unique_slug(UUID(client_id), slug)
 
         try:
             # Generate system prompt from personality
@@ -561,6 +562,9 @@ class WizardCompletionService:
                 "message": "Sidekick created successfully!"
             }
 
+        except ValueError as e:
+            logger.error(f"Validation error completing wizard for session {session_id}: {e}")
+            return {"success": False, "error": str(e)}
         except Exception as e:
             logger.error(f"Error completing wizard for session {session_id}: {e}")
             return {"success": False, "error": str(e)}
@@ -574,6 +578,31 @@ class WizardCompletionService:
         slug = re.sub(r'-+', '-', slug)
         slug = slug.strip('-')
         return slug or "sidekick"
+
+    async def _ensure_unique_slug(self, client_id: UUID, slug: str) -> str:
+        """Check the client DB for existing slugs and append a suffix if needed."""
+        try:
+            client_db = self.connection_manager.get_client_db_client(client_id)
+            # Check if slug already exists
+            result = client_db.table("agents").select("slug").eq("slug", slug).execute()
+            if not result.data:
+                return slug
+
+            # Slug exists - find a unique one by appending a number
+            for i in range(2, 100):
+                candidate = f"{slug}-{i}"
+                result = client_db.table("agents").select("slug").eq("slug", candidate).execute()
+                if not result.data:
+                    return candidate
+
+            # Extremely unlikely fallback
+            import uuid
+            return f"{slug}-{uuid.uuid4().hex[:6]}"
+        except Exception as e:
+            logger.warning(f"Error checking slug uniqueness: {e}")
+            # If we can't check, add a short random suffix to be safe
+            import uuid
+            return f"{slug}-{uuid.uuid4().hex[:6]}"
 
 
 # Singleton instance

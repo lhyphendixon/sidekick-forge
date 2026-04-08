@@ -1497,78 +1497,142 @@ Remember: if it's not a verifiable factual claim, do NOT include it. Err on the 
 
         try:
             content = await self._llm_chat(prompt, max_tokens=8000)
+            report_data = self._parse_integrity_json(content)
 
-            # Clean common LLM JSON issues
-            cleaned = self._clean_llm_json(content)
-            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            # If first pass isn't valid JSON, run a strict JSON reformatter pass.
+            if report_data is None:
+                logger.warning("Integrity response was not parseable JSON; attempting strict reformat pass")
+                reformat_prompt = f"""Convert the following integrity review output into valid JSON.
 
-            if json_match:
-                raw = json_match.group()
-                try:
-                    report_data = json.loads(raw)
-                except json.JSONDecodeError as je:
-                    logger.warning(f"Integrity JSON decode error at position {je.pos}, attempting repair: {je}")
-                    err_start = max(0, je.pos - 80)
-                    err_end = min(len(raw), je.pos + 80)
-                    logger.warning(f"Integrity JSON context around error: ...{raw[err_start:err_end]}...")
+You MUST output ONLY a JSON object and nothing else.
+No markdown fences. No commentary. No prose before or after the JSON.
 
-                    repaired = self._repair_truncated_json(raw)
-                    if repaired:
-                        try:
-                            report_data = json.loads(repaired)
-                            logger.info("Integrity JSON repaired successfully")
-                        except json.JSONDecodeError:
-                            logger.error(f"Integrity JSON repair also failed")
-                            raise ValueError(f"Failed to parse integrity report JSON: {je}")
-                    else:
-                        raise ValueError(f"Failed to parse integrity report JSON: {je}")
+Required shape:
+{{
+    "draft_1_issues": [
+        {{"claim": "string", "issue": "string", "severity": "low|medium|high"}}
+    ],
+    "draft_2_issues": [
+        {{"claim": "string", "issue": "string", "severity": "low|medium|high"}}
+    ],
+    "sources_verified": ["string"],
+    "sources_unverifiable": ["string"],
+    "factual_accuracy_score": 0.0,
+    "recommendations": ["string"]
+}}
 
-                # Use Perplexity to ground-truth ONLY flagged issues
-                all_issues = report_data.get("draft_1_issues", []) + report_data.get("draft_2_issues", [])
+Input to convert:
+{content[:12000]}"""
+                reformatted = await self._llm_chat(reformat_prompt, max_tokens=4000)
+                report_data = self._parse_integrity_json(reformatted)
 
-                if self.perplexity_api_key and all_issues:
-                    if progress_callback:
-                        progress_callback("integrity", "verifying", "Searching for ground truth on flagged claims...")
+            if report_data is None:
+                raise ValueError("Failed to parse integrity report JSON - no JSON found")
 
-                    verified_issues = await self._perplexity_verify_claims(all_issues)
+            # Use Perplexity to ground-truth ONLY flagged issues
+            all_issues = report_data.get("draft_1_issues", []) + report_data.get("draft_2_issues", [])
 
-                    if verified_issues:
-                        # Enrich issues and DROP false flags where Perplexity confirms accuracy
-                        for issues_list_key in ("draft_1_issues", "draft_2_issues"):
-                            kept_issues = []
-                            for issue in report_data.get(issues_list_key, []):
-                                claim = issue.get("claim", "")
-                                if claim in verified_issues:
-                                    verification = verified_issues[claim]
-                                    result = verification.get("result", "").upper()
-                                    if result == "ACCURATE":
-                                        # The flag was wrong — Perplexity confirmed the claim is true. Drop it.
-                                        logger.info(f"Integrity: dropping false flag, Perplexity confirmed accurate: {claim[:80]}")
-                                        continue
-                                    issue["perplexity_verified"] = True
-                                    issue["verification_result"] = verification.get("result", "")
-                                    issue["verification_explanation"] = verification.get("explanation", "")
-                                    issue["verification_sources"] = verification.get("sources", [])
-                                kept_issues.append(issue)
-                            report_data[issues_list_key] = kept_issues
+            if self.perplexity_api_key and all_issues:
+                if progress_callback:
+                    progress_callback("integrity", "verifying", "Searching for ground truth on flagged claims...")
 
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-                logger.info(f"Integrity phase completed in {duration_ms:.1f}ms")
+                verified_issues = await self._perplexity_verify_claims(all_issues)
 
-                return IntegrityReport(
-                    draft_1_issues=report_data.get("draft_1_issues", []),
-                    draft_2_issues=report_data.get("draft_2_issues", []),
-                    sources_verified=report_data.get("sources_verified", []),
-                    sources_unverifiable=report_data.get("sources_unverifiable", []),
-                    factual_accuracy_score=report_data.get("factual_accuracy_score", 0.0),
-                    recommendations=report_data.get("recommendations", []),
-                )
+                if verified_issues:
+                    # Enrich issues and DROP false flags where Perplexity confirms accuracy
+                    for issues_list_key in ("draft_1_issues", "draft_2_issues"):
+                        kept_issues = []
+                        for issue in report_data.get(issues_list_key, []):
+                            claim = issue.get("claim", "")
+                            if claim in verified_issues:
+                                verification = verified_issues[claim]
+                                result = verification.get("result", "").upper()
+                                if result == "ACCURATE":
+                                    # The flag was wrong — Perplexity confirmed the claim is true. Drop it.
+                                    logger.info(f"Integrity: dropping false flag, Perplexity confirmed accurate: {claim[:80]}")
+                                    continue
+                                issue["perplexity_verified"] = True
+                                issue["verification_result"] = verification.get("result", "")
+                                issue["verification_explanation"] = verification.get("explanation", "")
+                                issue["verification_sources"] = verification.get("sources", [])
+                            kept_issues.append(issue)
+                        report_data[issues_list_key] = kept_issues
 
-            raise ValueError("Failed to parse integrity report JSON - no JSON found")
+            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            logger.info(f"Integrity phase completed in {duration_ms:.1f}ms")
+
+            return IntegrityReport(
+                draft_1_issues=report_data.get("draft_1_issues", []),
+                draft_2_issues=report_data.get("draft_2_issues", []),
+                sources_verified=report_data.get("sources_verified", []),
+                sources_unverifiable=report_data.get("sources_unverifiable", []),
+                factual_accuracy_score=report_data.get("factual_accuracy_score", 0.0),
+                recommendations=report_data.get("recommendations", []),
+            )
 
         except Exception as e:
             logger.error(f"Integrity phase failed: {e}")
             raise
+
+    def _parse_integrity_json(self, content: str) -> Optional[Dict[str, Any]]:
+        """Best-effort parser for integrity JSON with common LLM formatting quirks."""
+        if not content or not isinstance(content, str):
+            return None
+
+        json_content = content
+
+        # Strip markdown fences if present
+        if "```json" in json_content:
+            m = re.search(r'```json\s*([\s\S]*?)\s*```', json_content)
+            if m:
+                json_content = m.group(1)
+            else:
+                json_content = json_content.split("```json", 1)[1]
+        elif "```" in json_content:
+            m = re.search(r'```\s*([\s\S]*?)\s*```', json_content)
+            if m:
+                json_content = m.group(1)
+
+        cleaned = self._clean_llm_json(json_content)
+
+        # Try parse as whole payload first
+        try:
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+        # Fallback: extract first object-like block
+        json_match = re.search(r'\{[\s\S]*\}', cleaned)
+        if not json_match:
+            return None
+
+        raw = json_match.group()
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+            return None
+        except json.JSONDecodeError as je:
+            logger.warning(f"Integrity JSON decode error at position {je.pos}, attempting repair: {je}")
+            err_start = max(0, je.pos - 80)
+            err_end = min(len(raw), je.pos + 80)
+            logger.warning(f"Integrity JSON context around error: ...{raw[err_start:err_end]}...")
+
+            repaired = self._repair_truncated_json(raw)
+            if not repaired:
+                return None
+            try:
+                parsed = json.loads(repaired)
+                if isinstance(parsed, dict):
+                    logger.info("Integrity JSON repaired successfully")
+                    return parsed
+            except json.JSONDecodeError:
+                logger.error("Integrity JSON repair also failed")
+                return None
+
+        return None
 
     async def _perplexity_verify_claims(
         self,
@@ -1976,8 +2040,21 @@ Output the polished article matching the example voice:"""
                 raise ValueError(f"Run {run_id} not found")
 
             # Reconstruct drafts and integrity report from stored phase data
-            draft_output = run.get("draft_output", {})
-            integrity_output = run.get("integrity_output", {})
+            draft_output = run.get("draft_output") or {}
+            integrity_output = run.get("integrity_output") or {}
+            if not isinstance(draft_output, dict):
+                logger.warning(f"Run {run_id} has non-dict draft_output type: {type(draft_output).__name__}")
+                draft_output = {}
+            if not isinstance(integrity_output, dict):
+                logger.warning(f"Run {run_id} has non-dict integrity_output type: {type(integrity_output).__name__}")
+                integrity_output = {}
+
+            # If upstream persistence failed, surface a clear error instead of crashing.
+            if not draft_output:
+                raise ValueError(
+                    "Cannot continue to polishing because draft output is missing for this run. "
+                    "Please restart Content Catalyst."
+                )
 
             d1 = draft_output.get("draft_1", {})
             d2 = draft_output.get("draft_2", {})
@@ -2021,10 +2098,12 @@ Output the polished article matching the example voice:"""
             )
 
             # Reconstruct config from run data
+            source_type_value = run.get("source_type") or "text"
+            target_word_count = run.get("target_word_count") or 1500
             config = ContentCatalystConfig(
-                source_type=SourceType(run.get("source_type", "text")),
+                source_type=SourceType(source_type_value),
                 source_content=run.get("source_content", ""),
-                target_word_count=run.get("target_word_count", 1500),
+                target_word_count=target_word_count,
                 style_prompt=run.get("style_prompt"),
             )
 

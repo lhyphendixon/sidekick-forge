@@ -96,43 +96,53 @@ async def start_content_catalyst(
         # Can be enabled at client level OR agent level (via agent_tools)
         platform_sb = client_service.supabase
         content_catalyst_enabled = False
-        has_llm_key = False
+        # Prefer typed client settings first (current architecture),
+        # then augment from legacy flat columns below.
+        client_api_keys = getattr(getattr(client, "settings", None), "api_keys", None)
+        has_llm_key = any([
+            getattr(client_api_keys, "groq_api_key", None),
+            getattr(client_api_keys, "openai_api_key", None),
+            getattr(client_api_keys, "anthropic_api_key", None),
+            getattr(client_api_keys, "deepinfra_api_key", None),
+            getattr(client_api_keys, "cerebras_api_key", None),
+        ])
 
         try:
             # Check client-level enablement
             result = platform_sb.table("clients").select(
-                "content_catalyst_enabled, groq_api_key, openai_api_key, anthropic_api_key, deepinfra_api_key"
+                "content_catalyst_enabled, groq_api_key, openai_api_key, anthropic_api_key, deepinfra_api_key, cerebras_api_key"
             ).eq("id", client_id).maybe_single().execute()
             if result.data:
                 content_catalyst_enabled = result.data.get("content_catalyst_enabled", False)
-                has_llm_key = any([
+                has_llm_key = has_llm_key or any([
                     result.data.get("groq_api_key"),
                     result.data.get("openai_api_key"),
                     result.data.get("anthropic_api_key"),
                     result.data.get("deepinfra_api_key"),
+                    result.data.get("cerebras_api_key"),
                 ])
 
             # If not enabled at client level, check if enabled for this specific agent
+            # using platform agent_tools -> tools mapping.
             if not content_catalyst_enabled and agent_id:
-                from app.utils.supabase_credentials import SupabaseCredentialManager
-                creds = await SupabaseCredentialManager.get_client_supabase_credentials(client_id)
-                if creds:
-                    client_supabase_url, _, client_service_key = creds
-                    from supabase import create_client
-                    client_sb = create_client(client_supabase_url, client_service_key)
-
-                    # Check agent_tools for content_catalyst ability
-                    agent_tools_result = client_sb.table("agent_tools") \
-                        .select("id") \
-                        .eq("agent_id", agent_id) \
-                        .eq("tool_type", "content_catalyst") \
-                        .eq("enabled", True) \
-                        .maybe_single() \
-                        .execute()
-
-                    if agent_tools_result.data:
-                        content_catalyst_enabled = True
-                        logger.info(f"Content Catalyst enabled for agent {agent_id} via agent_tools")
+                tool_result = platform_sb.table("tools") \
+                    .select("id") \
+                    .eq("slug", "content_catalyst") \
+                    .limit(1) \
+                    .execute()
+                tool_rows = tool_result.data or []
+                if tool_rows:
+                    content_catalyst_tool_id = tool_rows[0].get("id")
+                    if content_catalyst_tool_id:
+                        agent_tools_result = platform_sb.table("agent_tools") \
+                            .select("tool_id") \
+                            .eq("agent_id", agent_id) \
+                            .eq("tool_id", content_catalyst_tool_id) \
+                            .limit(1) \
+                            .execute()
+                        if agent_tools_result.data:
+                            content_catalyst_enabled = True
+                            logger.info(f"Content Catalyst enabled for agent {agent_id} via platform agent_tools")
 
             if not content_catalyst_enabled:
                 raise HTTPException(
@@ -143,7 +153,7 @@ async def start_content_catalyst(
             if not has_llm_key:
                 raise HTTPException(
                     status_code=400,
-                    detail="No LLM API key configured. Content Catalyst requires an LLM API key (Groq, OpenAI, Anthropic, or DeepInfra)."
+                    detail="No LLM API key configured. Content Catalyst requires an LLM API key (Groq, OpenAI, Anthropic, DeepInfra, or Cerebras)."
                 )
         except HTTPException:
             raise

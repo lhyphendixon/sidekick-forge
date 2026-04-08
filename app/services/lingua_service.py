@@ -293,6 +293,9 @@ class AssemblyAIClient:
         else:
             payload["language_detection"] = True
 
+        logger.info(f"Submitting transcription to AssemblyAI: audio_url={audio_url[:80]}...")
+        logger.debug(f"Payload: {payload}")
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{ASSEMBLYAI_BASE_URL}/transcript",
@@ -300,7 +303,10 @@ class AssemblyAIClient:
                 json=payload,
                 timeout=30.0,
             )
-            response.raise_for_status()
+            if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"AssemblyAI API error: status={response.status_code}, body={error_text}")
+                response.raise_for_status()
             data = response.json()
             return data["id"]
 

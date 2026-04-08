@@ -204,9 +204,12 @@ class AgentService:
             logger.error(f"Client configuration error: {e}")
             raise
         except Exception as e:
+            error_str = str(e)
             logger.error(f"Error creating agent for client {client_id}: {e}")
+            if "23505" in error_str or "duplicate key" in error_str:
+                raise ValueError(f"A sidekick with the slug '{agent_data.slug}' already exists. Please choose a different name.")
             return None
-    
+
     async def update_agent(self, client_id: UUID, agent_slug: str, agent_update: AgentUpdate) -> Optional[Agent]:
         """Update an existing agent for a client"""
         try:

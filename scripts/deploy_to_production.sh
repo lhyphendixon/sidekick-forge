@@ -695,7 +695,9 @@ done
 step "Step 8/10: Restarting agent worker..."
 
 if dc config --services 2>/dev/null | grep -q "agent-worker"; then
-    dc up -d --force-recreate --no-deps agent-worker 2>&1 | grep -v "variable is not set" || true
+    # Remove old container first to avoid docker-compose v1.29.2 'ContainerConfig' KeyError
+    dc rm -f -s agent-worker 2>&1 | grep -v "variable is not set" || true
+    dc up -d --no-deps agent-worker 2>&1 | grep -v "variable is not set" || true
     sleep 8
 
     if dc ps agent-worker 2>/dev/null | grep -qE "Up|running"; then
@@ -752,7 +754,7 @@ else
 fi
 
 # Check marketing routes loaded
-ROOT_RESPONSE=$(curl -sf http://localhost:8000/ 2>/dev/null | head -c 20)
+ROOT_RESPONSE=$(curl -sf http://localhost:8000/ 2>/dev/null | head -c 20 || true)
 if [[ "$ROOT_RESPONSE" == "<!DOCTYPE html>"* ]] || [[ "$ROOT_RESPONSE" == "<!"* ]]; then
     success "Marketing routes: loaded"
 else

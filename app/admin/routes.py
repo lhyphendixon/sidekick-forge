@@ -1498,6 +1498,18 @@ async def agents_page(
     })
 
 
+@router.get("/wizard", response_class=HTMLResponse)
+async def wizard_page(
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Serve the wizard as a full page (for sidebar navigation)."""
+    return templates.TemplateResponse("admin/wizard/wizard_page.html", {
+        "request": request,
+        "user": admin_user,
+    })
+
+
 @router.get("/wizard/modal", response_class=HTMLResponse)
 async def wizard_modal(
     request: Request,

@@ -1199,6 +1199,11 @@
             document.removeEventListener('keydown', window._wizardEnterKeyHandler);
             window._wizardEnterKeyHandler = null;
         }
+        // If we're on the dedicated wizard page, navigate back to agents
+        if (window.location.pathname === '/admin/wizard') {
+            window.location.href = '/admin/agents';
+            return;
+        }
         document.getElementById('modal-container').innerHTML = '';
     }
 
