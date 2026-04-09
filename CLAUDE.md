@@ -69,6 +69,26 @@ curl http://localhost:8000/admin
 - **Quick Start**: See [DEPLOYMENT_QUICKSTART.md](./DEPLOYMENT_QUICKSTART.md)
 - **Full Guide**: See [DEPLOYMENT.md](./DEPLOYMENT.md)
 - **Staging → Production**: Run `prepare_staging_release.sh` on staging, then `deploy_to_production.sh` on production
-- **Supabase Migrations**: Handled automatically via `supabase/migrations/` directory (version controlled)
 - **Zero-Downtime**: Deployment script handles container updates without service interruption
-- **Auto-Rollback**: System automatically rolls back on failure
+- **Auto-Rollback**: System automatically rolls back on failure (any non-zero exit triggers it)
+
+## Database migrations
+**New migrations MUST go in `supabase/migrations/`** with a timestamped filename
+(`YYYYMMDDHHMMSS_description.sql`). The deploy script applies them via
+`supabase db push --linked`, which is idempotent and tracks state remotely in
+the `supabase_migrations.schema_migrations` table.
+
+The legacy `migrations/` directory (top-level) is kept for historical files
+applied via the Supabase Management API and tracked locally in
+`.applied_migrations`. **Do not add new files here.** Existing files should be
+moved to `supabase/migrations/` over time.
+
+**Failure policy:** any migration failure aborts the deploy and triggers
+rollback. The script will NOT silently mark a failed migration as applied.
+
+**Schema/code drift rule:** if you add a `client.foo_api_key` reference (or
+any other DB column read) to code, you MUST ship the corresponding `ALTER
+TABLE ... ADD COLUMN IF NOT EXISTS foo_api_key TEXT` migration in the same
+PR. Use `SELECT *` (not explicit column lists) when reading optional columns
+so a missing one can't poison the entire query — see
+`docker/agent/api_key_loader.py` for the resilient pattern.

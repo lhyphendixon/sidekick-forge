@@ -196,8 +196,21 @@ class APIKeyLoader:
                 'ahrefs_api_key',
             ]
             
-            columns_str = ', '.join(api_key_columns)
-            result = supabase.table('clients').select(columns_str).eq('id', client_id).single().execute()
+            # Use SELECT * so we don't fail when newer optional columns
+            # (e.g. semrush_api_key, ahrefs_api_key) haven't been migrated to
+            # this client's database yet. We then only read keys we recognise.
+            try:
+                result = supabase.table('clients').select('*').eq('id', client_id).single().execute()
+            except Exception as select_err:
+                # Fallback: try the explicit column list. If THAT also fails on
+                # a missing column, retry with only the legacy/core key set.
+                err_str = str(select_err)
+                if 'does not exist' in err_str and '42703' in err_str:
+                    legacy_columns = [c for c in api_key_columns if c not in ('semrush_api_key', 'ahrefs_api_key', 'descript_api_key', 'speechify_api_key')]
+                    columns_str = ', '.join(legacy_columns)
+                    result = supabase.table('clients').select(columns_str).eq('id', client_id).single().execute()
+                else:
+                    raise
             
             if result.data:
                 # Convert database columns to api_keys dict

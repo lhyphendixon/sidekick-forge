@@ -722,8 +722,10 @@ async def embed_text_stream(
 
                             existing_meta["pending_user_message"] = message
                             existing_meta["pending_session_id"] = session_id
-                            await lk_api.room.update_room(
-                                livekit_api_pkg.UpdateRoomRequest(
+                            # NOTE: livekit-api SDK exposes update_room_metadata, not update_room.
+                            # The request class is UpdateRoomMetadataRequest with the same fields.
+                            await lk_api.room.update_room_metadata(
+                                livekit_api_pkg.UpdateRoomMetadataRequest(
                                     room=text_room_name,
                                     metadata=json.dumps(existing_meta),
                                 )

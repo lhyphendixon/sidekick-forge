@@ -1539,3 +1539,10 @@
 .cs-findings::-webkit-scrollbar-track {
     background: transparent;
 }
+
+/* Image Catalyst: dimensions dropdown options */
+#ic-dim-select option,
+#ic-dim-select optgroup {
+    background: #1a1a1a;
+    color: #e0e0e0;
+}

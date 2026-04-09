@@ -327,10 +327,11 @@ class LiveKitManager:
         """Update room metadata"""
         try:
             livekit_api = self._get_api_client()
-            await livekit_api.room.update_room(
-                api.UpdateRoomRequest(
+            # livekit-api SDK exposes update_room_metadata, not update_room.
+            await livekit_api.room.update_room_metadata(
+                api.UpdateRoomMetadataRequest(
                     room=room_name,
-                    metadata=json.dumps(metadata) if metadata else None
+                    metadata=json.dumps(metadata) if metadata else ""
                 )
             )
             

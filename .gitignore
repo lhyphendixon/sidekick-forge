@@ -120,7 +120,10 @@ dump.rdb
 # Backups
 backups/
 *.backup
-*.sql
+# Database dump files (but NOT migration files in migrations/ or supabase/migrations/)
+backups/**/*.sql
+*_dump.sql
+*_backup.sql
 
 # Local artifacts to exclude from version control
 cookies.txt

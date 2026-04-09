@@ -460,28 +460,75 @@ fi
 run_post_pull_verification
 
 # ── Step 3: Apply database migrations ────────────────────────────────────────
+# Migration policy:
+#   1. PRIMARY PATH: supabase/migrations/ via `supabase db push --linked`
+#      (canonical Supabase CLI directory, version controlled, idempotent state
+#      tracked in remote supabase_migrations.schema_migrations table).
+#   2. LEGACY PATH: migrations/*.sql via Supabase Management API, tracked in
+#      .applied_migrations on the local filesystem. Files in this directory
+#      should be migrated to supabase/migrations/ over time.
+#
+# FAIL LOUDLY: any migration failure aborts the deploy and triggers rollback.
+# Previously, failures were silently marked as "applied" and the deploy
+# proceeded -- which masked critical schema/code drift bugs at runtime.
 step "Step 3/10: Checking database migrations..."
 
 if [ "$SKIP_MIGRATIONS" = true ]; then
     warn "Skipping migrations (--skip-migrations flag)"
 else
-    MIGRATIONS_DIR="$PROJECT_ROOT/migrations"
+    SUPABASE_MIGRATIONS_DIR="$PROJECT_ROOT/supabase/migrations"
+    LEGACY_MIGRATIONS_DIR="$PROJECT_ROOT/migrations"
     MIGRATION_TRACKING_FILE="$PROJECT_ROOT/.applied_migrations"
-
-    # Create tracking file if it doesn't exist
     touch "$MIGRATION_TRACKING_FILE"
 
-    # Check for pending migrations (PLATFORM ONLY)
-    # Skip client-specific migrations that mention specific Supabase project IDs
-    PENDING_MIGRATIONS=()
-    CLIENT_SPECIFIC_PATTERNS=(
-        "yuowazxcxwhczywurmmw"  # Autonomite client database
-        "embeddings"            # Client-specific embedding migrations
-        "chat_mode_columns"     # Client agent table modifications
-    )
+    # ─── Path 1: Canonical supabase/migrations via supabase CLI ──────────────
+    # This is the modern approach. Files here are timestamped (YYYYMMDDHHMMSS_*.sql),
+    # tracked remotely by Supabase, and idempotently applied. New migrations
+    # SHOULD live here.
+    if [ -d "$SUPABASE_MIGRATIONS_DIR" ] && command -v supabase &>/dev/null; then
+        # Count actual .sql migration files (skip .gitkeep, etc.)
+        SB_MIGRATION_COUNT=$(find "$SUPABASE_MIGRATIONS_DIR" -maxdepth 1 -name "*.sql" -type f 2>/dev/null | wc -l)
+        if [ "$SB_MIGRATION_COUNT" -gt 0 ]; then
+            info "Running supabase db push --linked ($SB_MIGRATION_COUNT migration files in supabase/migrations/)"
+            cd "$PROJECT_ROOT"
+            # `supabase db push --linked` is idempotent: it only applies migrations
+            # not yet recorded in the remote schema_migrations table.
+            # We pipe `y` to auto-confirm the prompt.
+            if echo "y" | supabase db push --linked 2>&1 | tee /tmp/supabase_db_push.log; then
+                # Check the log for actual application errors that the CLI may
+                # report with exit code 0 (e.g. column already exists notices
+                # are fine, but real errors should fail).
+                if grep -qiE "^ERROR|fatal:|connection refused" /tmp/supabase_db_push.log; then
+                    fail "supabase db push reported errors -- aborting deploy"
+                    grep -iE "^ERROR|fatal:" /tmp/supabase_db_push.log | head -10
+                    exit 1
+                fi
+                success "supabase/migrations/ applied successfully"
+            else
+                fail "supabase db push --linked failed -- aborting deploy"
+                tail -20 /tmp/supabase_db_push.log
+                exit 1
+            fi
+        else
+            info "No files in supabase/migrations/ -- skipping CLI path"
+        fi
+    else
+        warn "supabase CLI not available or supabase/migrations/ missing -- skipping CLI path"
+    fi
 
-    for migration_file in "$MIGRATIONS_DIR"/*.sql; do
-        if [ -f "$migration_file" ]; then
+    # ─── Path 2: Legacy migrations/ directory via Management API ─────────────
+    # These should be migrated to supabase/migrations/ over time. New migrations
+    # should NOT be added here.
+    if [ -d "$LEGACY_MIGRATIONS_DIR" ]; then
+        PENDING_MIGRATIONS=()
+        CLIENT_SPECIFIC_PATTERNS=(
+            "yuowazxcxwhczywurmmw"  # Autonomite client database
+            "embeddings"            # Client-specific embedding migrations
+            "chat_mode_columns"     # Client agent table modifications
+        )
+
+        for migration_file in "$LEGACY_MIGRATIONS_DIR"/*.sql; do
+            [ -f "$migration_file" ] || continue
             migration_name=$(basename "$migration_file")
 
             # Skip if already applied
@@ -489,78 +536,84 @@ else
                 continue
             fi
 
-            # Skip client-specific migrations
+            # Skip client-specific migrations (mark as applied so we stop checking)
             is_client_migration=false
             for pattern in "${CLIENT_SPECIFIC_PATTERNS[@]}"; do
                 if grep -qi "$pattern" "$migration_file"; then
                     is_client_migration=true
                     info "Skipping client migration: $migration_name (contains '$pattern')"
-                    # Mark as applied so we don't keep checking it
                     echo "$migration_name" >> "$MIGRATION_TRACKING_FILE"
                     break
                 fi
             done
 
-            if [ "$is_client_migration" = false ]; then
-                PENDING_MIGRATIONS+=("$migration_file")
-            fi
-        fi
-    done
-
-    if [ ${#PENDING_MIGRATIONS[@]} -eq 0 ]; then
-        success "No pending migrations"
-    else
-        warn "Found ${#PENDING_MIGRATIONS[@]} pending migration(s):"
-        for m in "${PENDING_MIGRATIONS[@]}"; do
-            echo "  - $(basename "$m")"
+            [ "$is_client_migration" = false ] && PENDING_MIGRATIONS+=("$migration_file")
         done
 
-        if confirm "Apply migrations now?"; then
-            # Check for required Supabase env vars
-            if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
-                fail "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required for migrations"
-                exit 1
-            fi
-
-            # Extract project ref from URL
-            SUPABASE_PROJECT_REF=$(echo "$SUPABASE_URL" | sed -E 's|https://([^.]+)\.supabase\.co.*|\1|')
-
-            for migration_file in "${PENDING_MIGRATIONS[@]}"; do
-                migration_name=$(basename "$migration_file")
-                info "Applying: $migration_name"
-
-                # Read migration content
-                MIGRATION_SQL=$(cat "$migration_file")
-
-                # Apply via Supabase Management API
-                HTTP_STATUS=$(curl -s -o /tmp/migration_response.json -w "%{http_code}" \
-                    "https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/database/query" \
-                    -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN:-}" \
-                    -H "Content-Type: application/json" \
-                    -d "{\"query\": $(echo "$MIGRATION_SQL" | jq -Rs .)}" 2>/dev/null || echo "000")
-
-                if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "201" ]; then
-                    echo "$migration_name" >> "$MIGRATION_TRACKING_FILE"
-                    success "Applied: $migration_name"
-                else
-                    # Fallback: try direct psql if available
-                    if command -v psql &> /dev/null && [ -n "${DATABASE_URL:-}" ]; then
-                        warn "Management API failed, trying direct connection..."
-                        if psql "$DATABASE_URL" -f "$migration_file" 2>/dev/null; then
-                            echo "$migration_name" >> "$MIGRATION_TRACKING_FILE"
-                            success "Applied via psql: $migration_name"
-                        else
-                            warn "Migration failed: $migration_name (may already be applied)"
-                            echo "$migration_name" >> "$MIGRATION_TRACKING_FILE"
-                        fi
-                    else
-                        warn "Migration may have failed: $migration_name (HTTP $HTTP_STATUS)"
-                        warn "Please verify manually and add to .applied_migrations if successful"
-                    fi
-                fi
-            done
+        if [ ${#PENDING_MIGRATIONS[@]} -eq 0 ]; then
+            success "No pending legacy migrations"
         else
-            warn "Skipping migrations (user declined)"
+            warn "Found ${#PENDING_MIGRATIONS[@]} pending legacy migration(s):"
+            for m in "${PENDING_MIGRATIONS[@]}"; do
+                echo "  - $(basename "$m")"
+            done
+            warn "These should be moved to supabase/migrations/ for future deploys."
+
+            if confirm "Apply legacy migrations now?"; then
+                if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+                    fail "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required for legacy migrations"
+                    exit 1
+                fi
+
+                SUPABASE_PROJECT_REF=$(echo "$SUPABASE_URL" | sed -E 's|https://([^.]+)\.supabase\.co.*|\1|')
+
+                for migration_file in "${PENDING_MIGRATIONS[@]}"; do
+                    migration_name=$(basename "$migration_file")
+                    info "Applying legacy: $migration_name"
+                    MIGRATION_SQL=$(cat "$migration_file")
+                    APPLIED=false
+
+                    # Try Management API first (requires SUPABASE_ACCESS_TOKEN)
+                    if [ -n "${SUPABASE_ACCESS_TOKEN:-}" ]; then
+                        HTTP_STATUS=$(curl -s -o /tmp/migration_response.json -w "%{http_code}" \
+                            "https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/database/query" \
+                            -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            -d "{\"query\": $(echo "$MIGRATION_SQL" | jq -Rs .)}" 2>/dev/null || echo "000")
+
+                        if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "201" ]; then
+                            APPLIED=true
+                        else
+                            warn "Management API returned HTTP $HTTP_STATUS for $migration_name"
+                            [ -f /tmp/migration_response.json ] && cat /tmp/migration_response.json | head -5
+                        fi
+                    fi
+
+                    # Fallback: direct psql if DATABASE_URL is set
+                    if [ "$APPLIED" = false ] && command -v psql &>/dev/null && [ -n "${DATABASE_URL:-}" ]; then
+                        info "Trying psql fallback for $migration_name..."
+                        if psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration_file"; then
+                            APPLIED=true
+                        fi
+                    fi
+
+                    if [ "$APPLIED" = true ]; then
+                        echo "$migration_name" >> "$MIGRATION_TRACKING_FILE"
+                        success "Applied: $migration_name"
+                    else
+                        # FAIL LOUDLY -- do NOT mark as applied, do NOT continue.
+                        # The previous behavior of marking failed migrations as
+                        # applied caused the v2.11.0 semrush_api_key cascade.
+                        fail "Migration FAILED: $migration_name"
+                        fail "  Neither Management API nor psql could apply this migration."
+                        fail "  Aborting deploy. Fix the migration or run with --skip-migrations"
+                        fail "  to deploy without it (only if you know what you're doing)."
+                        exit 1
+                    fi
+                done
+            else
+                warn "Skipping migrations (user declined)"
+            fi
         fi
     fi
 fi
