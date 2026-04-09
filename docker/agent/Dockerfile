@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TRANSFORMERS_CACHE=/app/.cache/huggingface \
     HUGGINGFACE_HUB_CACHE=/app/.cache/huggingface
 
-# Install system dependencies
+# Install system dependencies + Node.js (for MCP-based abilities like Semrush)
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -17,6 +17,9 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     libpq-dev \
     build-essential \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g semrush-mcp \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory

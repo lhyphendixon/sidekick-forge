@@ -103,27 +103,40 @@ class CitationsComponent {
      */
     createCitationItem(docGroup, index) {
         const item = document.createElement('div');
-        item.className = 'citation-item';
-        
+        const sourceType = docGroup.source_type || '';
+        const isSpecialSource = sourceType === 'semrush' || sourceType === 'prediction_market';
+        item.className = isSpecialSource ? `citation-item citation-${sourceType}` : 'citation-item';
+
         // Extract domain from URL for display
         const domain = this.extractDomain(docGroup.source_url);
-        
+
         // Truncate long titles
         const displayTitle = this.truncateText(docGroup.title, 50);
-        
+
+        // Source badge for special citation types
+        let sourceBadge = '';
+        if (sourceType === 'semrush') {
+            sourceBadge = '<span class="citation-source-badge citation-badge-semrush">Semrush</span>';
+        } else if (sourceType === 'ahrefs') {
+            sourceBadge = '<span class="citation-source-badge citation-badge-ahrefs">Ahrefs</span>';
+        } else if (sourceType === 'prediction_market') {
+            sourceBadge = '<span class="citation-source-badge citation-badge-pm">Polymarket</span>';
+        }
+
         item.innerHTML = `
             <div class="citation-content">
                 <span class="citation-index">[${index}]</span>
-                <a href="${docGroup.source_url}" 
-                   target="_blank" 
+                ${sourceBadge}
+                <a href="${docGroup.source_url}"
+                   target="_blank"
                    rel="noopener noreferrer"
                    class="citation-link"
                    title="${docGroup.title}">
                     ${displayTitle}
                 </a>
                 <span class="citation-domain">${domain}</span>
-                ${docGroup.chunks.length > 1 ? 
-                    `<span class="citation-chunk-count">(${docGroup.chunks.length} sections)</span>` : 
+                ${docGroup.chunks.length > 1 ?
+                    `<span class="citation-chunk-count">(${docGroup.chunks.length} sections)</span>` :
                     ''}
             </div>
         `;

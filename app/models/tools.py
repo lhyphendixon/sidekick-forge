@@ -4,7 +4,7 @@ from typing import Optional, Literal, Any, Dict, List
 from pydantic import BaseModel, Field
 
 
-ToolType = Literal["mcp", "n8n", "sidekick", "code", "asana", "helpscout", "builtin", "content_catalyst", "documentsense", "lingua", "image_catalyst", "prediction_market", "print_ready", "evernote", "trello", "notion", "descript", "campaign_scan"]
+ToolType = Literal["mcp", "n8n", "sidekick", "code", "asana", "helpscout", "builtin", "content_catalyst", "documentsense", "lingua", "image_catalyst", "prediction_market", "print_ready", "evernote", "trello", "notion", "descript", "campaign_scan", "semrush", "ahrefs"]
 ToolScope = Literal["global", "client"]
 ExecutionPhase = Literal["active", "ambient"]
 

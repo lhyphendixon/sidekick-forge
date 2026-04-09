@@ -167,6 +167,34 @@ except Exception as exc:  # pragma: no cover
     NotionAuthService = None  # type: ignore
 
 
+# Semrush SEO ability module
+try:
+    from app.agent_modules.abilities.semrush import (  # type: ignore
+        SemrushAbilityConfigError,
+        build_semrush_tool,
+    )
+except Exception as exc:  # pragma: no cover - agent runtime runs standalone
+    logging.getLogger(__name__).warning(
+        "Failed to import Semrush ability module: %s", exc,
+    )
+    build_semrush_tool = None
+    SemrushAbilityConfigError = None  # type: ignore
+
+
+# Ahrefs (Content Recon) ability module
+try:
+    from app.agent_modules.abilities.ahrefs import (  # type: ignore
+        AhrefsAbilityConfigError,
+        build_ahrefs_tool,
+    )
+except Exception as exc:  # pragma: no cover - agent runtime runs standalone
+    logging.getLogger(__name__).warning(
+        "Failed to import Ahrefs ability module: %s", exc,
+    )
+    build_ahrefs_tool = None
+    AhrefsAbilityConfigError = None  # type: ignore
+
+
 def _is_glm_reasoning_model(model_name: str) -> bool:
     """
     Check if the model is a GLM model that supports the reasoning toggle.
@@ -279,6 +307,10 @@ class ToolRegistry:
                     ft = self._build_notion_tool(t)
                 elif ttype == "descript":
                     ft = self._build_descript_tool(t)
+                elif ttype == "semrush":
+                    ft = self._build_semrush_tool(t)
+                elif ttype == "ahrefs":
+                    ft = self._build_ahrefs_tool(t)
                 elif ttype == "builtin":
                     # Handle built-in tools by mapping slug to appropriate builder
                     ft = self._build_builtin_tool(t)
@@ -2209,6 +2241,75 @@ Do NOT use this for general knowledge questions - only for document-specific que
             return f"WIDGET_TRIGGER:descript:{suggested_instructions}"
 
         return lk_function_tool(raw_schema=raw_schema)(_invoke_raw)
+
+    def _build_semrush_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Semrush SEO tool (MCP-based, 60+ tools via single meta-tool)."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "semrush"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            for key in (slug, t.get("id"), t.get("name")):
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        # Resolve API key
+        if not merged_cfg.get("semrush_api_key"):
+            merged_cfg["semrush_api_key"] = self._api_keys.get("semrush_api_key")
+
+        if build_semrush_tool is None:
+            self._logger.warning("Semrush ability module not available; skipping")
+            return None
+
+        try:
+            return build_semrush_tool(t, merged_cfg, api_keys=self._api_keys)
+        except SemrushAbilityConfigError as exc:
+            self._logger.warning("Semrush tool not configured: %s", exc)
+            return None
+
+    def _build_ahrefs_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Content Recon (Ahrefs) tool — remote MCP, 42+ SEO tools."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "content_recon"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            for key in (slug, t.get("id"), t.get("name")):
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        if not merged_cfg.get("ahrefs_api_key"):
+            merged_cfg["ahrefs_api_key"] = self._api_keys.get("ahrefs_api_key")
+
+        if build_ahrefs_tool is None:
+            self._logger.warning("Ahrefs ability module not available; skipping")
+            return None
+
+        try:
+            return build_ahrefs_tool(t, merged_cfg, api_keys=self._api_keys)
+        except AhrefsAbilityConfigError as exc:
+            self._logger.warning("Ahrefs tool not configured: %s", exc)
+            return None
 
     def _build_print_ready_tool(self, t: Dict[str, Any]) -> Any:
         """Build the PrintReady tool for transcript printing/export."""

@@ -1370,10 +1370,10 @@ async def client_detail_page(
         try:
             platform_sb = client_service.supabase
             extra_cols = platform_sb.table("clients").select(
-                "descript_api_key, firecrawl_api_key, uses_platform_keys"
+                "descript_api_key, firecrawl_api_key, semrush_api_key, ahrefs_api_key, uses_platform_keys"
             ).eq("id", client_id).maybe_single().execute()
             if extra_cols.data:
-                for col_name in ("descript_api_key", "firecrawl_api_key"):
+                for col_name in ("descript_api_key", "firecrawl_api_key", "semrush_api_key", "ahrefs_api_key"):
                     if extra_cols.data.get(col_name):
                         client_dict[col_name] = extra_cols.data[col_name]
                 # uses_platform_keys must always be set (even if False)
@@ -4071,7 +4071,13 @@ async def agent_preview_modal(
     agent_slug: str,
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
-    """Return the agent preview modal that embeds the production embed UI in an iframe"""
+    """Return the agent preview modal that embeds the production embed UI in an iframe.
+
+    Phase 2: This handler returns the modal HTML IMMEDIATELY without waiting for
+    Supabase session token generation. The modal's inline script fetches tokens
+    via /admin/agents/preview/{client_id}/{agent_slug}/session-tokens in the
+    background and posts them to the iframe via postMessage when ready.
+    """
     try:
         logger.info(f"Preview (embed) modal requested for client_id={client_id}, agent_slug={agent_slug}")
         ensure_client_or_global_access(client_id, admin_user)
@@ -4092,98 +4098,11 @@ async def agent_preview_modal(
             netloc = "localhost"
         if scheme == "http" and netloc and not netloc.startswith("localhost"):
             scheme = "https"
-        api_base = "http://127.0.0.1:8000"
 
-        # Call EnsureClientUser to get client JWT for admin preview
-        import httpx
-        timeout = httpx.Timeout(20.0, connect=5.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            # Get platform session token for the API call
-            platform_token = request.headers.get("Authorization", "").replace("Bearer ", "")
-            if not platform_token and admin_user:
-                # Try to get from admin_user if available
-                platform_token = admin_user.get("access_token", "")
-
-            ensure_response = None
-            try:
-                ensure_response = await client.post(
-                    f"{api_base}/api/v2/admin/ensure-client-user",
-                    json={
-                        "client_id": client_id,
-                        "platform_user_id": admin_user.get("user_id"),
-                        "user_email": admin_user.get("email")
-                    },
-                    headers={"Authorization": f"Bearer {platform_token}"} if platform_token else {}
-                )
-            except httpx.TimeoutException:
-                logger.warning("ensure-client-user request timed out; continuing without client JWT fallback")
-            
-        client_jwt = None
-        client_user_id = None
-        client_supabase_tokens = None
-        admin_email = admin_user.get("email") if isinstance(admin_user, dict) else None
-            
-        if ensure_response and ensure_response.status_code == 200:
-            ensure_data = ensure_response.json()
-            client_jwt = ensure_data.get("client_jwt")
-            client_user_id = ensure_data.get("client_user_id")
-            logger.info(f"Got client JWT for preview: client_user_id={client_user_id}")
-        elif ensure_response is not None:
-            logger.warning(f"Failed to get client JWT: {ensure_response.status_code}")
-
-        if client_id != "global" and admin_email:
-            try:
-                client_supabase_tokens = await generate_client_session_tokens(client_id, admin_email)
-                logger.info(
-                    "Generated client Supabase tokens for embed preview user %s (client %s)",
-                    admin_email,
-                    client_id,
-                )
-            except Exception as exc:
-                logger.warning(f"Failed to bootstrap client Supabase session for embed preview: {exc}")
-        
         # Respect the original request scheme/host (include port in dev) for the embed iframe
         iframe_src = f"{scheme}://{netloc}/embed/{client_id}/{agent_slug}?theme=dark&source=admin"
-        
-        def _format_token_json(tokens: Optional[Dict[str, str]]):
-            if not tokens:
-                return "null", "null"
-            return json.dumps(tokens.get("access_token")), json.dumps(tokens.get("refresh_token"))
+        token_url = f"/admin/agents/preview/{client_id}/{agent_slug}/session-tokens"
 
-        client_supabase_access_json, client_supabase_refresh_json = _format_token_json(client_supabase_tokens)
-
-        # If we have a client JWT, pass it to the embed
-        jwt_script = ""
-        if client_jwt:
-            if not client_supabase_tokens:
-                client_supabase_tokens = {"access_token": client_jwt, "refresh_token": None}
-            client_supabase_access_json, client_supabase_refresh_json = _format_token_json(client_supabase_tokens)
-            jwt_script = f"""
-                    // Send client JWT for admin preview (shadow user in client Supabase)
-                    iframe.contentWindow.postMessage({{ 
-                        type: 'supabase-session', 
-                        access_token: '{client_jwt}',
-                        // No refresh token for admin preview sessions
-                        refresh_token: null,
-                        is_admin_preview: true,
-                        client_user_id: '{client_user_id}',
-                        client_supabase_access_token: {client_supabase_access_json},
-                        client_supabase_refresh_token: {client_supabase_refresh_json}
-                    }}, '*');
-            """
-        else:
-            # Fallback to original behavior if EnsureClientUser fails
-            jwt_script = """
-                    // Use global Supabase client from admin base to get current session
-                    var sb = window.__adminSupabaseClient || null;
-                    if (!sb || !sb.auth || !sb.auth.getSession) return;
-                    var res = await sb.auth.getSession();
-                    var session = (res && res.data && res.data.session) ? res.data.session : null;
-                    if (session && session.access_token && session.refresh_token) {
-                      iframe.contentWindow.postMessage({ type: 'supabase-session', access_token: session.access_token, refresh_token: session.refresh_token, client_supabase_access_token: %s, client_supabase_refresh_token: %s }, '*');
-                    }
-            """ % (client_supabase_access_json, client_supabase_refresh_json)
-        
         modal_html = f"""
         <div class=\"fixed inset-0 bg-black/80 flex items-center justify-center z-50\">
           <div class=\"bg-dark-surface border border-dark-border rounded-lg w-full max-w-4xl h-[90vh] flex flex-col\">
@@ -4200,11 +4119,54 @@ async def agent_preview_modal(
               try {{
                 var iframe = document.getElementById('embedFrame');
                 if (!iframe) return;
-                iframe.addEventListener('load', async function() {{
+
+                // Phase 2: Fetch session tokens in parallel with iframe load,
+                // then postMessage as soon as both are ready (whichever finishes last).
+                var iframeReady = false;
+                var pendingTokens = null;
+
+                function postTokens() {{
+                  if (!iframeReady || !pendingTokens) return;
                   try {{
-{jwt_script}
+                    iframe.contentWindow.postMessage(pendingTokens, '*');
                   }} catch (e) {{ console.warn('[preview->embed] token post failed', e); }}
+                }}
+
+                iframe.addEventListener('load', function() {{
+                  iframeReady = true;
+                  postTokens();
                 }});
+
+                fetch('{token_url}', {{ credentials: 'include' }})
+                  .then(function(res) {{ return res.json(); }})
+                  .then(function(data) {{
+                    if (!data || data.error) {{
+                      console.warn('[preview->embed] token fetch failed', data && data.error);
+                      // Fallback: use parent's admin Supabase session
+                      var sb = window.__adminSupabaseClient || null;
+                      if (sb && sb.auth && sb.auth.getSession) {{
+                        sb.auth.getSession().then(function(res) {{
+                          var session = res && res.data && res.data.session;
+                          if (session && session.access_token && session.refresh_token) {{
+                            pendingTokens = {{ type: 'supabase-session', access_token: session.access_token, refresh_token: session.refresh_token }};
+                            postTokens();
+                          }}
+                        }});
+                      }}
+                      return;
+                    }}
+                    pendingTokens = {{
+                      type: 'supabase-session',
+                      access_token: data.client_jwt,
+                      refresh_token: null,
+                      is_admin_preview: true,
+                      client_user_id: data.client_user_id,
+                      client_supabase_access_token: data.client_supabase_access_token,
+                      client_supabase_refresh_token: data.client_supabase_refresh_token
+                    }};
+                    postTokens();
+                  }})
+                  .catch(function(err) {{ console.warn('[preview->embed] token fetch error', err); }});
               }} catch (e) {{ console.warn('[preview modal] init failed', e); }}
             }})();
           </script>
@@ -4226,6 +4188,72 @@ async def agent_preview_modal(
             """,
             status_code=500
         )
+
+
+@router.get("/agents/preview/{client_id}/{agent_slug}/session-tokens")
+async def agent_preview_session_tokens(
+    request: Request,
+    client_id: str,
+    agent_slug: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Phase 2: Generate client session tokens for the embed preview iframe.
+
+    Called from the preview modal's inline script in parallel with the iframe
+    load, so the modal HTML can be returned immediately without waiting for
+    Supabase token generation.
+    """
+    try:
+        ensure_client_or_global_access(client_id, admin_user)
+
+        api_base = "http://127.0.0.1:8000"
+        client_jwt = None
+        client_user_id = None
+        client_supabase_tokens = None
+        admin_email = admin_user.get("email") if isinstance(admin_user, dict) else None
+
+        # Call EnsureClientUser to get client JWT
+        import httpx
+        timeout = httpx.Timeout(20.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            platform_token = request.headers.get("Authorization", "").replace("Bearer ", "")
+            if not platform_token and admin_user:
+                platform_token = admin_user.get("access_token", "")
+
+            try:
+                ensure_response = await client.post(
+                    f"{api_base}/api/v2/admin/ensure-client-user",
+                    json={
+                        "client_id": client_id,
+                        "platform_user_id": admin_user.get("user_id"),
+                        "user_email": admin_user.get("email")
+                    },
+                    headers={"Authorization": f"Bearer {platform_token}"} if platform_token else {}
+                )
+                if ensure_response.status_code == 200:
+                    ensure_data = ensure_response.json()
+                    client_jwt = ensure_data.get("client_jwt")
+                    client_user_id = ensure_data.get("client_user_id")
+            except httpx.TimeoutException:
+                logger.warning("ensure-client-user timed out in session-tokens")
+
+        if client_id != "global" and admin_email:
+            try:
+                client_supabase_tokens = await generate_client_session_tokens(client_id, admin_email)
+            except Exception as exc:
+                logger.warning(f"generate_client_session_tokens failed: {exc}")
+
+        return JSONResponse({
+            "client_jwt": client_jwt,
+            "client_user_id": client_user_id,
+            "client_supabase_access_token": (client_supabase_tokens or {}).get("access_token") if client_supabase_tokens else None,
+            "client_supabase_refresh_token": (client_supabase_tokens or {}).get("refresh_token") if client_supabase_tokens else None,
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"agent_preview_session_tokens failed: {exc}", exc_info=True)
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 @router.post("/agents/preview/{client_id}/{agent_slug}/send")
@@ -6229,7 +6257,9 @@ async def admin_update_client(
                 cohere_api_key=form.get("cohere_api_key") or (current_api_keys.cohere_api_key if hasattr(current_api_keys, 'cohere_api_key') else current_api_keys.get('cohere_api_key') if isinstance(current_api_keys, dict) else None),
                 siliconflow_api_key=form.get("siliconflow_api_key") or (current_api_keys.siliconflow_api_key if hasattr(current_api_keys, 'siliconflow_api_key') else current_api_keys.get('siliconflow_api_key') if isinstance(current_api_keys, dict) else None),
                 jina_api_key=form.get("jina_api_key") or (current_api_keys.jina_api_key if hasattr(current_api_keys, 'jina_api_key') else current_api_keys.get('jina_api_key') if isinstance(current_api_keys, dict) else None),
-                descript_api_key=form.get("descript_api_key") or (current_api_keys.descript_api_key if hasattr(current_api_keys, 'descript_api_key') else current_api_keys.get('descript_api_key') if isinstance(current_api_keys, dict) else None)
+                descript_api_key=form.get("descript_api_key") or (current_api_keys.descript_api_key if hasattr(current_api_keys, 'descript_api_key') else current_api_keys.get('descript_api_key') if isinstance(current_api_keys, dict) else None),
+                semrush_api_key=form.get("semrush_api_key") or (current_api_keys.semrush_api_key if hasattr(current_api_keys, 'semrush_api_key') else current_api_keys.get('semrush_api_key') if isinstance(current_api_keys, dict) else None),
+                ahrefs_api_key=form.get("ahrefs_api_key") or (current_api_keys.ahrefs_api_key if hasattr(current_api_keys, 'ahrefs_api_key') else current_api_keys.get('ahrefs_api_key') if isinstance(current_api_keys, dict) else None)
             ),
             embedding=EmbeddingSettings(
                 provider=form.get("embedding_provider", current_embedding.provider if hasattr(current_embedding, 'provider') else current_embedding.get('provider', 'openai') if current_embedding else 'openai'),
@@ -6289,6 +6319,12 @@ async def admin_update_client(
         firecrawl_key_val = form.get("firecrawl_api_key")
         if firecrawl_key_val is not None:
             direct_col_updates["firecrawl_api_key"] = firecrawl_key_val or None
+        semrush_key_val = form.get("semrush_api_key")
+        if semrush_key_val is not None:
+            direct_col_updates["semrush_api_key"] = semrush_key_val or None
+        ahrefs_key_val = form.get("ahrefs_api_key")
+        if ahrefs_key_val is not None:
+            direct_col_updates["ahrefs_api_key"] = ahrefs_key_val or None
         if direct_col_updates:
             try:
                 client_service.supabase.table("clients").update(direct_col_updates).eq("id", client_id).execute()

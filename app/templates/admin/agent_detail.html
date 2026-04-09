@@ -4166,6 +4166,72 @@ function _tsRenderTypeFields(toolType, config, toolName) {
         </div>`;
         return;
     }
+    if (toolType === 'semrush') {
+        const defaultDb = _tsEscapeHtml(safeConfig.default_database || 'us');
+        const timeoutVal = safeConfig.timeout !== undefined ? safeConfig.timeout : 30;
+        wrap.innerHTML = `
+        <div class="space-y-3">
+          <div class="p-3 bg-dark-elevated border border-dark-border rounded text-sm text-dark-text-secondary">
+            <p class="font-medium text-dark-text mb-1">Semrush SEO</p>
+            <p class="text-xs">Provides 60+ SEO tools via the Semrush MCP. Requires a Semrush API key configured in platform settings or client BYOK.</p>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm text-dark-text font-medium">Default Database</label>
+              <select id="ts_semrush_database" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm">
+                <option value="us" ${defaultDb === 'us' ? 'selected' : ''}>US</option>
+                <option value="uk" ${defaultDb === 'uk' ? 'selected' : ''}>UK</option>
+                <option value="ca" ${defaultDb === 'ca' ? 'selected' : ''}>Canada</option>
+                <option value="au" ${defaultDb === 'au' ? 'selected' : ''}>Australia</option>
+                <option value="de" ${defaultDb === 'de' ? 'selected' : ''}>Germany</option>
+                <option value="fr" ${defaultDb === 'fr' ? 'selected' : ''}>France</option>
+                <option value="es" ${defaultDb === 'es' ? 'selected' : ''}>Spain</option>
+                <option value="it" ${defaultDb === 'it' ? 'selected' : ''}>Italy</option>
+                <option value="br" ${defaultDb === 'br' ? 'selected' : ''}>Brazil</option>
+                <option value="jp" ${defaultDb === 'jp' ? 'selected' : ''}>Japan</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-sm text-dark-text font-medium">Timeout (seconds)</label>
+              <input id="ts_semrush_timeout" type="number" min="5" max="120" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" value="${timeoutVal}" />
+            </div>
+          </div>
+        </div>`;
+        return;
+    }
+    if (toolType === 'ahrefs') {
+        const defaultCountry = _tsEscapeHtml(safeConfig.default_country || 'us');
+        const timeoutVal = safeConfig.timeout !== undefined ? safeConfig.timeout : 30;
+        wrap.innerHTML = `
+        <div class="space-y-3">
+          <div class="p-3 bg-dark-elevated border border-dark-border rounded text-sm text-dark-text-secondary">
+            <p class="font-medium text-dark-text mb-1">Content Recon (Ahrefs)</p>
+            <p class="text-xs">Provides 42+ SEO tools via the Ahrefs remote MCP. Requires an Ahrefs MCP-scoped API key (Lite plan or higher).</p>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm text-dark-text font-medium">Default Country</label>
+              <select id="ts_ahrefs_country" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm">
+                <option value="us" ${defaultCountry === 'us' ? 'selected' : ''}>US</option>
+                <option value="gb" ${defaultCountry === 'gb' ? 'selected' : ''}>UK</option>
+                <option value="ca" ${defaultCountry === 'ca' ? 'selected' : ''}>Canada</option>
+                <option value="au" ${defaultCountry === 'au' ? 'selected' : ''}>Australia</option>
+                <option value="de" ${defaultCountry === 'de' ? 'selected' : ''}>Germany</option>
+                <option value="fr" ${defaultCountry === 'fr' ? 'selected' : ''}>France</option>
+                <option value="es" ${defaultCountry === 'es' ? 'selected' : ''}>Spain</option>
+                <option value="it" ${defaultCountry === 'it' ? 'selected' : ''}>Italy</option>
+                <option value="br" ${defaultCountry === 'br' ? 'selected' : ''}>Brazil</option>
+                <option value="jp" ${defaultCountry === 'jp' ? 'selected' : ''}>Japan</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-sm text-dark-text font-medium">Timeout (seconds)</label>
+              <input id="ts_ahrefs_timeout" type="number" min="5" max="120" class="w-full mt-1 px-3 py-2 bg-dark-elevated border border-dark-border rounded text-dark-text text-sm" value="${timeoutVal}" />
+            </div>
+          </div>
+        </div>`;
+        return;
+    }
     // Default: no type-specific fields
     wrap.innerHTML = '';
 }
@@ -4223,6 +4289,22 @@ function _tsCollectConfig(toolType, toolName) {
         else { cfg.boards = []; }
         const da = document.getElementById('ts_trello_default_action');
         cfg.default_action = da ? da.value : 'list';
+        return cfg;
+    }
+    if (toolType === 'semrush') {
+        const cfg = {};
+        const db = document.getElementById('ts_semrush_database');
+        if (db) cfg.default_database = db.value;
+        const to = document.getElementById('ts_semrush_timeout');
+        if (to) cfg.timeout = parseFloat(to.value) || 30;
+        return cfg;
+    }
+    if (toolType === 'ahrefs') {
+        const cfg = {};
+        const co = document.getElementById('ts_ahrefs_country');
+        if (co) cfg.default_country = co.value;
+        const to = document.getElementById('ts_ahrefs_timeout');
+        if (to) cfg.timeout = parseFloat(to.value) || 30;
         return cfg;
     }
     // For types with no special fields, return null (don't override config)

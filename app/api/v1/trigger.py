@@ -1963,6 +1963,8 @@ async def dispatch_agent_job(
             "rerank": context_snapshot.get("rerank"),
             "user_message": context_snapshot.get("user_message"),
             "email_address": getattr(agent, "email_address", None) or "",
+            # Phase 3: Carry prewarm flag so worker enters idle mode after init
+            "prewarm": bool(context_snapshot.get("prewarm")),
         }
 
         tools_payload = tools if tools is not None else context_snapshot.get("tools") or []

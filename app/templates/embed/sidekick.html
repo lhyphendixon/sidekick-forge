@@ -892,7 +892,7 @@
         </div>
         <div id="auth-msg" class="text-dark-text-secondary text-sm"></div>
       </div>
-      <div id="chat" class="hidden flex-1 flex flex-col min-h-0">
+      <div id="chat" class="flex-1 flex flex-col min-h-0">
         <!-- Header with mode toggle and new conversation button - all in one row -->
         <div class="px-2 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2 border-b border-white/5 relative">
           <!-- Mode toggle - left side -->
@@ -1461,9 +1461,17 @@
     function startNewConversation() {
       currentConversationId = null;
       isFirstMessage = true;
+      window.__prewarmRoomName = null; // discard any previous warm worker
       clearChatMessages();
       closeConversationHistory();
       console.log('[history] Started new conversation');
+
+      // Phase 3: Pre-warm a worker for the new conversation
+      if (typeof triggerPrewarm === 'function') {
+        triggerPrewarm().catch(err => {
+          console.warn('[prewarm] new-conversation prewarm failed:', err);
+        });
+      }
     }
 
     // ========================================
@@ -2794,6 +2802,15 @@ function clearVoiceTranscriptError(){
       const userId = getEffectiveUserId();
       if (userId) {
         fd.append('user_id', userId);
+      }
+
+      // Phase 3: If a prewarmed worker is waiting, route the message to it
+      // instead of dispatching a fresh worker. This makes first-message
+      // response time ~1-2s instead of ~10s.
+      if (window.__prewarmRoomName) {
+        fd.append('prewarm_room_name', window.__prewarmRoomName);
+        // Consume — a prewarm room only handles one message
+        window.__prewarmRoomName = null;
       }
 
       const bearer = manualToken || (session && session.access_token) || '';
@@ -5382,37 +5399,93 @@ function clearVoiceTranscriptError(){
       }
     }
 
+    // Phase 1: Show the chat UI immediately. Auth + history restore run in
+    // the background so the user can start typing the moment Connect is clicked.
     (async ()=>{
-      // First, try WordPress bridge auth if in iframe
-      const bridgeAuth = await initWordPressBridge();
-
-      // Then check session (bridge may have set it, or there may be an existing session)
-      const ok = bridgeAuth || await ensureSession();
-
-      // Hide loading overlay and show appropriate view
+      // Hide loader and show chat IMMEDIATELY — don't block on any network work
       hideInitialLoader();
-      setAuthVisible(!ok);
-      setChatVisible(ok);
-      try { document.getElementById('voiceStartBtn').disabled = !ok; } catch {}
-
-      // Initialize chat mode UI (show/hide tabs based on configuration)
+      setChatVisible(true);
       initChatModeUI();
 
-      // Initialize Supertab if configured (non-blocking)
-      if (SUPERTAB_CONFIG.enabled) {
-        initSupertab().catch(err => {
-          console.warn('[supertab] Background init failed:', err);
-        });
-        checkAdminBypass().catch(err => {
-          console.log('[admin-bypass] Check skipped:', err.message);
-        });
-      }
+      // Run auth + history restore in the background. The text input is already
+      // usable; sendMsg() will await ensureSession() on first send if needed.
+      (async () => {
+        try {
+          const bridgeAuth = await initWordPressBridge();
+          const ok = bridgeAuth || await ensureSession();
 
-      // Auto-restore most recent conversation if authenticated
-      if (ok) {
-        await autoRestoreConversation();
-      }
+          if (!ok) {
+            // No auth — surface the auth panel as a non-blocking overlay
+            setAuthVisible(true);
+            setChatVisible(false);
+            try { document.getElementById('voiceStartBtn').disabled = true; } catch {}
+            return;
+          }
+
+          try { document.getElementById('voiceStartBtn').disabled = false; } catch {}
+
+          // Initialize Supertab if configured (non-blocking)
+          if (SUPERTAB_CONFIG.enabled) {
+            initSupertab().catch(err => {
+              console.warn('[supertab] Background init failed:', err);
+            });
+            checkAdminBypass().catch(err => {
+              console.log('[admin-bypass] Check skipped:', err.message);
+            });
+          }
+
+          // Auto-restore most recent conversation
+          await autoRestoreConversation();
+
+          // Phase 3: Pre-warm a worker for the first message. This dispatches
+          // a worker that initializes context and idles waiting for input.
+          // First message response then takes ~1-2s instead of ~10s.
+          triggerPrewarm().catch(err => {
+            console.warn('[prewarm] background prewarm failed (non-fatal):', err);
+          });
+        } catch (err) {
+          console.error('[init] Background init failed:', err);
+        }
+      })();
     })();
+
+    // Phase 3: Fire-and-forget prewarm trigger
+    async function triggerPrewarm() {
+      // Generate a conversation_id if we don't have one yet — the worker and
+      // the eventual first sendMsg need to share the same id.
+      if (!currentConversationId) {
+        currentConversationId = (crypto && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : ('xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+              const r = Math.random() * 16 | 0;
+              return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            }));
+      }
+      const userId = getEffectiveUserId();
+      if (!userId) return;
+
+      const fd = new FormData();
+      fd.append('client_id', CLIENT_ID);
+      fd.append('agent_slug', AGENT_SLUG);
+      fd.append('conversation_id', currentConversationId);
+      fd.append('user_id', userId);
+
+      const bearer = manualToken || (session && session.access_token) || '';
+      const res = await fetch('/api/embed/text/prewarm', {
+        method: 'POST',
+        body: fd,
+        headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
+      });
+      if (!res.ok) {
+        console.warn('[prewarm] dispatch failed:', res.status);
+        return;
+      }
+      const data = await res.json();
+      if (data && data.room_name) {
+        window.__prewarmRoomName = data.room_name;
+        console.log('[prewarm] worker dispatched, room:', data.room_name);
+      }
+    }
 
     // Clean up realtime subscription when page unloads to prevent orphaned connections
     window.addEventListener('beforeunload', () => {
@@ -5673,48 +5746,79 @@ function clearVoiceTranscriptError(){
           Abilities
           <span class="agent-info-section-hint">— Click to invoke or simply ask</span>
         </div>
-        {% if agent_tools and agent_tools|length > 0 %}
-        <div class="ability-list">
-          {% for tool in agent_tools %}
-          <div class="ability-item{% if tool.admin_only %} admin-only-ability{% endif %}"
-               data-tool-slug="{{ tool.slug or tool.id }}"
-               data-tool-name="{{ tool.name }}"
-               data-tool-type="{{ tool.type or 'tool' }}"
-               onclick="triggerAbility(this)"
-               title="Click to use {{ tool.name }}">
-            <div class="ability-icon">
-              {% if tool.icon_url %}
-              <img src="{{ tool.icon_url }}" alt="{{ tool.name }}" onerror="this.parentElement.innerHTML='<svg fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M13 10V3L4 14h7v7l9-11h-7z\'/></svg>'">
-              {% else %}
-              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-              {% endif %}
-            </div>
-            <div class="ability-info">
-              <div class="ability-name">{{ tool.name }}</div>
-              {% if tool.description %}
-              <div class="ability-description">{{ tool.description }}</div>
-              {% endif %}
-            </div>
-          </div>
-          {% endfor %}
+        <!-- Phase 1: Lazy-loaded by openAgentInfoModal() — see renderAbilityList() in JS below -->
+        <div id="abilityListContainer">
+          <div class="text-center text-white/40 text-xs py-6">Loading abilities…</div>
         </div>
-        {% else %}
-        <div class="no-abilities-message">
-          <svg class="w-8 h-8 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
-          This sidekick is here to chat with you!
-        </div>
-        {% endif %}
       </div>
     </div>
   </div>
 
   <script>
     // Agent Info Modal Functions
+    let _abilityListLoaded = false;
+
     function openAgentInfoModal() {
       const modal = document.getElementById('agentInfoModal');
       if (modal) {
         modal.classList.add('active');
         document.body.style.overflow = 'hidden';
+      }
+      // Lazy-load abilities on first open
+      if (!_abilityListLoaded) {
+        loadAbilityList();
+      }
+    }
+
+    async function loadAbilityList() {
+      const container = document.getElementById('abilityListContainer');
+      if (!container) return;
+      try {
+        const res = await fetch(`/api/embed/agent-tools/${encodeURIComponent(CLIENT_ID)}/${encodeURIComponent(AGENT_SLUG)}`);
+        const data = await res.json();
+        const tools = (data && data.tools) || [];
+        _abilityListLoaded = true;
+
+        if (tools.length === 0) {
+          container.innerHTML = `
+            <div class="no-abilities-message">
+              <svg class="w-8 h-8 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+              This sidekick is here to chat with you!
+            </div>`;
+          return;
+        }
+
+        const items = tools.map(tool => {
+          const slug = escapeHtml(tool.slug || tool.id || '');
+          const name = escapeHtml(tool.name || '');
+          const type = escapeHtml(tool.type || 'tool');
+          const desc = tool.description ? `<div class="ability-description">${escapeHtml(tool.description)}</div>` : '';
+          const adminClass = tool.admin_only ? ' admin-only-ability' : '';
+          const icon = tool.icon_url
+            ? `<img src="${escapeHtml(tool.icon_url)}" alt="${name}" onerror="this.parentElement.innerHTML='<svg fill=\\'none\\' stroke=\\'currentColor\\' viewBox=\\'0 0 24 24\\'><path stroke-linecap=\\'round\\' stroke-linejoin=\\'round\\' stroke-width=\\'2\\' d=\\'M13 10V3L4 14h7v7l9-11h-7z\\'/></svg>'">`
+            : `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>`;
+          return `
+            <div class="ability-item${adminClass}"
+                 data-tool-slug="${slug}"
+                 data-tool-name="${name}"
+                 data-tool-type="${type}"
+                 onclick="triggerAbility(this)"
+                 title="Click to use ${name}">
+              <div class="ability-icon">${icon}</div>
+              <div class="ability-info">
+                <div class="ability-name">${name}</div>
+                ${desc}
+              </div>
+            </div>`;
+        }).join('');
+
+        container.innerHTML = `<div class="ability-list">${items}</div>`;
+      } catch (err) {
+        console.warn('[abilities] failed to load:', err);
+        container.innerHTML = `
+          <div class="no-abilities-message">
+            <p class="text-white/40 text-xs">Could not load abilities.</p>
+          </div>`;
       }
     }
 

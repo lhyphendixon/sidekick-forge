@@ -191,6 +191,9 @@ class APIKeyLoader:
                 'anthropic_api_key',
                 # Video/Media providers
                 'descript_api_key',
+                # SEO/Marketing providers
+                'semrush_api_key',
+                'ahrefs_api_key',
             ]
             
             columns_str = ', '.join(api_key_columns)

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from typing import Optional, Dict, Any, List
 import asyncio
 import json
@@ -36,7 +36,7 @@ ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
 
 # ── Embed config cache (TTL-based) ──────────────────────────────────────────
 _embed_config_cache: Dict[str, Any] = {}
-_EMBED_CACHE_TTL = 60  # seconds
+_EMBED_CACHE_TTL = 600  # seconds (10 minutes — embed config is mostly static)
 
 
 def _get_cached_embed_config(client_id: str, agent_slug: str) -> Optional[Dict[str, Any]]:
@@ -261,7 +261,6 @@ async def embed_sidekick(
     agent_image = None
     agent_id = None
     agent_description = ""
-    agent_tools = []
     sound_settings = {}  # Sound settings for thinking/ambient sounds
     try:
         # Get agent settings from client database (reuse platform_sb from above)
@@ -302,29 +301,10 @@ async def embed_sidekick(
                     sound_settings = agent_record.get("sound_settings")
                     logger.info(f"[embed] Loaded sound_settings: {sound_settings}")
 
-                # Fetch agent_tools + tool details (2 queries, but second depends on first)
-                if agent_id:
-                    try:
-                        agent_tools_result = platform_sb.table("agent_tools").select("tool_id").eq("agent_id", agent_id).execute()
-                        tool_ids = [r["tool_id"] for r in (agent_tools_result.data or [])]
-
-                        if tool_ids:
-                            tools_result = platform_sb.table("tools").select("name, slug, description, icon_url, execution_phase, admin_only, type").in_("id", tool_ids).eq("enabled", True).execute()
-                            if tools_result.data:
-                                agent_tools = [
-                                    {
-                                        "name": t.get("name", ""),
-                                        "slug": t.get("slug", ""),
-                                        "type": t.get("type", ""),
-                                        "description": t.get("description", ""),
-                                        "icon_url": t.get("icon_url", ""),
-                                        "admin_only": bool(t.get("admin_only")),
-                                    }
-                                    for t in tools_result.data
-                                    if t.get("execution_phase") == "active"
-                                ]
-                    except Exception as tools_err:
-                        logger.warning(f"[embed] Failed to fetch agent tools: {tools_err}")
+                # Phase 1: Skip tools fetch on initial render — lazy-loaded by
+                # the frontend when the user opens the "About this sidekick" modal.
+                # This removes 2 Supabase round-trips from the cold-render path.
+                # See /api/embed/agent-tools/{client_id}/{agent_slug} below.
 
                 # Chat mode settings
                 mode_access = _compute_effective_mode_access(agent_record, client_record)
@@ -379,7 +359,6 @@ async def embed_sidekick(
         "agent_name": agent_name,
         "agent_image": agent_image,
         "agent_description": agent_description,
-        "agent_tools": agent_tools,
         "supabase_url": settings.supabase_url,
         "supabase_anon_key": settings.supabase_anon_key,
         "client_supabase_url": client_supabase_url,
@@ -397,6 +376,68 @@ async def embed_sidekick(
     tpl_context_with_dims = {**tpl_context, **effective_dims}
 
     return templates.TemplateResponse("embed/sidekick.html", {**tpl_context_with_dims, "request": request, "theme": theme})
+
+
+@router.get("/api/embed/agent-tools/{client_id}/{agent_slug}")
+async def get_embed_agent_tools(client_id: str, agent_slug: str):
+    """Lazy-load agent tools for the embed's "About this sidekick" modal.
+
+    Phase 1 perf optimization: tools are no longer fetched in the embed page
+    server render. The frontend calls this endpoint when the user opens the
+    sidekick info modal.
+    """
+    try:
+        from supabase import create_client
+        client_service = get_client_service()
+        platform_sb = client_service.supabase
+
+        # Resolve client supabase creds + agent_id
+        client_result = platform_sb.table("clients").select(
+            "supabase_url, supabase_service_role_key"
+        ).eq("id", client_id).limit(1).execute()
+        if not client_result.data:
+            return JSONResponse({"tools": []})
+        cr = client_result.data[0] if isinstance(client_result.data, list) else client_result.data
+        client_supabase_url = cr.get("supabase_url", "")
+        client_service_key = cr.get("supabase_service_role_key", "")
+        if not client_supabase_url or not client_service_key:
+            return JSONResponse({"tools": []})
+
+        client_sb = create_client(client_supabase_url, client_service_key)
+        agent_result = client_sb.table("agents").select("id").eq("slug", agent_slug).limit(1).execute()
+        if not agent_result.data:
+            return JSONResponse({"tools": []})
+        agent_row = agent_result.data[0] if isinstance(agent_result.data, list) else agent_result.data
+        agent_id = agent_row.get("id")
+        if not agent_id:
+            return JSONResponse({"tools": []})
+
+        # Fetch agent_tools + tool details
+        agent_tools_result = platform_sb.table("agent_tools").select("tool_id").eq("agent_id", str(agent_id)).execute()
+        tool_ids = [r["tool_id"] for r in (agent_tools_result.data or [])]
+        if not tool_ids:
+            return JSONResponse({"tools": []})
+
+        tools_result = platform_sb.table("tools").select(
+            "name, slug, description, icon_url, execution_phase, admin_only, type"
+        ).in_("id", tool_ids).eq("enabled", True).execute()
+
+        tools = [
+            {
+                "name": t.get("name", ""),
+                "slug": t.get("slug", ""),
+                "type": t.get("type", ""),
+                "description": t.get("description", ""),
+                "icon_url": t.get("icon_url", ""),
+                "admin_only": bool(t.get("admin_only")),
+            }
+            for t in (tools_result.data or [])
+            if t.get("execution_phase") == "active"
+        ]
+        return JSONResponse({"tools": tools})
+    except Exception as exc:
+        logger.warning(f"[embed] agent-tools lazy fetch failed: {exc}")
+        return JSONResponse({"tools": []})
 
 
 @router.post("/api/embed/client-users/sync")
@@ -555,6 +596,7 @@ async def embed_text_stream(
     message: str = Form(...),
     conversation_id: Optional[str] = Form(None),
     user_id: Optional[str] = Form(None),
+    prewarm_room_name: Optional[str] = Form(None),
 ):
     async def generate():
         try:
@@ -564,7 +606,8 @@ async def embed_text_stream(
                 pass
 
             logger.info(
-                "[embed-stream] start client_id=%s agent=%s", client_id, agent_slug
+                "[embed-stream] start client_id=%s agent=%s prewarm_room=%s",
+                client_id, agent_slug, prewarm_room_name or "none",
             )
 
             # Use provided user_id or generate a deterministic one
@@ -636,71 +679,120 @@ async def embed_text_stream(
             try:
                 from app.integrations.livekit_client import livekit_manager
                 from app.config import settings
-                
+
                 backend_livekit = livekit_manager
                 if not backend_livekit._initialized:
                     await backend_livekit.initialize()
 
-                # Build agent context and room
-                agent_context, _, _, _ = await trigger_api._build_agent_context_for_dispatch(
-                    agent=agent,
-                    client=platform_client,
-                    conversation_id=effective_conversation_id,
-                    user_id=effective_user_id,
-                    session_id=session_id,
-                    mode="text",
-                    request_context=None,
-                    client_conversation_id=effective_conversation_id,
-                )
-                
-                # Add tools and user message to context
-                tools_payload = await trigger_api._get_agent_tools(tools_service, platform_client.id, agent.id)
-                logger.info(f"[embed-stream] tools_payload count: {len(tools_payload) if tools_payload else 0}")
-                if tools_payload:
-                    logger.info(f"[embed-stream] tool slugs: {[t.get('slug') for t in tools_payload]}")
-                    agent_context["tools"] = tools_payload
-                trigger_api._apply_tool_prompt_sections(agent_context, tools_payload)
-                agent_context["user_message"] = message
+                agent_context = None
+                prewarm_alive = False
 
-                # Create room and dispatch
-                # NOTE: enable_agent_dispatch=False because we explicitly call dispatch_agent_job below
-                # Setting it to True causes DOUBLE dispatch (one from room creation, one from explicit call)
-                text_room_name = f"text-{effective_conversation_id}-{uuid.uuid4().hex[:8]}"
-                # Use lightweight room metadata to stay under LiveKit's 64KB limit.
-                # Heavy config (dataset_ids, tools, system_prompt, api_keys, etc.)
-                # is delivered via dispatch job metadata instead.
-                _room_meta = {
-                    "agent_name": settings.livekit_agent_name,
-                    "agent_slug": agent.slug,
-                    "user_id": effective_user_id,
-                    "mode": "text",
-                    "client_id": agent_context.get("client_id"),
-                    "conversation_id": agent_context.get("conversation_id"),
-                    "email_address": getattr(agent, "email_address", None) or "",
-                }
-                await trigger_api.ensure_livekit_room_exists(
-                    backend_livekit,
-                    text_room_name,
-                    agent_name=settings.livekit_agent_name,
-                    agent_slug=agent.slug,
-                    user_id=effective_user_id,
-                    agent_config=_room_meta,
-                    enable_agent_dispatch=False,  # Don't dispatch here - we do it explicitly below
-                )
+                # Phase 3: If a prewarmed room is provided, the worker is already
+                # idling and waiting for a user message. Skip context build,
+                # room creation and dispatch — just deliver the message via metadata.
+                if prewarm_room_name:
+                    text_room_name = prewarm_room_name
+                    logger.info(f"[embed-stream] Using prewarmed room: {text_room_name}")
 
-                await trigger_api.dispatch_agent_job(
-                    livekit_manager=backend_livekit,
-                    room_name=text_room_name,
-                    agent=agent,
-                    client=platform_client,
-                    user_id=effective_user_id,
-                    conversation_id=effective_conversation_id,
-                    session_id=session_id,
-                    tools=agent_context.get("tools"),
-                    tools_config=agent_context.get("tools_config"),
-                    api_keys=agent_context.get("api_keys"),
-                    agent_context=agent_context,
-                )
+                    # Verify the room still exists (worker may have timed out)
+                    room_info = await backend_livekit.get_room(text_room_name)
+                    if not room_info:
+                        logger.warning(
+                            f"[embed-stream] Prewarmed room {text_room_name} not found — falling back to fresh dispatch"
+                        )
+                        prewarm_alive = False
+                    else:
+                        prewarm_alive = True
+
+                    if prewarm_alive:
+                        # Write the user message into room metadata so the idling worker picks it up.
+                        # The worker polls for `pending_user_message` and processes it when seen.
+                        try:
+                            from livekit import api as livekit_api_pkg
+                            lk_api = backend_livekit._get_api_client()
+                            existing_meta = {}
+                            try:
+                                rooms = await lk_api.room.list_rooms(
+                                    livekit_api_pkg.ListRoomsRequest(names=[text_room_name])
+                                )
+                                if rooms.rooms and rooms.rooms[0].metadata:
+                                    existing_meta = json.loads(rooms.rooms[0].metadata)
+                            except Exception as read_err:
+                                logger.warning(f"[embed-stream] Failed to read existing prewarm metadata: {read_err}")
+
+                            existing_meta["pending_user_message"] = message
+                            existing_meta["pending_session_id"] = session_id
+                            await lk_api.room.update_room(
+                                livekit_api_pkg.UpdateRoomRequest(
+                                    room=text_room_name,
+                                    metadata=json.dumps(existing_meta),
+                                )
+                            )
+                            logger.info(f"[embed-stream] Posted user message to prewarmed room {text_room_name}")
+                        except Exception as post_err:
+                            logger.error(f"[embed-stream] Failed to post message to prewarmed room: {post_err}")
+                            prewarm_alive = False
+
+                if not prewarm_room_name or not prewarm_alive:
+                    # Cold path: build context, create room and dispatch a fresh worker
+                    agent_context, _, _, _ = await trigger_api._build_agent_context_for_dispatch(
+                        agent=agent,
+                        client=platform_client,
+                        conversation_id=effective_conversation_id,
+                        user_id=effective_user_id,
+                        session_id=session_id,
+                        mode="text",
+                        request_context=None,
+                        client_conversation_id=effective_conversation_id,
+                    )
+
+                    # Add tools and user message to context
+                    tools_payload = await trigger_api._get_agent_tools(tools_service, platform_client.id, agent.id)
+                    logger.info(f"[embed-stream] tools_payload count: {len(tools_payload) if tools_payload else 0}")
+                    if tools_payload:
+                        logger.info(f"[embed-stream] tool slugs: {[t.get('slug') for t in tools_payload]}")
+                        agent_context["tools"] = tools_payload
+                    trigger_api._apply_tool_prompt_sections(agent_context, tools_payload)
+                    agent_context["user_message"] = message
+
+                    # NOTE: enable_agent_dispatch=False because we explicitly call dispatch_agent_job below
+                    # Setting it to True causes DOUBLE dispatch (one from room creation, one from explicit call)
+                    text_room_name = f"text-{effective_conversation_id}-{uuid.uuid4().hex[:8]}"
+                    # Use lightweight room metadata to stay under LiveKit's 64KB limit.
+                    # Heavy config (dataset_ids, tools, system_prompt, api_keys, etc.)
+                    # is delivered via dispatch job metadata instead.
+                    _room_meta = {
+                        "agent_name": settings.livekit_agent_name,
+                        "agent_slug": agent.slug,
+                        "user_id": effective_user_id,
+                        "mode": "text",
+                        "client_id": agent_context.get("client_id"),
+                        "conversation_id": agent_context.get("conversation_id"),
+                        "email_address": getattr(agent, "email_address", None) or "",
+                    }
+                    await trigger_api.ensure_livekit_room_exists(
+                        backend_livekit,
+                        text_room_name,
+                        agent_name=settings.livekit_agent_name,
+                        agent_slug=agent.slug,
+                        user_id=effective_user_id,
+                        agent_config=_room_meta,
+                        enable_agent_dispatch=False,  # Don't dispatch here - we do it explicitly below
+                    )
+
+                    await trigger_api.dispatch_agent_job(
+                        livekit_manager=backend_livekit,
+                        room_name=text_room_name,
+                        agent=agent,
+                        client=platform_client,
+                        user_id=effective_user_id,
+                        conversation_id=effective_conversation_id,
+                        session_id=session_id,
+                        tools=agent_context.get("tools"),
+                        tools_config=agent_context.get("tools_config"),
+                        api_keys=agent_context.get("api_keys"),
+                        agent_context=agent_context,
+                    )
 
                 # Track text usage for quota metering (per-agent)
                 try:
@@ -796,6 +888,114 @@ async def embed_text_stream(
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post("/api/embed/text/prewarm")
+async def embed_text_prewarm(
+    client_id: str = Form(...),
+    agent_slug: str = Form(...),
+    conversation_id: str = Form(...),
+    user_id: Optional[str] = Form(None),
+):
+    """Phase 3: Pre-warm a text-mode worker for the given conversation.
+
+    Creates a LiveKit room, dispatches an agent worker job with `prewarm: true`,
+    and returns the room name. The worker will initialize all context and idle
+    waiting for a user message via room metadata. The frontend then includes
+    this room name in subsequent /api/embed/text/stream calls so the warm
+    worker handles the message instead of dispatching a fresh one.
+    """
+    try:
+        effective_user_id = user_id if user_id else str(uuid.uuid5(uuid.NAMESPACE_URL, "sidekick-forge/embed-user"))
+        session_id = str(uuid.uuid4())
+
+        agent_service = MultitentAgentService()
+        client_service = MultitenantClientService()
+
+        from uuid import UUID
+        client_uuid = UUID(client_id)
+        agent = await agent_service.get_agent(client_uuid, agent_slug)
+        if not agent or not agent.enabled:
+            return JSONResponse({"error": "Agent not available"}, status_code=404)
+
+        platform_client = await client_service.get_client(client_id)
+        if not platform_client:
+            return JSONResponse({"error": "Client not found"}, status_code=404)
+
+        # Build agent context (same as cold path)
+        import os
+        platform_supabase_url = os.getenv('SUPABASE_URL')
+        platform_supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+        supabase_client_service = SupabaseClientService(
+            supabase_url=platform_supabase_url,
+            supabase_key=platform_supabase_key,
+        )
+        tools_service = ToolsService(client_service=supabase_client_service)
+
+        from app.integrations.livekit_client import livekit_manager
+        from app.config import settings
+        backend_livekit = livekit_manager
+        if not backend_livekit._initialized:
+            await backend_livekit.initialize()
+
+        agent_context, _, _, _ = await trigger_api._build_agent_context_for_dispatch(
+            agent=agent,
+            client=platform_client,
+            conversation_id=conversation_id,
+            user_id=effective_user_id,
+            session_id=session_id,
+            mode="text",
+            request_context=None,
+            client_conversation_id=conversation_id,
+        )
+
+        tools_payload = await trigger_api._get_agent_tools(tools_service, platform_client.id, agent.id)
+        if tools_payload:
+            agent_context["tools"] = tools_payload
+        trigger_api._apply_tool_prompt_sections(agent_context, tools_payload)
+        # Mark this as a prewarm job — worker will idle waiting for a message
+        agent_context["prewarm"] = True
+
+        text_room_name = f"prewarm-{conversation_id}-{uuid.uuid4().hex[:8]}"
+        _room_meta = {
+            "agent_name": settings.livekit_agent_name,
+            "agent_slug": agent.slug,
+            "user_id": effective_user_id,
+            "mode": "text",
+            "client_id": agent_context.get("client_id"),
+            "conversation_id": agent_context.get("conversation_id"),
+            "email_address": getattr(agent, "email_address", None) or "",
+            "prewarm": True,
+        }
+        await trigger_api.ensure_livekit_room_exists(
+            backend_livekit,
+            text_room_name,
+            agent_name=settings.livekit_agent_name,
+            agent_slug=agent.slug,
+            user_id=effective_user_id,
+            agent_config=_room_meta,
+            enable_agent_dispatch=False,
+        )
+
+        await trigger_api.dispatch_agent_job(
+            livekit_manager=backend_livekit,
+            room_name=text_room_name,
+            agent=agent,
+            client=platform_client,
+            user_id=effective_user_id,
+            conversation_id=conversation_id,
+            session_id=session_id,
+            tools=agent_context.get("tools"),
+            tools_config=agent_context.get("tools_config"),
+            api_keys=agent_context.get("api_keys"),
+            agent_context=agent_context,
+        )
+
+        logger.info(f"[embed-prewarm] Dispatched prewarm worker for {agent_slug} → room {text_room_name}")
+        return JSONResponse({"ok": True, "room_name": text_room_name})
+    except Exception as exc:
+        logger.error(f"[embed-prewarm] Failed: {exc}", exc_info=True)
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 class GenerateTitleRequest(BaseModel):

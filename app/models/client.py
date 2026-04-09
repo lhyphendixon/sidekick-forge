@@ -63,6 +63,10 @@ class APIKeys(BaseModel):
     # Video/Media Providers
     descript_api_key: Optional[str] = None
 
+    # SEO/Marketing Providers
+    semrush_api_key: Optional[str] = None
+    ahrefs_api_key: Optional[str] = None
+
 
 class EmbeddingSettings(BaseModel):
     """Embedding configuration"""

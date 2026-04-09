@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2026-04-05T23:55:55Z"
-AGENT_BUILD_HASH = "fix-campaign-scan-email-in-config"
+AGENT_BUILD_VERSION = "2026-04-09T08:05:19Z"
+AGENT_BUILD_HASH = "phase-3-prewarm-idle"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
@@ -585,6 +585,40 @@ def _extract_text_from_chat_items(items: List[Any]) -> str:
         if isinstance(text_attr, str) and text_attr.strip():
             return text_attr.strip()
     return ""
+
+
+async def _read_room_metadata(room_name: str) -> Optional[Dict[str, Any]]:
+    """Read current LiveKit room metadata as a dict. Returns None on failure.
+
+    Phase 3: Used by prewarm idle loop to poll for `pending_user_message`.
+    """
+    livekit_url = os.getenv("LIVEKIT_URL")
+    livekit_key = os.getenv("LIVEKIT_API_KEY")
+    livekit_secret = os.getenv("LIVEKIT_API_SECRET")
+    if not all([livekit_url, livekit_key, livekit_secret]):
+        return None
+    lk_client = None
+    try:
+        lk_client = livekit_api.LiveKitAPI(
+            url=livekit_url,
+            api_key=livekit_key,
+            api_secret=livekit_secret,
+        )
+        rooms = await lk_client.room.list_rooms(
+            livekit_api.ListRoomsRequest(names=[room_name])
+        )
+        if rooms.rooms and rooms.rooms[0].metadata:
+            raw = rooms.rooms[0].metadata
+            return json.loads(raw) if isinstance(raw, str) else dict(raw)
+        return {}
+    except Exception:
+        return None
+    finally:
+        if lk_client is not None:
+            try:
+                await lk_client.aclose()
+            except Exception:
+                pass
 
 
 async def _merge_and_update_room_metadata(
@@ -1415,6 +1449,61 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
         agent._current_citations = existing
         logger.info(f"📊 TEXT-MODE: Injected prediction market insight citation ({len(markets)} markets)")
 
+    # Inject Semrush SEO citations from text-mode tool results
+    for tr in tool_results:
+        if not isinstance(tr, dict) or tr.get("tool") != "semrush" or not tr.get("success"):
+            continue
+        raw = tr.get("output", "")
+        try:
+            semrush_data = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, dict) else {})
+        except Exception:
+            continue
+        if semrush_data.get("error"):
+            continue
+        tool_called = semrush_data.get("tool", "SEO Data")
+        # Format a human-readable title from the tool name
+        title_parts = tool_called.replace("semrush_", "").replace("_", " ").title()
+        existing = getattr(agent, "_current_citations", []) or []
+        existing.insert(0, {
+            "doc_id": "semrush",
+            "title": f"Semrush: {title_parts}",
+            "source_url": "https://semrush.com",
+            "source_type": "semrush",
+            "source": "semrush",
+            "chunk_index": 0,
+            "content": json.dumps(semrush_data.get("data", semrush_data)),
+            "similarity": 1.0,
+        })
+        agent._current_citations = existing
+        logger.info(f"🔍 TEXT-MODE: Injected Semrush citation for {tool_called}")
+
+    # Inject Ahrefs (Content Recon) citations from text-mode tool results
+    for tr in tool_results:
+        if not isinstance(tr, dict) or tr.get("tool") != "content_recon" or not tr.get("success"):
+            continue
+        raw = tr.get("output", "")
+        try:
+            ahrefs_data = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, dict) else {})
+        except Exception:
+            continue
+        if ahrefs_data.get("error"):
+            continue
+        tool_called = ahrefs_data.get("tool", "SEO Data")
+        title_parts = tool_called.replace("site-explorer-", "").replace("keywords-explorer-", "").replace("-", " ").title()
+        existing = getattr(agent, "_current_citations", []) or []
+        existing.insert(0, {
+            "doc_id": "ahrefs",
+            "title": f"Content Recon: {title_parts}",
+            "source_url": "https://ahrefs.com",
+            "source_type": "ahrefs",
+            "source": "ahrefs",
+            "chunk_index": 0,
+            "content": json.dumps(ahrefs_data.get("data", ahrefs_data)),
+            "similarity": 1.0,
+        })
+        agent._current_citations = existing
+        logger.info(f"🔍 TEXT-MODE: Injected Ahrefs citation for {tool_called}")
+
     citations = list(getattr(agent, "_current_citations", []) or [])
     logger.info(f"📚 DEBUG: Found {len(citations)} citations on agent for response payload")
     if citations:
@@ -1441,7 +1530,9 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
             content = citation_copy.get("content", "")
             # Skip truncation for prediction market — content IS the structured data
             is_pm = citation_copy.get("source") == "prediction_market" or citation_copy.get("source_type") == "prediction_market"
-            if not is_pm and len(content) > 500:
+            is_semrush = citation_copy.get("source_type") == "semrush"
+            is_ahrefs = citation_copy.get("source_type") == "ahrefs"
+            if not is_pm and not is_semrush and not is_ahrefs and len(content) > 500:
                 citation_copy["content"] = content[:500] + "... [truncated]"
             metadata_citations.append(citation_copy)
         else:
@@ -3961,7 +4052,56 @@ async def agent_job_handler(ctx: JobContext):
                     background_audio = None
 
             if is_text_mode:
+                is_prewarm = bool(metadata.get("prewarm"))
                 user_message = metadata.get("user_message")
+
+                # Phase 3: Prewarm mode — worker has finished init and now idles,
+                # polling room metadata for a `pending_user_message` to arrive.
+                # Times out after 5 minutes of no activity.
+                if is_prewarm and not user_message:
+                    logger.info(f"⏸️  Prewarm worker idling for room {ctx.room.name} (5min timeout)")
+                    PREWARM_TIMEOUT_SECONDS = 300  # 5 minutes
+                    PREWARM_POLL_INTERVAL = 0.5
+                    poll_start = time.time()
+                    pending_message = None
+                    pending_session_id = None
+
+                    while time.time() - poll_start < PREWARM_TIMEOUT_SECONDS:
+                        try:
+                            room_info = await _read_room_metadata(ctx.room.name)
+                            if room_info and room_info.get("pending_user_message"):
+                                pending_message = room_info.get("pending_user_message")
+                                pending_session_id = room_info.get("pending_session_id")
+                                logger.info(f"📨 Prewarm worker received user message after {time.time() - poll_start:.1f}s idle")
+                                # Clear the pending fields so the message isn't processed twice
+                                await _merge_and_update_room_metadata(
+                                    room_name=ctx.room.name,
+                                    payload={"pending_user_message": None, "pending_session_id": None, "prewarm": None},
+                                    logger=logger,
+                                    retries=1,
+                                )
+                                break
+                        except Exception as poll_err:
+                            logger.warning(f"Prewarm poll error: {poll_err}")
+                        await asyncio.sleep(PREWARM_POLL_INTERVAL)
+
+                    if not pending_message:
+                        logger.info(f"⏰ Prewarm worker timed out after {PREWARM_TIMEOUT_SECONDS}s — exiting")
+                        try:
+                            session.shutdown(drain=False)
+                        except Exception:
+                            pass
+                        try:
+                            if hasattr(ctx.room, "disconnect"):
+                                await ctx.room.disconnect()
+                        except Exception:
+                            pass
+                        return
+
+                    user_message = pending_message
+                    # Note: session_id from FastAPI side is used for transcript storage there;
+                    # worker doesn't need to update its own session_id mid-job.
+
                 try:
                     payload = await _run_text_mode_interaction(
                         session=session,

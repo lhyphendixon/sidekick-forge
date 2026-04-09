@@ -1067,5 +1067,16 @@ function closeUpgradeModal() {
     document.getElementById('upgradeError').classList.add('hidden');
     document.getElementById('upgradeSuccess').classList.add('hidden');
 }
+
+// Auto-open wizard modal if redirected from /admin/wizard
+(function() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('open_wizard') === '1') {
+        // Remove the query param from URL without reload
+        history.replaceState(null, '', window.location.pathname);
+        // Trigger the wizard modal via HTMX
+        htmx.ajax('GET', '/admin/wizard/modal', {target: '#modal-container', swap: 'innerHTML'});
+    }
+})();
 </script>
 {% endblock %}

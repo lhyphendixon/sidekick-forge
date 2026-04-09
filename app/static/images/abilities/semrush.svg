@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Search/magnifying glass base -->
+  <circle cx="28" cy="28" r="16" stroke="#ff6432" stroke-width="3" fill="#ff6432" fill-opacity="0.1"/>
+  <line x1="39" y1="39" x2="52" y2="52" stroke="#ff6432" stroke-width="4" stroke-linecap="round"/>
+  <!-- Trend line inside lens -->
+  <polyline points="18,34 24,28 30,31 36,22" stroke="#ff6432" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Bar chart dots -->
+  <circle cx="18" cy="34" r="2" fill="#ff6432"/>
+  <circle cx="24" cy="28" r="2" fill="#ff6432"/>
+  <circle cx="30" cy="31" r="2" fill="#ff6432"/>
+  <circle cx="36" cy="22" r="2" fill="#ff6432"/>
+</svg>

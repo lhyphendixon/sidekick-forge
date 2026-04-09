@@ -20,6 +20,8 @@ from app.agent_modules.abilities.evernote import EvernoteAbilityConfigError, bui
 from app.agent_modules.abilities.trello import TrelloAbilityConfigError, build_trello_tool
 from app.agent_modules.abilities.notion import NotionAbilityConfigError, build_notion_tool
 from app.agent_modules.abilities.descript import DescriptAbilityConfigError, build_descript_tool
+from app.agent_modules.abilities.semrush import SemrushAbilityConfigError, build_semrush_tool
+from app.agent_modules.abilities.ahrefs import AhrefsAbilityConfigError, build_ahrefs_tool
 from app.services.asana_oauth_service import AsanaOAuthService
 from app.agent_modules.tool_status_wrapper import with_status_updates, get_tool_friendly_name
 
@@ -72,6 +74,10 @@ class ToolRegistry:
                     ft = self._build_descript_tool(t)
                 elif ttype == "campaign_scan":
                     ft = self._build_campaign_scan_tool(t)
+                elif ttype == "semrush":
+                    ft = self._build_semrush_tool(t)
+                elif ttype == "ahrefs":
+                    ft = self._build_ahrefs_tool(t)
                 else:
                     self._logger.warning(f"Unsupported tool type '{ttype}' for slug={slug}; skipping")
                     continue
@@ -1046,3 +1052,64 @@ class ToolRegistry:
                     merged_cfg[key] = value
 
         return build_campaign_scan_tool(t, merged_cfg, api_keys=self._api_keys)
+
+    def _build_semrush_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Semrush SEO tool (MCP-based, 60+ tools via single meta-tool)."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "semrush"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            for key in (slug, t.get("id"), t.get("name")):
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        # Resolve API key
+        if not merged_cfg.get("semrush_api_key"):
+            merged_cfg["semrush_api_key"] = self._api_keys.get("semrush_api_key")
+
+        try:
+            return build_semrush_tool(t, merged_cfg, api_keys=self._api_keys)
+        except SemrushAbilityConfigError as exc:
+            self._logger.warning("Semrush tool not configured: %s", exc)
+            return None
+
+    def _build_ahrefs_tool(self, t: Dict[str, Any]) -> Any:
+        """Build the Content Recon (Ahrefs) tool — remote MCP, 42+ SEO tools."""
+        slug = t.get("slug") or t.get("name") or t.get("id") or "content_recon"
+        cfg = dict(t.get("config") or {})
+
+        per_tool_cfg: Dict[str, Any] = {}
+        if isinstance(self._tools_config, dict):
+            for key in (slug, t.get("id"), t.get("name")):
+                if not key:
+                    continue
+                candidate = self._tools_config.get(str(key))
+                if isinstance(candidate, dict):
+                    per_tool_cfg = candidate
+                    break
+
+        merged_cfg = dict(cfg)
+        if isinstance(per_tool_cfg, dict):
+            for key, value in per_tool_cfg.items():
+                if value is not None:
+                    merged_cfg[key] = value
+
+        if not merged_cfg.get("ahrefs_api_key"):
+            merged_cfg["ahrefs_api_key"] = self._api_keys.get("ahrefs_api_key")
+
+        try:
+            return build_ahrefs_tool(t, merged_cfg, api_keys=self._api_keys)
+        except AhrefsAbilityConfigError as exc:
+            self._logger.warning("Ahrefs tool not configured: %s", exc)
+            return None
