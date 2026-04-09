@@ -64,6 +64,31 @@ server {
         access_log off;
     }
 
+    # Embed routes — must be iframable from third-party origins.
+    # Override the global X-Frame-Options with a permissive frame-ancestors CSP.
+    # Nginx add_header does NOT inherit from outer scope when any add_header is
+    # defined here, so we re-declare all desired security headers without
+    # X-Frame-Options.
+    location /embed/ {
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "frame-ancestors *; default-src 'self' https:; script-src 'self' https: 'unsafe-inline' 'unsafe-eval'; style-src 'self' https: 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https: wss:; font-src 'self' https: data:; media-src 'self' https:;" always;
+
+        proxy_pass http://fastapi_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_buffering off;
+        proxy_redirect off;
+    }
+
     location / {
         proxy_pass http://fastapi_backend;
         proxy_http_version 1.1;
