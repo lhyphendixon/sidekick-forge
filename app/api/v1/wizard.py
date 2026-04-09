@@ -70,6 +70,11 @@ class AvatarGenerateRequest(BaseModel):
     style: Optional[str] = None
 
 
+class AvatarEditRequest(BaseModel):
+    source_image_url: str
+    edit_prompt: str
+
+
 class AvatarResponse(BaseModel):
     id: str
     prompt: str
@@ -312,30 +317,48 @@ async def process_wizard_website(
             {"status": "processing"}
         )
 
-        # Scrape website using Firecrawl
-        scraper = FirecrawlScraper()
-        scrape_result = await scraper.scrape_and_extract(
+        # Load Firecrawl API key: client config → platform env → fail
+        firecrawl_api_key = None
+        try:
+            from app.core.dependencies import get_client_service
+            client_service = get_client_service()
+            platform_sb = client_service.supabase
+            result = platform_sb.table("clients").select("firecrawl_api_key").eq("id", client_id).maybe_single().execute()
+            if result.data:
+                firecrawl_api_key = result.data.get("firecrawl_api_key")
+        except Exception as key_err:
+            logger.warning(f"Failed to load Firecrawl key for client {client_id}: {key_err}")
+
+        if not firecrawl_api_key:
+            firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY")
+
+        if firecrawl_api_key:
+            scraper = FirecrawlScraper(api_key=firecrawl_api_key, base_url="https://api.firecrawl.dev")
+        else:
+            raise Exception("No Firecrawl API key configured. Please add a Firecrawl API key in your client settings.")
+
+        pages = await scraper.scrape_and_extract(
             url=url,
             crawl=True,
-            limit=max_pages
+            crawl_limit=max_pages,
         )
 
-        if not scrape_result.get("success"):
+        if not pages:
             await wizard_session_service.update_pending_document(
                 pending_doc_id,
-                {
-                    "status": "error",
-                    "error_message": scrape_result.get("error", "Crawl failed")
-                }
+                {"status": "error", "error_message": "No content extracted from website"}
             )
             return
 
-        # Get the content
-        content = scrape_result.get("content", "")
-        title = scrape_result.get("title", url)
-        pages_crawled = scrape_result.get("pages_crawled", 1)
+        # Combine all crawled pages into one document
+        pages_crawled = len(pages)
+        title = pages[0].get("title", url) if pages else url
+        content = "\n\n---\n\n".join(
+            f"# {p.get('title', 'Untitled')}\n\n{p.get('content', '')}"
+            for p in pages if p.get("content")
+        )
 
-        if not content:
+        if not content.strip():
             await wizard_session_service.update_pending_document(
                 pending_doc_id,
                 {"status": "error", "error_message": "No content extracted from website"}
@@ -348,15 +371,18 @@ async def process_wizard_website(
             {"pages_crawled": pages_crawled}
         )
 
-        # Process through document pipeline
+        # Write content to a temp file and process through document pipeline
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, prefix='wizard_web_')
+        tmp.write(content)
+        tmp.close()
+
         processor = DocumentProcessor()
-        result = await processor.process_web_content(
-            content=content,
+        result = await processor.process_uploaded_file(
+            file_path=tmp.name,
             title=title,
-            source_url=url,
-            description=f"Crawled via wizard ({pages_crawled} pages)",
+            description=f"Crawled from {url} ({pages_crawled} pages)",
             client_id=client_id,
-            metadata={"source": "wizard", "pages_crawled": pages_crawled}
         )
 
         if result.get("success"):
@@ -391,6 +417,13 @@ async def process_wizard_website(
             pending_doc_id,
             {"status": "error", "error_message": str(e)}
         )
+    finally:
+        # Clean up temp file if it was created
+        try:
+            if 'tmp' in dir() and tmp and os.path.exists(tmp.name):
+                os.unlink(tmp.name)
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -1065,9 +1098,8 @@ async def generate_avatar(
     request: AvatarGenerateRequest,
     background_tasks: BackgroundTasks,
 ):
-    """Generate an avatar image for the sidekick using Silicon Flow Z-Image-Turbo."""
+    """Generate an avatar image for the sidekick using Runware API."""
     import httpx
-    import base64
 
     # Verify session exists
     session = await wizard_session_service.get_session(session_id)
@@ -1094,101 +1126,59 @@ async def generate_avatar(
         "suitable for profile picture, centered composition"
     )
 
-    # Get Silicon Flow API key
-    siliconflow_api_key = os.getenv("SILICONFLOW_API_KEY")
-    if not siliconflow_api_key:
-        raise HTTPException(status_code=503, detail="Platform Silicon Flow API key not configured.")
-
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                "https://api.siliconflow.com/v1/images/generations",
-                headers={
-                    "Authorization": f"Bearer {siliconflow_api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "Tongyi-MAI/Z-Image-Turbo",
-                    "prompt": prompt,
-                    "image_size": "1024x1024",
-                    "num_inference_steps": 8,
-                    "batch_size": 1
-                }
-            )
+        from app.services.runware_service import get_runware_service, RunWareError
 
-            if response.status_code != 200:
-                error_detail = response.text
-                logger.error(f"Silicon Flow API error: {response.status_code} - {error_detail}")
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Avatar generation failed: {response.status_code}"
-                )
+        runware = get_runware_service()
+        if not runware.api_key:
+            raise HTTPException(status_code=503, detail="Runware API key not configured.")
 
-            result = response.json()
-            logger.info(f"Silicon Flow response: {result}")
+        generated = await runware.generate_image_advanced(
+            prompt=prompt,
+            model="google:4@3",
+            width=1024,
+            height=1024,
+        )
 
-            # Extract image URL from response
-            images = result.get("images", []) or result.get("data", [])
-            if not images:
-                raise HTTPException(status_code=502, detail="No image returned from generation")
+        # Download and persist locally so we don't depend on a temporary URL
+        image_url = generated.image_url
+        avatar_dir = Path(__file__).parent.parent.parent / "static" / "images" / "avatars"
+        avatar_dir.mkdir(parents=True, exist_ok=True)
 
-            # Silicon Flow returns either URL or base64 - always persist locally
-            image_data = images[0]
-            avatar_dir = Path(__file__).parent.parent.parent / "static" / "images" / "avatars"
-            avatar_dir.mkdir(parents=True, exist_ok=True)
-
-            if isinstance(image_data, dict):
-                remote_url = image_data.get("url")
-                b64_data = image_data.get("b64_json")
-            else:
-                remote_url = image_data  # Direct URL string
-                b64_data = None
-
-            if b64_data:
-                img_bytes = base64.b64decode(b64_data)
-            elif remote_url:
-                # Download the image so we don't depend on a temporary external URL
-                img_response = await client.get(remote_url, timeout=30.0)
-                if img_response.status_code != 200:
-                    logger.warning(f"Failed to download avatar from {remote_url}, using URL directly")
-                    image_url = remote_url
-                    img_bytes = None
-                else:
-                    img_bytes = img_response.content
-            else:
-                img_bytes = None
-
-            if img_bytes:
-                filename = f"avatar_{uuid.uuid4().hex[:12]}.png"
+        async with httpx.AsyncClient(timeout=30.0) as dl_client:
+            img_response = await dl_client.get(image_url)
+            if img_response.status_code == 200:
+                ext = ".webp" if "webp" in img_response.headers.get("content-type", "") else ".png"
+                filename = f"avatar_{uuid.uuid4().hex[:12]}{ext}"
                 filepath = avatar_dir / filename
-                filepath.write_bytes(img_bytes)
+                filepath.write_bytes(img_response.content)
                 image_url = f"/static/images/avatars/{filename}"
-            elif not remote_url:
-                raise HTTPException(status_code=502, detail="No image data in response")
+            else:
+                logger.warning(f"Failed to download avatar from {image_url}, using remote URL")
 
-            if not image_url:
-                raise HTTPException(status_code=502, detail="Could not extract image URL from response")
+        logger.info(f"Generated avatar: {image_url} for session {session_id}")
 
-            logger.info(f"Generated avatar: {image_url} for session {session_id}")
+        # Create avatar record
+        avatar = await wizard_session_service.create_avatar(
+            session_id=session_id,
+            prompt=prompt,
+            image_url=image_url,
+            provider="runware",
+            model="google:4@3",
+            params={"style": request.style}
+        )
 
-            # Create avatar record
-            avatar = await wizard_session_service.create_avatar(
-                session_id=session_id,
-                prompt=prompt,
-                image_url=image_url,
-                provider="siliconflow",
-                model="Tongyi-MAI/Z-Image-Turbo",
-                params={"style": request.style}
-            )
+        return AvatarResponse(
+            id=avatar["id"],
+            prompt=avatar["prompt"],
+            image_url=avatar["image_url"],
+            selected=avatar["selected"],
+            created_at=avatar["created_at"]
+        )
 
-            return AvatarResponse(
-                id=avatar["id"],
-                prompt=avatar["prompt"],
-                image_url=avatar["image_url"],
-                selected=avatar["selected"],
-                created_at=avatar["created_at"]
-            )
-
+    except RunWareError as e:
+        logger.error(f"Runware avatar generation failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Avatar generation failed: {str(e)}")
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Avatar generation timed out. Please try again.")
     except HTTPException:
@@ -1319,6 +1309,85 @@ async def upload_avatar(
         selected=avatar["selected"],
         created_at=avatar["created_at"],
     )
+
+
+@router.post("/sessions/{session_id}/edit-avatar", response_model=AvatarResponse)
+async def edit_avatar(
+    session_id: str,
+    request: AvatarEditRequest,
+):
+    """Edit an existing avatar using Nano Banana 2 (google:4@2) reference image editing."""
+    import httpx
+
+    session = await wizard_session_service.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        from app.services.runware_service import get_runware_service, RunWareError
+
+        runware = get_runware_service()
+        if not runware.api_key:
+            raise HTTPException(status_code=503, detail="Runware API key not configured.")
+
+        # Ensure the source image is a full URL for Runware's referenceImages
+        source_url = request.source_image_url
+        if source_url.startswith("/"):
+            # Local path — build absolute URL so Runware can fetch it
+            from app.config import settings
+            source_url = f"https://{settings.domain_name}{source_url}"
+
+        generated = await runware.generate_image_advanced(
+            prompt=request.edit_prompt,
+            model="google:4@2",
+            width=1024,
+            height=1024,
+            reference_images=[source_url],
+        )
+
+        # Download and persist locally
+        image_url = generated.image_url
+        avatar_dir = Path(__file__).parent.parent.parent / "static" / "images" / "avatars"
+        avatar_dir.mkdir(parents=True, exist_ok=True)
+
+        async with httpx.AsyncClient(timeout=30.0) as dl_client:
+            img_response = await dl_client.get(image_url)
+            if img_response.status_code == 200:
+                ext = ".webp" if "webp" in img_response.headers.get("content-type", "") else ".png"
+                filename = f"avatar_{uuid.uuid4().hex[:12]}{ext}"
+                filepath = avatar_dir / filename
+                filepath.write_bytes(img_response.content)
+                image_url = f"/static/images/avatars/{filename}"
+
+        logger.info(f"Edited avatar: {image_url} for session {session_id}")
+
+        avatar = await wizard_session_service.create_avatar(
+            session_id=session_id,
+            prompt=request.edit_prompt,
+            image_url=image_url,
+            provider="runware",
+            model="google:4@2",
+            params={"source_image": request.source_image_url}
+        )
+
+        return AvatarResponse(
+            id=avatar["id"],
+            prompt=avatar["prompt"],
+            image_url=avatar["image_url"],
+            selected=avatar["selected"],
+            created_at=avatar["created_at"]
+        )
+
+    except RunWareError as e:
+        logger.error(f"Runware avatar edit failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Avatar editing failed: {str(e)}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Avatar editing timed out. Please try again.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error editing avatar: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to edit avatar: {str(e)}")
 
 
 # ============================================================

@@ -366,86 +366,128 @@
                 </div>
 
                 <!-- Step 4: Avatar -->
-                <div x-show="currentStep === 4" x-cloak class="step-content">
-                    <div class="text-center mb-8">
+                <div x-show="currentStep === 4" x-cloak class="step-content"
+                     x-init="$watch('currentStep', v => { if (v === 4) loadAvatarHistory(); })">
+                    <!-- Header - hides when generating or avatar exists -->
+                    <div x-show="!generatingAvatar && !stepData.avatar_url" class="text-center mb-8"
+                         x-transition:leave="transition ease-in duration-200"
+                         x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
                         <h3 class="text-2xl font-bold text-dark-text mb-2">Create an avatar for your sidekick</h3>
                         <p class="text-dark-text-secondary">Generate or skip to use a default avatar</p>
                     </div>
                     <div class="max-w-lg mx-auto">
-                        <div class="flex gap-3 mb-4">
+                        <!-- Avatar preview (above controls) -->
+                        <div x-show="generatingAvatar || stepData.avatar_url" class="text-center mb-6"
+                             x-transition:enter="transition ease-out duration-500"
+                             x-transition:enter-start="opacity-0 transform scale-90"
+                             x-transition:enter-end="opacity-100 transform scale-100">
+                            <!-- Spinner placeholder while generating -->
+                            <div x-show="generatingAvatar && !stepData.avatar_url"
+                                 class="w-64 h-64 rounded-2xl mx-auto border-2 border-brand-teal/30 bg-dark-surface flex flex-col items-center justify-center gap-4">
+                                <div class="flex space-x-2">
+                                    <div class="w-3 h-3 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
+                                    <div class="w-3 h-3 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
+                                    <div class="w-3 h-3 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
+                                </div>
+                                <p class="text-sm text-dark-text-secondary" x-text="avatarProgress"></p>
+                            </div>
+                            <!-- Selected avatar -->
+                            <div x-show="stepData.avatar_url" class="relative inline-block">
+                                <img :src="stepData.avatar_url"
+                                     class="w-64 h-64 rounded-2xl mx-auto object-cover border-2 border-brand-teal"
+                                     alt="Selected avatar"
+                                     x-transition:enter="transition ease-out duration-500"
+                                     x-transition:enter-start="opacity-0 transform scale-90"
+                                     x-transition:enter-end="opacity-100 transform scale-100" />
+                                <!-- Editing overlay -->
+                                <div x-show="generatingAvatar || editingAvatar" class="absolute inset-0 rounded-2xl bg-black/60 flex flex-col items-center justify-center gap-3">
+                                    <div class="flex space-x-2">
+                                        <div class="w-2.5 h-2.5 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
+                                        <div class="w-2.5 h-2.5 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
+                                        <div class="w-2.5 h-2.5 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
+                                    </div>
+                                    <p class="text-xs text-white" x-text="avatarProgress"></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Error display -->
+                        <p x-show="avatarError" x-text="avatarError" class="text-sm text-red-400 text-center mb-4"></p>
+
+                        <!-- Unified prompt + buttons -->
+                        <div x-show="!generatingAvatar && !editingAvatar" class="space-y-3 mb-4">
                             <input type="text"
                                    x-model="avatarPrompt"
-                                   class="wizard-input flex-1 text-base"
-                                   placeholder="Describe your avatar (optional)...">
-                            <button @click="generateAvatar()"
-                                    :disabled="generatingAvatar"
-                                    class="btn-wizard-primary whitespace-nowrap">
-                                <span x-show="!generatingAvatar">Generate</span>
-                                <span x-show="generatingAvatar" class="flex items-center gap-2">
-                                    <svg class="w-4 h-4 spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke-width="4"></circle>
-                                        <path class="opacity-75" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                                    </svg>
-                                    Generating...
-                                </span>
-                            </button>
-                        </div>
-
-                        <!-- Avatar Grid -->
-                        <div x-show="avatarHistory.length > 0" class="grid grid-cols-3 gap-3">
-                            <template x-for="avatar in avatarHistory" :key="avatar.id">
-                                <button @click="selectAvatarImage(avatar)"
-                                        @dblclick.stop="openAvatarLightbox(avatar)"
-                                        :class="{ 'selected': stepData.avatar_url === avatar.image_url }"
-                                        class="avatar-card relative group"
-                                        title="Double-click to view full size">
-                                    <img :src="avatar.image_url" :alt="avatar.prompt" class="w-full h-full object-cover">
-                                    <!-- Zoom hint on hover -->
-                                    <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/>
-                                        </svg>
-                                    </div>
+                                   class="wizard-input w-full text-base"
+                                   :placeholder="stepData.avatar_url ? 'Describe changes or a new look...' : 'Describe your avatar (optional)...'"
+                                   @keydown.enter.prevent="stepData.avatar_url && avatarPrompt.trim() ? editAvatar() : generateAvatar()">
+                            <div class="flex gap-2 justify-center">
+                                <button @click="generateAvatar()"
+                                        class="btn-wizard-primary whitespace-nowrap text-sm px-4 py-2">
+                                    <span x-text="stepData.avatar_url ? 'Regenerate' : 'Generate'"></span>
                                 </button>
-                            </template>
-                        </div>
-
-                        <!-- Divider -->
-                        <div class="flex items-center gap-4 my-4">
-                            <div class="flex-1 border-t border-white/10"></div>
-                            <span class="text-sm text-dark-text-secondary">or</span>
-                            <div class="flex-1 border-t border-white/10"></div>
-                        </div>
-
-                        <!-- Upload Own Image -->
-                        <div class="text-center">
-                            <input
-                                type="file"
-                                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
-                                @change="uploadAvatar($event)"
-                                x-ref="avatarFileInput"
-                                class="hidden"
-                            />
-                            <button
-                                @click="$refs.avatarFileInput.click()"
-                                :disabled="uploadingAvatar"
-                                class="btn-wizard-secondary inline-flex items-center gap-2">
-                                <svg x-show="uploadingAvatar" class="w-5 h-5 spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                                </svg>
-                                <svg x-show="!uploadingAvatar" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                                </svg>
-                                <span x-text="uploadingAvatar ? 'Uploading...' : 'Upload Your Own Image'"></span>
-                            </button>
-                            <p class="text-xs text-dark-text-secondary mt-2">
-                                PNG, JPG, WEBP, GIF, or SVG. Max 5 MB.
+                                <button x-show="stepData.avatar_url"
+                                        @click="editAvatar()"
+                                        :disabled="!avatarPrompt.trim()"
+                                        class="btn-wizard-secondary whitespace-nowrap text-sm px-4 py-2 inline-flex items-center gap-1.5">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                                    </svg>
+                                    Edit Current
+                                </button>
+                            </div>
+                            <p class="text-xs text-dark-text-secondary text-center">
+                                Takes 30-90 seconds. Please stay on this page.
                             </p>
                         </div>
 
-                        <p x-show="avatarHistory.length === 0" class="text-center text-dark-text-secondary py-8">
-                            Click "Generate" to create an avatar, upload your own, or skip this step.
-                        </p>
+                        <!-- Progress text below avatar (no dots — dots are on the overlay) -->
+                        <div x-show="(generatingAvatar || editingAvatar) && stepData.avatar_url" class="text-center mb-4">
+                            <p class="text-sm text-dark-text-secondary" x-text="avatarProgress"></p>
+                        </div>
+
+                        <!-- Avatar History Grid -->
+                        <div x-show="avatarHistory.length > 1" class="mb-4">
+                            <p class="text-xs text-dark-text-secondary text-center mb-2">Previous versions — click to select:</p>
+                            <div class="relative">
+                                <div class="grid grid-cols-4 gap-2 max-h-28 overflow-y-auto pr-1">
+                                    <template x-for="avatar in avatarHistory" :key="avatar.id">
+                                        <button @click="selectAvatarImage(avatar)"
+                                                @dblclick.stop="openAvatarLightbox(avatar)"
+                                                :class="{ 'ring-2 ring-brand-teal': stepData.avatar_url === avatar.image_url }"
+                                                class="avatar-card relative group aspect-square rounded-lg overflow-hidden"
+                                                title="Double-click to view full size">
+                                            <img :src="avatar.image_url" :alt="avatar.prompt" class="w-full h-full object-cover">
+                                            <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/>
+                                                </svg>
+                                            </div>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Upload (only before first avatar) -->
+                        <div x-show="!stepData.avatar_url && !generatingAvatar">
+                            <div class="flex items-center gap-4 my-4">
+                                <div class="flex-1 border-t border-white/10"></div>
+                                <span class="text-sm text-dark-text-secondary">or</span>
+                                <div class="flex-1 border-t border-white/10"></div>
+                            </div>
+                            <div class="text-center">
+                                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                                       @change="uploadAvatar($event)" x-ref="avatarFileInput" class="hidden" />
+                                <button @click="$refs.avatarFileInput.click()" :disabled="uploadingAvatar"
+                                        class="btn-wizard-secondary inline-flex items-center gap-2">
+                                    <svg x-show="!uploadingAvatar" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                                    </svg>
+                                    <span x-text="uploadingAvatar ? 'Uploading...' : 'Upload Your Own'"></span>
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -1194,6 +1236,8 @@
 <script>
     // Close modal function
     function closeWizardModal() {
+        // Prevent closing while generating or editing avatar
+        if (window._wizardAvatarBusy) return;
         // Clean up the Enter key handler if it exists
         if (window._wizardEnterKeyHandler) {
             document.removeEventListener('keydown', window._wizardEnterKeyHandler);
@@ -1396,8 +1440,10 @@
             // Avatars
             avatarHistory: [],
             generatingAvatar: false,
+            editingAvatar: false,
             uploadingAvatar: false,
             avatarPrompt: '',
+            editPrompt: '',
 
             // Abilities
             availableAbilities: [],
@@ -2081,16 +2127,56 @@
                 }
             },
 
+            _avatarTimer: null,
+            avatarProgress: 'Generating...',
+            avatarError: null,
+
+            async loadAvatarHistory() {
+                if (!this.sessionId) return;
+                try {
+                    const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/avatars`);
+                    if (response.ok) {
+                        const avatars = await response.json();
+                        if (avatars.length > this.avatarHistory.length) {
+                            this.avatarHistory = avatars;
+                            // Pick the newest if no avatar selected or a new one arrived
+                            if (!this.stepData.avatar_url || avatars.length > 0) {
+                                const selected = avatars.find(a => a.selected) || avatars[0];
+                                if (selected) this.stepData.avatar_url = selected.image_url;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Failed to load avatar history:', e);
+                }
+            },
+
+            _startAvatarTimer(prefix) {
+                let seconds = 0;
+                this.avatarProgress = `${prefix}...`;
+                this._avatarTimer = setInterval(() => {
+                    seconds++;
+                    if (seconds < 15) this.avatarProgress = `${prefix}... (${seconds}s)`;
+                    else if (seconds < 45) this.avatarProgress = `Working on it... (${seconds}s)`;
+                    else this.avatarProgress = `Almost there... (${seconds}s)`;
+                }, 1000);
+            },
+
+            _stopAvatarTimer() {
+                if (this._avatarTimer) { clearInterval(this._avatarTimer); this._avatarTimer = null; }
+            },
+
             async generateAvatar() {
                 if (this.generatingAvatar) return;
                 this.generatingAvatar = true;
+                window._wizardAvatarBusy = true;
+                this.avatarError = null;
+                this._startAvatarTimer('Generating');
 
                 try {
                     const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/generate-avatar`, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ prompt: this.avatarPrompt })
                     });
 
@@ -2098,11 +2184,69 @@
                         const avatar = await response.json();
                         this.avatarHistory.unshift(avatar);
                         this.stepData.avatar_url = avatar.image_url;
+                    } else {
+                        const err = await response.json().catch(() => ({}));
+                        this.avatarError = err.detail || `Generation failed (${response.status}). Try again.`;
                     }
                 } catch (e) {
                     console.error('Failed to generate avatar:', e);
+                    this.avatarError = 'Connection interrupted — checking for results...';
+                    await new Promise(r => setTimeout(r, 2000));
+                    await this.loadAvatarHistory();
+                    if (this.avatarHistory.length > 0 && this.stepData.avatar_url) {
+                        this.avatarError = null;
+                    } else {
+                        this.avatarError = 'Generation request failed — please try again.';
+                    }
                 } finally {
+                    this._stopAvatarTimer();
                     this.generatingAvatar = false;
+                    window._wizardAvatarBusy = false;
+                }
+            },
+
+            async editAvatar() {
+                if (this.editingAvatar || !this.sessionId || !this.avatarPrompt.trim() || !this.stepData.avatar_url) return;
+
+                this.editingAvatar = true;
+                window._wizardAvatarBusy = true;
+                this.avatarError = null;
+                this._startAvatarTimer('Editing');
+
+                try {
+                    const response = await authFetch(`/api/v1/wizard/sessions/${this.sessionId}/edit-avatar`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            source_image_url: this.stepData.avatar_url,
+                            edit_prompt: this.avatarPrompt.trim()
+                        })
+                    });
+
+                    if (response.ok) {
+                        const avatar = await response.json();
+                        this.avatarHistory.unshift(avatar);
+                        this.stepData.avatar_url = avatar.image_url;
+                        this.avatarPrompt = '';
+                    } else {
+                        const err = await response.json().catch(() => ({}));
+                        this.avatarError = err.detail || `Edit failed (${response.status}). Try again.`;
+                    }
+                } catch (e) {
+                    console.error('Failed to edit avatar:', e);
+                    // Connection may have dropped but backend may have succeeded — check
+                    this.avatarError = 'Connection interrupted — checking for results...';
+                    await new Promise(r => setTimeout(r, 2000));
+                    await this.loadAvatarHistory();
+                    if (!this.avatarError || this.avatarHistory.length > 0) {
+                        this.avatarError = null; // Cleared if we recovered
+                    } else {
+                        this.avatarError = 'Edit request failed — please try again.';
+                    }
+                } finally {
+                    this._stopAvatarTimer();
+                    this.editingAvatar = false;
+                    window._wizardAvatarBusy = false;
                 }
             },
 
@@ -2362,9 +2506,9 @@
                     return;
                 }
 
-                // Don't trigger if generating avatar
-                if (this.generatingAvatar) {
-                    console.log('Blocked: generating avatar');
+                // Don't trigger if generating or editing avatar
+                if (this.generatingAvatar || this.editingAvatar) {
+                    console.log('Blocked: generating/editing avatar');
                     return;
                 }
 

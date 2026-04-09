@@ -302,6 +302,8 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                     else:
                         role = 'subscriber'
 
+            logger.debug(f"Auth resolved: user={user.id}, role={role}")
+
             def _normalize_ids(raw_ids: Any) -> list:
                 if isinstance(raw_ids, (list, tuple, set)):
                     return [str(i) for i in raw_ids if i]
@@ -323,34 +325,45 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
             if 'subscriber_client_ids' not in tenant_assignments:
                 tenant_assignments['subscriber_client_ids'] = []
 
+            # Fallback: if no tenant_assignments but client_id in metadata, use it
+            if not tenant_assignments.get('admin_client_ids') and meta_dict.get('client_id'):
+                fallback_cid = str(meta_dict['client_id'])
+                tenant_assignments['admin_client_ids'] = [fallback_cid]
+                if role == 'subscriber':
+                    role = 'admin'
+
             visible_client_ids = []
             if role == 'admin':
                 visible_client_ids = tenant_assignments.get('admin_client_ids', [])
             elif role != 'superadmin':
                 visible_client_ids = tenant_assignments.get('subscriber_client_ids', [])
 
-            # Determine can_create_sidekick based on tier
+            # Determine can_create_sidekick and tier based on client record
             can_create = role == 'superadmin'
+            client_tier = 'adventurer'  # default
             if not can_create:
                 try:
                     admin_client = supabase_manager.admin_client
-                    # Check tier for the user's client(s)
                     client_ids_to_check = visible_client_ids or tenant_assignments.get('admin_client_ids', [])
                     if client_ids_to_check:
                         tier_result = admin_client.table('clients').select('tier, max_sidekicks').eq('id', client_ids_to_check[0]).maybe_single().execute()
                         if tier_result.data:
-                            tier = (tier_result.data.get('tier') or 'adventurer').lower()
+                            client_tier = (tier_result.data.get('tier') or 'adventurer').lower()
                             max_sk = tier_result.data.get('max_sidekicks')
-                            if tier == 'paragon' or max_sk is None:
+                            if client_tier == 'paragon' or max_sk is None:
                                 can_create = True
                             else:
-                                # Count existing agents for this client
-                                count_result = admin_client.table('agents').select('id', count='exact').eq('client_id', client_ids_to_check[0]).execute()
+                                # Count completed wizard sessions as proxy for agent count
+                                count_result = admin_client.table('sidekick_wizard_sessions').select('id', count='exact').eq('client_id', client_ids_to_check[0]).eq('status', 'completed').execute()
                                 current_count = count_result.count if hasattr(count_result, 'count') and count_result.count is not None else len(count_result.data or [])
                                 can_create = current_count < (max_sk or 0)
                 except Exception as tier_err:
                     logger.warning(f"Failed to check tier for can_create_sidekick: {tier_err}")
-                    can_create = True  # Fail open to avoid blocking users
+                    can_create = False  # Fail closed — user can still view existing sidekicks
+
+            # Primary client for non-superadmin users (first admin client)
+            admin_client_ids = tenant_assignments.get('admin_client_ids', [])
+            primary_client_id = admin_client_ids[0] if admin_client_ids else None
 
             return {
                 "user_id": user.id,
@@ -363,7 +376,9 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                 "tenant_assignments": tenant_assignments,
                 "visible_client_ids": visible_client_ids,
                 "is_super_admin": role == 'superadmin',
-                "can_create_sidekick": can_create
+                "is_adventurer_only": role != 'superadmin' and client_tier == 'adventurer',
+                "can_create_sidekick": can_create,
+                "primary_client_id": primary_client_id,
             }
         else:
             raise HTTPException(

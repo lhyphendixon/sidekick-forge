@@ -169,6 +169,7 @@ def get_scoped_client_ids(admin_user: Dict[str, Any]) -> Optional[Set[str]]:
 def ensure_client_access(client_id: str, admin_user: Dict[str, Any]) -> None:
     """Raise 403 if the admin user does not have access to the given client."""
     scoped_ids = get_scoped_client_ids(admin_user)
+    logger.debug(f"ensure_client_access: client_id={client_id!r}, scoped_ids={scoped_ids}")
     if scoped_ids is None or client_id in scoped_ids:
         return
     raise HTTPException(
@@ -1312,6 +1313,9 @@ async def clients_list(
     admin_user: Dict[str, Any] = Depends(get_admin_user)
 ):
     """Client management page"""
+    # Adventurer users don't have multi-client access; send them to sidekicks
+    if admin_user.get("is_adventurer_only"):
+        return RedirectResponse(url="/admin/agents", status_code=302)
     try:
         clients = await get_all_clients_with_containers(admin_user)
         logger.info(f"Admin Dashboard: Successfully prepared {len(clients)} clients for display")

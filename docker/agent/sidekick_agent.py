@@ -525,6 +525,9 @@ class SidekickAgent(voice.Agent):
                 api_keys=api_keys,
             )
             
+            # Store RAG context for injection into the LLM prompt
+            self._current_rag_context = result.context_for_llm or ""
+
             # Store citations for inclusion in the final response
             self._current_citations = [
                 {

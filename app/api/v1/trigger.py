@@ -390,17 +390,26 @@ async def _build_agent_context_for_dispatch(
             embedding_cfg = _add_settings.get("embedding", {})
             logger.info(f"Using embedding config from client.additional_settings: provider={embedding_cfg.get('provider')}, model={embedding_cfg.get('document_model')}")
 
-    # NO FALLBACK - fail explicitly if embedding config is missing
+    # Platform inference default: SiliconFlow Qwen3-Embedding-4B
     if not embedding_cfg or not embedding_cfg.get("provider"):
-        # Log what we found to help debug
-        settings_emb = getattr(client.settings, 'embedding', None) if client.settings else None
-        settings_add = getattr(client.settings, 'additional_settings', None) if client.settings else None
-        client_add = getattr(client, 'additional_settings', None)
-        logger.error(f"Embedding config missing for client {client.id}. settings.embedding={settings_emb}, settings.additional_settings={settings_add}, additional_settings={client_add}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Embedding configuration missing for client {client.id}. Configure embedding.provider in client's additional_settings."
-        )
+        uses_platform = getattr(client, 'uses_platform_keys', None)
+        if uses_platform is None or uses_platform:
+            embedding_cfg = {
+                "provider": "siliconflow",
+                "document_model": "Qwen/Qwen3-Embedding-4B",
+                "conversation_model": "Qwen/Qwen3-Embedding-4B",
+                "dimension": 1024,
+            }
+            logger.info(f"Using platform default embedding config for client {client.id}")
+        else:
+            settings_emb = getattr(client.settings, 'embedding', None) if client.settings else None
+            settings_add = getattr(client.settings, 'additional_settings', None) if client.settings else None
+            client_add = getattr(client, 'additional_settings', None)
+            logger.error(f"Embedding config missing for BYOK client {client.id}. settings.embedding={settings_emb}, settings.additional_settings={settings_add}, additional_settings={client_add}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Embedding configuration missing for client {client.id}. Configure embedding.provider in client's additional_settings."
+            )
 
     tools_config = _extract_agent_tools_config(agent)
     api_keys_map = _extract_api_keys(client)

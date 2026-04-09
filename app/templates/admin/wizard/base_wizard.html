@@ -449,8 +449,12 @@
                 // Avatars
                 avatarHistory: [],
                 generatingAvatar: false,
+                editingAvatar: false,
                 uploadingAvatar: false,
                 avatarPrompt: '',
+                editPrompt: '',
+                avatarError: null,
+                avatarProgress: 'Generating...',
 
                 // Knowledge
                 pendingDocuments: [],
@@ -805,6 +809,153 @@
                 prevStep() {
                     if (this.currentStep > 1) {
                         this.currentStep--;
+                    }
+                },
+
+                // ========== Avatar Methods ==========
+                _avatarTimer: null,
+
+                _startProgressTimer(prefix) {
+                    let seconds = 0;
+                    this.avatarProgress = `${prefix}...`;
+                    this._avatarTimer = setInterval(() => {
+                        seconds++;
+                        if (seconds < 15) {
+                            this.avatarProgress = `${prefix}... (${seconds}s)`;
+                        } else if (seconds < 45) {
+                            this.avatarProgress = `Working on it... (${seconds}s)`;
+                        } else {
+                            this.avatarProgress = `Almost there... (${seconds}s)`;
+                        }
+                    }, 1000);
+                },
+
+                _stopProgressTimer() {
+                    if (this._avatarTimer) {
+                        clearInterval(this._avatarTimer);
+                        this._avatarTimer = null;
+                    }
+                },
+
+                async generateAvatar() {
+                    if (this.generatingAvatar || !this.sessionId) return;
+
+                    this.generatingAvatar = true;
+                    this.avatarError = null;
+                    this._startProgressTimer('Generating');
+
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch(`/api/v1/wizard/sessions/${this.sessionId}/generate-avatar`, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                prompt: this.avatarPrompt || null
+                            })
+                        });
+
+                        if (response.ok) {
+                            const avatar = await response.json();
+                            this.avatarHistory.unshift(avatar);
+                            this.stepData.avatar_url = avatar.image_url;
+                        } else {
+                            const err = await response.json().catch(() => ({}));
+                            this.avatarError = err.detail || `Generation failed (${response.status}). Please try again.`;
+                        }
+                    } catch (e) {
+                        console.error('Failed to generate avatar:', e);
+                        this.avatarError = 'Network error — please check your connection and try again.';
+                    } finally {
+                        this._stopProgressTimer();
+                        this.generatingAvatar = false;
+                    }
+                },
+
+                async editAvatar() {
+                    if (this.editingAvatar || !this.sessionId || !this.editPrompt.trim() || !this.stepData.avatar_url) return;
+
+                    this.editingAvatar = true;
+                    this.avatarError = null;
+                    this._startProgressTimer('Editing');
+
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const response = await fetch(`/api/v1/wizard/sessions/${this.sessionId}/edit-avatar`, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                source_image_url: this.stepData.avatar_url,
+                                edit_prompt: this.editPrompt.trim()
+                            })
+                        });
+
+                        if (response.ok) {
+                            const avatar = await response.json();
+                            this.avatarHistory.unshift(avatar);
+                            this.stepData.avatar_url = avatar.image_url;
+                            this.editPrompt = '';
+                        } else {
+                            const err = await response.json().catch(() => ({}));
+                            this.avatarError = err.detail || `Edit failed (${response.status}). Please try again.`;
+                        }
+                    } catch (e) {
+                        console.error('Failed to edit avatar:', e);
+                        this.avatarError = 'Network error — please check your connection and try again.';
+                    } finally {
+                        this._stopProgressTimer();
+                        this.editingAvatar = false;
+                    }
+                },
+
+                async selectAvatar(avatar) {
+                    this.stepData.avatar_url = avatar.image_url;
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        await fetch(`/api/v1/wizard/sessions/${this.sessionId}/avatars/${avatar.id}/select`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                    } catch (e) {
+                        console.error('Failed to select avatar:', e);
+                    }
+                },
+
+                async uploadAvatar(event) {
+                    const file = event?.target?.files?.[0];
+                    if (!file || this.uploadingAvatar || !this.sessionId) return;
+
+                    this.uploadingAvatar = true;
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const formData = new FormData();
+                        formData.append('file', file);
+
+                        const response = await fetch(`/api/v1/wizard/sessions/${this.sessionId}/upload-avatar`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${token}` },
+                            body: formData
+                        });
+
+                        if (response.ok) {
+                            const avatar = await response.json();
+                            this.avatarHistory.unshift(avatar);
+                            this.stepData.avatar_url = avatar.image_url;
+                        } else {
+                            const err = await response.json().catch(() => ({}));
+                            alert(err.detail || 'Failed to upload image. Please try again.');
+                        }
+                    } catch (e) {
+                        console.error('Failed to upload avatar:', e);
+                        alert('Failed to upload image. Please try again.');
+                    } finally {
+                        this.uploadingAvatar = false;
+                        if (this.$refs.avatarFileInput) this.$refs.avatarFileInput.value = '';
                     }
                 },
 

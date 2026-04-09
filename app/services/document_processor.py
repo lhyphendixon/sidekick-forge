@@ -115,6 +115,15 @@ class DocumentProcessor:
 
             if hasattr(client_settings, 'dict'):
                 client_settings = client_settings.dict()
+            elif hasattr(client_settings, 'model_dump'):
+                client_settings = client_settings.model_dump()
+
+            # Merge additional_settings (contains embedding config) into client_settings
+            additional = getattr(client, 'additional_settings', None)
+            if isinstance(additional, dict) and isinstance(client_settings, dict):
+                for key, val in additional.items():
+                    if key not in client_settings or not client_settings[key]:
+                        client_settings[key] = val
 
             if not supabase_config:
                 logger.warning(f"Client {client_id} missing Supabase credentials")
@@ -866,7 +875,8 @@ class DocumentProcessor:
         supabase_client = supabase
         if client_id and supabase_client is None:
             supabase_client, _ = await self._get_client_context(client_id)
-        elif supabase_client is None:
+        if supabase_client is None:
+            # Shared-tier clients use the platform DB directly
             supabase_client = self._ensure_supabase()
 
         if supabase_client is None:

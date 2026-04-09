@@ -206,8 +206,8 @@ class ToolsService:
 
             csb = await self.get_client_supabase(client_id)
             try:
-                if self._table_exists(csb, "tools"):
-                    qc = csb.table("tools").select("*")
+                if csb and self._table_exists(csb, "tools"):
+                    qc = csb.table("tools").select("*").eq("client_id", client_id)
                     qc = apply_filters(qc)
                     client_rows = qc.execute()
                     for row in client_rows.data or []:

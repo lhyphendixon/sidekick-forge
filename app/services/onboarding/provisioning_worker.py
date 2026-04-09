@@ -293,6 +293,16 @@ async def provision_client_by_tier(
 
     now_iso = datetime.utcnow().isoformat()
 
+    # Default embedding config for platform inference users
+    PLATFORM_EMBEDDING_DEFAULTS = {
+        "embedding": {
+            "provider": "siliconflow",
+            "document_model": "Qwen/Qwen3-Embedding-4B",
+            "conversation_model": "Qwen/Qwen3-Embedding-4B",
+            "dimension": 1024,
+        }
+    }
+
     if hosting == HostingType.SHARED:
         # Shared-tier clients use the platform database directly.
         platform_url = os.getenv("SUPABASE_URL")
@@ -313,6 +323,7 @@ async def provision_client_by_tier(
             "provisioning_started_at": now_iso,
             "provisioning_completed_at": now_iso,
             "provisioning_error": None,
+            "additional_settings": PLATFORM_EMBEDDING_DEFAULTS,
         }).eq("id", client_id).execute()
 
         logger.info(
@@ -325,6 +336,7 @@ async def provision_client_by_tier(
             "provisioning_status": "queued",
             "provisioning_started_at": now_iso,
             "provisioning_error": None,
+            "additional_settings": PLATFORM_EMBEDDING_DEFAULTS,
         }).eq("id", client_id).execute()
 
         platform_db.table("client_provisioning_jobs").upsert({

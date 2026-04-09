@@ -13,7 +13,7 @@
     <div class="flex justify-between items-center mb-6">
         <div>
             <h1 class="text-3xl font-bold text-dark-text flex items-center">
-                <a href="/admin/clients" class="text-dark-text-secondary hover:text-brand-teal mr-3">
+                <a href="{% if user.is_adventurer_only %}/admin/agents{% else %}/admin/clients{% endif %}" class="text-dark-text-secondary hover:text-brand-teal mr-3">
                     <i class="bi bi-arrow-left"></i>
                 </a>
                 {{ client.name }}
