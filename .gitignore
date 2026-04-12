@@ -20,6 +20,10 @@ logs/
 uploads/
 data/
 
+# Large model files (exceed GitHub's 100MB limit)
+docker/agent/models/
+*.imx
+
 # IDE
 .vscode/
 .idea/
