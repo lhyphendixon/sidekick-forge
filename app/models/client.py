@@ -52,7 +52,14 @@ class APIKeys(BaseModel):
     elevenlabs_api_key: Optional[str] = None
     cartesia_api_key: Optional[str] = None
     speechify_api_key: Optional[str] = None
-    
+    inworld_api_key: Optional[str] = None
+    fish_audio_api_key: Optional[str] = None
+
+    # Avatar/Video Providers
+    bithuman_api_secret: Optional[str] = None
+    bey_api_key: Optional[str] = None
+    liveavatar_api_key: Optional[str] = None
+
     # Reranking Providers
     siliconflow_api_key: Optional[str] = None
     jina_api_key: Optional[str] = None
@@ -69,11 +76,20 @@ class APIKeys(BaseModel):
 
 
 class EmbeddingSettings(BaseModel):
-    """Embedding configuration"""
-    provider: str = Field(default="novita", description="Embedding provider")
-    document_model: str = Field(default="Qwen/Qwen2.5-72B-Instruct", description="Document embedding model")
-    conversation_model: str = Field(default="Qwen/Qwen2.5-72B-Instruct", description="Conversation embedding model")
-    dimension: Optional[int] = Field(default=None, description="Embedding dimension (e.g., 1024 for Qwen/Qwen3-Embedding-0.6B, 4096 for Qwen/Qwen3-Embedding-8B)")
+    """Embedding configuration.
+
+    Defaults match the platform-wide canonical embedding model. ALL fallback
+    paths in trigger code, document processor, and provisioning must use the
+    same model — mixing models produces incompatible vector spaces and silent
+    RAG failures (chunks embedded with one model are unsearchable by queries
+    embedded with another). The previous default of `Qwen/Qwen2.5-72B-Instruct`
+    was both wrong (that's a chat model, not an embedding model) and dangerous
+    because nothing rejected it at runtime.
+    """
+    provider: str = Field(default="siliconflow", description="Embedding provider")
+    document_model: str = Field(default="Qwen/Qwen3-Embedding-4B", description="Document embedding model")
+    conversation_model: str = Field(default="Qwen/Qwen3-Embedding-4B", description="Conversation embedding model")
+    dimension: Optional[int] = Field(default=1024, description="Embedding dimension (1024 is the canonical platform value matching Qwen3-Embedding-4B truncated)")
 
 
 class RerankSettings(BaseModel):

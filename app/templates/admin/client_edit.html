@@ -364,13 +364,27 @@
                         <input type="password" value="{{ client.settings.api_keys.cartesia_api_key or '' }}" name="cartesia_api_key" data-api-key="cartesia_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
-                    
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Inworld API Key</label>
+                        <input type="password" value="{{ client.settings.api_keys.inworld_api_key or '' }}" name="inworld_api_key" data-api-key="inworld_api_key"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                        <p class="mt-1 text-xs text-gray-500">Base64-encoded Inworld API key for TTS.</p>
+                    </div>
+
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Speechify API Key</label>
                         <input type="password" value="{{ client.settings.api_keys.speechify_api_key or '' }}" name="speechify_api_key" data-api-key="speechify_api_key"
                                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
                     </div>
-                    
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Fish Audio API Key</label>
+                        <input type="password" value="{{ client.settings.api_keys.fish_audio_api_key or '' }}" name="fish_audio_api_key" data-api-key="fish_audio_api_key"
+                               class="mt-1 block w-full border-gray-300 rounded-md shadow-sm px-3 py-2 border focus:ring-blue-500 focus:border-blue-500">
+                        <p class="mt-1 text-xs text-gray-500">API key from <a href="https://fish.audio" target="_blank" class="text-blue-500 hover:underline">fish.audio</a>. Env var fallback: FISH_API_KEY.</p>
+                    </div>
+
                     <!-- Embedding/Reranking Providers -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Novita API Key</label>

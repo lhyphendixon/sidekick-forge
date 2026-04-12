@@ -452,6 +452,32 @@
                             </button>
                         </div>
                     </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Inworld API Key</label>
+                        <div class="relative">
+                            <input type="password" id="inworldKey" name="inworld_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('inworld_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('inworldKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-1">Base64-encoded Inworld API key from <a href="https://platform.inworld.ai/" target="_blank" class="text-brand-teal hover:underline">platform.inworld.ai</a>.</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Fish Audio API Key</label>
+                        <div class="relative">
+                            <input type="password" id="fishAudioKey" name="fish_audio_api_key"
+                                   value="{{ client.settings.get('api_keys', {}).get('fish_audio_api_key') or '' }}"
+                                   class="w-full px-3 py-2 pr-10 bg-dark-elevated border border-dark-border text-dark-text rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal">
+                            <button type="button" onclick="togglePassword('fishAudioKey')"
+                                    class="absolute inset-y-0 right-0 px-3 flex items-center text-dark-text-secondary hover:text-dark-text">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-1">API key from <a href="https://fish.audio" target="_blank" class="text-brand-teal hover:underline">fish.audio</a> for Fish Audio TTS.</p>
+                    </div>
                 </div>
 
                 <!-- Transcription Providers -->

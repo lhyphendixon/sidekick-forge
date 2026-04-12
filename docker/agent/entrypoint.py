@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2026-04-09T08:05:19Z"
-AGENT_BUILD_HASH = "phase-3-prewarm-idle"
+AGENT_BUILD_VERSION = "2026-04-09T18:19:27Z"
+AGENT_BUILD_HASH = "9f516c0"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
@@ -29,6 +29,14 @@ from livekit.agents import JobContext, JobRequest, WorkerOptions, cli, llm, voic
 from livekit.agents import BackgroundAudioPlayer, AudioConfig, BuiltinAudioClip
 from livekit.agents import TurnHandlingOptions
 from livekit.plugins import deepgram, elevenlabs, openai, groq, silero, cartesia
+try:
+    from livekit.plugins import inworld  # type: ignore
+except ImportError:  # plugin optional during transitional rollouts
+    inworld = None  # type: ignore
+try:
+    from livekit.plugins import fishaudio  # type: ignore
+except ImportError:
+    fishaudio = None  # type: ignore
 # bithuman is imported lazily when needed to avoid dependency conflicts
 try:
     from livekit.plugins import bithuman
@@ -128,6 +136,19 @@ async def send_model_ready(room: rtc.Room) -> None:
         logger.warning(f"Failed to send model ready event: {e}")
 
 
+async def send_model_error(room: rtc.Room, message: str) -> None:
+    """Notify frontend that avatar model failed to load."""
+    try:
+        data = json.dumps({
+            "type": "model_error",
+            "message": message,
+        }).encode("utf-8")
+        await room.local_participant.publish_data(data, reliable=True)
+        logger.info(f"❌ Sent model_error event to frontend: {message}")
+    except Exception as e:
+        logger.warning(f"Failed to send model error event: {e}")
+
+
 async def download_imx_from_supabase(
     storage_path: str,
     client_supabase_url: str,
@@ -181,6 +202,10 @@ async def download_imx_from_supabase(
         # Download the file using aiohttp
         local_dir = "/tmp/imx_models"
         os.makedirs(local_dir, exist_ok=True)
+        # Ensure directory is writable (Docker volume mounts may be root-owned)
+        if not os.access(local_dir, os.W_OK):
+            local_dir = os.path.join(os.path.expanduser("~"), ".imx_models")
+            os.makedirs(local_dir, exist_ok=True)
 
         # Use a consistent filename based on the path to enable caching
         import hashlib
@@ -357,6 +382,83 @@ def _normalize_transcript_text(value: Any) -> str:
     return text
 
 
+def _get_fish_audio_emotion_instructions(voice_settings: dict) -> str:
+    """Return Fish Audio emotion instructions if enabled, for dynamic TTS expression.
+
+    Fish Audio supports inline emotion tags that the TTS engine interprets:
+    - S1 model uses ``(emotion)`` syntax at the start of a sentence.
+    - S2-Pro model uses ``[emotion]`` syntax with natural language descriptions.
+
+    The LLM is instructed to prepend the most fitting tag to each sentence so
+    the synthesised voice carries genuine emotional inflection.  The tags are
+    stripped from transcripts before display (see ``_strip_tts_emotion_tags``).
+    """
+    if not voice_settings:
+        return ""
+
+    provider = voice_settings.get("tts_provider") or voice_settings.get("provider")
+    emotions_enabled = voice_settings.get("fish_emotions_enabled", True)  # on by default
+
+    if provider != "fish_audio" or not emotions_enabled:
+        return ""
+
+    model = (
+        voice_settings.get("model")
+        or voice_settings.get("tts_model")
+        or (voice_settings.get("provider_config") or {}).get("model")
+        or "s2-pro"
+    )
+
+    # Determine tag syntax based on model
+    if model.startswith("s2"):
+        tag_open, tag_close = "[", "]"
+        tag_examples = (
+            '  [happy] Great to hear from you!\n'
+            '  [empathetic] I understand how that feels.\n'
+            '  [excited] That\'s amazing news!\n'
+            '  [calm] Let me walk you through this step by step.\n'
+            '  [sad][sighing] I\'m sorry to hear that.\n'
+        )
+    else:
+        tag_open, tag_close = "(", ")"
+        tag_examples = (
+            '  (happy) Great to hear from you!\n'
+            '  (empathetic) I understand how that feels.\n'
+            '  (excited) That\'s amazing news!\n'
+            '  (calm) Let me walk you through this step by step.\n'
+            '  (sad)(sighing) I\'m sorry to hear that.\n'
+        )
+
+    logger.info("🎭 Fish Audio emotion expression enabled (model=%s, syntax=%s…%s)", model, tag_open, tag_close)
+    return (
+        "\n\n## Emotional Voice Expression\n"
+        "Your voice is rendered by a TTS engine that supports emotion tags. "
+        "Prepend the most appropriate emotion tag to **every** sentence you speak. "
+        f"Use the {tag_open}emotion{tag_close} syntax at the **beginning** of each sentence.\n\n"
+        "### Available Emotions\n"
+        f"**Core:** {tag_open}happy{tag_close}, {tag_open}sad{tag_close}, {tag_open}angry{tag_close}, "
+        f"{tag_open}excited{tag_close}, {tag_open}calm{tag_close}, {tag_open}nervous{tag_close}, "
+        f"{tag_open}confident{tag_close}, {tag_open}surprised{tag_close}, {tag_open}empathetic{tag_close}, "
+        f"{tag_open}curious{tag_close}, {tag_open}grateful{tag_close}, {tag_open}proud{tag_close}, "
+        f"{tag_open}worried{tag_close}, {tag_open}frustrated{tag_close}, {tag_open}hopeful{tag_close}, "
+        f"{tag_open}sarcastic{tag_close}\n"
+        f"**Tones:** {tag_open}whispering{tag_close}, {tag_open}soft tone{tag_close}, "
+        f"{tag_open}in a hurry tone{tag_close}, {tag_open}shouting{tag_close}\n"
+        f"**Effects:** {tag_open}laughing{tag_close}, {tag_open}chuckling{tag_close}, "
+        f"{tag_open}sighing{tag_close}, {tag_open}gasping{tag_close}\n\n"
+        "### Rules\n"
+        "- Place the tag at the very start of each sentence, before the first word.\n"
+        f"- You may combine tags: {tag_open}sad{tag_close}{tag_open}whispering{tag_close} I miss those days.\n"
+        "- Never place a tag in the middle of a sentence.\n"
+        "- Choose the emotion that matches the meaning of the sentence naturally.\n"
+        "- Vary emotions across sentences — avoid repeating the same tag.\n"
+        "- Default to the emotion that fits the conversational context; "
+        f"use {tag_open}calm{tag_close} when no strong emotion applies.\n\n"
+        "### Examples\n"
+        + tag_examples
+    )
+
+
 def _get_cartesia_emotion_instructions(voice_settings: dict) -> str:
     """Return Cartesia emotion instructions if enabled, for dynamic expression."""
     if not voice_settings:
@@ -439,7 +541,60 @@ def _initialize_tts_plugin(
     if not isinstance(provider_config, dict):
         provider_config = {}
 
-    if tts_provider == "elevenlabs":
+    if tts_provider == "inworld":
+        if inworld is None:
+            raise ConfigurationError(
+                "Inworld TTS plugin is not installed in this worker image. "
+                "Add `livekit-plugins-inworld` to requirements-agent.txt and rebuild."
+            )
+        inworld_key = api_keys.get("inworld_api_key")
+        if not inworld_key:
+            raise ConfigurationError("Inworld API key required for TTS but not found")
+
+        inworld_model = (
+            voice_settings.get("model")
+            or voice_settings.get("tts_model")
+            or provider_config.get("model")
+            or "inworld-tts-1.5-max"
+        )
+        inworld_voice = (
+            voice_settings.get("voice_id")
+            or provider_config.get("voice_id")
+            or "Ashley"
+        )
+        # Optional knobs
+        kwargs: Dict[str, Any] = {
+            "api_key": inworld_key,
+            "model": inworld_model,
+            "voice": inworld_voice,
+        }
+        temperature = provider_config.get("temperature") or voice_settings.get("temperature")
+        if temperature is not None:
+            try:
+                kwargs["temperature"] = float(temperature)
+            except (TypeError, ValueError):
+                pass
+        speaking_rate = (
+            provider_config.get("speaking_rate")
+            or voice_settings.get("speaking_rate")
+            or voice_settings.get("tts_speed")
+        )
+        if speaking_rate is not None:
+            try:
+                kwargs["speaking_rate"] = float(speaking_rate)
+            except (TypeError, ValueError):
+                pass
+        text_norm = provider_config.get("text_normalization") or voice_settings.get("text_normalization")
+        if text_norm is not None:
+            kwargs["text_normalization"] = "ON" if str(text_norm).lower() in {"1", "true", "on", "yes"} else "OFF"
+
+        logger.info(
+            "🔊 Initializing Inworld TTS with model=%s voice=%s",
+            inworld_model,
+            inworld_voice,
+        )
+        tts_plugin = inworld.TTS(**kwargs)
+    elif tts_provider == "elevenlabs":
         elevenlabs_key = api_keys.get("elevenlabs_api_key")
         if not elevenlabs_key:
             raise ConfigurationError("ElevenLabs API key required for TTS but not found")
@@ -459,6 +614,42 @@ def _initialize_tts_plugin(
             api_key=elevenlabs_key,
             enable_logging=True,
         )
+    elif tts_provider == "fish_audio":
+        if fishaudio is None:
+            raise ConfigurationError(
+                "Fish Audio TTS plugin is not installed in this worker image. "
+                "Add `livekit-plugins-fishaudio` to requirements-agent.txt and rebuild."
+            )
+        fish_key = api_keys.get("fish_audio_api_key")
+        if not fish_key:
+            raise ConfigurationError("Fish Audio API key required for TTS but not found")
+
+        fish_model = (
+            voice_settings.get("model")
+            or voice_settings.get("tts_model")
+            or provider_config.get("model")
+            or "s2-pro"
+        )
+        fish_reference_id = (
+            voice_settings.get("voice_id")
+            or provider_config.get("reference_id")
+            or "8ef4a238714b45718ce04243307c57a7"
+        )
+        fish_kwargs: Dict[str, Any] = {
+            "api_key": fish_key,
+            "model": fish_model,
+            "reference_id": fish_reference_id,
+        }
+        latency_mode = provider_config.get("latency_mode")
+        if latency_mode is not None:
+            fish_kwargs["latency_mode"] = str(latency_mode)
+
+        logger.info(
+            "🔊 Initializing Fish Audio TTS with model=%s reference_id=%s",
+            fish_model,
+            fish_reference_id,
+        )
+        tts_plugin = fishaudio.TTS(**fish_kwargs)
     else:
         cartesia_key = api_keys.get("cartesia_api_key")
         if not cartesia_key:
@@ -1784,12 +1975,19 @@ async def agent_job_handler(ctx: JobContext):
     try:
         def _on_local_track_published(publication, track):
             try:
+                kind = getattr(publication, "kind", None)
                 logger.info(
                     "📡 local_track_published kind=%s track_sid=%s muted=%s",
-                    getattr(publication, "kind", None),
+                    kind,
                     getattr(publication, "track_sid", None) or getattr(publication, "sid", None),
                     getattr(publication, "muted", None),
                 )
+                # Signal avatar video published when a local video track (kind=1) is
+                # published.  Bithuman runs in-process so its tracks appear as local
+                # publishes, not remote track_published events.
+                if kind == 1:
+                    avatar_video_published_event.set()
+                    logger.info("🎬 Local video track published - signaling model_ready")
             except Exception as log_err:
                 logger.debug(f"Failed to log local_track_published: {log_err}")
 
@@ -2164,13 +2362,30 @@ async def agent_job_handler(ctx: JobContext):
                 # Align with Cerebras documented chat models
                 # https://inference-docs.cerebras.ai/api-reference/chat-completions
                 model = voice_settings.get("llm_model", metadata.get("model", "zai-glm-4.7"))
-                llm_plugin = openai.LLM.with_cerebras(
-                    model=model
-                )
-                # Check if this is a GLM model that supports reasoning toggle
-                # GLM-4.7 supports disable_reasoning parameter for fast voice responses
+
+                # Detect GLM reasoning model
                 from tool_registry import _is_glm_reasoning_model
                 is_glm_model = _is_glm_reasoning_model(model)
+
+                # Build kwargs for the Cerebras LLM plugin. For wizard mode on
+                # a GLM reasoning model we explicitly disable reasoning so the
+                # model produces direct content instead of spending hundreds
+                # of output tokens on chain-of-thought. Verified on Cerebras
+                # GLM-4.7: reasoning_effort='none' drops a turn that produced
+                # ~2000 tokens of internal thinking down to ~25 tokens of
+                # final reply, going from ~30s wall to ~280ms wall. The
+                # wizard's tasks are extraction, not reasoning, so this is
+                # always the right call here.
+                cerebras_kwargs: dict = {"model": model}
+                if is_wizard_mode and is_glm_model:
+                    cerebras_kwargs["reasoning_effort"] = "none"
+                    logger.info(
+                        f"🚀 Wizard mode + GLM model: forcing reasoning_effort=none "
+                        f"on {model} for fast extraction-style turns"
+                    )
+
+                llm_plugin = openai.LLM.with_cerebras(**cerebras_kwargs)
+
                 if is_glm_model:
                     glm_model_name = model
                     logger.info(f"🧠 GLM model detected ({model}), reasoning toggle will be enabled")
@@ -2407,6 +2622,12 @@ async def agent_job_handler(ctx: JobContext):
             if emotion_instructions:
                 enhanced_prompt = enhanced_prompt + emotion_instructions
                 logger.info("🎭 Cartesia emotion controls enabled for dynamic expression")
+
+            # Add Fish Audio emotion instructions if enabled
+            fish_emotion_instructions = _get_fish_audio_emotion_instructions(voice_settings)
+            if fish_emotion_instructions:
+                enhanced_prompt = enhanced_prompt + fish_emotion_instructions
+                logger.info("🎭 Fish Audio emotion controls enabled for dynamic expression")
 
             greeting_enhanced_prompt = enhanced_prompt
             
@@ -2746,6 +2967,7 @@ async def agent_job_handler(ctx: JobContext):
                         'rerank': metadata.get("rerank"),
                         'api_keys': metadata.get("api_keys"),
                         'is_wizard_mode': False,
+                        'fish_emotions_enabled': voice_settings.get("fish_emotions_enabled", True) if (voice_settings.get("tts_provider") or voice_settings.get("provider")) == "fish_audio" else False,
                         'hosting_type': metadata.get("hosting_type"),
                         'email_address': metadata.get("email_address", ""),
                     },
@@ -3842,7 +4064,14 @@ async def agent_job_handler(ctx: JobContext):
                         bithuman_api_secret = api_keys.get("bithuman_api_secret") or os.getenv("BITHUMAN_API_SECRET")
 
                         if not bithuman_api_secret:
-                            logger.warning("No bithuman_api_secret in client keys or BITHUMAN_API_SECRET env - plugin will attempt its own resolution")
+                            error_msg = (
+                                "Bithuman API key is not configured. "
+                                "Please add your Bithuman API secret in the admin dashboard "
+                                "under Client Settings → API Keys."
+                            )
+                            logger.error(f"❌ {error_msg}")
+                            await send_model_error(ctx.room, error_msg)
+                            raise ValueError(error_msg)
 
                         if not avatar_model_path:
                             raise ValueError("Video chat with Bithuman requires avatar_model_path - upload an .imx model file in agent settings")
@@ -3874,6 +4103,12 @@ async def agent_job_handler(ctx: JobContext):
 
                         # Check if the model file exists
                         if not os.path.exists(avatar_model_path):
+                            error_msg = (
+                                "Avatar model file not found. "
+                                "Please upload a Bithuman .imx model file in the agent's video settings."
+                            )
+                            logger.error(f"❌ {error_msg} (path: {avatar_model_path})")
+                            await send_model_error(ctx.room, error_msg)
                             raise ValueError(f"IMX model file not found: {avatar_model_path}")
 
                         await send_model_loading_progress(ctx.room, 20, "Creating avatar session...")
@@ -3942,7 +4177,7 @@ async def agent_job_handler(ctx: JobContext):
                         # Don't send model_ready yet - wait for actual video track to be published
                         logger.info("✅ Bithuman avatar session started - waiting for video track to be published...")
 
-                        # Start a background task to wait for video and send model_ready
+                        # Wait for video track and signal model_ready to frontend
                         async def wait_for_avatar_video_and_signal():
                             try:
                                 # Wait up to 90 seconds for avatar video track
@@ -3960,10 +4195,14 @@ async def agent_job_handler(ctx: JobContext):
                                 await send_model_loading_progress(ctx.room, 100, "Avatar ready!")
                                 await send_model_ready(ctx.room)
 
-                        asyncio.create_task(wait_for_avatar_video_and_signal())
+                        # Wait synchronously for the avatar video track before starting
+                        # the agent session.  This prevents the agent from speaking
+                        # (via greeting or STT→LLM→TTS) while the avatar is still loading.
+                        await wait_for_avatar_video_and_signal()
 
                 except Exception as avatar_err:
                     logger.error(f"❌ Failed to initialize {avatar_provider} avatar: {avatar_err}")
+                    await send_model_error(ctx.room, f"Avatar initialization failed: {avatar_err}")
                     raise ValueError(f"Video chat initialization failed ({avatar_provider}): {avatar_err}") from avatar_err
 
             # Start the agent session with room_options (proper RoomIO integration)
@@ -4059,8 +4298,8 @@ async def agent_job_handler(ctx: JobContext):
                 # polling room metadata for a `pending_user_message` to arrive.
                 # Times out after 5 minutes of no activity.
                 if is_prewarm and not user_message:
-                    logger.info(f"⏸️  Prewarm worker idling for room {ctx.room.name} (5min timeout)")
-                    PREWARM_TIMEOUT_SECONDS = 300  # 5 minutes
+                    logger.info(f"⏸️  Prewarm worker idling for room {ctx.room.name} (15s timeout)")
+                    PREWARM_TIMEOUT_SECONDS = 15  # Short timeout to avoid blocking worker for video jobs
                     PREWARM_POLL_INTERVAL = 0.5
                     poll_start = time.time()
                     pending_message = None
@@ -4180,82 +4419,16 @@ async def agent_job_handler(ctx: JobContext):
             except Exception as diag_err:
                 logger.warning(f"Participant publication diagnostics failed: {type(diag_err).__name__}: {diag_err}")
 
-            # Instrument audio sink to confirm frames are forwarded to LiveKit
+            # Ensure session.output.audio is bound to the RoomIO audio output so
+            # downstream interrupt handlers (which call session.output.audio.clear_buffer)
+            # can find the sink. AgentSession does not always set this itself in v1.5.
             try:
-                audio_output = session.output.audio
-                if not audio_output and hasattr(session, "_room_io"):
-                    audio_output = getattr(session._room_io, "audio_output", None)
-                    if audio_output:
-                        session.output.audio = audio_output
-                        logger.info("🔧 Attached RoomIO audio output onto session.output.audio")
-
-                room_io_audio = getattr(session._room_io, "audio_output", None) if hasattr(session, "_room_io") else None
-                logger.info(
-                    "🔍 RoomIO diagnostics post-start | has_output=%s has_room_io=%s room_io_audio=%s",
-                    bool(session.output.audio),
-                    hasattr(session, "_room_io"),
-                    bool(room_io_audio),
-                )
-
-                if audio_output:
-                    chain_labels = []
-                    link = audio_output
-                    while link is not None and link not in chain_labels:
-                        chain_labels.append(type(link).__name__)
-                        link = getattr(link, "next_in_chain", None)
-                    logger.info("🔍 RoomIO audio chain: %s", " -> ".join(chain_labels) or "(empty)")
-
-                    current = audio_output
-                    visited = set()
-                    while current and current not in visited:
-                        visited.add(current)
-                        try:
-                            original_capture = current.capture_frame
-                        except AttributeError:
-                            original_capture = None
-
-                        if original_capture and not getattr(current, "_diag_capture_wrapped", False):
-                            async def capture_with_log(self, frame, *args, **kwargs):
-                                try:
-                                    import audioop
-
-                                    rms = audioop.rms(frame.data, 2) if hasattr(frame, "data") else None
-                                    logger.info(
-                                        "🎧 capture_frame label=%s sr=%s samples=%s duration_ms=%.2f rms=%s",
-                                        getattr(self, "label", None),
-                                        getattr(frame, "sample_rate", None),
-                                        getattr(frame, "samples_per_channel", None),
-                                        (getattr(frame, "duration", None) or 0) * 1000.0,
-                                        rms,
-                                    )
-                                except Exception:
-                                    logger.info(
-                                        "🎧 capture_frame label=%s (frame stats unavailable)",
-                                        getattr(self, "label", None),
-                                    )
-                                return await original_capture(frame, *args, **kwargs)
-
-                            current.capture_frame = types.MethodType(capture_with_log, current)
-                            current._diag_capture_wrapped = True
-
-                        try:
-                            original_flush = current.flush
-                        except AttributeError:
-                            original_flush = None
-
-                        if original_flush and not getattr(current, "_diag_flush_wrapped", False):
-                            def flush_with_log(self, *args, **kwargs):
-                                logger.info(
-                                    "🎧 audio_output.flush label=%s", getattr(self, "label", None)
-                                )
-                                return original_flush(*args, **kwargs)
-
-                            current.flush = types.MethodType(flush_with_log, current)
-                            current._diag_flush_wrapped = True
-
-                        current = getattr(current, "next_in_chain", None)
-            except Exception as audio_patch_err:
-                logger.warning(f"Audio output diagnostics attachment failed: {audio_patch_err}")
+                if not session.output.audio and hasattr(session, "_room_io"):
+                    room_io_audio = getattr(session._room_io, "audio_output", None)
+                    if room_io_audio:
+                        session.output.audio = room_io_audio
+            except Exception as audio_attach_err:
+                logger.warning(f"Audio output attach failed: {audio_attach_err}")
 
             # Helper functions for looping thinking sound
             # The built-in BackgroundAudioPlayer thinking_sound doesn't loop,
@@ -4537,6 +4710,14 @@ async def agent_job_handler(ctx: JobContext):
                         logger.info("🎤 User started speaking")
                         # Stop thinking sound when user starts speaking (interruption)
                         _stop_thinking_sound_loop()
+
+                        # In wizard mode, do NOT forcefully interrupt speech — the wizard
+                        # uses allow_interruptions=False and forceful interrupts leave the
+                        # AgentSession pipeline in a broken state where STT stops processing.
+                        # The speech will finish naturally, then the user's next turn is handled.
+                        if is_wizard_mode:
+                            logger.info("🧙 Wizard mode: skipping forceful interrupt on user speech")
+                            return
 
                         # Check if we're within the grace period after a turn commit
                         # If so, this is likely false speech detection from thinking sound feedback

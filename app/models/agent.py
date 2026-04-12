@@ -16,6 +16,8 @@ class ProviderType(str, Enum):
     CARTESIA = "cartesia"
     DEEPGRAM = "deepgram"
     SPEECHIFY = "speechify"
+    INWORLD = "inworld"
+    FISH_AUDIO = "fish_audio"
 
 
 class VoiceSettings(BaseModel):
@@ -45,6 +47,9 @@ class VoiceSettings(BaseModel):
     provider_config: Dict[str, Any] = Field(default_factory=dict)
     cartesia_emotions_enabled: Optional[bool] = Field(
         default=False, description="Enable Cartesia Sonic-3 emotion tagging"
+    )
+    fish_emotions_enabled: Optional[bool] = Field(
+        default=True, description="Enable Fish Audio emotion tags in LLM output for expressive TTS"
     )
     cartesia_emotion_style: Optional[str] = Field(
         default=None, description="Default emotion style for Cartesia Sonic-3"

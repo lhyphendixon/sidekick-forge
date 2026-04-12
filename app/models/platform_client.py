@@ -27,7 +27,14 @@ class APIKeys(BaseModel):
     elevenlabs_api_key: Optional[str] = None
     cartesia_api_key: Optional[str] = None
     speechify_api_key: Optional[str] = None
-    
+    inworld_api_key: Optional[str] = None
+    fish_audio_api_key: Optional[str] = None
+
+    # Avatar/Video Providers
+    bithuman_api_secret: Optional[str] = None
+    bey_api_key: Optional[str] = None
+    liveavatar_api_key: Optional[str] = None
+
     # Reranking Providers
     siliconflow_api_key: Optional[str] = None
     jina_api_key: Optional[str] = None

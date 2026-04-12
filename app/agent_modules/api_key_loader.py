@@ -98,7 +98,8 @@ class APIKeyLoader:
             # Platform database stores API keys as individual columns
             api_key_columns = [
                 'openai_api_key', 'groq_api_key', 'deepgram_api_key', 
-                'elevenlabs_api_key', 'cartesia_api_key', 'speechify_api_key',
+                'elevenlabs_api_key', 'cartesia_api_key', 'speechify_api_key', 'inworld_api_key', 'fish_audio_api_key',
+                'bithuman_api_secret', 'bey_api_key', 'liveavatar_api_key',
                 'deepinfra_api_key', 'replicate_api_key', 'novita_api_key',
                 'cohere_api_key', 'siliconflow_api_key', 'jina_api_key',
                 'anthropic_api_key'

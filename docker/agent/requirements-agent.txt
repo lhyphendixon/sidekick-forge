@@ -9,7 +9,10 @@ livekit-plugins-groq==1.5.0
 livekit-plugins-silero==1.5.0
 livekit-plugins-speechify==1.5.0
 livekit-plugins-cartesia==1.5.0
+livekit-plugins-inworld==1.5.0
+livekit-plugins-fishaudio==1.5.0
 livekit-plugins-turn-detector==1.5.0
+livekit-plugins-bithuman>=1.5.0,<1.6
 mcp>=1.14.0,<2.0.0
 
 # Voice/Audio Processing

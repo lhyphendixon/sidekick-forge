@@ -25,6 +25,47 @@ class ImageCatalystWidget extends BaseWidget {
         this.uploadedReferencePreview = null;
     }
 
+    /**
+     * Parse a fetch Response that should be JSON, but degrade gracefully when
+     * it isn't (e.g. nginx returns an HTML 504/502 page when the upstream
+     * Runware request times out). Always returns an object the caller can
+     * inspect via `data.success` / `data.error` etc.
+     */
+    static async _parseResponse(res, label) {
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        const text = await res.text();
+
+        if (ct.includes('application/json')) {
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                return {
+                    success: false,
+                    error: `Server returned malformed JSON (HTTP ${res.status}). ${e.message}`,
+                };
+            }
+        }
+
+        // Non-JSON response — almost always an HTML error page from nginx
+        // (504 Gateway Timeout, 502 Bad Gateway, 413, etc.) or a plain-text
+        // proxy error. Surface the status code so the user knows it's a
+        // gateway/timeout problem rather than blaming the widget.
+        let friendly;
+        if (res.status === 504) {
+            friendly = 'Image provider timed out (HTTP 504). The upstream model took too long to respond — please try again.';
+        } else if (res.status === 502) {
+            friendly = 'Bad gateway (HTTP 502). The image service is unreachable — please try again shortly.';
+        } else if (res.status === 413) {
+            friendly = 'Reference image is too large (HTTP 413). Please use a smaller file.';
+        } else if (res.status >= 500) {
+            friendly = `Server error during ${label} (HTTP ${res.status}). Please try again.`;
+        } else {
+            friendly = `Unexpected non-JSON response during ${label} (HTTP ${res.status}).`;
+        }
+
+        return { success: false, error: friendly };
+    }
+
     render(container) {
         super.render(container);
         this.element.className = 'ic-widget glass-container rounded-2xl overflow-hidden';
@@ -358,7 +399,7 @@ class ImageCatalystWidget extends BaseWidget {
                 body: JSON.stringify(body)
             });
 
-            const data = await res.json();
+            const data = await ImageCatalystWidget._parseResponse(res, 'generation');
             console.log('[ic-widget] Generation result:', data);
 
             if (data.success && data.image_url) {
@@ -585,7 +626,7 @@ class ImageCatalystWidget extends BaseWidget {
                 body: JSON.stringify(body)
             });
 
-            const data = await res.json();
+            const data = await ImageCatalystWidget._parseResponse(res, 'edit');
             console.log('[ic-widget] Edit result:', data);
 
             if (data.success && data.image_url) {

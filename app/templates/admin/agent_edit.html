@@ -109,6 +109,8 @@
                         <option value="cartesia" {% if agent.voice_settings.provider == "cartesia" %}selected{% endif %}>Cartesia</option>
                         <option value="deepgram" {% if agent.voice_settings.provider == "deepgram" %}selected{% endif %}>Deepgram</option>
                         <option value="speechify" {% if agent.voice_settings.provider == "speechify" %}selected{% endif %}>Speechify</option>
+                        <option value="inworld" {% if agent.voice_settings.provider == "inworld" %}selected{% endif %}>Inworld</option>
+                        <option value="fish_audio" {% if agent.voice_settings.provider == "fish_audio" %}selected{% endif %}>Fish Audio</option>
                     </select>
                 </div>
                 
@@ -130,8 +132,14 @@
                             <option value="sonic-2" {% if agent.voice_settings.model == 'sonic-2' %}selected{% endif %}>sonic-2</option>
                             <option value="sonic-3" {% if agent.voice_settings.model == 'sonic-3' %}selected{% endif %}>sonic-3</option>
                         </optgroup>
+                        <optgroup label="Inworld">
+                            <option value="inworld-tts-1" {% if agent.voice_settings.model == 'inworld-tts-1' %}selected{% endif %}>inworld-tts-1</option>
+                            <option value="inworld-tts-1-max" {% if agent.voice_settings.model == 'inworld-tts-1-max' %}selected{% endif %}>inworld-tts-1-max</option>
+                            <option value="inworld-tts-1.5-mini" {% if agent.voice_settings.model == 'inworld-tts-1.5-mini' %}selected{% endif %}>inworld-tts-1.5-mini</option>
+                            <option value="inworld-tts-1.5-max" {% if agent.voice_settings.model == 'inworld-tts-1.5-max' %}selected{% endif %}>inworld-tts-1.5-max</option>
+                        </optgroup>
                     </select>
-                    <p class="mt-1 text-xs text-gray-500">Required when provider is Cartesia. Choose an explicit model.</p>
+                    <p class="mt-1 text-xs text-gray-500">Required when provider is Cartesia or Inworld. Choose an explicit model.</p>
                 </div>
 
                 <!-- TTS Speed Control -->
@@ -146,6 +154,22 @@
                     </div>
                     <p class="mt-1 text-xs text-gray-500">
                         Speed multiplier: 0.6x (slow) to 1.5x (fast). Default is 1.0x (normal).
+                    </p>
+                </div>
+
+                <!-- Inworld TTS Voice Temperature (Inworld-only; stored in provider_config so it does not collide with LLM temperature) -->
+                <div id="inworldTemperatureContainer" class="hidden">
+                    <label class="block text-sm font-medium text-gray-700">Inworld Voice Temperature</label>
+                    {% set _inworld_temp = (agent.voice_settings.provider_config.temperature if agent.voice_settings.provider_config and agent.voice_settings.provider_config.get('temperature') is not none else 0.8) %}
+                    <div class="flex items-center gap-3 mt-1">
+                        <input type="range" id="inworldTemperature" min="0.0" max="2.0" step="0.05"
+                               value="{{ _inworld_temp }}"
+                               class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-brand-teal"
+                               oninput="document.getElementById('inworldTemperatureValue').textContent = parseFloat(this.value).toFixed(2)">
+                        <span id="inworldTemperatureValue" class="text-sm font-medium text-gray-700 w-12">{{ '%.2f' % _inworld_temp }}</span>
+                    </div>
+                    <p class="mt-1 text-xs text-gray-500">
+                        Controls Inworld TTS voice expressiveness/variation: 0.0 (flat, deterministic) – 2.0 (highly varied). Default 0.8. Independent of LLM temperature above.
                     </p>
                 </div>
 
@@ -193,26 +217,49 @@
                         <!-- Current model indicator -->
                         <div id="currentImxModel" class="mt-2 mb-3">
                             {% if agent.voice_settings.avatar_model_path and agent.voice_settings.avatar_model_path.startswith('supabase://') %}
-                            <div class="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-md">
-                                <svg class="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-                                </svg>
-                                <span class="text-sm text-green-700">IMX model uploaded</span>
-                                <span class="text-xs text-green-600 font-mono">{{ agent.voice_settings.avatar_model_path.split('/')[-1] }}</span>
+                            {% set imx_filename = agent.voice_settings.avatar_model_path.split('/')[-1] %}
+                            <div class="flex items-center gap-4 p-4 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg shadow-sm">
+                                <div class="flex-shrink-0 w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                                    <svg class="w-7 h-7 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/>
+                                    </svg>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-sm font-semibold text-green-800">Avatar Model Loaded</span>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">Active</span>
+                                    </div>
+                                    <p class="text-sm text-green-700 font-mono truncate mt-0.5" title="{{ imx_filename }}">{{ imx_filename }}</p>
+                                    <p class="text-xs text-green-600 mt-0.5">Stored in Supabase Storage</p>
+                                </div>
+                                <button type="button" onclick="document.getElementById('imxFileInput').click()" class="flex-shrink-0 text-xs text-green-600 hover:text-green-800 font-medium px-3 py-1.5 rounded-md hover:bg-green-100 transition-colors">
+                                    Replace
+                                </button>
                             </div>
                             {% elif agent.voice_settings.avatar_model_path %}
-                            <div class="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-                                <svg class="w-5 h-5 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
-                                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-                                </svg>
-                                <span class="text-sm text-yellow-700">Legacy path (needs upload): <span class="font-mono">{{ agent.voice_settings.avatar_model_path }}</span></span>
+                            <div class="flex items-center gap-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg shadow-sm">
+                                <div class="flex-shrink-0 w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
+                                    <svg class="w-7 h-7 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+                                    </svg>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <span class="text-sm font-semibold text-yellow-800">Legacy Model Path</span>
+                                    <p class="text-sm text-yellow-700 font-mono truncate mt-0.5">{{ agent.voice_settings.avatar_model_path }}</p>
+                                    <p class="text-xs text-yellow-600 mt-0.5">Re-upload to migrate to cloud storage</p>
+                                </div>
                             </div>
                             {% else %}
-                            <div class="flex items-center gap-2 p-3 bg-gray-50 border border-gray-200 rounded-md">
-                                <svg class="w-5 h-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                                    <path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clip-rule="evenodd"/>
-                                </svg>
-                                <span class="text-sm text-gray-500">No IMX model uploaded yet</span>
+                            <div class="flex items-center gap-4 p-4 bg-gray-50 border border-gray-200 border-dashed rounded-lg">
+                                <div class="flex-shrink-0 w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center">
+                                    <svg class="w-7 h-7 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/>
+                                    </svg>
+                                </div>
+                                <div class="flex-1">
+                                    <span class="text-sm font-medium text-gray-500">No avatar model uploaded</span>
+                                    <p class="text-xs text-gray-400 mt-0.5">Upload an .imx file below to enable the video avatar</p>
+                                </div>
                             </div>
                             {% endif %}
                         </div>
@@ -430,19 +477,29 @@ function updateTTSUI() {
     const provider = document.getElementById('voiceProvider').value;
     const ttsModelContainer = document.getElementById('ttsModelContainer');
     const ttsSpeedContainer = document.getElementById('ttsSpeedContainer');
+    const inworldTemperatureContainer = document.getElementById('inworldTemperatureContainer');
 
-    // Show TTS model selector for Cartesia
-    if (provider === 'cartesia') {
+    // Show TTS model selector for Cartesia and Inworld
+    if (provider === 'cartesia' || provider === 'inworld') {
         ttsModelContainer.classList.remove('hidden');
     } else {
         ttsModelContainer.classList.add('hidden');
     }
 
-    // Show TTS speed control for Cartesia (and potentially other providers)
-    if (provider === 'cartesia') {
+    // Show TTS speed control for Cartesia and Inworld
+    if (provider === 'cartesia' || provider === 'inworld') {
         ttsSpeedContainer.classList.remove('hidden');
     } else {
         ttsSpeedContainer.classList.add('hidden');
+    }
+
+    // Show Inworld voice temperature only for Inworld
+    if (inworldTemperatureContainer) {
+        if (provider === 'inworld') {
+            inworldTemperatureContainer.classList.remove('hidden');
+        } else {
+            inworldTemperatureContainer.classList.add('hidden');
+        }
     }
 
     updateCartesiaEmotionControls();
@@ -536,18 +593,37 @@ async function saveAgent() {
         avatar_id: document.getElementById('avatarId').value || null,
         liveavatar_avatar_id: document.getElementById('liveavatarAvatarId')?.value || null
     });
-    if (selectedProvider === 'cartesia') {
+    if (selectedProvider === 'cartesia' || selectedProvider === 'inworld') {
         mergedVoiceSettings.model = selectedModel || null;
-        // Get TTS speed value
+        // Get TTS speed value (shared slider for Cartesia and Inworld)
         const ttsSpeedEl = document.getElementById('ttsSpeed');
         if (ttsSpeedEl) {
             mergedVoiceSettings.tts_speed = parseFloat(ttsSpeedEl.value);
         }
-        // Dynamic emotion expression - agent chooses emotions based on context
-        const emotionToggle = document.getElementById('cartesiaEmotionsEnabled');
-        mergedVoiceSettings.cartesia_emotions_enabled = emotionToggle?.checked || false;
+
+        if (selectedProvider === 'cartesia') {
+            // Dynamic emotion expression - agent chooses emotions based on context
+            const emotionToggle = document.getElementById('cartesiaEmotionsEnabled');
+            mergedVoiceSettings.cartesia_emotions_enabled = emotionToggle?.checked || false;
+        } else {
+            mergedVoiceSettings.cartesia_emotions_enabled = false;
+        }
+
+        if (selectedProvider === 'inworld') {
+            // Inworld TTS-specific knobs live in provider_config so they don't collide with the
+            // shared voice_settings.temperature field used by some LLM providers (e.g. Groq).
+            // The agent worker reads provider_config.temperature first (entrypoint.py:473).
+            const inworldTempEl = document.getElementById('inworldTemperature');
+            const existingProviderConfig =
+                (existingVoiceSettings && existingVoiceSettings.provider_config) || {};
+            const nextProviderConfig = Object.assign({}, existingProviderConfig);
+            if (inworldTempEl) {
+                nextProviderConfig.temperature = parseFloat(inworldTempEl.value);
+            }
+            mergedVoiceSettings.provider_config = nextProviderConfig;
+        }
     } else {
-        // Clear model if switching away from Cartesia
+        // Clear TTS-model-bearing fields if switching away from Cartesia/Inworld
         mergedVoiceSettings.model = null;
         mergedVoiceSettings.cartesia_emotions_enabled = false;
     }
@@ -763,69 +839,92 @@ async function handleImxUpload(file) {
     uploadZone.style.opacity = '0.5';
     uploadZone.style.pointerEvents = 'none';
 
-    // Create FormData
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
+        // Step 1: Get TUS upload credentials from our server (small request)
+        statusText.textContent = 'Requesting upload credentials...';
+        const credResp = await fetch(`/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/upload-imx`, {
+            method: 'POST',
+        });
+        if (!credResp.ok) {
+            const err = await credResp.json().catch(() => ({}));
+            throw new Error(err.detail || `Server error (${credResp.status})`);
+        }
+        const creds = await credResp.json();
+        if (!creds.success || !creds.tus_endpoint) {
+            throw new Error('Failed to get upload credentials');
+        }
+
+        statusText.textContent = 'Starting upload...';
+
+        // Step 2: TUS resumable upload directly to Supabase (bypasses Cloudflare + 50MB limit)
+        const bucketB64 = btoa(creds.bucket_name);
+        const objectB64 = btoa(creds.object_name);
+        const ctypeB64 = btoa('application/octet-stream');
+
+        const createResp = await fetch(creds.tus_endpoint, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${creds.auth_token}`,
+                'apikey': creds.auth_token,
+                'x-upsert': 'true',
+                'upload-length': String(file.size),
+                'upload-metadata': `bucketName ${bucketB64},objectName ${objectB64},contentType ${ctypeB64}`,
+                'tus-resumable': '1.0.0',
+            },
+        });
+        if (!createResp.ok) {
+            const body = await createResp.text();
+            throw new Error(`Failed to create upload session (${createResp.status}): ${body}`);
+        }
+        const tusUrl = createResp.headers.get('location');
+        if (!tusUrl) throw new Error('No upload location returned');
+
+        statusText.textContent = 'Uploading to storage...';
+
         const xhr = new XMLHttpRequest();
-
-        // Track upload progress
-        xhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable) {
-                const percent = Math.round((e.loaded / e.total) * 100);
-                progressBar.style.width = percent + '%';
-                progressText.textContent = percent + '%';
-                statusText.textContent = percent < 100 ? 'Uploading...' : 'Processing...';
-            }
-        });
-
-        // Handle completion
-        xhr.addEventListener('load', () => {
-            progressContainer.classList.add('hidden');
-            uploadZone.style.opacity = '1';
-            uploadZone.style.pointerEvents = 'auto';
-
-            if (xhr.status === 200) {
-                const result = JSON.parse(xhr.responseText);
-                if (result.success) {
-                    // Update hidden field with storage path
-                    document.getElementById('avatarModelPath').value = result.storage_path;
-
-                    // Update the current model indicator
-                    updateImxModelIndicator(result.storage_path);
-
-                    showImxResult('success', 'IMX model uploaded successfully! Click "Save Changes" to apply.');
-                } else {
-                    showImxResult('error', result.message || 'Upload failed');
+        await new Promise((resolve, reject) => {
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    progressBar.style.width = pct + '%';
+                    progressText.textContent = pct + '%';
+                    statusText.textContent = `Uploading... ${(e.loaded / (1024*1024)).toFixed(1)} / ${(e.total / (1024*1024)).toFixed(1)} MB`;
                 }
-            } else {
-                let errorMsg = 'Upload failed';
-                try {
-                    const error = JSON.parse(xhr.responseText);
-                    errorMsg = error.detail || error.message || errorMsg;
-                } catch (e) {}
-                showImxResult('error', errorMsg);
-            }
+            });
+            xhr.addEventListener('load', () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve();
+                } else {
+                    let msg = `Upload failed (${xhr.status})`;
+                    try { const b = JSON.parse(xhr.responseText); msg = b.message || b.error || msg; } catch(e) {}
+                    reject(new Error(msg));
+                }
+            });
+            xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+            xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
+
+            xhr.open('PATCH', tusUrl);
+            xhr.setRequestHeader('Authorization', `Bearer ${creds.auth_token}`);
+            xhr.setRequestHeader('apikey', creds.auth_token);
+            xhr.setRequestHeader('tus-resumable', '1.0.0');
+            xhr.setRequestHeader('upload-offset', '0');
+            xhr.setRequestHeader('content-type', 'application/offset+octet-stream');
+            xhr.send(file);
         });
 
-        // Handle error
-        xhr.addEventListener('error', () => {
-            progressContainer.classList.add('hidden');
-            uploadZone.style.opacity = '1';
-            uploadZone.style.pointerEvents = 'auto';
-            showImxResult('error', 'Network error during upload');
-        });
-
-        // Send request
-        xhr.open('POST', `/api/v1/agents/client/{{ agent.client_id }}/{{ agent.slug }}/upload-imx`);
-        xhr.send(formData);
+        // Success
+        progressContainer.classList.add('hidden');
+        uploadZone.style.opacity = '1';
+        uploadZone.style.pointerEvents = 'auto';
+        document.getElementById('avatarModelPath').value = creds.storage_path;
+        updateImxModelIndicator(creds.storage_path);
+        showImxResult('success', 'IMX model uploaded successfully! Click "Save Changes" to apply.');
 
     } catch (error) {
         progressContainer.classList.add('hidden');
         uploadZone.style.opacity = '1';
         uploadZone.style.pointerEvents = 'auto';
-        showImxResult('error', 'Error: ' + error.message);
+        showImxResult('error', error.message || 'Upload failed');
     }
 }
 
@@ -859,12 +958,23 @@ function updateImxModelIndicator(storagePath) {
     const filename = storagePath.split('/').pop() || 'model.imx';
 
     container.innerHTML = `
-        <div class="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-md">
-            <svg class="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-            </svg>
-            <span class="text-sm text-green-700">IMX model uploaded</span>
-            <span class="text-xs text-green-600 font-mono">${filename}</span>
+        <div class="flex items-center gap-4 p-4 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg shadow-sm">
+            <div class="flex-shrink-0 w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                <svg class="w-7 h-7 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/>
+                </svg>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-sm font-semibold text-green-800">Avatar Model Loaded</span>
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">Active</span>
+                </div>
+                <p class="text-sm text-green-700 font-mono truncate mt-0.5" title="${filename}">${filename}</p>
+                <p class="text-xs text-green-600 mt-0.5">Stored in Supabase Storage</p>
+            </div>
+            <button type="button" onclick="document.getElementById('imxFileInput').click()" class="flex-shrink-0 text-xs text-green-600 hover:text-green-800 font-medium px-3 py-1.5 rounded-md hover:bg-green-100 transition-colors">
+                Replace
+            </button>
         </div>
     `;
 }

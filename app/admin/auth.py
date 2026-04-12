@@ -353,9 +353,53 @@ async def get_admin_user(request: Request) -> Dict[str, Any]:
                             if client_tier == 'paragon' or max_sk is None:
                                 can_create = True
                             else:
-                                # Count completed wizard sessions as proxy for agent count
-                                count_result = admin_client.table('sidekick_wizard_sessions').select('id', count='exact').eq('client_id', client_ids_to_check[0]).eq('status', 'completed').execute()
-                                current_count = count_result.count if hasattr(count_result, 'count') and count_result.count is not None else len(count_result.data or [])
+                                # Count agents that actually still exist for this client.
+                                # The agents table on shared-tier DBs has no client_id
+                                # column, so we use the wizard session as a join: get all
+                                # completed sessions for this client and check which of
+                                # their stored agent_ids still resolve to a real row.
+                                # This correctly handles agent deletion (a stale wizard
+                                # session no longer counts against the limit).
+                                current_count = 0
+                                try:
+                                    sessions_result = (
+                                        admin_client.table('sidekick_wizard_sessions')
+                                        .select('agent_id')
+                                        .eq('client_id', client_ids_to_check[0])
+                                        .eq('status', 'completed')
+                                        .execute()
+                                    )
+                                    session_agent_ids = [
+                                        row['agent_id']
+                                        for row in (sessions_result.data or [])
+                                        if row.get('agent_id')
+                                    ]
+                                    if session_agent_ids:
+                                        existing_result = (
+                                            admin_client.table('agents')
+                                            .select('id')
+                                            .in_('id', session_agent_ids)
+                                            .execute()
+                                        )
+                                        current_count = len(existing_result.data or [])
+                                except Exception as count_err:
+                                    logger.warning(
+                                        f"Failed to count live agents for client "
+                                        f"{client_ids_to_check[0]}: {count_err}"
+                                    )
+                                    # Fall back to raw session count so we don't fail open
+                                    fallback_result = (
+                                        admin_client.table('sidekick_wizard_sessions')
+                                        .select('id', count='exact')
+                                        .eq('client_id', client_ids_to_check[0])
+                                        .eq('status', 'completed')
+                                        .execute()
+                                    )
+                                    current_count = (
+                                        fallback_result.count
+                                        if hasattr(fallback_result, 'count') and fallback_result.count is not None
+                                        else len(fallback_result.data or [])
+                                    )
                                 can_create = current_count < (max_sk or 0)
                 except Exception as tier_err:
                     logger.warning(f"Failed to check tier for can_create_sidekick: {tier_err}")

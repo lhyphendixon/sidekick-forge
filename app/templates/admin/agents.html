@@ -286,6 +286,8 @@
                                 <option value="cartesia">Cartesia</option>
                                 <option value="deepgram">Deepgram</option>
                                 <option value="speechify">Speechify</option>
+                                <option value="inworld">Inworld</option>
+                                <option value="fish_audio">Fish Audio</option>
                             </select>
                         </div>
                         
@@ -319,8 +321,14 @@
                                     <option value="sonic-2">sonic-2</option>
                                     <option value="sonic-3">sonic-3</option>
                                 </optgroup>
+                                <optgroup label="Inworld">
+                                    <option value="inworld-tts-1">inworld-tts-1</option>
+                                    <option value="inworld-tts-1-max">inworld-tts-1-max</option>
+                                    <option value="inworld-tts-1.5-mini">inworld-tts-1.5-mini</option>
+                                    <option value="inworld-tts-1.5-max">inworld-tts-1.5-max</option>
+                                </optgroup>
                             </select>
-                            <p class="text-xs text-gray-500 mt-1">Cartesia requires an explicit model.</p>
+                            <p class="text-xs text-gray-500 mt-1">Cartesia and Inworld require an explicit model.</p>
                         </div>
 
                         <div id="cartesiaEmotionsContainer" class="hidden md:col-span-2 border border-gray-200 rounded-md bg-gray-50 p-4">
@@ -826,7 +834,7 @@ function updateAddAgentTTSUI() {
     const ttsModelContainer = document.getElementById('ttsModelContainer');
     const emotionsContainer = document.getElementById('cartesiaEmotionsContainer');
     if (!ttsModelContainer || !emotionsContainer) return;
-    ttsModelContainer.classList.toggle('hidden', provider !== 'cartesia');
+    ttsModelContainer.classList.toggle('hidden', provider !== 'cartesia' && provider !== 'inworld');
     // Show emotion toggle for Cartesia sonic models
     const shouldShowEmotions = provider === 'cartesia' && (model === 'sonic-3' || model?.startsWith('sonic'));
     emotionsContainer.classList.toggle('hidden', !shouldShowEmotions);
@@ -864,6 +872,13 @@ async function addAgent() {
         // Dynamic emotion expression - agent chooses emotions based on context
         const emotionsToggle = document.getElementById('cartesiaEmotionsEnabled');
         agentData.voice_settings.cartesia_emotions_enabled = emotionsToggle?.checked || false;
+    } else if (agentData.voice_settings.provider === 'inworld') {
+        const selectedModel = document.getElementById('ttsModel')?.value || 'inworld-tts-1.5-max';
+        agentData.voice_settings.model = selectedModel;
+        // Default voice if user left the placeholder "alloy" in
+        if (!agentData.voice_settings.voice_id || agentData.voice_settings.voice_id === 'alloy') {
+            agentData.voice_settings.voice_id = 'Ashley';
+        }
     }
     
     try {

@@ -156,6 +156,16 @@ class ClientService:
                 client_dict["cartesia_api_key"] = api_keys.cartesia_api_key
             if api_keys.speechify_api_key:
                 client_dict["speechify_api_key"] = api_keys.speechify_api_key
+            if api_keys.inworld_api_key:
+                client_dict["inworld_api_key"] = api_keys.inworld_api_key
+            if api_keys.fish_audio_api_key:
+                client_dict["fish_audio_api_key"] = api_keys.fish_audio_api_key
+            if api_keys.bithuman_api_secret:
+                client_dict["bithuman_api_secret"] = api_keys.bithuman_api_secret
+            if api_keys.bey_api_key:
+                client_dict["bey_api_key"] = api_keys.bey_api_key
+            if api_keys.liveavatar_api_key:
+                client_dict["liveavatar_api_key"] = api_keys.liveavatar_api_key
             if api_keys.novita_api_key:
                 client_dict["novita_api_key"] = api_keys.novita_api_key
             if api_keys.cohere_api_key:
@@ -266,6 +276,16 @@ class ClientService:
                     update_dict["cartesia_api_key"] = api_keys.cartesia_api_key
                 if api_keys.speechify_api_key is not None:
                     update_dict["speechify_api_key"] = api_keys.speechify_api_key
+                if api_keys.inworld_api_key is not None:
+                    update_dict["inworld_api_key"] = api_keys.inworld_api_key
+                if api_keys.fish_audio_api_key is not None:
+                    update_dict["fish_audio_api_key"] = api_keys.fish_audio_api_key
+                if api_keys.bithuman_api_secret is not None:
+                    update_dict["bithuman_api_secret"] = api_keys.bithuman_api_secret
+                if api_keys.bey_api_key is not None:
+                    update_dict["bey_api_key"] = api_keys.bey_api_key
+                if api_keys.liveavatar_api_key is not None:
+                    update_dict["liveavatar_api_key"] = api_keys.liveavatar_api_key
                 if api_keys.novita_api_key is not None:
                     update_dict["novita_api_key"] = api_keys.novita_api_key
                 if api_keys.cohere_api_key is not None:
@@ -387,9 +407,9 @@ class ClientService:
                     },
                     "api_keys": {},
                     "embedding": {
-                        "provider": "novita",
-                        "document_model": "Qwen/Qwen2.5-72B-Instruct",
-                        "conversation_model": "Qwen/Qwen2.5-72B-Instruct"
+                        "provider": "siliconflow",
+                        "document_model": "Qwen/Qwen3-Embedding-4B",
+                        "conversation_model": "Qwen/Qwen3-Embedding-4B"
                     },
                     "rerank": {
                         "enabled": False,
@@ -419,9 +439,9 @@ class ClientService:
                     },
                     "api_keys": {},
                     "embedding": {
-                        "provider": "novita",
-                        "document_model": "Qwen/Qwen2.5-72B-Instruct",
-                        "conversation_model": "Qwen/Qwen2.5-72B-Instruct"
+                        "provider": "siliconflow",
+                        "document_model": "Qwen/Qwen3-Embedding-4B",
+                        "conversation_model": "Qwen/Qwen3-Embedding-4B"
                     },
                     "rerank": {
                         "enabled": False,
@@ -587,7 +607,7 @@ class ClientService:
                     # Only update if the key exists in global_settings and has a non-empty value
                     api_key_mappings = [
                         'openai_api_key', 'groq_api_key', 'deepinfra_api_key', 'replicate_api_key',
-                        'deepgram_api_key', 'elevenlabs_api_key', 'cartesia_api_key', 'speechify_api_key',
+                        'deepgram_api_key', 'elevenlabs_api_key', 'cartesia_api_key', 'speechify_api_key', 'inworld_api_key',
                         'novita_api_key', 'cohere_api_key', 'siliconflow_api_key', 'jina_api_key'
                     ]
                     
@@ -595,13 +615,16 @@ class ClientService:
                         if key in global_settings_dict and global_settings_dict[key]:
                             settings["api_keys"][key] = global_settings_dict[key]
                     
-                    # Extract embedding settings
+                    # Extract embedding settings. Defaults are the platform
+                    # canonical model (siliconflow Qwen3-Embedding-4B) — must
+                    # stay in sync with EmbeddingSettings, AIProcessor, and
+                    # provisioning_worker.
                     settings["embedding"] = {
-                        "provider": global_settings_dict.get('embedding_provider', 'openai'),
-                        "document_model": global_settings_dict.get('embedding_model_documents', 'text-embedding-3-small'),
-                        "conversation_model": global_settings_dict.get('embedding_model_conversations', 'text-embedding-3-small')
+                        "provider": global_settings_dict.get('embedding_provider', 'siliconflow'),
+                        "document_model": global_settings_dict.get('embedding_model_documents', 'Qwen/Qwen3-Embedding-4B'),
+                        "conversation_model": global_settings_dict.get('embedding_model_conversations', 'Qwen/Qwen3-Embedding-4B')
                     }
-                    
+
                     # Extract rerank settings
                     settings["rerank"] = {
                         "enabled": global_settings_dict.get('rerank_enabled', 'false').lower() == 'true',
@@ -610,15 +633,15 @@ class ClientService:
                         "top_k": int(global_settings_dict.get('rerank_top_k', '3')),
                         "candidates": int(global_settings_dict.get('rerank_candidates', '20'))
                     }
-                    
+
                 except Exception as e:
                     # Log but don't fail if global_settings fetch fails
                     print(f"Failed to fetch global_settings: {e}")
-                    # Use defaults
+                    # Use platform canonical defaults (must match EmbeddingSettings)
                     settings["embedding"] = {
-                        "provider": "openai",
-                        "document_model": "text-embedding-3-small",
-                        "conversation_model": "text-embedding-3-small"
+                        "provider": "siliconflow",
+                        "document_model": "Qwen/Qwen3-Embedding-4B",
+                        "conversation_model": "Qwen/Qwen3-Embedding-4B"
                     }
                     settings["rerank"] = {
                         "enabled": False,
@@ -678,8 +701,9 @@ class ClientService:
         api_key_fields = [
             "openai_api_key", "groq_api_key", "deepgram_api_key", "elevenlabs_api_key",
             "cartesia_api_key", "replicate_api_key", "deepinfra_api_key", "cerebras_api_key",
-            "novita_api_key", "cohere_api_key", "siliconflow_api_key", "jina_api_key", "speechify_api_key",
-            "perplexity_api_key"
+            "novita_api_key", "cohere_api_key", "siliconflow_api_key", "jina_api_key", "speechify_api_key", "inworld_api_key",
+            "fish_audio_api_key", "perplexity_api_key",
+            "bithuman_api_secret", "bey_api_key", "liveavatar_api_key"
         ]
         for key_field in api_key_fields:
             if key_field in db_row and db_row[key_field]:

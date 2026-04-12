@@ -846,7 +846,7 @@
     })();
   </script>
   {% endif %}
-  <link rel="stylesheet" href="/static/css/citations.css?v=20260210a">
+  <link rel="stylesheet" href="/static/css/citations.css?v=20260409-glass">
   <link rel="stylesheet" href="/static/css/widgets.css?v=20260326a">
   <link rel="stylesheet" href="/static/css/kenburns.css?v=20260206d">
   <script src="/static/js/citations.js?v=20260210a"></script>
@@ -1043,16 +1043,6 @@
 
             <!-- Voice Session Active Area -->
             <div id="voiceTranscriptList" class="w-full flex-1 overflow-y-auto p-4 space-y-4 min-h-0 hidden"></div>
-            <div id="agentSpeakingIndicator" class="hidden mb-2">
-              <div class="flex items-center gap-2 text-dark-text-secondary text-sm">
-                <span>Agent speaking</span>
-                <div class="flex space-x-1">
-                  <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:0ms"></div>
-                  <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:150ms"></div>
-                  <div class="w-2 h-2 bg-brand-teal rounded-full animate-bounce" style="animation-delay:300ms"></div>
-                </div>
-              </div>
-            </div>
             <div id="voiceStatus" class="text-xs text-dark-text-secondary text-center"></div>
           </div>
           <!-- Voice History Button -->
@@ -2660,6 +2650,16 @@ function clearVoiceTranscriptError(){
         videoBtn.classList.add('active');
         panelVideo.classList.remove('hidden');
       }
+
+      // Cancel any active prewarm worker when switching away from text.
+      // The prewarm holds the single LiveKit worker slot and blocks
+      // voice/video dispatches from being picked up.
+      if (t !== 'text' && window.__prewarmRoomName) {
+        const roomToDelete = window.__prewarmRoomName;
+        window.__prewarmRoomName = null;
+        console.log('[prewarm] cancelling prewarm worker (switching to ' + t + '), room:', roomToDelete);
+        fetch('/api/v1/room/' + encodeURIComponent(roomToDelete), { method: 'DELETE' }).catch(() => {});
+      }
     }
 
     function showDisabledModeTooltip(mode) {
@@ -3746,7 +3746,6 @@ function clearVoiceTranscriptError(){
       const status = document.getElementById('voiceStatus');
       const startBtn = document.getElementById('voiceStartBtn');
       const endBtn = document.getElementById('voiceEndBtn');
-      const indicator = document.getElementById('agentSpeakingIndicator');
 
       if (!sessionInfo || !sessionInfo.server || !sessionInfo.token) {
         throw new Error('connectLivekit missing session info');
@@ -4116,7 +4115,17 @@ function clearVoiceTranscriptError(){
               });
               // LiveKit sends segments array - combine them into transcript
               if (segments && segments.length > 0) {
-                const text = segments.map(s => s.text || '').join(' ').trim();
+                let text = segments.map(s => s.text || '').join(' ').trim();
+                // Strip TTS emotion tags (Fish Audio [emotion], (emotion); Cartesia SSML)
+                // so they never appear in the live transcript UI.
+                // Use [ \t]* (not \s*) after tags to preserve line breaks.
+                text = text
+                  .replace(/<emotion\s+value="[^"]*"\s*\/?>/g, '')
+                  .replace(/<\/emotion>/g, '')
+                  .replace(/\([a-z]+(?:\s[a-z]+){0,3}\)[ \t]*/g, '')
+                  .replace(/\[[a-z]+(?:\s[a-z]+){0,3}\][ \t]*/g, '')
+                  .replace(/[ \t]{2,}/g, ' ')
+                  .trim();
                 const isFinal = segments.some(s => s.final);
                 const segmentId = segments[0]?.id || `lk-${Date.now()}`;
                 // Use first segment ID as a per-speech key for interim bubble IDs.
@@ -4138,16 +4147,20 @@ function clearVoiceTranscriptError(){
                   }
                   _lastInterimRole = role;
 
+                  // Sound handling:
+                  // - Start thinking sound when user's final transcript arrives.
+                  // - Stop thinking sound on the FIRST assistant transcript (interim
+                  //   OR final), since that is the earliest signal the agent has begun
+                  //   responding. Waiting for `isFinal` causes overlap with TTS providers
+                  //   like Inworld where audio playback begins seconds before the
+                  //   assistant transcript flips to final.
+                  if (role === 'assistant') {
+                    stopThinkingSound();
+                  } else if (role === 'user' && isFinal) {
+                    playThinkingSound();
+                  }
+
                   if (isFinal) {
-                    // Sound handling: When user finishes speaking, start thinking sound
-                    // When assistant starts responding, stop thinking sound
-                    if (role === 'user') {
-                      // User finished speaking - agent will start thinking
-                      playThinkingSound();
-                    } else if (role === 'assistant') {
-                      // Agent is responding - stop thinking sound
-                      stopThinkingSound();
-                    }
 
                     // Check if this speech's final bubble already exists (subsequent
                     // events for the same speech add more final segments)
@@ -4226,8 +4239,16 @@ function clearVoiceTranscriptError(){
               const role = isAgent ? 'assistant' : 'user';
 
               // readAll waits for the stream to close, then returns full text
-              const text = await reader.readAll();
+              let text = await reader.readAll();
               if (!text || !text.trim()) return;
+              // Strip TTS emotion tags (preserve line breaks with [ \t]* not \s*)
+              text = text
+                .replace(/<emotion\s+value="[^"]*"\s*\/?>/g, '')
+                .replace(/<\/emotion>/g, '')
+                .replace(/\([a-z]+(?:\s[a-z]+){0,3}\)[ \t]*/g, '')
+                .replace(/\[[a-z]+(?:\s[a-z]+){0,3}\][ \t]*/g, '')
+                .replace(/[ \t]{2,}/g, ' ')
+                .trim();
 
               console.log('[voice] TextStream lk.transcription', {
                 role, isFinal, segmentId: segmentId?.slice(0, 8), len: text.length
@@ -4308,7 +4329,6 @@ function clearVoiceTranscriptError(){
         roomConn.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
           try {
             const anyAgentSpeaking = (speakers||[]).some(s => String(s.identity||'').toLowerCase().includes('agent') && (s.audioLevel||0) > 0);
-            if (indicator){ indicator.classList.toggle('hidden', !anyAgentSpeaking); }
             if (anyAgentSpeaking) {
               attachExistingRemoteAudio(roomConn);
             }
@@ -4794,6 +4814,15 @@ function clearVoiceTranscriptError(){
           } else if (data.type === 'model_ready') {
             // Model is ready - hide the loader and show video
             hideVideoModelLoader();
+          } else if (data.type === 'model_error') {
+            // Avatar model failed to load - show error to user
+            console.error('[video] Model error:', data.message);
+            hideVideoModelLoader();
+            const status = document.getElementById('videoStatus');
+            if (status) {
+              status.textContent = data.message || 'Avatar failed to load. Please check your API key configuration.';
+              status.style.color = '#ef4444';
+            }
           } else if (data.type === 'kenburns_image') {
             // Ken Burns image received - display it
             console.log('[video] Ken Burns image received:', data.data?.image_url?.substring(0, 60));
@@ -5440,9 +5469,17 @@ function clearVoiceTranscriptError(){
           // Phase 3: Pre-warm a worker for the first message. This dispatches
           // a worker that initializes context and idles waiting for input.
           // First message response then takes ~1-2s instead of ~10s.
-          triggerPrewarm().catch(err => {
-            console.warn('[prewarm] background prewarm failed (non-fatal):', err);
-          });
+          // Only prewarm when the text tab is active — prewarm holds the single
+          // worker slot and blocks voice/video dispatches from being picked up.
+          const activeTabBtn = document.querySelector('.mode-toggle-btn.active');
+          const activeTabId = activeTabBtn ? activeTabBtn.id : '';
+          if (activeTabId === 'tab-text') {
+            triggerPrewarm().catch(err => {
+              console.warn('[prewarm] background prewarm failed (non-fatal):', err);
+            });
+          } else {
+            console.log('[prewarm] skipped — active tab is not text (' + activeTabId + ')');
+          }
         } catch (err) {
           console.error('[init] Background init failed:', err);
         }

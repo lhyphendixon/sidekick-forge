@@ -49,10 +49,22 @@ class APIKeyLoader:
                 else:
                     logger.warning(f"Failed to load API keys from Supabase for client {client_id}")
 
-        # If no keys yet, try metadata (secondary source)
-        if not api_keys and metadata.get('api_keys'):
-            logger.info("Loading API keys from metadata (secondary source)")
-            api_keys = metadata['api_keys']
+        # Merge metadata-supplied keys ON TOP of the loaded set. Metadata
+        # represents an explicit per-job override (e.g. the wizard injects
+        # Farah's required Inworld key from the Autonomite tenant regardless
+        # of which tenant the wizard user belongs to). Treating metadata only
+        # as a fallback would silently drop those overrides whenever the
+        # primary load returned ANY keys at all.
+        metadata_keys = metadata.get('api_keys') or {}
+        if metadata_keys:
+            overlapping = [k for k in metadata_keys if k in api_keys and api_keys[k] != metadata_keys[k]]
+            new_only = [k for k in metadata_keys if k not in api_keys]
+            if new_only or overlapping:
+                logger.info(
+                    f"Merging {len(metadata_keys)} metadata-supplied API keys "
+                    f"(new={new_only}, overrides={overlapping})"
+                )
+            api_keys = {**api_keys, **{k: v for k, v in metadata_keys.items() if v}}
             
         # NO ENVIRONMENT VARIABLE FALLBACK - This violates the Dynamic API Key Loading Policy
         # Environment variables should only be used for initial bootstrap (Supabase connection)
@@ -181,6 +193,12 @@ class APIKeyLoader:
                 'elevenlabs_api_key',
                 'cartesia_api_key',
                 'speechify_api_key',
+                'inworld_api_key',
+                'fish_audio_api_key',
+                # Avatar/Video providers
+                'bithuman_api_secret',
+                'bey_api_key',
+                'liveavatar_api_key',
                 # Embedding/rerank providers
                 'novita_api_key',
                 'cohere_api_key',

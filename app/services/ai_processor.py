@@ -15,18 +15,30 @@ logger = logging.getLogger(__name__)
 
 
 class AIProcessor:
-    """Handles AI processing tasks including embedding generation"""
-    
+    """Handles AI processing tasks including embedding generation.
+
+    All defaults here MUST match the platform canonical embedding model
+    (siliconflow / Qwen3-Embedding-4B / 1024 dim). Any other default produces
+    a different vector space and causes silent RAG failures: chunks ingested
+    with one model become unsearchable by queries embedded with another.
+    """
+
+    # Platform canonical embedding defaults — keep in sync with
+    # app/models/client.py EmbeddingSettings and provisioning_worker.
+    DEFAULT_EMBEDDING_PROVIDER = 'siliconflow'
+    DEFAULT_EMBEDDING_MODEL = 'Qwen/Qwen3-Embedding-4B'
+    DEFAULT_EMBEDDING_DIMENSION = 1024
+
     def __init__(self):
         self.default_embedding_models = {
-            'document': 'text-embedding-3-small',  # OpenAI model for documents
-            'conversation': 'text-embedding-3-small',  # OpenAI model for conversations
+            'document': self.DEFAULT_EMBEDDING_MODEL,
+            'conversation': self.DEFAULT_EMBEDDING_MODEL,
         }
         self.http_client = httpx.AsyncClient(timeout=30.0)
-    
+
     async def generate_embeddings(
-        self, 
-        text: str, 
+        self,
+        text: str,
         context: str = 'document',
         client_settings: Optional[Dict] = None
     ) -> Optional[List[float]]:
@@ -34,23 +46,33 @@ class AIProcessor:
         try:
             if not text or not text.strip():
                 return None
-            
+
             # Get embedding configuration from client settings
             if client_settings:
-                embedding_config = client_settings.get('embedding', {})
-                provider = embedding_config.get('provider', 'openai')
+                embedding_config = client_settings.get('embedding') or {}
+                provider = embedding_config.get('provider') or self.DEFAULT_EMBEDDING_PROVIDER
                 if context == 'document':
-                    model = embedding_config.get('document_model', 'text-embedding-3-small')
+                    model = embedding_config.get('document_model') or self.DEFAULT_EMBEDDING_MODEL
                 else:
-                    model = embedding_config.get('conversation_model', 'text-embedding-3-small')
-                dimension = embedding_config.get('dimension', None)
+                    model = embedding_config.get('conversation_model') or self.DEFAULT_EMBEDDING_MODEL
+                dimension = embedding_config.get('dimension') or self.DEFAULT_EMBEDDING_DIMENSION
                 api_keys = client_settings.get('api_keys', {})
+                if not embedding_config or not embedding_config.get('provider'):
+                    logger.warning(
+                        f"AIProcessor: client_settings has no embedding config; "
+                        f"using platform defaults ({self.DEFAULT_EMBEDDING_PROVIDER}/{self.DEFAULT_EMBEDDING_MODEL})"
+                    )
             else:
-                provider = 'openai'
-                model = self.default_embedding_models.get(context, 'text-embedding-3-small')
-                dimension = None
+                logger.warning(
+                    "AIProcessor: no client_settings provided; using platform defaults "
+                    f"({self.DEFAULT_EMBEDDING_PROVIDER}/{self.DEFAULT_EMBEDDING_MODEL}). "
+                    "This usually indicates a code path that forgot to pass client config."
+                )
+                provider = self.DEFAULT_EMBEDDING_PROVIDER
+                model = self.DEFAULT_EMBEDDING_MODEL
+                dimension = self.DEFAULT_EMBEDDING_DIMENSION
                 api_keys = {}
-            
+
             logger.info(f"Generating embeddings with provider={provider}, model={model}, context={context}")
             
             def require_key(name: str) -> Optional[str]:
@@ -250,11 +272,15 @@ class AIProcessor:
                 api_key = await self._get_api_key_from_settings('novita_api_key', client_settings)
             
             if not api_key:
-                logger.error(f"No Novita API key available. API keys provided: {list(api_keys.keys())}")
-                # Try to fall back to OpenAI if available
-                if api_keys.get('openai_api_key'):
-                    logger.warning("Falling back to OpenAI embeddings due to missing Novita key")
-                    return await self._generate_openai_embeddings(text, 'text-embedding-3-small', api_keys)
+                # NO FALLBACK POLICY: do not silently swap providers. Different
+                # providers/models live in different vector spaces and the swap
+                # produces silent RAG failures (chunks ingested with one model
+                # become unsearchable by queries from another). Fail loud.
+                logger.error(
+                    f"No Novita API key available. API keys provided: {list(api_keys.keys())}. "
+                    f"Refusing to fall back to a different provider — this would create "
+                    f"a vector-space mismatch with existing chunks."
+                )
                 return None
             
             headers = {
@@ -308,11 +334,12 @@ class AIProcessor:
                     logger.info(f"[DEBUG] api_key after _get_api_key_from_settings: {api_key[:10] if api_key else 'None'}...")
                 
                 if not api_key:
-                    logger.error(f"No SiliconFlow API key available. API keys provided: {list(api_keys.keys())}")
-                    # Try to fall back to OpenAI if available
-                    if api_keys.get('openai_api_key'):
-                        logger.warning("Falling back to OpenAI embeddings due to missing SiliconFlow key")
-                        return await self._generate_openai_embeddings(text, 'text-embedding-3-small', api_keys)
+                    # NO FALLBACK POLICY: do not silently swap providers.
+                    # See note in _generate_novita_embeddings for rationale.
+                    logger.error(
+                        f"No SiliconFlow API key available. API keys provided: {list(api_keys.keys())}. "
+                        f"Refusing to fall back to OpenAI — vector spaces are incompatible."
+                    )
                     return None
                 
                 # Log the API key (masked for security)
@@ -360,13 +387,11 @@ class AIProcessor:
                 logger.error(f"SiliconFlow embedding error: {str(e)}")
                 logger.error(f"SiliconFlow traceback: {traceback.format_exc()}")
 
-                # Best-effort fallback: if SiliconFlow is unreachable and an OpenAI key is
-                # available in the same settings, try a small OpenAI model so we can keep
-                # the pipeline moving rather than stalling the backfill.
-                if api_keys.get('openai_api_key'):
-                    logger.warning("Falling back to OpenAI embeddings after SiliconFlow failure")
-                    return await self._generate_openai_embeddings(text, "text-embedding-3-small", api_keys)
-
+                # NO FALLBACK POLICY: do not swap to OpenAI on SiliconFlow
+                # failures. The two providers produce vectors in incompatible
+                # spaces, and silently substituting OpenAI here was the cause
+                # of "RAG returns nothing" mysteries during backfills. Let the
+                # caller observe the failure and retry/alert appropriately.
                 return None
     
     async def close(self):

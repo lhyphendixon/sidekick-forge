@@ -3245,6 +3245,8 @@ async def agent_detail(
             cartesia_model = voice_settings.get('model', 'sonic-english') if tts_provider == 'cartesia' else 'sonic-english'
             elevenlabs_voice_id = voice_settings.get('voice_id', '') if tts_provider == 'elevenlabs' else provider_config.get('elevenlabs_voice_id', '')
             speechify_voice_id = voice_settings.get('voice_id', 'jack') if tts_provider == 'speechify' else provider_config.get('speechify_voice_id', 'jack')
+            inworld_voice_id = voice_settings.get('voice_id', 'Ashley') if tts_provider == 'inworld' else provider_config.get('inworld_voice_id', 'Ashley')
+            inworld_model = voice_settings.get('model', 'inworld-tts-1.5-max') if tts_provider == 'inworld' else 'inworld-tts-1.5-max'
             
             # Escape any problematic characters
             agent_name = str(agent_name_raw).replace('"', '&quot;')
@@ -3513,6 +3515,7 @@ async def agent_detail(
                                             <option value="cartesia">Cartesia</option>
                                             <option value="replicate">Replicate</option>
                                             <option value="speechify">Speechify</option>
+                                            <option value="inworld">Inworld</option>
                                         </select>
                                     </div>
                                 </div>
@@ -3624,6 +3627,28 @@ async def agent_detail(
                                                 <input type="checkbox" name="speechify_text_normalization" class="text-blue-600 focus:ring-blue-500">
                                                 <span class="text-white">Enable Text Normalization</span>
                                             </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Inworld TTS Settings -->
+                                <div id="tts-inworld" class="provider-section">
+                                    <h3 class="text-lg font-semibold text-white mb-3">Inworld TTS Settings</h3>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Voice</label>
+                                            <input type="text" name="inworld_voice_id" value="{inworld_voice_id}" placeholder="Ashley" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                            <p class="text-xs text-gray-400 mt-1">Inworld voice name (e.g. Ashley, Hades, Edward).</p>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
+                                            <select name="inworld_model" class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:ring-blue-500 focus:border-blue-500">
+                                                <option value="inworld-tts-1" {"selected" if inworld_model == "inworld-tts-1" else ""}>inworld-tts-1</option>
+                                                <option value="inworld-tts-1-max" {"selected" if inworld_model == "inworld-tts-1-max" else ""}>inworld-tts-1-max</option>
+                                                <option value="inworld-tts-1.5-mini" {"selected" if inworld_model == "inworld-tts-1.5-mini" else ""}>inworld-tts-1.5-mini</option>
+                                                <option value="inworld-tts-1.5-max" {"selected" if inworld_model == "inworld-tts-1.5-max" else ""}>inworld-tts-1.5-max</option>
+                                            </select>
+                                            <p class="text-xs text-gray-400 mt-1">Default: inworld-tts-1.5-max</p>
                                         </div>
                                     </div>
                                 </div>
@@ -5427,6 +5452,56 @@ async def upload_agent_image(
     }
 
 
+@router.post("/agents/{client_id}/{agent_slug}/upload-imx")
+async def get_imx_upload_credentials(
+    client_id: str,
+    agent_slug: str,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Return Supabase TUS upload credentials so the browser can do a
+    resumable upload directly to Supabase Storage, bypassing both the
+    Cloudflare proxy limit and the Supabase 50 MB standard upload cap."""
+
+    ensure_client_or_global_access(client_id, admin_user)
+
+    from app.core.dependencies import get_client_service
+    client_service = get_client_service()
+    client_sb = await client_service.get_client_supabase_client(client_id, auto_sync=False)
+    if not client_sb:
+        raise HTTPException(status_code=500, detail="Could not connect to client Supabase project")
+
+    bucket_name = "avatars"
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    unique_id = uuid.uuid4().hex[:8]
+    storage_file = f"imx/{client_id}/{agent_slug}_{timestamp}_{unique_id}.imx"
+
+    try:
+        # Ensure bucket exists with a 500 MB file size limit for IMX models
+        bucket_opts = {"public": False, "file_size_limit": "500MB"}
+        try:
+            client_sb.storage.create_bucket(bucket_name, options=bucket_opts)
+        except Exception:
+            # Bucket already exists — update its file size limit
+            try:
+                client_sb.storage.update_bucket(bucket_name, options=bucket_opts)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    storage_path = f"supabase://{bucket_name}/{storage_file}"
+    logger.info("Created TUS upload credentials for %s/%s -> %s", client_id, agent_slug, storage_path)
+
+    return {
+        "success": True,
+        "tus_endpoint": f"{client_sb.supabase_url}/storage/v1/upload/resumable",
+        "auth_token": client_sb.supabase_key,
+        "bucket_name": bucket_name,
+        "object_name": storage_file,
+        "storage_path": storage_path,
+    }
+
+
 @router.post("/api/upload-avatar")
 async def upload_avatar_image(
     request: Request,
@@ -5715,6 +5790,8 @@ async def admin_update_agent(
                 "elevenlabs": "elevenlabs_api_key",
                 "cartesia": "cartesia_api_key",
                 "speechify": "speechify_api_key",
+                "inworld": "inworld_api_key",
+                "fish_audio": "fish_audio_api_key",
                 "replicate": "replicate_api_key"
             }
 
@@ -6253,6 +6330,11 @@ async def admin_update_client(
                 elevenlabs_api_key=form.get("elevenlabs_api_key") or (current_api_keys.elevenlabs_api_key if hasattr(current_api_keys, 'elevenlabs_api_key') else current_api_keys.get('elevenlabs_api_key') if isinstance(current_api_keys, dict) else None),
                 cartesia_api_key=form.get("cartesia_api_key") or (current_api_keys.cartesia_api_key if hasattr(current_api_keys, 'cartesia_api_key') else current_api_keys.get('cartesia_api_key') if isinstance(current_api_keys, dict) else None),
                 speechify_api_key=form.get("speechify_api_key") or (current_api_keys.speechify_api_key if hasattr(current_api_keys, 'speechify_api_key') else current_api_keys.get('speechify_api_key') if isinstance(current_api_keys, dict) else None),
+                inworld_api_key=form.get("inworld_api_key") or (current_api_keys.inworld_api_key if hasattr(current_api_keys, 'inworld_api_key') else current_api_keys.get('inworld_api_key') if isinstance(current_api_keys, dict) else None),
+                fish_audio_api_key=form.get("fish_audio_api_key") or (current_api_keys.fish_audio_api_key if hasattr(current_api_keys, 'fish_audio_api_key') else current_api_keys.get('fish_audio_api_key') if isinstance(current_api_keys, dict) else None),
+                bithuman_api_secret=form.get("bithuman_api_secret") or (current_api_keys.bithuman_api_secret if hasattr(current_api_keys, 'bithuman_api_secret') else current_api_keys.get('bithuman_api_secret') if isinstance(current_api_keys, dict) else None),
+                bey_api_key=form.get("bey_api_key") or (current_api_keys.bey_api_key if hasattr(current_api_keys, 'bey_api_key') else current_api_keys.get('bey_api_key') if isinstance(current_api_keys, dict) else None),
+                liveavatar_api_key=form.get("liveavatar_api_key") or (current_api_keys.liveavatar_api_key if hasattr(current_api_keys, 'liveavatar_api_key') else current_api_keys.get('liveavatar_api_key') if isinstance(current_api_keys, dict) else None),
                 novita_api_key=form.get("novita_api_key") or (current_api_keys.novita_api_key if hasattr(current_api_keys, 'novita_api_key') else current_api_keys.get('novita_api_key') if isinstance(current_api_keys, dict) else None),
                 cohere_api_key=form.get("cohere_api_key") or (current_api_keys.cohere_api_key if hasattr(current_api_keys, 'cohere_api_key') else current_api_keys.get('cohere_api_key') if isinstance(current_api_keys, dict) else None),
                 siliconflow_api_key=form.get("siliconflow_api_key") or (current_api_keys.siliconflow_api_key if hasattr(current_api_keys, 'siliconflow_api_key') else current_api_keys.get('siliconflow_api_key') if isinstance(current_api_keys, dict) else None),
@@ -6261,11 +6343,16 @@ async def admin_update_client(
                 semrush_api_key=form.get("semrush_api_key") or (current_api_keys.semrush_api_key if hasattr(current_api_keys, 'semrush_api_key') else current_api_keys.get('semrush_api_key') if isinstance(current_api_keys, dict) else None),
                 ahrefs_api_key=form.get("ahrefs_api_key") or (current_api_keys.ahrefs_api_key if hasattr(current_api_keys, 'ahrefs_api_key') else current_api_keys.get('ahrefs_api_key') if isinstance(current_api_keys, dict) else None)
             ),
+            # Embedding defaults: platform canonical (siliconflow Qwen3-Embedding-4B
+            # at 1024 dim). MUST stay in sync with EmbeddingSettings field
+            # defaults, AIProcessor.DEFAULT_*, provisioning_worker, and the
+            # trigger fallbacks. Mixing models produces incompatible vector
+            # spaces and silent RAG failures.
             embedding=EmbeddingSettings(
-                provider=form.get("embedding_provider", current_embedding.provider if hasattr(current_embedding, 'provider') else current_embedding.get('provider', 'openai') if current_embedding else 'openai'),
-                document_model=form.get("document_embedding_model", current_embedding.document_model if hasattr(current_embedding, 'document_model') else current_embedding.get('document_model', 'text-embedding-3-small') if current_embedding else 'text-embedding-3-small'),
-                conversation_model=form.get("conversation_embedding_model", current_embedding.conversation_model if hasattr(current_embedding, 'conversation_model') else current_embedding.get('conversation_model', 'text-embedding-3-small') if current_embedding else 'text-embedding-3-small'),
-                dimension=int(form.get("embedding_dimension")) if form.get("embedding_dimension") and form.get("embedding_dimension").strip() else (current_embedding.dimension if hasattr(current_embedding, 'dimension') else current_embedding.get('dimension') if current_embedding else None)
+                provider=form.get("embedding_provider", current_embedding.provider if hasattr(current_embedding, 'provider') else current_embedding.get('provider', 'siliconflow') if current_embedding else 'siliconflow'),
+                document_model=form.get("document_embedding_model", current_embedding.document_model if hasattr(current_embedding, 'document_model') else current_embedding.get('document_model', 'Qwen/Qwen3-Embedding-4B') if current_embedding else 'Qwen/Qwen3-Embedding-4B'),
+                conversation_model=form.get("conversation_embedding_model", current_embedding.conversation_model if hasattr(current_embedding, 'conversation_model') else current_embedding.get('conversation_model', 'Qwen/Qwen3-Embedding-4B') if current_embedding else 'Qwen/Qwen3-Embedding-4B'),
+                dimension=int(form.get("embedding_dimension")) if form.get("embedding_dimension") and form.get("embedding_dimension").strip() else (current_embedding.dimension if hasattr(current_embedding, 'dimension') else current_embedding.get('dimension') if current_embedding else 1024)
             ),
             rerank=RerankSettings(
                 enabled=form.get("rerank_enabled", "off") == "on",

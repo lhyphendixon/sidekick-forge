@@ -90,6 +90,7 @@ app = FastAPI(
     version="2.2.1",
     docs_url="/docs",
     redoc_url="/redoc",
+    redirect_slashes=False,
     lifespan=lifespan,
     openapi_tags=[
         {"name": "agents", "description": "Agent management operations"},

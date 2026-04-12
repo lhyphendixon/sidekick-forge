@@ -90,12 +90,16 @@ services:
       - ./docker/agent/api_key_loader.py:/app/api_key_loader.py:ro
       - ./docker/agent/citations_service.py:/app/citations_service.py:ro
       - ./docker/agent/tool_registry.py:/app/tool_registry.py:ro
+      - ./docker/agent/models:/app/models:ro
+      - ./docker/agent/wizard_tasks.py:/app/wizard_tasks.py:ro
       - ./app:/app/app:ro
+      - imx-cache:/tmp/imx_models
     networks:
       - platform-network
 
 volumes:
   redis-data:
+  imx-cache:
 
 networks:
   platform-network:

@@ -246,6 +246,11 @@ def _extract_api_keys(client: Any) -> Dict[str, Any]:
             "deepgram_api_key": settings_obj.api_keys.deepgram_api_key,
             "elevenlabs_api_key": settings_obj.api_keys.elevenlabs_api_key,
             "cartesia_api_key": settings_obj.api_keys.cartesia_api_key,
+            "inworld_api_key": getattr(settings_obj.api_keys, "inworld_api_key", None),
+            "fish_audio_api_key": getattr(settings_obj.api_keys, "fish_audio_api_key", None),
+            "bithuman_api_secret": getattr(settings_obj.api_keys, "bithuman_api_secret", None),
+            "bey_api_key": getattr(settings_obj.api_keys, "bey_api_key", None),
+            "liveavatar_api_key": getattr(settings_obj.api_keys, "liveavatar_api_key", None),
             "anthropic_api_key": getattr(settings_obj.api_keys, "anthropic_api_key", None),
             "novita_api_key": settings_obj.api_keys.novita_api_key,
             "cohere_api_key": settings_obj.api_keys.cohere_api_key,
@@ -979,7 +984,7 @@ async def handle_voice_trigger(
         conversation_id=conversation_id,
         user_id=request.user_id,
         session_id=request.session_id,
-        mode="voice",
+        mode=request.mode.value,
         request_context=request.context,
         client_conversation_id=client_conversation_id,
     )
@@ -996,7 +1001,7 @@ async def handle_voice_trigger(
         "agent_name": settings.livekit_agent_name,
         "agent_slug": agent.slug,
         "user_id": request.user_id,
-        "mode": "voice",
+        "mode": request.mode.value,
         "client_id": agent_context.get("client_id"),
         "conversation_id": agent_context.get("conversation_id"),
     }
@@ -1039,6 +1044,8 @@ async def handle_voice_trigger(
             "deepgram": "deepgram_api_key",
             "elevenlabs": "elevenlabs_api_key",
             "cartesia": "cartesia_api_key",
+            "inworld": "inworld_api_key",
+            "fish_audio": "fish_audio_api_key",
         }
         api_keys_map = agent_context.get("api_keys", {})
         # Debug missing keys
@@ -1512,7 +1519,9 @@ async def handle_text_trigger(
             platform_key_names = [
                 "cerebras_api_key", "cartesia_api_key", "siliconflow_api_key",
                 "deepgram_api_key", "openai_api_key", "groq_api_key",
-                "elevenlabs_api_key", "novita_api_key", "cohere_api_key", "jina_api_key"
+                "elevenlabs_api_key", "novita_api_key", "cohere_api_key", "jina_api_key",
+                "inworld_api_key",
+                "fish_audio_api_key"
             ]
             for key_name in platform_key_names:
                 key_value = await platform_key_service.get_platform_key(key_name)
@@ -1533,6 +1542,11 @@ async def handle_text_trigger(
                 "deepgram_api_key": client.settings.api_keys.deepgram_api_key,
                 "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key,
                 "cartesia_api_key": client.settings.api_keys.cartesia_api_key,
+                "inworld_api_key": getattr(client.settings.api_keys, 'inworld_api_key', None),
+                "fish_audio_api_key": getattr(client.settings.api_keys, 'fish_audio_api_key', None),
+                "bithuman_api_secret": getattr(client.settings.api_keys, 'bithuman_api_secret', None),
+                "bey_api_key": getattr(client.settings.api_keys, 'bey_api_key', None),
+                "liveavatar_api_key": getattr(client.settings.api_keys, 'liveavatar_api_key', None),
                 "anthropic_api_key": getattr(client.settings.api_keys, 'anthropic_api_key', None),
                 "novita_api_key": client.settings.api_keys.novita_api_key,
                 "cohere_api_key": client.settings.api_keys.cohere_api_key,
@@ -1862,6 +1876,12 @@ async def dispatch_agent_job(
                 "elevenlabs_api_key": client.settings.api_keys.elevenlabs_api_key,
                 "cartesia_api_key": client.settings.api_keys.cartesia_api_key,
                 "speechify_api_key": client.settings.api_keys.speechify_api_key,
+                "inworld_api_key": getattr(client.settings.api_keys, 'inworld_api_key', None),
+                "fish_audio_api_key": getattr(client.settings.api_keys, 'fish_audio_api_key', None),
+                # Avatar/Video Providers
+                "bithuman_api_secret": getattr(client.settings.api_keys, 'bithuman_api_secret', None),
+                "bey_api_key": getattr(client.settings.api_keys, 'bey_api_key', None),
+                "liveavatar_api_key": getattr(client.settings.api_keys, 'liveavatar_api_key', None),
                 # Embedding/Reranking Providers
                 "novita_api_key": client.settings.api_keys.novita_api_key,
                 "cohere_api_key": client.settings.api_keys.cohere_api_key,
@@ -1956,10 +1976,8 @@ async def dispatch_agent_job(
             "dataset_ids": context_dataset_ids,
             "api_keys": api_keys_map,
             # Carry interaction mode so the worker can skip STT/TTS for text sessions
-            "mode": (
-                context_snapshot.get("mode")
-                or ("text" if context_snapshot.get("user_message") else "voice")
-            ),
+            # and initialize avatar for video sessions
+            "mode": context_snapshot.get("mode", "text"),
             "rerank": context_snapshot.get("rerank"),
             "user_message": context_snapshot.get("user_message"),
             "email_address": getattr(agent, "email_address", None) or "",

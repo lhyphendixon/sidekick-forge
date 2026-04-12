@@ -210,9 +210,9 @@ class ClientService:
                     },
                     "api_keys": {},
                     "embedding": {
-                        "provider": "novita",
-                        "document_model": "Qwen/Qwen2.5-72B-Instruct",
-                        "conversation_model": "Qwen/Qwen2.5-72B-Instruct"
+                        "provider": "siliconflow",
+                        "document_model": "Qwen/Qwen3-Embedding-4B",
+                        "conversation_model": "Qwen/Qwen3-Embedding-4B"
                     },
                     "rerank": {
                         "enabled": False,
@@ -242,9 +242,9 @@ class ClientService:
                     },
                     "api_keys": {},
                     "embedding": {
-                        "provider": "novita",
-                        "document_model": "Qwen/Qwen2.5-72B-Instruct",
-                        "conversation_model": "Qwen/Qwen2.5-72B-Instruct"
+                        "provider": "siliconflow",
+                        "document_model": "Qwen/Qwen3-Embedding-4B",
+                        "conversation_model": "Qwen/Qwen3-Embedding-4B"
                     },
                     "rerank": {
                         "enabled": False,

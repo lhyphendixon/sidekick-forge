@@ -268,16 +268,22 @@ class WizardCompletionService:
         """
         Assign all ready documents from the wizard session to the new agent.
 
+        Always inserts into the platform admin Supabase since `agent_documents`
+        lives there (it's an agent↔document join with no client_id column).
+        Previously this used a brittle connection_manager path that silently
+        failed for shared-tier clients, leaving the agent with no document
+        permissions even though the wizard reported success.
+
         Returns the number of documents assigned.
         """
         try:
             if not supabase_manager._initialized:
                 await supabase_manager.initialize()
 
+            admin = supabase_manager.admin_client
+
             # Get pending documents that are ready
-            result = supabase_manager.admin_client.table(
-                "wizard_pending_documents"
-            ).select("*").eq(
+            result = admin.table("wizard_pending_documents").select("*").eq(
                 "session_id", session_id
             ).eq("status", "ready").execute()
 
@@ -285,47 +291,65 @@ class WizardCompletionService:
                 logger.info(f"No ready documents to assign for session {session_id}")
                 return 0
 
-            # Get client database connection with hosting info
-            client_db, hosting_type, _ = self.connection_manager.get_client_db_client_with_info(UUID(client_id))
-            is_shared = hosting_type == 'shared'
-
             assigned_count = 0
+            failed_count = 0
             for pending_doc in result.data:
                 document_id = pending_doc.get("document_id")
                 if not document_id:
+                    logger.warning(
+                        f"Skipping pending doc {pending_doc.get('id')} for session "
+                        f"{session_id}: no document_id (probably failed upstream)"
+                    )
                     continue
 
                 try:
-                    # Check if assignment already exists
-                    existing = client_db.table("agent_documents").select(
-                        "id"
-                    ).eq("agent_id", agent_id).eq(
-                        "document_id", document_id
-                    ).limit(1).execute()
+                    # Skip if assignment already exists (idempotent)
+                    existing = admin.table("agent_documents").select("id").eq(
+                        "agent_id", agent_id
+                    ).eq("document_id", document_id).limit(1).execute()
 
                     if existing.data:
+                        logger.info(
+                            f"agent_documents row already exists for "
+                            f"agent={agent_id} doc={document_id}, skipping"
+                        )
                         continue
 
-                    # Create assignment
-                    agent_doc_data = {
+                    admin.table("agent_documents").insert({
                         "agent_id": agent_id,
                         "document_id": document_id,
-                    }
-                    # Shared pool requires client_id for tenant isolation
-                    if is_shared and client_id:
-                        agent_doc_data["client_id"] = client_id
-                    client_db.table("agent_documents").insert(agent_doc_data).execute()
-
+                        "enabled": True,
+                    }).execute()
                     assigned_count += 1
+                    logger.info(
+                        f"Assigned document {document_id} to agent {agent_id}"
+                    )
 
-                except Exception as e:
-                    logger.warning(f"Failed to assign document {document_id} to agent: {e}")
+                except Exception as assign_err:
+                    failed_count += 1
+                    logger.error(
+                        f"Failed to assign document {document_id} to agent "
+                        f"{agent_id}: {assign_err}",
+                        exc_info=True,
+                    )
 
-            logger.info(f"Assigned {assigned_count} documents to agent {agent_id}")
+            if failed_count:
+                logger.warning(
+                    f"Wizard doc assignment for session {session_id}: "
+                    f"{assigned_count} succeeded, {failed_count} failed"
+                )
+            else:
+                logger.info(
+                    f"Assigned {assigned_count} documents to agent {agent_id} "
+                    f"(session {session_id})"
+                )
             return assigned_count
 
         except Exception as e:
-            logger.error(f"Error assigning documents to agent: {e}")
+            logger.error(
+                f"Error assigning documents to agent {agent_id}: {e}",
+                exc_info=True,
+            )
             return 0
 
     async def _assign_abilities_to_agent(

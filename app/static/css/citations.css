@@ -1,223 +1,270 @@
 /**
  * Citations Component Styles
- * Responsive styles for RAG citation display in both admin and embed contexts
+ *
+ * Dark glass-morphism design that matches the embed's `.glass-container` /
+ * `.glass-surface` aesthetic: translucent dark backgrounds, backdrop blur,
+ * thin white borders at low alpha, and brand-teal (#01a4a6) accents with
+ * subtle glow on focus/hover. Citations are only rendered inside the embed,
+ * which is always dark, so we no longer carry separate light-mode styles.
+ *
+ * Class names match `app/static/js/citations.js`:
+ *   .citations-container, .citations-header, .citations-icon, .citations-label,
+ *   .citations-list, .citations-expand-btn, .citations-expanded
+ *   .citation-item, .citation-content, .citation-index, .citation-link,
+ *   .citation-domain, .citation-chunk-count
+ *   .citation-tooltip + tooltip-* descendants
+ *   .citation-source-badge + badge variants
+ *   .compact (added when rendered in the embed message stream)
  */
 
-/* Citations Container */
+/* Brand variables — keep in sync with embed glass-container palette */
+:root {
+    --citation-teal: #01a4a6;
+    --citation-teal-bright: #14d8da;
+    --citation-glass-bg: rgba(255, 255, 255, 0.04);
+    --citation-glass-bg-hover: rgba(1, 164, 166, 0.08);
+    --citation-glass-border: rgba(255, 255, 255, 0.08);
+    --citation-glass-border-accent: rgba(1, 164, 166, 0.28);
+    --citation-text: rgba(255, 255, 255, 0.92);
+    --citation-text-muted: rgba(255, 255, 255, 0.55);
+    --citation-text-dim: rgba(255, 255, 255, 0.4);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Container — the wrapper around an entire citations block
+   ────────────────────────────────────────────────────────────────────────── */
 .citations-container {
-    margin-top: 8px;
-    padding: 12px;
-    background: rgba(1, 164, 166, 0.05);
-    border: 1px solid rgba(1, 164, 166, 0.2);
-    border-radius: 8px;
-    font-size: 0.875rem;
-    line-height: 1.4;
+    margin-top: 10px;
+    padding: 12px 14px;
+    background: rgba(15, 15, 15, 0.55);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    border: 1px solid var(--citation-glass-border);
+    border-radius: 12px;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--citation-text);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        0 4px 24px -8px rgba(0, 0, 0, 0.5);
+    transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
-/* Dark theme support */
-.dark .citations-container,
-[data-theme="dark"] .citations-container {
-    background: rgba(1, 164, 166, 0.1);
-    border-color: rgba(1, 164, 166, 0.3);
+.citations-container:hover {
+    border-color: rgba(1, 164, 166, 0.22);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        0 6px 28px -8px rgba(0, 0, 0, 0.55),
+        0 0 24px -8px rgba(1, 164, 166, 0.25);
 }
 
-/* Citations Header */
+/* ──────────────────────────────────────────────────────────────────────────
+   Header — "Sources (N)" with icon
+   ────────────────────────────────────────────────────────────────────────── */
 .citations-header {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin-bottom: 8px;
-    color: #01a4a6;
-    font-weight: 500;
-}
-
-.dark .citations-header,
-[data-theme="dark"] .citations-header {
-    color: #01c4c6;
+    gap: 8px;
+    margin-bottom: 10px;
+    color: var(--citation-teal-bright);
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
 }
 
 .citations-icon {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     stroke: currentColor;
+    flex-shrink: 0;
+    filter: drop-shadow(0 0 6px rgba(1, 164, 166, 0.4));
 }
 
 .citations-label {
-    font-size: 0.875rem;
+    font-size: inherit;
 }
 
-/* Citations List */
+/* ──────────────────────────────────────────────────────────────────────────
+   List + items
+   ────────────────────────────────────────────────────────────────────────── */
 .citations-list {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    transition: all 0.3s ease;
 }
 
-/* Citation Item */
 .citation-item {
     position: relative;
-    padding: 8px;
-    background: rgba(255, 255, 255, 0.5);
-    border: 1px solid rgba(1, 164, 166, 0.15);
-    border-radius: 6px;
-    transition: all 0.2s ease;
-}
-
-.dark .citation-item,
-[data-theme="dark"] .citation-item {
-    background: rgba(0, 0, 0, 0.2);
-    border-color: rgba(1, 164, 166, 0.25);
+    padding: 9px 11px;
+    background: var(--citation-glass-bg);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--citation-glass-border);
+    border-radius: 8px;
+    transition: background 0.2s ease, border-color 0.2s ease,
+                transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .citation-item:hover {
-    background: rgba(1, 164, 166, 0.1);
-    border-color: rgba(1, 164, 166, 0.3);
+    background: var(--citation-glass-bg-hover);
+    border-color: var(--citation-glass-border-accent);
     transform: translateY(-1px);
+    box-shadow:
+        0 4px 16px -6px rgba(0, 0, 0, 0.5),
+        0 0 0 1px rgba(1, 164, 166, 0.18),
+        0 0 20px -8px rgba(1, 164, 166, 0.4);
 }
 
-.dark .citation-item:hover,
-[data-theme="dark"] .citation-item:hover {
-    background: rgba(1, 164, 166, 0.15);
+.citation-item:focus-within {
+    outline: none;
+    border-color: rgba(1, 164, 166, 0.55);
+    box-shadow:
+        0 0 0 1px rgba(1, 164, 166, 0.4),
+        0 0 24px -6px rgba(1, 164, 166, 0.5);
 }
 
-/* Citation Content */
+/* ──────────────────────────────────────────────────────────────────────────
+   Citation content row
+   ────────────────────────────────────────────────────────────────────────── */
 .citation-content {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     flex-wrap: wrap;
 }
 
+/* The little [N] number badge — frosted teal pill */
 .citation-index {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 24px;
+    min-width: 22px;
     height: 20px;
-    background: #01a4a6;
-    color: white;
-    font-size: 0.75rem;
-    font-weight: 600;
-    border-radius: 3px;
+    padding: 0 6px;
+    background: linear-gradient(135deg, rgba(1, 164, 166, 0.28), rgba(1, 164, 166, 0.16));
+    color: var(--citation-teal-bright);
+    font-size: 0.7rem;
+    font-weight: 700;
+    border-radius: 5px;
+    border: 1px solid rgba(1, 164, 166, 0.4);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        0 0 12px -4px rgba(1, 164, 166, 0.5);
     flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
 }
 
 .citation-link {
-    color: #374151;
+    color: var(--citation-text);
     text-decoration: none;
     font-weight: 500;
     flex: 1;
-    min-width: 0; /* Allow text truncation */
-}
-
-.dark .citation-link,
-[data-theme="dark"] .citation-link {
-    color: #e0e0e0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 0.2s ease, text-shadow 0.2s ease;
 }
 
 .citation-link:hover {
-    color: #01a4a6;
-    text-decoration: underline;
-}
-
-.dark .citation-link:hover,
-[data-theme="dark"] .citation-link:hover {
-    color: #01c4c6;
+    color: var(--citation-teal-bright);
+    text-shadow: 0 0 12px rgba(20, 216, 218, 0.4);
+    text-decoration: none;
 }
 
 .citation-domain {
-    color: #6b7280;
-    font-size: 0.75rem;
-    opacity: 0.8;
+    color: var(--citation-text-muted);
+    font-size: 0.7rem;
     flex-shrink: 0;
-}
-
-.dark .citation-domain,
-[data-theme="dark"] .citation-domain {
-    color: #9ca3af;
+    padding: 2px 7px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
 }
 
 .citation-chunk-count {
-    color: #6b7280;
-    font-size: 0.75rem;
+    color: var(--citation-text-dim);
+    font-size: 0.7rem;
     font-style: italic;
     flex-shrink: 0;
 }
 
-.dark .citation-chunk-count,
-[data-theme="dark"] .citation-chunk-count {
-    color: #9ca3af;
-}
-
-/* Expand Button */
+/* ──────────────────────────────────────────────────────────────────────────
+   Expand / collapse button
+   ────────────────────────────────────────────────────────────────────────── */
 .citations-expand-btn {
-    margin-top: 8px;
-    padding: 6px 12px;
-    background: transparent;
-    border: 1px solid rgba(1, 164, 166, 0.3);
-    border-radius: 4px;
-    color: #01a4a6;
-    font-size: 0.75rem;
+    margin-top: 10px;
+    padding: 7px 14px;
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(1, 164, 166, 0.25);
+    border-radius: 8px;
+    color: var(--citation-teal-bright);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
     cursor: pointer;
     transition: all 0.2s ease;
     width: 100%;
 }
 
-.dark .citations-expand-btn,
-[data-theme="dark"] .citations-expand-btn {
-    color: #01c4c6;
-    border-color: rgba(1, 164, 166, 0.4);
-}
-
 .citations-expand-btn:hover {
     background: rgba(1, 164, 166, 0.1);
     border-color: rgba(1, 164, 166, 0.5);
+    box-shadow: 0 0 20px -6px rgba(1, 164, 166, 0.4);
+    transform: translateY(-1px);
 }
 
-.dark .citations-expand-btn:hover,
-[data-theme="dark"] .citations-expand-btn:hover {
-    background: rgba(1, 164, 166, 0.15);
+.citations-expand-btn:focus {
+    outline: none;
+    border-color: rgba(1, 164, 166, 0.6);
+    box-shadow: 0 0 0 2px rgba(1, 164, 166, 0.25);
 }
 
-/* Citation Tooltip */
+.citations-expand-btn:active {
+    transform: translateY(0);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Hover tooltip — full glass card with chunk previews
+   ────────────────────────────────────────────────────────────────────────── */
 .citation-tooltip {
     position: fixed;
-    max-width: 320px;
-    padding: 12px;
-    background: white;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-    font-size: 0.875rem;
+    max-width: 360px;
+    padding: 14px 16px;
+    background: rgba(10, 10, 10, 0.85);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    box-shadow:
+        0 20px 60px -10px rgba(0, 0, 0, 0.7),
+        0 0 0 1px rgba(1, 164, 166, 0.15),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    color: var(--citation-text);
+    font-size: 0.8125rem;
+    line-height: 1.5;
     z-index: 1000;
     pointer-events: none;
 }
 
-.dark .citation-tooltip,
-[data-theme="dark"] .citation-tooltip {
-    background: #1f2937;
-    border-color: #374151;
-    color: #e5e7eb;
-}
-
 .tooltip-header {
     font-weight: 600;
-    margin-bottom: 8px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #e5e7eb;
-    color: #01a4a6;
-}
-
-.dark .tooltip-header,
-[data-theme="dark"] .tooltip-header {
-    border-color: #374151;
-    color: #01c4c6;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--citation-teal-bright);
+    font-size: 0.8125rem;
 }
 
 .tooltip-chunks {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
 }
 
 .tooltip-chunk {
@@ -225,95 +272,115 @@
 }
 
 .tooltip-chunk:not(:last-child) {
-    border-bottom: 1px solid #f3f4f6;
-}
-
-.dark .tooltip-chunk:not(:last-child),
-[data-theme="dark"] .tooltip-chunk:not(:last-child) {
-    border-color: #374151;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .tooltip-chunk-location {
-    font-size: 0.75rem;
-    color: #6b7280;
+    font-size: 0.7rem;
+    color: var(--citation-text-muted);
     font-weight: 500;
     margin-bottom: 4px;
-}
-
-.dark .tooltip-chunk-location,
-[data-theme="dark"] .tooltip-chunk-location {
-    color: #9ca3af;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 .tooltip-chunk-preview {
-    color: #4b5563;
-    line-height: 1.5;
+    color: var(--citation-text);
+    line-height: 1.55;
     margin-bottom: 4px;
-}
-
-.dark .tooltip-chunk-preview,
-[data-theme="dark"] .tooltip-chunk-preview {
-    color: #d1d5db;
+    font-size: 0.8125rem;
 }
 
 .tooltip-chunk-similarity {
-    font-size: 0.75rem;
-    color: #01a4a6;
-    font-weight: 500;
-}
-
-.dark .tooltip-chunk-similarity,
-[data-theme="dark"] .tooltip-chunk-similarity {
-    color: #01c4c6;
+    font-size: 0.7rem;
+    color: var(--citation-teal-bright);
+    font-weight: 600;
 }
 
 .tooltip-footer {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid #e5e7eb;
-    font-size: 0.75rem;
-    color: #6b7280;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.7rem;
+    color: var(--citation-text-dim);
     text-align: center;
     font-style: italic;
 }
 
-.dark .tooltip-footer,
-[data-theme="dark"] .tooltip-footer {
-    border-color: #374151;
-    color: #9ca3af;
+/* ──────────────────────────────────────────────────────────────────────────
+   Source badges — Semrush / Ahrefs / Polymarket
+   Slightly more luminous to fit the dark glass aesthetic
+   ────────────────────────────────────────────────────────────────────────── */
+.citation-source-badge {
+    display: inline-block;
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    vertical-align: middle;
+    margin-right: 6px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
 }
 
-/* Responsive Design */
-@media (max-width: 640px) {
-    .citations-container {
-        padding: 8px;
-        font-size: 0.8rem;
-    }
-    
-    .citation-content {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 4px;
-    }
-    
-    .citation-index {
-        align-self: flex-start;
-    }
-    
-    .citation-tooltip {
-        max-width: calc(100vw - 32px);
-        font-size: 0.8rem;
-    }
+.citation-badge-semrush {
+    background: rgba(255, 100, 50, 0.18);
+    color: #ff8a5b;
+    border: 1px solid rgba(255, 100, 50, 0.4);
+    box-shadow: 0 0 12px -4px rgba(255, 100, 50, 0.5);
 }
 
-/* Compact mode for embed contexts */
+.citation-badge-ahrefs {
+    background: rgba(59, 130, 246, 0.18);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    box-shadow: 0 0 12px -4px rgba(59, 130, 246, 0.5);
+}
+
+.citation-badge-pm {
+    background: rgba(99, 102, 241, 0.18);
+    color: #a5b4fc;
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    box-shadow: 0 0 12px -4px rgba(99, 102, 241, 0.5);
+}
+
+/* Per-source left accent bars on the citation card */
+.citation-item.citation-semrush {
+    border-left: 2px solid rgba(255, 100, 50, 0.55);
+    padding-left: 11px;
+}
+
+.citation-item.citation-ahrefs {
+    border-left: 2px solid rgba(59, 130, 246, 0.55);
+    padding-left: 11px;
+}
+
+.citation-item.citation-prediction_market {
+    border-left: 2px solid rgba(99, 102, 241, 0.55);
+    padding-left: 11px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Compact mode — what the embed message stream uses
+   Tighter padding/typography for tucking under chat replies
+   ────────────────────────────────────────────────────────────────────────── */
 .citations-container.compact {
-    padding: 8px;
-    font-size: 0.8rem;
+    margin-top: 8px;
+    padding: 9px 11px;
+    border-radius: 10px;
+    font-size: 0.75rem;
 }
 
 .compact .citations-header {
-    margin-bottom: 6px;
+    margin-bottom: 7px;
+    font-size: 0.65rem;
+}
+
+.compact .citations-icon {
+    width: 12px;
+    height: 12px;
 }
 
 .compact .citations-list {
@@ -321,95 +388,80 @@
 }
 
 .compact .citation-item {
-    padding: 6px;
+    padding: 7px 9px;
+    border-radius: 7px;
+}
+
+.compact .citation-content {
+    gap: 8px;
 }
 
 .compact .citation-index {
     min-width: 20px;
-    height: 16px;
-    font-size: 0.7rem;
+    height: 18px;
+    font-size: 0.65rem;
+    padding: 0 5px;
 }
 
-/* Animation for expand/collapse */
-.citations-list {
-    transition: all 0.3s ease;
+.compact .citation-domain,
+.compact .citation-chunk-count {
+    font-size: 0.65rem;
 }
 
-.citations-expanded .citations-list {
-    /* Add any expand animations here */
+.compact .citations-expand-btn {
+    margin-top: 7px;
+    padding: 6px 12px;
+    font-size: 0.625rem;
 }
 
-/* Accessibility */
-.citation-item:focus-within {
-    outline: 2px solid #01a4a6;
-    outline-offset: 2px;
-}
-
-.citations-expand-btn:focus {
-    outline: 2px solid #01a4a6;
-    outline-offset: 2px;
-}
-
-/* Print styles */
-@media print {
-    .citation-tooltip {
-        display: none;
+/* ──────────────────────────────────────────────────────────────────────────
+   Responsive: phone widths
+   ────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+    .citations-container {
+        padding: 10px 12px;
+        font-size: 0.75rem;
     }
-    
+
+    .citation-content {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 5px;
+    }
+
+    .citation-index {
+        align-self: flex-start;
+    }
+
+    .citation-link {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+    }
+
+    .citation-tooltip {
+        max-width: calc(100vw - 32px);
+        font-size: 0.75rem;
+        padding: 12px 14px;
+    }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Print
+   ────────────────────────────────────────────────────────────────────────── */
+@media print {
+    .citation-tooltip,
     .citations-expand-btn {
         display: none;
     }
-    
+
     .citations-container {
         break-inside: avoid;
+        background: none;
+        border: 1px solid #ccc;
+        color: #000;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        box-shadow: none;
     }
-}
-
-/* ── Special source badges ── */
-.citation-source-badge {
-    display: inline-block;
-    font-size: 0.65rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 1px 6px;
-    border-radius: 4px;
-    vertical-align: middle;
-    margin-right: 4px;
-}
-
-.citation-badge-semrush {
-    background: rgba(255, 100, 50, 0.15);
-    color: #ff6432;
-    border: 1px solid rgba(255, 100, 50, 0.3);
-}
-
-.citation-badge-ahrefs {
-    background: rgba(59, 130, 246, 0.15);
-    color: #60a5fa;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.citation-badge-pm {
-    background: rgba(99, 102, 241, 0.15);
-    color: #818cf8;
-    border: 1px solid rgba(99, 102, 241, 0.3);
-}
-
-/* Semrush citation item accent */
-.citation-item.citation-semrush {
-    border-left: 3px solid rgba(255, 100, 50, 0.5);
-    padding-left: 8px;
-}
-
-/* Ahrefs citation item accent */
-.citation-item.citation-ahrefs {
-    border-left: 3px solid rgba(59, 130, 246, 0.5);
-    padding-left: 8px;
-}
-
-/* Prediction market citation item accent */
-.citation-item.citation-prediction_market {
-    border-left: 3px solid rgba(99, 102, 241, 0.5);
-    padding-left: 8px;
 }

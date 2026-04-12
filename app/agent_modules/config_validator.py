@@ -99,7 +99,7 @@ class ConfigValidator:
         # Validate provider values
         valid_llm_providers = ['openai', 'groq', 'cerebras', 'deepinfra']
         valid_stt_providers = ['deepgram', 'cartesia']
-        valid_tts_providers = ['elevenlabs', 'cartesia']
+        valid_tts_providers = ['elevenlabs', 'cartesia', 'inworld', 'fish_audio']
         
         llm = voice_settings.get('llm_provider')
         if llm not in valid_llm_providers:
@@ -204,7 +204,11 @@ class ConfigValidator:
             # Only add if not already required for STT
             if stt_provider != 'cartesia':
                 required.append(('cartesia_api_key', 'Cartesia TTS'))
-                
+        elif tts_provider == 'inworld':
+            required.append(('inworld_api_key', 'Inworld TTS'))
+        elif tts_provider == 'fish_audio':
+            required.append(('fish_audio_api_key', 'Fish Audio TTS'))
+
         return required
     
     @staticmethod

@@ -258,27 +258,64 @@ async def handle_voice_trigger(
         "conversation_id": conversation_id,
         "client_conversation_id": client_conversation_id,
         "context": request.context or {},
+        "mode": request.mode.value if hasattr(request.mode, 'value') else str(request.mode),
         "api_keys": {k: v for k, v in api_keys.items() if v}  # Include all available API keys
     }
 
-    # Attach embedding settings (client-level) - required for RAG context
+    # Attach embedding settings (client-level) - required for RAG context.
+    # The data may live in any of three places depending on which client service
+    # loaded the row, so check all three. Order matters: client.settings.embedding
+    # is the structured Pydantic field; client.settings.additional_settings is the
+    # JSONB blob inside the settings sub-object (this is where multitenant
+    # ClientService puts the additional_settings column); client.additional_settings
+    # is the top-level attribute (used by other services). The fallback to 0.6B is
+    # last-resort only — if it triggers, the agent will be searching with a
+    # different embedding model than the chunks were created with and RAG will
+    # silently return zero matches due to incompatible vector spaces.
     try:
         embedding_cfg = {}
         if hasattr(platform_client.settings, "embedding") and platform_client.settings.embedding:
-            embedding_cfg = platform_client.settings.embedding.dict()
-        elif isinstance(getattr(platform_client, "additional_settings", None), dict):
-            embedding_cfg = platform_client.additional_settings.get("embedding", {}) or {}
-        # Fallback: if embedding config is still empty, derive a safe default so the context manager can initialize
-        if not embedding_cfg:
+            try:
+                cfg = platform_client.settings.embedding.dict()
+                if cfg.get("provider"):
+                    embedding_cfg = cfg
+            except Exception:
+                pass
+        if not embedding_cfg.get("provider"):
+            settings_add = getattr(platform_client.settings, "additional_settings", None) if platform_client.settings else None
+            if isinstance(settings_add, dict):
+                cfg = settings_add.get("embedding") or {}
+                if isinstance(cfg, dict) and cfg.get("provider"):
+                    embedding_cfg = cfg
+        if not embedding_cfg.get("provider"):
+            top_add = getattr(platform_client, "additional_settings", None)
+            if isinstance(top_add, dict):
+                cfg = top_add.get("embedding") or {}
+                if isinstance(cfg, dict) and cfg.get("provider"):
+                    embedding_cfg = cfg
+        # Fallback: derive a safe default so the context manager can initialize.
+        # NOTE: this default uses Qwen3-Embedding-4B (the platform default we set
+        # in provisioning) so it matches the embedding model used to create chunks
+        # for new clients. Previously this was 0.6B which produces a different
+        # vector space and silently breaks RAG.
+        if not embedding_cfg.get("provider"):
             embedding_cfg = {
                 "provider": "siliconflow",
-                "document_model": "Qwen/Qwen3-Embedding-0.6B",
-                "conversation_model": "Qwen/Qwen3-Embedding-0.6B",
+                "document_model": "Qwen/Qwen3-Embedding-4B",
+                "conversation_model": "Qwen/Qwen3-Embedding-4B",
                 "dimension": 1024,
             }
-            logger.info("Voice trigger: using default embedding config (siliconflow)")
+            logger.warning(
+                "Voice trigger: client %s has no embedding config; falling back to "
+                "platform default (siliconflow Qwen3-Embedding-4B). RAG may return "
+                "zero matches if existing chunks were embedded with a different model.",
+                getattr(platform_client, "id", "?"),
+            )
         agent_context["embedding"] = embedding_cfg
-        logger.info(f"Voice trigger: attached embedding config - provider={embedding_cfg.get('provider')}")
+        logger.info(
+            f"Voice trigger: attached embedding config - provider={embedding_cfg.get('provider')}, "
+            f"document_model={embedding_cfg.get('document_model')}"
+        )
     except Exception as embedding_err:
         logger.warning("Voice trigger: failed to attach embedding settings: %s", embedding_err)
 

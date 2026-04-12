@@ -635,8 +635,8 @@ class ClientService:
                     },
                     "embedding": {
                         "provider": "novita",  # Default from WordPress
-                        "document_model": "Qwen/Qwen2.5-72B-Instruct",
-                        "conversation_model": "Qwen/Qwen2.5-72B-Instruct"
+                        "document_model": "Qwen/Qwen3-Embedding-4B",
+                        "conversation_model": "Qwen/Qwen3-Embedding-4B"
                     },
                     "rerank": {
                         "enabled": False,

@@ -18,7 +18,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 from livekit import rtc
 from livekit.agents import AgentTask, function_tool, RunContext
@@ -287,6 +287,7 @@ class WizardUIEventManager:
     def __init__(self, room: rtc.Room):
         self.room = room
         self._step_completion_events: Dict[int, asyncio.Event] = {}
+        self._step_revisit_events: Dict[int, asyncio.Event] = {}
         self._step_data: Dict[int, Dict[str, Any]] = {}
         self._data_callback_registered = False
 
@@ -314,7 +315,14 @@ class WizardUIEventManager:
 
         logger.info(f"🖱️ UI action received: action={action}, step={step}, data={data}")
 
-        if action == "step_completed" and step is not None:
+        if action == "step_revisited" and step is not None:
+            # User navigated back to a previously completed step
+            logger.info(f"🔙 Step {step} revisited by user")
+            if step not in self._step_revisit_events:
+                self._step_revisit_events[step] = asyncio.Event()
+            self._step_revisit_events[step].set()
+
+        elif action == "step_completed" and step is not None:
             # Store any data from the UI (e.g., voice_id, avatar_prompt)
             if data.get("field_data"):
                 self._step_data[step] = data["field_data"]
@@ -348,6 +356,15 @@ class WizardUIEventManager:
         if step in self._step_data:
             del self._step_data[step]
 
+    async def wait_for_any_revisit(self) -> int:
+        """Block until the user revisits any step. Returns the step number."""
+        while True:
+            for step, event in list(self._step_revisit_events.items()):
+                if event.is_set():
+                    event.clear()
+                    return step
+            await asyncio.sleep(0.3)
+
 
 # =============================================================================
 # Helper Functions
@@ -375,12 +392,9 @@ async def wait_for_speech_completion(session, timeout: float = 10.0) -> None:
             except asyncio.TimeoutError:
                 logger.warning(f"⚠️ Speech wait timed out after {timeout}s, proceeding anyway")
         else:
-            # Longer delay when no speech detected - there may be audio in flight
-            await asyncio.sleep(1.0)
-            logger.info("🔇 No active speech detected, waited 1s buffer before proceeding")
+            logger.info("🔇 No active speech detected, proceeding immediately")
     except Exception as e:
         logger.warning(f"Error waiting for speech completion: {e}")
-        await asyncio.sleep(1.0)
 
 
 # =============================================================================
@@ -752,45 +766,43 @@ class PersonalityTask(AgentTask[PersonalityResult]):
     ):
         super().__init__(
             instructions=f"""
-            You are collecting personality details for {sidekick_name} through guided questions about 6 traits.
+            You are collecting personality details for {sidekick_name}.
 
-            TRAITS TO COLLECT:
-            1. OPENNESS: creative/imaginative vs practical/down-to-earth
-            2. CONSCIENTIOUSNESS: organized/detail-oriented vs relaxed/flexible
-            3. EXTRAVERSION: outgoing/energetic vs reserved/calm
-            4. AGREEABLENESS: warm/nurturing vs professional/neutral
-            5. EMOTIONAL STABILITY: calm under pressure vs emotionally expressive
-            6. COMMUNICATION STYLE: formal/casual, detailed/concise
-            7. ANYTHING ELSE: optional extras (expertise, humor, etc.)
+            YOUR GOAL: Determine 0-100% values for each Big Five personality
+            trait based on what the user tells you about their sidekick. The
+            five traits are:
+            1. OPENNESS (creative/imaginative ↔ practical/down-to-earth)
+            2. CONSCIENTIOUSNESS (organized/detail-oriented ↔ relaxed/flexible)
+            3. EXTRAVERSION (outgoing/energetic ↔ reserved/calm)
+            4. AGREEABLENESS (warm/nurturing ↔ professional/direct)
+            5. EMOTIONAL STABILITY (calm under pressure ↔ emotionally expressive)
 
-            PRE-COLLECTION FROM INITIAL DESCRIPTION:
-            - When the user gives a rich initial description (e.g., "creative, outgoing, warm, casual"),
-              call analyze_description FIRST to extract any traits already mentioned.
-            - This will record matching traits automatically. Then only ask about the REMAINING uncollected traits.
-            - If the user gives a short/vague answer, skip analyze_description and ask questions one by one.
+            You also note COMMUNICATION STYLE (formal/casual, verbose/concise)
+            for the system prompt, but it is not a slider trait.
 
-            QUESTION FLOW (for remaining uncollected traits):
-            - Ask ONE question at a time for each trait not yet collected
-            - After EACH user response, call ONLY the ONE matching record_* tool
-            - Then SPEAK the next question - do NOT silently call another record tool
-            - NEVER call multiple record_* tools in a single turn
-            - The tool response tells you what to ask next - SAY that question to the user
-            - After all 6 required traits are collected, ask the "anything else?" question
-            - If user says "no" or "that's it" for anything else, call skip_anything_else
+            FLOW:
+            1. Start with ONE open question: "Tell me about {sidekick_name}'s
+               personality — how should they come across to people?"
+            2. When the user responds, call analyze_description with EVERY
+               trait you can infer from their answer — fill in as many as
+               possible. You do NOT need to ask about traits individually.
+            3. If you still cannot make a reasonable inference for some traits
+               after the initial answer, ask AT MOST 2 brief follow-up
+               questions covering the gaps. After each follow-up answer,
+               call record_trait for the newly clarified traits.
+            4. After 2 follow-ups (or sooner if all traits are clear), call
+               confirm_personality. For any trait you still lack explicit
+               information about, make a sensible default assumption based
+               on the overall personality picture and fill it in.
+               DO NOT keep asking — the user should not answer more than
+               3 questions total in this step.
+            5. Briefly summarise the personality you've captured and move on.
 
-            MANDATORY CONFIRMATION STEP:
-            - After ALL 6 traits are collected AND the "anything else?" question is handled,
-              you MUST verbally summarize ALL collected traits to the user.
-            - Say something like: "Here's what I have for [name]'s personality: [list all traits]. Does that sound right?"
-            - WAIT for the user to confirm (e.g., "yes", "sounds good", "perfect")
-            - Only call confirm_personality AFTER the user verbally confirms
-            - If the user wants changes, update the relevant trait(s) and re-confirm
-            - NEVER call confirm_personality without the user's explicit verbal confirmation
-
-            STYLE:
-            - Keep questions conversational and brief
-            - Acknowledge each answer briefly before asking the next question
-            - If traits were pre-collected, acknowledge what you understood and ask about what's missing
+            RULES:
+            - NEVER ask about traits one at a time if you can infer them.
+            - NEVER exceed 2 follow-up questions.
+            - Keep each question conversational and brief.
+            - It is better to assume a reasonable default than to over-ask.
             """,
             chat_ctx=chat_ctx,
         )
@@ -798,6 +810,7 @@ class PersonalityTask(AgentTask[PersonalityResult]):
         self.sidekick_name = sidekick_name
         self._collected: Dict[str, str] = {}
         self._asked_anything_else = False
+        self._followup_count = 0  # track follow-ups, max 2
         self._user_confirmed = False
         self._ui_event_manager = ui_event_manager
         self._ui_watcher_task: Optional[asyncio.Task] = None
@@ -809,9 +822,9 @@ class PersonalityTask(AgentTask[PersonalityResult]):
         if self._ui_event_manager:
             self._ui_watcher_task = asyncio.create_task(self._watch_ui_completion())
 
-        # Start with openness question
+        # Start with a broad, open personality question
         await self.session.say(
-            f"Now let's shape {self.sidekick_name}'s personality. Should they be creative and imaginative, or more practical and down-to-earth?",
+            f"Now let's shape {self.sidekick_name}'s personality. Tell me about how {self.sidekick_name} should come across to people — what kind of personality do you envision?",
             allow_interruptions=False
         )
 
@@ -874,34 +887,57 @@ class PersonalityTask(AgentTask[PersonalityResult]):
         return "done"
 
     def _build_next_prompt(self) -> str:
-        """Build the prompt for the next question based on what's missing."""
-        next_q = self._get_next_question()
-
-        prompts = {
-            "openness": f"Ask about {self.sidekick_name}'s openness - creative/imaginative or practical/down-to-earth?",
-            "conscientiousness": f"Ask about {self.sidekick_name}'s work style - organized/detail-oriented or relaxed/flexible?",
-            "extraversion": f"Ask about {self.sidekick_name}'s energy - outgoing/energetic or reserved/calm?",
-            "agreeableness": f"Ask about {self.sidekick_name}'s warmth - warm/nurturing or professional/neutral?",
-            "emotional_stability": f"Ask about {self.sidekick_name}'s emotional style - calm under pressure or more expressive?",
-            "communication_style": f"Ask about {self.sidekick_name}'s speaking style - formal or casual? Detailed or concise?",
-            "anything_else": "Ask: 'Anything else? Like expertise areas, humor style, or other preferences?' Keep it brief.",
-            "done": "All traits collected! Summarize ALL 6 traits to the user and ask 'Does that sound right?' WAIT for their confirmation before calling confirm_personality.",
-        }
-
-        return prompts.get(next_q, prompts["done"])
+        """Build the prompt for the next step based on what's missing."""
+        missing = self._get_missing_required()
+        if not missing:
+            return (
+                "All traits determined! Briefly summarise the personality you've "
+                "captured, then call confirm_personality."
+            )
+        if self._followup_count >= 2:
+            return (
+                f"You've already asked 2 follow-up questions. Fill in reasonable "
+                f"defaults for the remaining traits ({', '.join(sorted(missing))}) "
+                f"and call confirm_personality now."
+            )
+        return (
+            f"Still missing: {', '.join(sorted(missing))}. "
+            f"Ask ONE brief follow-up question that covers as many of the "
+            f"missing traits as possible. (Follow-up {self._followup_count + 1}/2 max)"
+        )
 
     async def _update_and_continue(self, field: str, value: str) -> str:
         """Store a collected field and return instructions for next step."""
         self._collected[field] = value
         logger.info(f"Wizard: Recorded {field}='{value}' for {self.sidekick_name}")
 
-        # Publish partial update to frontend (text description)
-        await self.publisher.field_update(f"personality_{field}", value, step=2)
-
-        # Publish numeric slider score so the personality engine sliders update in real time
+        # Publish text + slider updates IN PARALLEL via the LiveKit data channel.
+        # Previously these awaited sequentially, adding ~30ms per call to every
+        # personality turn. They are independent so they can race.
         trait_score = _score_single_trait(field, value)
+        publish_tasks = [
+            self.publisher.field_update(f"personality_{field}", value, step=2),
+        ]
         if trait_score:
-            await self.publisher.field_update("personality_traits", trait_score, step=2)
+            publish_tasks.append(
+                self.publisher.field_update("personality_traits", trait_score, step=2)
+            )
+        await asyncio.gather(*publish_tasks)
+
+        # Truncate the rolling chat context. The wizard's authoritative state
+        # lives in `self._collected` (server-side), so the LLM doesn't need
+        # turn-by-turn recall — it just needs the most recent exchange to
+        # produce a coherent next reply. Capping at 12 items (~6 user/assistant
+        # pairs) keeps prompt growth bounded while still leaving plenty of
+        # context for the model. Without this, a 6-trait personality phase
+        # accumulates ~14 turns + tool calls and the prompt linearly grows.
+        try:
+            ctx = self.chat_ctx.copy()
+            if ctx and len(ctx.items) > 12:
+                ctx.truncate(max_items=12)
+                await self.update_chat_ctx(ctx)
+        except Exception as trunc_err:
+            logger.debug(f"chat_ctx truncate skipped: {trunc_err}")
 
         # Build response with progress info
         collected_count = len([k for k in self._collected if k in self.REQUIRED_FIELDS])
@@ -944,23 +980,38 @@ class PersonalityTask(AgentTask[PersonalityResult]):
             "communication_style": communication_style,
         }
 
+        # Collect ALL the publish tasks first, then await them in parallel.
+        # Previously each trait did 2 sequential awaits inside the loop, so a
+        # 6-trait extraction did up to 12 sequential round-trips on the
+        # LiveKit data channel. Bundling them cuts that to a single gather().
+        publish_tasks: List[Any] = []
         for trait, value in trait_map.items():
             if value and value.strip():
-                self._collected[trait] = value.strip()
-                await self.publisher.field_update(f"personality_{trait}", value.strip(), step=2)
-                # Update slider with numeric score
-                trait_score = _score_single_trait(trait, value.strip())
+                clean = value.strip()
+                self._collected[trait] = clean
+                publish_tasks.append(
+                    self.publisher.field_update(f"personality_{trait}", clean, step=2)
+                )
+                trait_score = _score_single_trait(trait, clean)
                 if trait_score:
-                    await self.publisher.field_update("personality_traits", trait_score, step=2)
+                    publish_tasks.append(
+                        self.publisher.field_update("personality_traits", trait_score, step=2)
+                    )
                 extracted.append(trait)
-                logger.info(f"Wizard: Pre-collected {trait}='{value.strip()}' from initial description")
+                logger.info(f"Wizard: Pre-collected {trait}='{clean}' from initial description")
+
+        if publish_tasks:
+            await asyncio.gather(*publish_tasks)
 
         collected_count = len([k for k in self._collected if k in self.REQUIRED_FIELDS])
         total_required = len(self.REQUIRED_FIELDS)
         missing = self._get_missing_required()
 
         if not missing:
-            return f"All {total_required} traits extracted! Acknowledge what you understood, then ask the 'anything else?' question."
+            return (
+                f"All {total_required} traits extracted! Briefly acknowledge what "
+                f"you understood, then call confirm_personality."
+            )
 
         return (
             f"Extracted {len(extracted)} traits ({collected_count}/{total_required} collected). "
@@ -969,93 +1020,40 @@ class PersonalityTask(AgentTask[PersonalityResult]):
         )
 
     @function_tool
-    async def record_openness(
+    async def record_trait(
         self,
         context: RunContext,
-        openness: str
+        trait: Literal[
+            "openness",
+            "conscientiousness",
+            "extraversion",
+            "agreeableness",
+            "emotional_stability",
+            "communication_style",
+        ],
+        value: str,
     ) -> str:
         """
-        Record the sidekick's openness trait (creative vs practical).
+        Record one of the six required Big Five personality traits for the
+        sidekick. Call this once per trait as the user describes it. The wizard
+        tracks which traits have been collected and will guide you to ask about
+        the missing ones until all six are gathered.
 
         Args:
-            openness: Description like "creative", "imaginative", "curious", "practical", "down-to-earth", "conventional"
+            trait: Which trait you are recording. Must be exactly one of:
+                - "openness": creative/imaginative vs practical/down-to-earth
+                - "conscientiousness": organized/detail-oriented vs relaxed/flexible
+                - "extraversion": outgoing/energetic vs reserved/calm
+                - "agreeableness": warm/nurturing vs professional/objective
+                - "emotional_stability": calm/composed vs expressive/reactive
+                - "communication_style": tone + verbosity, e.g. "casual, concise"
+            value: A short natural-language description of how the user wants
+                this trait expressed for their sidekick (e.g. "creative",
+                "organized and detail-oriented", "warm and friendly",
+                "casual, concise"). Use the user's own words when possible.
         """
-        return await self._update_and_continue("openness", openness)
-
-    @function_tool
-    async def record_conscientiousness(
-        self,
-        context: RunContext,
-        conscientiousness: str
-    ) -> str:
-        """
-        Record the sidekick's conscientiousness trait (organized vs relaxed).
-
-        Args:
-            conscientiousness: Description like "organized", "thorough", "detail-oriented", "relaxed", "flexible", "easygoing"
-        """
-        return await self._update_and_continue("conscientiousness", conscientiousness)
-
-    @function_tool
-    async def record_extraversion(
-        self,
-        context: RunContext,
-        extraversion: str
-    ) -> str:
-        """
-        Record the sidekick's extraversion trait (outgoing vs reserved).
-
-        Args:
-            extraversion: Description like "outgoing", "energetic", "enthusiastic", "reserved", "calm", "quiet"
-        """
-        return await self._update_and_continue("extraversion", extraversion)
-
-    @function_tool
-    async def record_agreeableness(
-        self,
-        context: RunContext,
-        agreeableness: str
-    ) -> str:
-        """
-        Record the sidekick's agreeableness trait (warm vs professional).
-
-        Args:
-            agreeableness: Description like "warm", "friendly", "nurturing", "caring", "professional", "neutral", "objective"
-        """
-        return await self._update_and_continue("agreeableness", agreeableness)
-
-    @function_tool
-    async def record_emotional_stability(
-        self,
-        context: RunContext,
-        emotional_stability: str
-    ) -> str:
-        """
-        Record the sidekick's emotional stability trait (calm vs expressive).
-
-        Args:
-            emotional_stability: Description like "calm", "composed", "steady", "stable", "expressive", "reactive", "passionate"
-        """
-        return await self._update_and_continue("emotional_stability", emotional_stability)
-
-    @function_tool
-    async def record_communication_style(
-        self,
-        context: RunContext,
-        style: str,
-        detail_level: str = ""
-    ) -> str:
-        """
-        Record how the sidekick communicates.
-
-        Args:
-            style: Communication tone - e.g., "formal", "casual", "professional", "friendly"
-            detail_level: How verbose - e.g., "detailed", "concise", "thorough", "brief" (optional)
-        """
-        combined = style
-        if detail_level:
-            combined = f"{style}, {detail_level}"
-        return await self._update_and_continue("communication_style", combined)
+        self._followup_count += 1
+        return await self._update_and_continue(trait, value)
 
     @function_tool
     async def record_anything_else(
@@ -1111,23 +1109,34 @@ class PersonalityTask(AgentTask[PersonalityResult]):
     @function_tool
     async def confirm_personality(self, context: RunContext, user_said_yes: bool = True) -> Optional[str]:
         """
-        Complete the personality step. ONLY call this AFTER you have:
-        1. Collected ALL 6 required traits
-        2. Asked the "anything else?" question
-        3. Verbally summarized all traits to the user
-        4. The user has explicitly confirmed (said "yes", "sounds good", "perfect", etc.)
+        Complete the personality step. Call this once you have enough information
+        to determine personality trait values (after the initial description and
+        any follow-up questions). Any traits not explicitly described will be
+        filled with sensible defaults.
 
-        DO NOT call this until the user has verbally confirmed the summary.
+        You can also pass inferred values for traits not yet collected via the
+        optional parameters — fill in anything the user hasn't explicitly
+        described based on the overall personality picture.
 
         Args:
-            user_said_yes: True if the user confirmed the personality summary
+            user_said_yes: True to confirm and finalize the personality
         """
+        # Auto-fill missing required traits with neutral defaults so we never block
         missing_required = self._get_missing_required()
         if missing_required:
-            return f"Cannot confirm yet. Still need: {', '.join(sorted(missing_required))}. Ask about each missing trait one by one."
+            defaults = {
+                "openness": "balanced — moderately open to new ideas",
+                "conscientiousness": "moderate — reasonably organized",
+                "extraversion": "balanced — neither strongly outgoing nor reserved",
+                "agreeableness": "warm and approachable",
+                "emotional_stability": "generally stable",
+                "communication_style": "conversational and natural",
+            }
+            for trait in missing_required:
+                self._collected[trait] = defaults.get(trait, "moderate")
+                logger.info(f"Wizard: Auto-filled missing trait {trait}='{self._collected[trait]}' for {self.sidekick_name}")
 
-        if not self._asked_anything_else:
-            return "You haven't asked the 'anything else?' question yet. Ask it before confirming."
+        self._asked_anything_else = True
 
         # Build description from collected traits
         parts = []
@@ -1364,6 +1373,7 @@ class AvatarTask(AgentTask[AvatarResult]):
         personality: str,
         chat_ctx=None,
         ui_event_manager: Optional[WizardUIEventManager] = None,
+        has_existing_avatar: bool = False,
     ):
         super().__init__(
             instructions=f"""
@@ -1376,15 +1386,35 @@ class AvatarTask(AgentTask[AvatarResult]):
                a. Pick a number ("number 3", "the second one", "I like 2") -> call select_avatar_by_number
                b. Ask for more ("generate another", "try again", "more", "different ones", "another") -> call regenerate_avatars
                c. Refine ("make it more blue", "try something darker") -> call regenerate_avatars with the new description
-               d. Say "skip" -> call skip_avatar
-            4. Repeat steps 2-3 until user picks one or skips
+               d. Edit the current avatar ("change the hair", "make the eyes blue", "add glasses") -> call edit_avatar
+               e. Say "skip" -> call skip_avatar
+               f. Say "continue", "next", "done", "that's good" -> call confirm_and_continue
+            4. After selecting an avatar, the user may still want to EDIT it before moving on.
+               Ask if they want to make any changes. Only call confirm_and_continue when they're done.
+            5. Repeat steps 2-4 until user confirms or skips
+
+            EDIT vs REGENERATE:
+            - If the user wants to MODIFY a specific feature of the current avatar (e.g., "change the
+              background", "make the hair darker", "add a hat", "put a pin on the shirt"),
+              call edit_avatar. This edits the currently displayed image.
+            - If the user wants completely NEW avatars or a fresh start, call regenerate_avatars.
+            - The user MAY already have an avatar displayed from a previous session.
+              If they ask to edit or change something about the current avatar, call
+              edit_avatar — do NOT say you can't see an avatar. The frontend has it.
+
+            MULTI-ACTION REQUESTS:
+            - If the user asks to do TWO things (e.g., "select number 1 and add a pin"),
+              do them SEQUENTIALLY: first call select_avatar_by_number, THEN call edit_avatar.
+              select_avatar_by_number does NOT end the step — you can still edit after selecting.
+            - NEVER complete the step until ALL requested actions are done.
 
             CRITICAL RULES:
             - NEVER call select_avatar_by_number in the same turn as generate_avatar or regenerate_avatars
             - When user says "another", "more", "again", "different", "try again", "new ones", "generate more" -> call regenerate_avatars
             - Do NOT call confirm_and_continue or select_avatar_by_number when user asks for more avatars
-            - Only complete the step when user picks a specific number or says skip
-            - Do NOT speak after select_avatar_by_number or skip_avatar completes
+            - select_avatar_by_number does NOT complete the step. After selecting, ask the user if they want to edit or continue.
+            - Only call confirm_and_continue when the user is DONE with their avatar (no more edits requested)
+            - Do NOT speak after confirm_and_continue or skip_avatar completes
             """,
             chat_ctx=chat_ctx,
         )
@@ -1394,6 +1424,7 @@ class AvatarTask(AgentTask[AvatarResult]):
         self._last_set_time: float = 0
         self._ui_event_manager = ui_event_manager
         self._ui_watcher_task: Optional[asyncio.Task] = None
+        self._has_existing_avatar = has_existing_avatar
 
     async def on_enter(self) -> None:
         await wait_for_speech_completion(self.session, timeout=3.0)
@@ -1403,7 +1434,18 @@ class AvatarTask(AgentTask[AvatarResult]):
             self._ui_watcher_task = asyncio.create_task(self._watch_ui_completion())
 
         # Use say() instead of generate_reply() to prevent LLM from calling tools
-        await self.session.say(f"Describe an avatar for {self.sidekick_name}, or say skip.", allow_interruptions=False)
+        if self._has_existing_avatar:
+            await self.session.say(
+                f"Welcome back! Would you like to update the avatar for {self.sidekick_name}, "
+                f"or say continue to keep it as is?",
+                allow_interruptions=False
+            )
+        else:
+            await self.session.say(
+                f"Now let's create an avatar for {self.sidekick_name}. "
+                f"Describe what you'd like them to look like, or say skip.",
+                allow_interruptions=False
+            )
 
     async def _watch_ui_completion(self) -> None:
         """Background task that watches for UI-triggered step completion."""
@@ -1469,10 +1511,13 @@ class AvatarTask(AgentTask[AvatarResult]):
         )
 
     @function_tool
-    async def select_avatar_by_number(self, context: RunContext, number: int) -> Optional[str]:
+    async def select_avatar_by_number(self, context: RunContext, number: int) -> str:
         """
         Select an avatar by its number in the grid (1-based). Call this when the user says
         something like "I like number 3" or "let's go with 2".
+
+        This does NOT complete the step. The user may still want to edit the avatar.
+        After selecting, ask the user if they'd like to make any changes or continue.
 
         Args:
             number: The avatar number (1-based index in the grid)
@@ -1486,8 +1531,13 @@ class AvatarTask(AgentTask[AvatarResult]):
         })
 
         self._pending_prompt = self._pending_prompt or ""
-        self.complete(AvatarResult(avatar_prompt=self._pending_prompt))
-        return None  # Suppress speech - frontend handles selection
+        self._last_set_time = time.time()
+
+        return (
+            "Avatar selected! Ask the user if they'd like to make any edits "
+            "(like changing colors, adding accessories, etc.) or if they're happy "
+            "and want to continue to the next step."
+        )
 
     @function_tool
     async def regenerate_avatars(self, context: RunContext, new_description: str = "") -> str:
@@ -1513,6 +1563,31 @@ class AvatarTask(AgentTask[AvatarResult]):
         return "Generating new avatars! Tell the user new avatars are on the way. They can pick by number or ask for more."
 
     @function_tool
+    async def edit_avatar(self, context: RunContext, edit_prompt: str) -> str:
+        """
+        Edit the currently displayed avatar. Call this when the user wants to modify
+        a specific aspect of the current avatar (e.g., "change the hair color",
+        "add glasses", "make the background blue", "remove the hat").
+
+        This keeps the base image and applies the requested changes, rather than
+        generating completely new avatars.
+
+        Args:
+            edit_prompt: Description of the changes to make (e.g., "make the hair darker", "add a friendly smile")
+        """
+        logger.info(f"Wizard: Editing avatar with prompt '{edit_prompt[:50]}...'")
+
+        await self.publisher.publish("wizard_avatar_edit", {
+            "edit_prompt": edit_prompt,
+            "current_step": 4,
+        })
+
+        return (
+            "Avatar edit triggered! Tell the user you're making the changes they asked for. "
+            "Once it's done, they can pick it, ask for more changes, or generate new ones."
+        )
+
+    @function_tool
     async def confirm_and_continue(self, context: RunContext, user_said: str) -> Optional[str]:
         """
         ONLY call this after the user confirms they're happy with their avatar selection.
@@ -1521,7 +1596,7 @@ class AvatarTask(AgentTask[AvatarResult]):
         Args:
             user_said: The EXACT words the user spoke to confirm (e.g., "yes", "that's right", "yep")
         """
-        if not self._pending_prompt:
+        if not self._pending_prompt and not self._has_existing_avatar:
             return "Error: No avatar description yet. Call generate_avatar first, then ask user to confirm."
 
         # CRITICAL: Reject if called too soon after generate_avatar (same turn detection)
@@ -1559,7 +1634,7 @@ class AvatarTask(AgentTask[AvatarResult]):
             return "I didn't quite catch that. Does this sound right? Just say yes or no."
 
         logger.info(f"Wizard: Avatar confirmed with '{user_said}', completing step")
-        self.complete(AvatarResult(avatar_prompt=self._pending_prompt))
+        self.complete(AvatarResult(avatar_prompt=self._pending_prompt or ""))
         return None  # Return None to suppress LLM response
 
     @function_tool
@@ -1613,10 +1688,12 @@ class AbilitiesTask(AgentTask[AbilitiesResult]):
 
         # Use generate_reply to engage the LLM properly for tool-calling on subsequent turns.
         # say() bypasses the LLM, so it won't be primed to call tools when user says "continue".
-        self.session.chat_ctx.append(
+        ctx = self.chat_ctx.copy()
+        ctx.add_message(
             role="user",
-            text="[System: The abilities/superpowers page is now showing. Tell the user to toggle abilities on screen and say continue when ready.]"
+            content="[System: The abilities/superpowers page is now showing. Tell the user to toggle abilities on screen and say continue when ready.]"
         )
+        await self.update_chat_ctx(ctx)
         await self.session.generate_reply()
 
     async def _watch_ui_completion(self) -> None:
@@ -1711,10 +1788,12 @@ class KnowledgeTask(AgentTask[KnowledgeResult]):
             self._ui_watcher_task = asyncio.create_task(self._watch_ui_completion())
 
         # Use generate_reply to engage the LLM for tool-calling on subsequent turns
-        self.session.chat_ctx.append(
+        ctx = self.chat_ctx.copy()
+        ctx.add_message(
             role="user",
-            text="[System: The knowledge base page is now showing. Tell the user they can add documents or URLs on screen, then say continue or skip when ready.]"
+            content="[System: The knowledge base page is now showing. Tell the user they can add documents or URLs on screen, then say continue or skip when ready.]"
         )
+        await self.update_chat_ctx(ctx)
         await self.session.generate_reply()
 
     async def _watch_ui_completion(self) -> None:
@@ -2136,6 +2215,116 @@ class WizardGuideAgent(Agent):
             self.ui_event_manager.setup_listener()
             logger.info("🔗 Wizard UI event manager initialized")
 
+            # Background task: when the user navigates back to a completed step,
+            # have Farah acknowledge the revisit and offer to help update it.
+            # For steps with tool-driven interactions (avatar), re-run the full
+            # task so Farah has the tools available.
+            async def _handle_step_revisits():
+                STEP_LABELS = {
+                    1: "naming", 2: "personality", 3: "voice",
+                    4: "avatar", 5: "abilities", 6: "knowledge",
+                    7: "configuration", 9: "review",
+                }
+                while True:
+                    try:
+                        step = await self.ui_event_manager.wait_for_any_revisit()
+                        label = STEP_LABELS.get(step, f"step {step}")
+                        sidekick = self.collected_data.get("name", "your sidekick")
+
+                        if step == 4:
+                            # Avatar step: greet and start an inline edit loop.
+                            # We can't re-run AvatarTask from a background coroutine
+                            # (LiveKit SDK restriction), so we handle avatar editing
+                            # by publishing events directly to the frontend.
+                            logger.info("🔙 Avatar step revisited — starting inline edit flow")
+                            await self.session.say(
+                                f"Welcome back to the avatar step! Would you like to change "
+                                f"{sidekick}'s look? Just describe what you'd like to update "
+                                f"and I'll take care of it, or click Continue to keep the current avatar.",
+                                allow_interruptions=False,
+                            )
+
+                            # Listen for subsequent user speech and publish avatar
+                            # edit events directly.  We use the session's
+                            # user_speech_committed event to capture what the user says.
+                            avatar_edit_done = asyncio.Event()
+
+                            @self.session.on("user_speech_committed")
+                            def _on_avatar_revisit_speech(ev):
+                                text = getattr(ev, "transcript", "") or getattr(ev, "text", "") or ""
+                                if not text.strip():
+                                    return
+                                lower = text.lower().strip()
+
+                                # Check for "continue" / "next" / "done" / "keep it"
+                                done_phrases = ["continue", "next", "done", "keep it", "keep the current", "that's fine", "no changes", "skip"]
+                                if any(p in lower for p in done_phrases):
+                                    avatar_edit_done.set()
+                                    return
+
+                                # Treat user speech as an avatar edit/generate request
+                                async def _publish_edit():
+                                    existing_prompt = self.collected_data.get("avatar_prompt")
+                                    if existing_prompt:
+                                        # Edit existing avatar
+                                        logger.info(f"🎨 Avatar revisit: editing with prompt: {text[:80]}")
+                                        await self.publisher.publish("wizard_avatar_edit", {
+                                            "edit_prompt": text,
+                                            "current_step": 4,
+                                        })
+                                        await self.session.say(
+                                            f"I'm updating the avatar now. Let me know if you'd like any other changes, "
+                                            f"or click Continue when you're happy with it.",
+                                            allow_interruptions=True,
+                                        )
+                                    else:
+                                        # Generate new avatar
+                                        logger.info(f"🎨 Avatar revisit: generating with prompt: {text[:80]}")
+                                        await self.publisher.field_update("avatar_prompt", text, step=4)
+                                        await self.publisher.publish("wizard_avatar_generate", {
+                                            "prompt": text,
+                                            "current_step": 4,
+                                        })
+                                        self.collected_data["avatar_prompt"] = text
+                                        await self.session.say(
+                                            f"Generating new avatars for you now! Once they appear, "
+                                            f"let me know if you'd like any edits or click Continue.",
+                                            allow_interruptions=True,
+                                        )
+                                asyncio.ensure_future(_publish_edit())
+
+                            # Wait for the user to finish editing or for them to
+                            # click Continue (which triggers step_completed)
+                            ui_done = self.ui_event_manager.get_step_event(4)
+                            self.ui_event_manager.clear_step(4)
+                            done_tasks = [
+                                asyncio.create_task(avatar_edit_done.wait()),
+                                asyncio.create_task(ui_done.wait()),
+                            ]
+                            await asyncio.wait(done_tasks, return_when=asyncio.FIRST_COMPLETED)
+                            for t in done_tasks:
+                                t.cancel()
+
+                            # Remove the temporary listener
+                            self.session.off("user_speech_committed", _on_avatar_revisit_speech)
+                            logger.info("🔙 Avatar revisit flow complete")
+                        else:
+                            # Other steps: generic acknowledgment
+                            await self.session.generate_reply(
+                                instructions=(
+                                    f"The user just navigated back to the {label} step for {sidekick}. "
+                                    f"Briefly acknowledge they're revisiting this step and ask if they'd "
+                                    f"like to update anything. Keep it to one or two sentences, warm and casual. "
+                                    f"Do NOT repeat the full original step instructions."
+                                )
+                            )
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as e:
+                        logger.warning(f"Step revisit handler error: {e}")
+
+            self._revisit_task = asyncio.create_task(_handle_step_revisits())
+
         # Wait for at least one participant to join before starting
         if room:
             max_wait = 30  # seconds
@@ -2210,12 +2399,14 @@ class WizardGuideAgent(Agent):
 
         # Step 4: Avatar
         if self.current_step <= 4:
+            has_existing_avatar = bool(self.collected_data.get("avatar_url") or self.collected_data.get("avatar_prompt"))
             avatar_result = await AvatarTask(
                 self.publisher,
                 sidekick_name=sidekick_name,
                 personality=self.collected_data.get("personality", ""),
                 chat_ctx=self.chat_ctx,
                 ui_event_manager=self.ui_event_manager,
+                has_existing_avatar=has_existing_avatar,
             )
             self.collected_data["avatar_prompt"] = avatar_result.avatar_prompt
             self.collected_data["avatar_url"] = avatar_result.avatar_url
@@ -2261,6 +2452,10 @@ class WizardGuideAgent(Agent):
             # Skip step 8 (API Keys - handled by UI only) and go to step 9
             await wait_for_speech_completion(self.session, timeout=10.0)
             await self.publisher.step_change(step=9, total=TOTAL_STEPS)
+
+        # Cancel the step revisit listener — no going back from review
+        if hasattr(self, '_revisit_task') and self._revisit_task:
+            self._revisit_task.cancel()
 
         # Step 9: Review and confirm (Launch)
         confirmed = await ReviewTask(

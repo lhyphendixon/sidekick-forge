@@ -18,6 +18,14 @@ try:
 except ImportError:  # pragma: no cover - fallback for older SDKs
     from livekit.agents.voice.agent import TimedString
 
+try:
+    from livekit.agents.types import NOT_GIVEN
+except ImportError:
+    try:
+        from livekit.agents import NOT_GIVEN
+    except ImportError:
+        NOT_GIVEN = None  # type: ignore
+
 
 logger = logging.getLogger(__name__)
 
@@ -34,36 +42,45 @@ def _normalize_text(value: str) -> str:
     return text
 
 
-def _strip_ssml_tags(text: str) -> str:
+def _strip_tts_emotion_tags(text: str) -> str:
     """
-    Strip Cartesia SSML emotion tags and laughter markers from transcript text.
+    Strip TTS emotion tags from transcript text so they never appear in the UI.
 
-    These tags are meant for TTS rendering only and should not appear in
-    the displayed transcript.
-
-    Strips:
-    - <emotion value="..." /> (self-closing emotion tags)
-    - <emotion value="...">...</emotion> (wrapping emotion tags, just in case)
-    - [laughter] markers
+    Handles:
+    - Cartesia SSML: <emotion value="..." />, <emotion value="...">…</emotion>
+    - Fish Audio S1 parenthesis tags: (happy), (sighing), (in a hurry tone), etc.
+    - Fish Audio S2-Pro bracket tags: [happy], [sighing], [soft tone], etc.
+    - [laughter] and similar audio-effect markers
     """
     if not text:
         return text
 
-    # Strip self-closing emotion tags: <emotion value="..." />
+    # ── Cartesia SSML ────────────────────────────────────────────────────
     text = re.sub(r'<emotion\s+value="[^"]*"\s*/>', '', text)
-
-    # Strip wrapping emotion tags: <emotion value="...">text</emotion>
-    # Just remove the tags, keep the content inside
     text = re.sub(r'<emotion\s+value="[^"]*">', '', text)
     text = re.sub(r'</emotion>', '', text)
 
-    # Strip [laughter] markers
+    # ── Fish Audio parenthesis tags: (emotion) ───────────────────────────
+    # Match tags at the start of text or after whitespace/newline.
+    # Content is 1-4 lowercase words (e.g. "happy", "in a hurry tone").
+    # Use [ \t]* (not \s*) to eat trailing horizontal whitespace only,
+    # preserving \n line breaks that separate paragraphs.
+    text = re.sub(r'\((?:[a-z]+(?:\s[a-z]+){0,3})\)[ \t]*', '', text)
+
+    # ── Fish Audio bracket tags: [emotion] ───────────────────────────────
+    text = re.sub(r'\[(?:[a-z]+(?:\s[a-z]+){0,3})\][ \t]*', '', text)
+
+    # ── Stray markers ────────────────────────────────────────────────────
     text = re.sub(r'\[laughter\]', '', text, flags=re.IGNORECASE)
 
-    # Clean up any double spaces left behind
-    text = re.sub(r'  +', ' ', text)
+    # Clean up double horizontal spaces (preserve newlines)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
 
     return text.strip()
+
+
+# Keep old name as alias for any external callers
+_strip_ssml_tags = _strip_tts_emotion_tags
 
 
 class SidekickAgent(voice.Agent):
@@ -795,13 +812,23 @@ class SidekickAgent(voice.Agent):
                 chunk_text = str(chunk)
             else:
                 chunk_text = chunk
-            
-            # Accumulate text
+
+            # Accumulate text (raw, with tags intact)
             accumulated_text += chunk_text
 
-            # Apply formatting incrementally for better UX
-            # This formats the text as it streams rather than waiting for the end
-            formatted_text = self._enhance_text_for_display(accumulated_text)
+            # Apply formatting, then strip any TTS emotion tags (Fish Audio, Cartesia, etc.)
+            # so they never appear in stored transcripts.
+            pre_strip = self._enhance_text_for_display(accumulated_text)
+            formatted_text = _strip_tts_emotion_tags(pre_strip)
+            if pre_strip != formatted_text:
+                logger.info("🏷️ EMOTION STRIP: removed %d chars. Before: %r  After: %r",
+                           len(pre_strip) - len(formatted_text),
+                           pre_strip[:80], formatted_text[:80])
+            import re as _re
+            leftover_tags = _re.findall(r'\[[a-z]+(?:\s[a-z]+){0,3}\]', formatted_text)
+            if leftover_tags:
+                logger.error("🏷️ TAGS STILL PRESENT after strip: %s in text: %r",
+                            leftover_tags[:5], formatted_text[:120])
 
             # Write to database incrementally with formatted text
             # DEBUG: Log the condition check
@@ -871,12 +898,17 @@ class SidekickAgent(voice.Agent):
                 # Log why we're not writing to database
                 logger.warning(f"📝 DB write SKIPPED: supabase={bool(self._supabase_client)}, conv_id={self._conversation_id}, agent_id={self._agent_id}")
 
-            # Yield the chunk back to continue the pipeline
+            # Yield the original chunk unchanged. Emotion tags are stripped:
+            # 1. From DB writes (formatted_text above) — stored transcripts are clean.
+            # 2. Client-side in the embed JS (TranscriptionReceived handler) — live
+            #    display is also clean.
             yield chunk
 
         # At end of stream, ensure final content is formatted
         # (formatting is already applied incrementally, this is a safety net)
-        final_content = self._enhance_text_for_display(accumulated_text)
+        final_content = _strip_tts_emotion_tags(
+            self._enhance_text_for_display(accumulated_text)
+        )
         logger.info(f"📝 transcription_node FINISHED, accumulated: {len(accumulated_text)} chars, enhanced: {len(final_content)} chars")
 
         # Store final streamed text for deduplication, then clear streaming row ID
@@ -944,10 +976,18 @@ class SidekickAgent(voice.Agent):
         try:
             self._current_assistant_transcript = text
             
-            # Skip if we already wrote this via transcription_node streaming
-            if self._streaming_transcript_row_id:
-                logger.debug("Skipping duplicate assistant transcript (already streamed)")
+            # Skip if we already wrote this via transcription_node streaming.
+            # Check both the row ID (if still set) and the text content (which
+            # persists after the row ID is cleared at end-of-stream).
+            if self._streaming_transcript_row_id or self._streaming_transcript_text:
+                logger.info("🏷️ _handle_assistant_transcript SKIPPED (already streamed). row_id=%s, text_len=%d",
+                           self._streaming_transcript_row_id, len(self._streaming_transcript_text or ''))
                 return
+            import re as _re
+            _hat_tags = _re.findall(r'\[[a-z]+(?:\s[a-z]+){0,3}\]', text)
+            if _hat_tags:
+                logger.warning("🏷️ _handle_assistant_transcript WRITING with tags: %s text=%r",
+                              _hat_tags[:5], text[:120])
             
             # Include citations if available
             citations = self._current_citations if self._citations_enabled else None
@@ -988,7 +1028,17 @@ class SidekickAgent(voice.Agent):
             return None
         
         logger.debug(f"Storing {role} transcript for conversation {self._conversation_id}, seq={sequence}, turn={turn_id}")
-        
+
+        # DEBUG: detect emotion tag leakage at this entry point
+        if role == "assistant" and content:
+            import re as _re
+            _st_tags = _re.findall(r'\[[a-z]+(?:\s[a-z]+){0,3}\]', content)
+            if _st_tags:
+                logger.error("🏷️ _store_transcript CALLED WITH TAGS: %s content=%r",
+                            _st_tags[:5], content[:120])
+                import traceback
+                logger.error("🏷️ _store_transcript caller:\n%s", ''.join(traceback.format_stack()[-5:-1]))
+
         try:
             ts = datetime.utcnow().isoformat()
 

@@ -496,9 +496,101 @@
                             <option value="cartesia" {% if latest_config.tts_provider == 'cartesia' %}selected{% endif %}>Cartesia</option>
                             <option value="replicate" {% if latest_config.tts_provider == 'replicate' %}selected{% endif %}>Replicate</option>
                             <option value="speechify" {% if latest_config.tts_provider == 'speechify' %}selected{% endif %}>Speechify</option>
+                            <option value="inworld" {% if latest_config.tts_provider == 'inworld' %}selected{% endif %}>Inworld</option>
+                            <option value="fish_audio" {% if latest_config.tts_provider == 'fish_audio' %}selected{% endif %}>Fish Audio</option>
                         </select>
                     </div>
-                    
+
+                    <!-- Inworld Voice/Model -->
+                    <div id="config_inworld_voice_settings" {% if latest_config.tts_provider != 'inworld' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Voice</label>
+                        <input type="text" id="config_inworld_voice_id" value="{{ latest_config.inworld_voice_id or agent.voice_settings.voice_id or 'Ashley' }}"
+                               placeholder="e.g. Ashley"
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                    </div>
+
+                    <div id="config_inworld_model_settings" {% if latest_config.tts_provider != 'inworld' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">TTS Model</label>
+                        <select id="config_inworld_model" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                            <option value="inworld-tts-1" {% if (agent.voice_settings.model or latest_config.tts_model) == 'inworld-tts-1' %}selected{% endif %}>inworld-tts-1</option>
+                            <option value="inworld-tts-1-max" {% if (agent.voice_settings.model or latest_config.tts_model) == 'inworld-tts-1-max' %}selected{% endif %}>inworld-tts-1-max</option>
+                            <option value="inworld-tts-1.5-mini" {% if (agent.voice_settings.model or latest_config.tts_model) == 'inworld-tts-1.5-mini' %}selected{% endif %}>inworld-tts-1.5-mini</option>
+                            <option value="inworld-tts-1.5-max" {% if (agent.voice_settings.model or latest_config.tts_model or 'inworld-tts-1.5-max') == 'inworld-tts-1.5-max' %}selected{% endif %}>inworld-tts-1.5-max</option>
+                        </select>
+                        <p class="text-xs text-dark-text-secondary mt-2">Inworld TTS model (default: inworld-tts-1.5-max).</p>
+                    </div>
+
+                    <!-- Fish Audio Voice -->
+                    <div id="config_fish_audio_voice_settings" {% if latest_config.tts_provider != 'fish_audio' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Reference ID (Voice)</label>
+                        <input type="text" id="config_fish_audio_reference_id" value="{{ agent.voice_settings.voice_id or '8ef4a238714b45718ce04243307c57a7' }}"
+                               placeholder="e.g. 8ef4a238714b45718ce04243307c57a7"
+                               class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                        <p class="text-xs text-dark-text-secondary mt-2">Fish Audio voice reference ID from <a href="https://fish.audio" target="_blank" class="text-brand-teal hover:underline">fish.audio</a>.</p>
+                    </div>
+
+                    <!-- Fish Audio Emotion Control -->
+                    {% set _fa_pc = agent.voice_settings.provider_config if agent.voice_settings.provider_config else {} %}
+                    <div id="config_fish_audio_emotion_settings" class="md:col-span-2" {% if latest_config.tts_provider != 'fish_audio' %}style="display:none"{% endif %}>
+                        <label class="flex items-center text-sm font-medium text-dark-text cursor-pointer">
+                            <input type="checkbox" id="config_fish_audio_emotions_enabled"
+                                   class="rounded border-dark-border text-brand-teal shadow-sm focus:border-brand-teal/50 focus:ring focus:ring-brand-teal/30 focus:ring-opacity-50 mr-2"
+                                   {% if agent.voice_settings.fish_emotions_enabled is not defined or agent.voice_settings.fish_emotions_enabled != false %}checked{% endif %}>
+                            <span>Enable emotion control</span>
+                        </label>
+                        <p class="text-xs text-dark-text-secondary mt-1">
+                            When enabled, the LLM adds emotion tags (e.g. [happy], [empathetic]) to each sentence.
+                            Fish Audio's TTS renders these as expressive vocal inflections.
+                            Tags are automatically stripped from transcripts.
+                        </p>
+                    </div>
+
+                    <!-- Fish Audio Model -->
+                    <div id="config_fish_audio_model_settings" {% if latest_config.tts_provider != 'fish_audio' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">TTS Model</label>
+                        <select id="config_fish_audio_model" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                            <option value="s1" {% if agent.voice_settings.model == 's1' %}selected{% endif %}>s1</option>
+                            <option value="s2-pro" {% if agent.voice_settings.model == 's2-pro' or not agent.voice_settings.model %}selected{% endif %}>s2-pro (Recommended)</option>
+                        </select>
+                        <p class="text-xs text-dark-text-secondary mt-2">Fish Audio TTS model backend.</p>
+                    </div>
+
+                    <!-- Fish Audio Latency Mode -->
+                    <div id="config_fish_audio_latency_settings" {% if latest_config.tts_provider != 'fish_audio' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Latency Mode</label>
+                        <select id="config_fish_audio_latency" class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-teal text-dark-text">
+                            <option value="balanced" {% if _fa_pc.get('latency_mode', 'balanced') == 'balanced' %}selected{% endif %}>Balanced (~300ms)</option>
+                            <option value="normal" {% if _fa_pc.get('latency_mode') == 'normal' %}selected{% endif %}>Normal (~500ms)</option>
+                        </select>
+                        <p class="text-xs text-dark-text-secondary mt-2">Lower latency may trade off quality.</p>
+                    </div>
+
+                    <!-- Fish Audio Temperature -->
+                    <div id="config_fish_audio_temperature_settings" {% if latest_config.tts_provider != 'fish_audio' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Voice Temperature</label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" id="config_fish_audio_temperature" min="0.0" max="2.0" step="0.05"
+                                   value="{{ _fa_pc.get('temperature', 0.7) }}"
+                                   class="flex-1 h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer accent-brand-teal"
+                                   oninput="document.getElementById('config_fish_audio_temp_val').textContent = parseFloat(this.value).toFixed(2)">
+                            <span id="config_fish_audio_temp_val" class="text-sm font-medium text-dark-text w-12">{{ '%.2f' % (_fa_pc.get('temperature', 0.7)|float) }}</span>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-2">Controls voice expressiveness (0.0–2.0). Stored for forward compatibility.</p>
+                    </div>
+
+                    <!-- Fish Audio Speed -->
+                    <div id="config_fish_audio_speed_settings" {% if latest_config.tts_provider != 'fish_audio' %}style="display:none"{% endif %}>
+                        <label class="block text-sm font-medium text-dark-text mb-2">Speech Speed</label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" id="config_fish_audio_speed" min="0.5" max="2.0" step="0.05"
+                                   value="{{ agent.voice_settings.tts_speed or _fa_pc.get('speaking_rate', 1.0) }}"
+                                   class="flex-1 h-2 bg-dark-elevated rounded-lg appearance-none cursor-pointer accent-brand-teal"
+                                   oninput="document.getElementById('config_fish_audio_speed_val').textContent = this.value + 'x'">
+                            <span id="config_fish_audio_speed_val" class="text-sm font-medium text-dark-text w-12">{{ (agent.voice_settings.tts_speed or _fa_pc.get('speaking_rate', 1.0)) }}x</span>
+                        </div>
+                        <p class="text-xs text-dark-text-secondary mt-2">Speed multiplier: 0.5x (slow) to 2.0x (fast). Default 1.0x.</p>
+                    </div>
+
                     <!-- OpenAI Voice -->
                     <div id="config_openai_voice_settings" {% if latest_config.tts_provider != 'openai' %}style="display:none"{% endif %}>
                         <label class="block text-sm font-medium text-dark-text mb-2">Voice</label>
@@ -782,16 +874,104 @@
                         </p>
                     </div>
 
-                    <!-- Bithuman Settings (Local mode only - requires .imx model) -->
+                    <!-- Bithuman Settings -->
                     <div id="bithumanSettings" {% if avatar_prov and avatar_prov != 'bithuman' %}style="display: none;"{% endif %}>
-                        <!-- IMX Model Path (required) -->
+                        <!-- IMX Model Upload -->
                         <div class="mb-6">
-                            <label class="block text-sm font-medium text-dark-text mb-2">IMX Model Path <span class="text-red-500">*</span></label>
-                            <input type="text" id="avatarModelPath" value="{{ vs.get('avatar_model_path', '/app/models/farah_qubit.imx') if vs is mapping else '/app/models/farah_qubit.imx' }}"
-                                   class="w-full px-3 py-2 bg-dark-elevated border border-dark-border rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-dark-text"
-                                   placeholder="/app/models/your_avatar.imx">
-                            <p class="text-xs text-dark-text-secondary mt-2">
-                                Path to the .imx model file inside the agent container. Models are stored in /app/models/
+                            <label class="block text-sm font-medium text-dark-text mb-2">IMX Model File <span class="text-red-500">*</span></label>
+
+                            <!-- Current model indicator -->
+                            {% set current_model_path = vs.get('avatar_model_path', '') if vs is mapping else '' %}
+                            <div id="currentImxModel" class="mb-3">
+                                {% if current_model_path and current_model_path.startswith('supabase://') %}
+                                {% set imx_filename = current_model_path.split('/')[-1] %}
+                                <div class="flex items-center gap-4 p-4 bg-gradient-to-r from-green-900/30 to-emerald-900/20 border border-green-700 rounded-lg shadow-sm">
+                                    <div class="flex-shrink-0 w-12 h-12 bg-green-900/40 rounded-lg flex items-center justify-center">
+                                        <svg class="w-7 h-7 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/>
+                                        </svg>
+                                    </div>
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-sm font-semibold text-green-300">Avatar Model Loaded</span>
+                                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-800/50 text-green-300">Active</span>
+                                        </div>
+                                        <p class="text-sm text-green-400 font-mono truncate mt-0.5" title="{{ imx_filename }}">{{ imx_filename }}</p>
+                                        <p class="text-xs text-green-500/70 mt-0.5">Stored in Supabase Storage</p>
+                                    </div>
+                                    <button type="button" onclick="document.getElementById('imxFileInput').click()" class="flex-shrink-0 text-xs text-green-400 hover:text-green-300 font-medium px-3 py-1.5 rounded-md hover:bg-green-900/30 transition-colors">
+                                        Replace
+                                    </button>
+                                </div>
+                                {% elif current_model_path %}
+                                <div class="flex items-center gap-4 p-4 bg-yellow-900/20 border border-yellow-700/50 rounded-lg shadow-sm">
+                                    <div class="flex-shrink-0 w-12 h-12 bg-yellow-900/30 rounded-lg flex items-center justify-center">
+                                        <svg class="w-7 h-7 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+                                        </svg>
+                                    </div>
+                                    <div class="flex-1 min-w-0">
+                                        <span class="text-sm font-semibold text-yellow-400">Legacy Model Path</span>
+                                        <p class="text-sm text-yellow-500 font-mono truncate mt-0.5">{{ current_model_path }}</p>
+                                        <p class="text-xs text-yellow-600 mt-0.5">Re-upload to migrate to cloud storage</p>
+                                    </div>
+                                </div>
+                                {% else %}
+                                <div class="flex items-center gap-4 p-4 bg-dark-elevated/50 border border-dark-border border-dashed rounded-lg">
+                                    <div class="flex-shrink-0 w-12 h-12 bg-dark-elevated rounded-lg flex items-center justify-center">
+                                        <svg class="w-7 h-7 text-dark-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/>
+                                        </svg>
+                                    </div>
+                                    <div class="flex-1">
+                                        <span class="text-sm font-medium text-dark-text-secondary">No avatar model uploaded</span>
+                                        <p class="text-xs text-dark-text-secondary/70 mt-0.5">Upload an .imx file below to enable the video avatar</p>
+                                    </div>
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Hidden field to store the path (read by save JS) -->
+                            <input type="hidden" id="avatarModelPath" value="{{ current_model_path }}">
+
+                            <!-- File upload zone -->
+                            <div id="imxUploadZone"
+                                 class="flex justify-center px-6 pt-5 pb-6 border-2 border-dark-border border-dashed rounded-md hover:border-purple-500 transition-colors cursor-pointer"
+                                 onclick="document.getElementById('imxFileInput').click()"
+                                 ondragover="event.preventDefault(); this.classList.add('border-purple-500')"
+                                 ondragleave="this.classList.remove('border-purple-500')"
+                                 ondrop="event.preventDefault(); this.classList.remove('border-purple-500'); handleImxFile(event.dataTransfer.files[0])">
+                                <div class="space-y-1 text-center">
+                                    <svg id="imxUploadIcon" class="mx-auto h-12 w-12 text-dark-text-secondary" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                                        <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    <div class="flex text-sm text-dark-text-secondary">
+                                        <label class="relative cursor-pointer rounded-md font-medium text-purple-400 hover:text-purple-300 focus-within:outline-none">
+                                            <span>Upload an IMX file</span>
+                                            <input id="imxFileInput" type="file" class="sr-only" accept=".imx" onchange="handleImxFile(this.files[0])">
+                                        </label>
+                                        <p class="pl-1">or drag and drop</p>
+                                    </div>
+                                    <p class="text-xs text-dark-text-secondary">.imx files only, up to 500MB</p>
+                                </div>
+                            </div>
+
+                            <!-- Upload progress -->
+                            <div id="imxUploadProgress" class="hidden mt-3">
+                                <div class="flex items-center gap-3">
+                                    <div class="flex-1 bg-dark-elevated rounded-full h-2">
+                                        <div id="imxProgressBar" class="bg-purple-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                    </div>
+                                    <span id="imxProgressText" class="text-sm text-dark-text-secondary">0%</span>
+                                </div>
+                                <p id="imxUploadStatus" class="text-xs text-dark-text-secondary mt-1">Uploading...</p>
+                            </div>
+
+                            <!-- Upload result message -->
+                            <div id="imxUploadResult" class="hidden mt-3"></div>
+
+                            <p class="mt-2 text-xs text-dark-text-secondary">
+                                Upload your .imx model file. Create IMX models at <a href="https://imaginex.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Bithuman ImagineX Console</a>.
                             </p>
                         </div>
 
@@ -813,7 +993,7 @@
                         <div class="rounded-md bg-dark-elevated/50 border border-dark-border px-4 py-3">
                             <p class="text-xs text-dark-text-secondary">
                                 <i class="bi bi-info-circle mr-1"></i>
-                                Video chat is powered by <a href="https://www.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Bithuman</a> (local mode).
+                                Video chat is powered by <a href="https://www.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">Bithuman</a>.
                                 Create IMX models at <a href="https://imaginex.bithuman.ai" target="_blank" class="text-purple-400 hover:text-purple-300">ImagineX Console</a>.
                                 Ensure the Bithuman API Secret is configured in the client settings.
                             </p>
@@ -1819,6 +1999,8 @@ async function saveAgent() {
         voiceSettings.voice_id = document.getElementById('config_elevenlabs_voice_id')?.value || '';
     } else if (ttsProvider === 'cartesia') {
         voiceSettings.voice_id = document.getElementById('config_cartesia_voice_id')?.value || '';
+    } else if (ttsProvider === 'inworld') {
+        voiceSettings.voice_id = document.getElementById('config_inworld_voice_id')?.value || 'Ashley';
     }
     
     // First check if config form dropdowns exist and use their values directly
@@ -1863,9 +2045,34 @@ async function saveAgent() {
             // Dynamic emotion expression - agent chooses emotions based on context
             const emotionToggle = document.getElementById('config_cartesia_emotions_enabled');
             voiceSettings.cartesia_emotions_enabled = emotionToggle?.checked || false;
+        } else if (ttsProvider === 'inworld') {
+            const inworldModelEl = document.getElementById('config_inworld_model');
+            voiceSettings.model = inworldModelEl ? (inworldModelEl.value || 'inworld-tts-1.5-max') : 'inworld-tts-1.5-max';
+            voiceSettings.cartesia_emotions_enabled = false;
+        } else if (ttsProvider === 'fish_audio') {
+            const fishRefEl = document.getElementById('config_fish_audio_reference_id');
+            voiceSettings.voice_id = fishRefEl ? fishRefEl.value : '8ef4a238714b45718ce04243307c57a7';
+            const fishModelEl = document.getElementById('config_fish_audio_model');
+            voiceSettings.model = fishModelEl ? fishModelEl.value : 's2-pro';
+            const fishLatencyEl = document.getElementById('config_fish_audio_latency');
+            const fishTempEl = document.getElementById('config_fish_audio_temperature');
+            const fishSpeedEl = document.getElementById('config_fish_audio_speed');
+            const existingPC = (voiceSettings.provider_config && typeof voiceSettings.provider_config === 'object') ? voiceSettings.provider_config : {};
+            voiceSettings.provider_config = Object.assign({}, existingPC, {
+                latency_mode: fishLatencyEl ? fishLatencyEl.value : 'balanced',
+                temperature: fishTempEl ? parseFloat(fishTempEl.value) : 0.7,
+                speaking_rate: fishSpeedEl ? parseFloat(fishSpeedEl.value) : 1.0
+            });
+            if (fishSpeedEl) {
+                voiceSettings.tts_speed = parseFloat(fishSpeedEl.value);
+            }
+            voiceSettings.cartesia_emotions_enabled = false;
+            const fishEmotionToggle = document.getElementById('config_fish_audio_emotions_enabled');
+            voiceSettings.fish_emotions_enabled = fishEmotionToggle?.checked ?? true;
         } else {
             voiceSettings.model = null;
             voiceSettings.cartesia_emotions_enabled = false;
+            voiceSettings.fish_emotions_enabled = false;
         }
     } else if (providerConfig && providerConfig.tts) {
         voiceSettings.tts_provider = providerConfig.tts.provider;
@@ -1931,9 +2138,8 @@ async function saveAgent() {
         voiceSettings.avatar_provider = avatarProvider;
 
         if (avatarProvider === 'bithuman') {
-            // Bithuman only supports local .imx models (cloud mode removed)
             voiceSettings.avatar_model_path = document.getElementById('avatarModelPath')?.value || null;
-            voiceSettings.avatar_image_url = null;  // Cloud mode removed
+            voiceSettings.avatar_image_url = null;
             voiceSettings.avatar_model_type = document.getElementById('avatarModelType')?.value || 'expression';
             // Clear other provider settings
             voiceSettings.avatar_id = null;
@@ -2633,6 +2839,170 @@ function toggleAvatarSettings() {
             avatarSection.classList.add('hidden');
         }
     }
+}
+
+// ---- IMX Upload Helpers ----
+async function handleImxFile(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.imx')) {
+        showImxResult('error', 'Only .imx files are accepted');
+        return;
+    }
+    if (file.size > 500 * 1024 * 1024) {
+        showImxResult('error', 'File exceeds 500 MB limit');
+        return;
+    }
+
+    const uploadZone = document.getElementById('imxUploadZone');
+    const progressContainer = document.getElementById('imxUploadProgress');
+    const progressBar = document.getElementById('imxProgressBar');
+    const progressText = document.getElementById('imxProgressText');
+    const statusText = document.getElementById('imxUploadStatus');
+    const resultContainer = document.getElementById('imxUploadResult');
+
+    // Reset UI
+    resultContainer.classList.add('hidden');
+    progressContainer.classList.remove('hidden');
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
+    statusText.textContent = 'Requesting upload URL...';
+    uploadZone.style.opacity = '0.5';
+    uploadZone.style.pointerEvents = 'none';
+
+    try {
+        // Step 1: Get TUS upload credentials from our server (small request)
+        const credResp = await fetch(`/admin/agents/{{ agent.client_id }}/{{ agent.slug }}/upload-imx`, {
+            method: 'POST',
+        });
+        if (!credResp.ok) {
+            const err = await credResp.json().catch(() => ({}));
+            throw new Error(err.detail || `Server error (${credResp.status})`);
+        }
+        const creds = await credResp.json();
+        if (!creds.success || !creds.tus_endpoint) {
+            throw new Error('Failed to get upload credentials');
+        }
+
+        statusText.textContent = 'Starting upload...';
+
+        // Step 2: TUS resumable upload directly to Supabase (bypasses Cloudflare + 50MB limit)
+        // 2a: Create the upload session
+        const bucketB64 = btoa(creds.bucket_name);
+        const objectB64 = btoa(creds.object_name);
+        const ctypeB64 = btoa('application/octet-stream');
+
+        const createResp = await fetch(creds.tus_endpoint, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${creds.auth_token}`,
+                'apikey': creds.auth_token,
+                'x-upsert': 'true',
+                'upload-length': String(file.size),
+                'upload-metadata': `bucketName ${bucketB64},objectName ${objectB64},contentType ${ctypeB64}`,
+                'tus-resumable': '1.0.0',
+            },
+        });
+        if (!createResp.ok) {
+            const body = await createResp.text();
+            throw new Error(`Failed to create upload session (${createResp.status}): ${body}`);
+        }
+        const tusUrl = createResp.headers.get('location');
+        if (!tusUrl) throw new Error('No upload location returned');
+
+        statusText.textContent = 'Uploading to storage...';
+
+        // 2b: Upload the file content via PATCH (supports progress)
+        const xhr = new XMLHttpRequest();
+        await new Promise((resolve, reject) => {
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    progressBar.style.width = pct + '%';
+                    progressText.textContent = pct + '%';
+                    statusText.textContent = `Uploading... ${(e.loaded / (1024*1024)).toFixed(1)} / ${(e.total / (1024*1024)).toFixed(1)} MB`;
+                }
+            });
+            xhr.addEventListener('load', () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve();
+                } else {
+                    let msg = `Upload failed (${xhr.status})`;
+                    try { const b = JSON.parse(xhr.responseText); msg = b.message || b.error || msg; } catch(e) {}
+                    reject(new Error(msg));
+                }
+            });
+            xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+            xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
+
+            xhr.open('PATCH', tusUrl);
+            xhr.setRequestHeader('Authorization', `Bearer ${creds.auth_token}`);
+            xhr.setRequestHeader('apikey', creds.auth_token);
+            xhr.setRequestHeader('tus-resumable', '1.0.0');
+            xhr.setRequestHeader('upload-offset', '0');
+            xhr.setRequestHeader('content-type', 'application/offset+octet-stream');
+            xhr.send(file);
+        });
+
+        // Success
+        progressContainer.classList.add('hidden');
+        uploadZone.style.opacity = '1';
+        uploadZone.style.pointerEvents = 'auto';
+        document.getElementById('avatarModelPath').value = creds.storage_path;
+        updateImxModelIndicator(creds.storage_path);
+        showImxResult('success', 'IMX model uploaded successfully! Click "Save Changes" to apply.');
+
+    } catch (error) {
+        progressContainer.classList.add('hidden');
+        uploadZone.style.opacity = '1';
+        uploadZone.style.pointerEvents = 'auto';
+        showImxResult('error', error.message || 'Upload failed');
+    }
+}
+
+function showImxResult(type, message) {
+    const container = document.getElementById('imxUploadResult');
+    container.classList.remove('hidden');
+    if (type === 'success') {
+        container.innerHTML = `
+            <div class="flex items-center gap-2 p-3 bg-green-900/30 border border-green-700 rounded-md">
+                <svg class="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                <span class="text-sm text-green-300">${message}</span>
+            </div>`;
+    } else {
+        container.innerHTML = `
+            <div class="flex items-center gap-2 p-3 bg-red-900/30 border border-red-700 rounded-md">
+                <svg class="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                </svg>
+                <span class="text-sm text-red-300">${message}</span>
+            </div>`;
+    }
+}
+
+function updateImxModelIndicator(storagePath) {
+    const container = document.getElementById('currentImxModel');
+    const filename = storagePath.split('/').pop() || 'model.imx';
+    container.innerHTML = `
+        <div class="flex items-center gap-4 p-4 bg-gradient-to-r from-green-900/30 to-emerald-900/20 border border-green-700 rounded-lg shadow-sm">
+            <div class="flex-shrink-0 w-12 h-12 bg-green-900/40 rounded-lg flex items-center justify-center">
+                <svg class="w-7 h-7 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/>
+                </svg>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-sm font-semibold text-green-300">Avatar Model Loaded</span>
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-800/50 text-green-300">Active</span>
+                </div>
+                <p class="text-sm text-green-400 font-mono truncate mt-0.5" title="${filename}">${filename}</p>
+                <p class="text-xs text-green-500/70 mt-0.5">Stored in Supabase Storage</p>
+            </div>
+            <button type="button" onclick="document.getElementById('imxFileInput').click()" class="flex-shrink-0 text-xs text-green-400 hover:text-green-300 font-medium px-3 py-1.5 rounded-md hover:bg-green-900/30 transition-colors">
+                Replace
+            </button>
+        </div>`;
 }
 
 function toggleAvatarProviderSettings() {
@@ -3690,6 +4060,22 @@ function updateTTSSettings() {
     document.getElementById('config_openai_voice_settings').style.display = 'none';
     document.getElementById('config_elevenlabs_voice_settings').style.display = 'none';
     document.getElementById('config_cartesia_voice_settings').style.display = 'none';
+    const inworldVoice = document.getElementById('config_inworld_voice_settings');
+    const inworldModel = document.getElementById('config_inworld_model_settings');
+    if (inworldVoice) inworldVoice.style.display = 'none';
+    if (inworldModel) inworldModel.style.display = 'none';
+    const fishAudioVoice = document.getElementById('config_fish_audio_voice_settings');
+    const fishAudioModel = document.getElementById('config_fish_audio_model_settings');
+    const fishAudioLatency = document.getElementById('config_fish_audio_latency_settings');
+    const fishAudioTemp = document.getElementById('config_fish_audio_temperature_settings');
+    const fishAudioSpeed = document.getElementById('config_fish_audio_speed_settings');
+    const fishAudioEmotion = document.getElementById('config_fish_audio_emotion_settings');
+    if (fishAudioVoice) fishAudioVoice.style.display = 'none';
+    if (fishAudioModel) fishAudioModel.style.display = 'none';
+    if (fishAudioLatency) fishAudioLatency.style.display = 'none';
+    if (fishAudioTemp) fishAudioTemp.style.display = 'none';
+    if (fishAudioSpeed) fishAudioSpeed.style.display = 'none';
+    if (fishAudioEmotion) fishAudioEmotion.style.display = 'none';
     const cartesiaModel = document.getElementById('config_cartesia_model_settings');
     const cartesiaSpeed = document.getElementById('config_cartesia_speed_settings');
     const cartesiaEmotion = document.getElementById('config_cartesia_emotion_settings');
@@ -3707,6 +4093,16 @@ function updateTTSSettings() {
         if (cartesiaModel) cartesiaModel.style.display = '';
         if (cartesiaSpeed) cartesiaSpeed.style.display = '';
         updateCartesiaEmotionSettings();
+    } else if (provider === 'inworld') {
+        if (inworldVoice) inworldVoice.style.display = '';
+        if (inworldModel) inworldModel.style.display = '';
+    } else if (provider === 'fish_audio') {
+        if (fishAudioVoice) fishAudioVoice.style.display = '';
+        if (fishAudioModel) fishAudioModel.style.display = '';
+        if (fishAudioLatency) fishAudioLatency.style.display = '';
+        if (fishAudioTemp) fishAudioTemp.style.display = '';
+        if (fishAudioSpeed) fishAudioSpeed.style.display = '';
+        if (fishAudioEmotion) fishAudioEmotion.style.display = '';
     }
 }
 
@@ -3758,6 +4154,11 @@ function applyConfiguration() {
         providerConfig.tts.cartesia_voice_id = document.getElementById('config_cartesia_voice_id').value;
         const selectedCartesiaModel = document.getElementById('config_cartesia_model');
         providerConfig.tts.model = selectedCartesiaModel ? selectedCartesiaModel.value || 'sonic-english' : 'sonic-english';
+    } else if (ttsProvider === 'inworld') {
+        const inworldVoiceEl = document.getElementById('config_inworld_voice_id');
+        const inworldModelEl = document.getElementById('config_inworld_model');
+        providerConfig.tts.voice = inworldVoiceEl ? inworldVoiceEl.value || 'Ashley' : 'Ashley';
+        providerConfig.tts.model = inworldModelEl ? inworldModelEl.value || 'inworld-tts-1.5-max' : 'inworld-tts-1.5-max';
     }
     
     // Update main form fields

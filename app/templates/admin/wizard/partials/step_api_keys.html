@@ -188,6 +188,21 @@
                         >
                     </div>
 
+                    <!-- Inworld API Key (if selected for TTS) -->
+                    <div x-show="stepData.advanced_config.tts_provider === 'inworld'"
+                         class="space-y-2">
+                        <label class="flex items-center justify-between">
+                            <span class="text-sm text-dark-text-secondary">Inworld API Key</span>
+                            <a href="https://platform.inworld.ai/" target="_blank" class="text-xs text-brand-teal hover:underline">Get key</a>
+                        </label>
+                        <input
+                            type="password"
+                            x-model="stepData.api_keys.inworld"
+                            placeholder="Base64-encoded key..."
+                            class="w-full bg-dark-elevated border border-white/10 rounded-lg px-4 py-3 text-white placeholder-dark-text-muted focus:border-brand-teal focus:outline-none"
+                        >
+                    </div>
+
                     <!-- ElevenLabs API Key (if selected for TTS) -->
                     <div x-show="stepData.advanced_config.tts_provider === 'elevenlabs'"
                          class="space-y-2">

@@ -1,14 +1,20 @@
 """
 Agents API endpoints for multi-tenant agent management (Supabase only)
 """
+import logging
+import uuid
+from datetime import datetime
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, File, UploadFile
 from pydantic import BaseModel
 
 from app.models.agent import Agent, AgentCreate, AgentUpdate, AgentInDB, AgentWithClient
 from app.services.agent_service_supabase import AgentService
 from app.services.client_service_supabase import ClientService
 from app.core.dependencies import get_client_service, get_agent_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -124,6 +130,8 @@ async def update_agent(
             "elevenlabs": "elevenlabs_api_key",
             "cartesia": "cartesia_api_key",
             "speechify": "speechify_api_key",
+            "inworld": "inworld_api_key",
+            "fish_audio": "fish_audio_api_key",
             "replicate": "replicate_api_key"
         }
         
@@ -264,6 +272,139 @@ async def sync_agents(
         message=f"Synced {count} agents from Supabase",
         data={"count": count}
     )
+
+
+@router.post("/client/{client_id}/{agent_slug}/upload-imx")
+async def upload_imx_model(
+    client_id: str,
+    agent_slug: str,
+    file: UploadFile = File(...),
+    client_service: ClientService = Depends(get_client_service),
+):
+    """
+    Upload a Bithuman .imx model file to the client's Supabase Storage.
+
+    Returns the ``supabase://`` storage path that should be saved in the
+    agent's ``voice_settings.avatar_model_path``.
+    """
+    # --- Validate the upload -------------------------------------------------
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    if not file.filename.lower().endswith(".imx"):
+        raise HTTPException(status_code=400, detail="Only .imx files are accepted")
+
+    try:
+        contents = await file.read()
+    except Exception as exc:
+        logger.error("Failed to read uploaded IMX file: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to read uploaded file") from exc
+
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    # 500 MB limit (matches the frontend constraint)
+    max_size = 500 * 1024 * 1024
+    if len(contents) > max_size:
+        raise HTTPException(status_code=413, detail="File exceeds 500 MB limit")
+
+    # --- Obtain the client's Supabase connection -----------------------------
+    client_sb = await client_service.get_client_supabase_client(client_id, auto_sync=False)
+    if not client_sb:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not connect to client Supabase project",
+        )
+
+    # --- Upload to Supabase Storage ------------------------------------------
+    bucket_name = "avatars"
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    unique_id = uuid.uuid4().hex[:8]
+    storage_file = f"imx/{client_id}/{agent_slug}_{timestamp}_{unique_id}.imx"
+
+    try:
+        # Ensure bucket exists with a 500 MB file size limit for IMX models
+        bucket_opts = {"public": False, "file_size_limit": "500MB"}
+        try:
+            client_sb.storage.create_bucket(bucket_name, options=bucket_opts)
+        except Exception:
+            # Bucket already exists — update its file size limit
+            try:
+                client_sb.storage.update_bucket(bucket_name, options=bucket_opts)
+            except Exception:
+                pass
+
+        # Files > 6 MB must use the TUS resumable upload protocol;
+        # the standard Supabase upload has a 50 MB API-gateway limit.
+        if len(contents) > 6 * 1024 * 1024:
+            import base64
+            import httpx
+
+            supabase_url = client_sb.supabase_url
+            supabase_key = client_sb.supabase_key
+            tus_endpoint = f"{supabase_url}/storage/v1/upload/resumable"
+
+            bucket_b64 = base64.b64encode(bucket_name.encode()).decode()
+            path_b64 = base64.b64encode(storage_file.encode()).decode()
+            ctype_b64 = base64.b64encode(b"application/octet-stream").decode()
+
+            create_headers = {
+                "Authorization": f"Bearer {supabase_key}",
+                "apikey": supabase_key,
+                "x-upsert": "true",
+                "upload-length": str(len(contents)),
+                "upload-metadata": f"bucketName {bucket_b64},objectName {path_b64},contentType {ctype_b64}",
+                "tus-resumable": "1.0.0",
+            }
+
+            async with httpx.AsyncClient(timeout=600.0) as http_client:
+                # Step 1: create the resumable upload
+                create_resp = await http_client.post(tus_endpoint, headers=create_headers)
+                if create_resp.status_code not in (200, 201):
+                    raise Exception(f"TUS create failed ({create_resp.status_code}): {create_resp.text}")
+
+                upload_url = create_resp.headers.get("location")
+                if not upload_url:
+                    raise Exception("No upload URL returned from TUS endpoint")
+
+                # Step 2: send the file content
+                patch_headers = {
+                    "Authorization": f"Bearer {supabase_key}",
+                    "apikey": supabase_key,
+                    "tus-resumable": "1.0.0",
+                    "upload-offset": "0",
+                    "content-type": "application/offset+octet-stream",
+                }
+                patch_resp = await http_client.patch(upload_url, headers=patch_headers, content=contents)
+                if patch_resp.status_code not in (200, 204):
+                    raise Exception(f"TUS upload failed ({patch_resp.status_code}): {patch_resp.text}")
+
+            logger.info("IMX uploaded via TUS resumable protocol")
+        else:
+            # Standard upload for small files (< 6 MB)
+            client_sb.storage.from_(bucket_name).upload(
+                path=storage_file,
+                file=contents,
+                file_options={"content-type": "application/octet-stream"},
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Supabase storage upload failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Storage upload failed: {exc}") from exc
+
+    storage_path = f"supabase://{bucket_name}/{storage_file}"
+    size_mb = len(contents) / (1024 * 1024)
+    logger.info(
+        "Uploaded IMX model for %s/%s: %s (%.1f MB)",
+        client_id, agent_slug, storage_path, size_mb,
+    )
+
+    return {
+        "success": True,
+        "storage_path": storage_path,
+        "message": f"IMX model uploaded ({size_mb:.1f} MB)",
+    }
 
 
 # Demo endpoints for testing without real Supabase

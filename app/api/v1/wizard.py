@@ -1625,8 +1625,126 @@ async def complete_wizard(
 # Default voice ID for the wizard assistant (Farah Qubit's voice)
 # Farah Qubit's actual Cartesia voice ID from her agent configuration
 WIZARD_VOICE_ID = "1013a0b6-8ce7-44dd-8bce-aadf7ac495a0"
-WIZARD_TTS_MODEL = "sonic-3"  # Cartesia model (Farah uses sonic-3)
+WIZARD_TTS_MODEL = "sonic-3"  # Cartesia model (legacy fallback for cached step audio)
 WIZARD_LLM_MODEL = "llama-3.3-70b-versatile"  # Groq Llama 3.3 70B (verified tool calling support)
+
+# Fallback values used only if we cannot fetch Farah's live agent record from
+# the Autonomite client database. The live settings are the source of truth.
+_FARAH_FALLBACK_VOICE_SETTINGS = {
+    "voice_id": WIZARD_VOICE_ID,
+    "tts_provider": "cartesia",
+    "stt_provider": "cartesia",
+    "llm_provider": "cerebras",
+    "llm_model": "zai-glm-4.7",
+    "model": WIZARD_TTS_MODEL,
+    "temperature": 0.8,
+}
+_FARAH_FALLBACK_SOUND_SETTINGS = {
+    "thinking_sound": "beta1",
+    "thinking_volume": 0.5,
+    "ambient_sound": "office",
+    "ambient_volume": 0.65,
+}
+
+
+# Provider → required api_key column name. Used to pull Farah's provider
+# credentials out of the Autonomite tenant alongside her settings, so the
+# wizard works regardless of what's in the wizard user's own tenant.
+_PROVIDER_KEY_MAP = {
+    "cartesia": "cartesia_api_key",
+    "deepgram": "deepgram_api_key",
+    "elevenlabs": "elevenlabs_api_key",
+    "speechify": "speechify_api_key",
+    "inworld": "inworld_api_key",
+    "fish_audio": "fish_audio_api_key",
+    "openai": "openai_api_key",
+    "groq": "groq_api_key",
+    "cerebras": "cerebras_api_key",
+    "anthropic": "anthropic_api_key",
+    "deepinfra": "deepinfra_api_key",
+}
+
+
+async def _load_farah_live_settings() -> tuple[dict, dict, dict]:
+    """Fetch Farah Qubit's current voice_settings, sound_settings, AND the
+    provider API keys she needs from the Autonomite client database (where
+    her canonical agent record lives).
+
+    The wizard uses Farah as its on-screen guide, but Farah is administered
+    like any other agent inside Autonomite — so updates made through the
+    normal admin UI (e.g. switching her TTS provider from Cartesia to
+    Inworld) should propagate to the wizard automatically without anyone
+    having to edit this file. Crucially, the provider keys MUST come from
+    Autonomite as well: the wizard user's own tenant has no reason to carry
+    a key for whatever exotic provider Farah is currently using.
+
+    Returns a tuple ``(voice_settings, sound_settings, provider_api_keys)``.
+    ``provider_api_keys`` is a dict like ``{"inworld_api_key": "...",
+    "cartesia_api_key": "...", "cerebras_api_key": "..."}`` ready to merge
+    into the agent metadata's ``api_keys``.
+    """
+    try:
+        from supabase import create_client
+        if not supabase_manager._initialized:
+            await supabase_manager.initialize()
+
+        # Pull Autonomite's row in the platform DB. We need its Supabase
+        # credentials AND every provider api_key column so we can copy
+        # whichever ones Farah's providers depend on.
+        client_row = supabase_manager.admin_client.table("clients").select(
+            "*"
+        ).eq("name", "Autonomite").limit(1).execute()
+        if not client_row.data:
+            logger.warning("Autonomite client row not found; using fallback Farah settings")
+            return dict(_FARAH_FALLBACK_VOICE_SETTINGS), dict(_FARAH_FALLBACK_SOUND_SETTINGS), {}
+
+        autonomite_row = client_row.data[0]
+        autonomite_url = autonomite_row.get("supabase_url")
+        autonomite_key = autonomite_row.get("supabase_service_role_key")
+        if not autonomite_url or not autonomite_key:
+            logger.warning("Autonomite Supabase credentials missing; using fallback Farah settings")
+            return dict(_FARAH_FALLBACK_VOICE_SETTINGS), dict(_FARAH_FALLBACK_SOUND_SETTINGS), {}
+
+        autonomite_sb = create_client(autonomite_url, autonomite_key)
+        agent_row = autonomite_sb.table("agents").select(
+            "voice_settings,sound_settings"
+        ).eq("slug", "farah").limit(1).execute()
+        if not agent_row.data:
+            logger.warning("Farah agent (slug=farah) not found in Autonomite DB; using fallback")
+            return dict(_FARAH_FALLBACK_VOICE_SETTINGS), dict(_FARAH_FALLBACK_SOUND_SETTINGS), {}
+
+        voice = agent_row.data[0].get("voice_settings") or {}
+        sound = agent_row.data[0].get("sound_settings") or {}
+
+        # Merge over fallbacks so any field Farah's record omits stays sane.
+        merged_voice = {**_FARAH_FALLBACK_VOICE_SETTINGS, **voice}
+        merged_sound = {**_FARAH_FALLBACK_SOUND_SETTINGS, **sound}
+
+        # Collect every provider key Farah's current configuration needs.
+        # Prefer Autonomite (BYOK source of truth), then env vars as a
+        # platform-wide backstop for keys that are intentionally provided at
+        # the platform level (e.g. INWORLD_API_KEY in /root/sidekick-forge/.env).
+        provider_keys: dict = {}
+        for provider_field in ("tts_provider", "stt_provider", "llm_provider"):
+            provider_name = (merged_voice.get(provider_field) or "").lower()
+            key_col = _PROVIDER_KEY_MAP.get(provider_name)
+            if not key_col:
+                continue
+            key_value = autonomite_row.get(key_col) or os.getenv(key_col.upper())
+            if key_value:
+                provider_keys[key_col] = key_value
+
+        logger.info(
+            f"Loaded live Farah settings from Autonomite DB: "
+            f"tts_provider={merged_voice.get('tts_provider')}, "
+            f"model={merged_voice.get('model')}, "
+            f"voice_id={merged_voice.get('voice_id')}, "
+            f"injected_provider_keys={list(provider_keys.keys())}"
+        )
+        return merged_voice, merged_sound, provider_keys
+    except Exception as e:
+        logger.error(f"Failed to load live Farah settings, falling back: {e}")
+        return dict(_FARAH_FALLBACK_VOICE_SETTINGS), dict(_FARAH_FALLBACK_SOUND_SETTINGS), {}
 
 # Step prompts for the wizard
 WIZARD_STEP_PROMPTS = {
@@ -1700,77 +1818,72 @@ async def get_step_prompt(step_number: int):
 @router.post("/tts")
 async def synthesize_speech(request: TTSRequest):
     """
-    Synthesize speech using Cartesia TTS.
+    Synthesize speech using Farah's live TTS provider.
 
-    Uses Farah Qubit's voice configuration to generate audio for the wizard.
+    Uses Farah Qubit's current voice configuration (from the Autonomite DB)
+    to generate audio for the wizard.  Supports Fish Audio, Cartesia, and
+    any future provider configured on Farah's agent record.
     Returns audio as a streaming response.
     """
-    # Get Cartesia API key from environment
-    cartesia_api_key = os.getenv("CARTESIA_API_KEY")
-    if not cartesia_api_key:
-        # Try to get from a default client
-        try:
-            if not supabase_manager._initialized:
-                await supabase_manager.initialize()
-
-            # Get Autonomite client's API key (default client)
-            result = supabase_manager.admin_client.table("clients").select(
-                "cartesia_api_key"
-            ).eq("name", "Autonomite").limit(1).execute()
-
-            if result.data:
-                cartesia_api_key = result.data[0].get("cartesia_api_key")
-        except Exception as e:
-            logger.error(f"Error getting Cartesia API key: {e}")
-
-    if not cartesia_api_key:
-        raise HTTPException(
-            status_code=500,
-            detail="Cartesia API key not configured. Please contact support."
-        )
-
-    voice_id = request.voice_id or WIZARD_VOICE_ID
-    model = request.model or WIZARD_TTS_MODEL
-
-    # Cartesia TTS API endpoint
-    cartesia_url = "https://api.cartesia.ai/tts/bytes"
-
-    headers = {
-        "X-API-Key": cartesia_api_key,
-        "Cartesia-Version": "2024-06-10",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "model_id": model,
-        "transcript": request.text,
-        "voice": {
-            "mode": "id",
-            "id": voice_id
-        },
-        "output_format": {
-            "container": "mp3",
-            "encoding": "mp3",
-            "sample_rate": 44100
-        }
-    }
+    farah_voice, _farah_sound, farah_keys = await _load_farah_live_settings()
+    tts_provider = (farah_voice.get("tts_provider") or "cartesia").lower()
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                cartesia_url,
-                headers=headers,
-                json=payload
-            )
+            if tts_provider == "fish_audio":
+                fish_key = farah_keys.get("fish_audio_api_key") or os.getenv("FISH_API_KEY")
+                if not fish_key:
+                    raise HTTPException(status_code=500, detail="Fish Audio API key not configured")
+
+                fish_model = farah_voice.get("model") or farah_voice.get("tts_model") or "s2-pro"
+                fish_reference_id = request.voice_id or farah_voice.get("voice_id") or "8ef4a238714b45718ce04243307c57a7"
+
+                response = await client.post(
+                    "https://api.fish.audio/v1/tts",
+                    headers={
+                        "Authorization": f"Bearer {fish_key}",
+                        "Content-Type": "application/json",
+                        "model": fish_model,
+                    },
+                    json={
+                        "text": request.text,
+                        "reference_id": fish_reference_id,
+                        "format": "mp3",
+                        "mp3_bitrate": 128,
+                        "sample_rate": 44100,
+                    },
+                )
+            else:
+                # Cartesia TTS (legacy fallback)
+                cartesia_key = farah_keys.get("cartesia_api_key") or os.getenv("CARTESIA_API_KEY")
+                if not cartesia_key:
+                    raise HTTPException(status_code=500, detail="Cartesia API key not configured")
+
+                voice_id = request.voice_id or farah_voice.get("voice_id") or WIZARD_VOICE_ID
+                model = request.model or farah_voice.get("model") or WIZARD_TTS_MODEL
+
+                response = await client.post(
+                    "https://api.cartesia.ai/tts/bytes",
+                    headers={
+                        "X-API-Key": cartesia_key,
+                        "Cartesia-Version": "2024-06-10",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model_id": model,
+                        "transcript": request.text,
+                        "voice": {"mode": "id", "id": voice_id},
+                        "output_format": {"container": "mp3", "encoding": "mp3", "sample_rate": 44100},
+                    },
+                )
 
             if response.status_code != 200:
-                logger.error(f"Cartesia TTS error: {response.status_code} - {response.text}")
+                logger.error(f"{tts_provider} TTS error: {response.status_code} - {response.text}")
                 raise HTTPException(
                     status_code=response.status_code,
                     detail=f"TTS synthesis failed: {response.text}"
                 )
 
-            # Return audio as streaming response
             return StreamingResponse(
                 iter([response.content]),
                 media_type="audio/mpeg",
@@ -1783,7 +1896,7 @@ async def synthesize_speech(request: TTSRequest):
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="TTS request timed out")
     except httpx.RequestError as e:
-        logger.error(f"Cartesia TTS request error: {e}")
+        logger.error(f"{tts_provider} TTS request error: {e}")
         raise HTTPException(status_code=502, detail="Failed to connect to TTS service")
 
 
@@ -1834,7 +1947,9 @@ async def generate_tts_cache():
     """
     Pre-generate and cache all wizard step TTS audio files.
 
-    Admin endpoint to populate the audio cache.
+    Admin endpoint to populate the audio cache.  Uses Farah's live TTS
+    settings from the Autonomite database so the cached audio always matches
+    her current provider (e.g. Fish Audio, Cartesia, etc.).
     """
     # Use container path first, fallback to host path
     for cache_dir_candidate in [
@@ -1851,29 +1966,11 @@ async def generate_tts_cache():
     else:
         raise HTTPException(status_code=500, detail="Cannot find writable static directory")
 
-    # Get Cartesia API key
-    cartesia_api_key = os.getenv("CARTESIA_API_KEY")
-    if not cartesia_api_key:
-        try:
-            if not supabase_manager._initialized:
-                await supabase_manager.initialize()
-            result = supabase_manager.admin_client.table("clients").select(
-                "cartesia_api_key"
-            ).eq("name", "Autonomite").limit(1).execute()
-            if result.data:
-                cartesia_api_key = result.data[0].get("cartesia_api_key")
-        except Exception as e:
-            logger.error(f"Error getting Cartesia API key: {e}")
-
-    if not cartesia_api_key:
-        raise HTTPException(status_code=500, detail="Cartesia API key not configured")
+    # Load Farah's live settings to determine which TTS provider to use
+    farah_voice, _farah_sound, farah_keys = await _load_farah_live_settings()
+    tts_provider = (farah_voice.get("tts_provider") or "cartesia").lower()
 
     results = []
-    headers = {
-        "X-API-Key": cartesia_api_key,
-        "Cartesia-Version": "2024-06-10",
-        "Content-Type": "application/json"
-    }
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         for step_num, prompts in WIZARD_STEP_PROMPTS.items():
@@ -1881,31 +1978,66 @@ async def generate_tts_cache():
             cache_path = cache_dir / f"step_{step_num}.mp3"
 
             try:
-                payload = {
-                    "model_id": WIZARD_TTS_MODEL,
-                    "transcript": text,
-                    "voice": {"mode": "id", "id": WIZARD_VOICE_ID},
-                    "output_format": {"container": "mp3", "encoding": "mp3", "sample_rate": 44100}
-                }
+                if tts_provider == "fish_audio":
+                    # Fish Audio TTS
+                    fish_key = farah_keys.get("fish_audio_api_key") or os.getenv("FISH_API_KEY")
+                    if not fish_key:
+                        raise ValueError("Fish Audio API key not available")
 
-                response = await client.post(
-                    "https://api.cartesia.ai/tts/bytes",
-                    headers=headers,
-                    json=payload
-                )
+                    fish_model = farah_voice.get("model") or farah_voice.get("tts_model") or "s2-pro"
+                    fish_reference_id = farah_voice.get("voice_id") or "8ef4a238714b45718ce04243307c57a7"
+
+                    response = await client.post(
+                        "https://api.fish.audio/v1/tts",
+                        headers={
+                            "Authorization": f"Bearer {fish_key}",
+                            "Content-Type": "application/json",
+                            "model": fish_model,
+                        },
+                        json={
+                            "text": text,
+                            "reference_id": fish_reference_id,
+                            "format": "mp3",
+                            "mp3_bitrate": 128,
+                            "sample_rate": 44100,
+                        },
+                    )
+                else:
+                    # Cartesia TTS (legacy fallback)
+                    cartesia_key = farah_keys.get("cartesia_api_key") or os.getenv("CARTESIA_API_KEY")
+                    if not cartesia_key:
+                        raise ValueError("Cartesia API key not available")
+
+                    voice_id = farah_voice.get("voice_id") or WIZARD_VOICE_ID
+                    model = farah_voice.get("model") or WIZARD_TTS_MODEL
+
+                    response = await client.post(
+                        "https://api.cartesia.ai/tts/bytes",
+                        headers={
+                            "X-API-Key": cartesia_key,
+                            "Cartesia-Version": "2024-06-10",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model_id": model,
+                            "transcript": text,
+                            "voice": {"mode": "id", "id": voice_id},
+                            "output_format": {"container": "mp3", "encoding": "mp3", "sample_rate": 44100},
+                        },
+                    )
 
                 if response.status_code == 200:
                     with open(cache_path, "wb") as f:
                         f.write(response.content)
-                    results.append({"step": step_num, "status": "success", "path": str(cache_path)})
-                    logger.info(f"Cached TTS for step {step_num}: {cache_path}")
+                    results.append({"step": step_num, "status": "success", "path": str(cache_path), "provider": tts_provider})
+                    logger.info(f"Cached TTS for step {step_num} via {tts_provider}: {cache_path}")
                 else:
                     results.append({"step": step_num, "status": "error", "error": response.text})
 
             except Exception as e:
                 results.append({"step": step_num, "status": "error", "error": str(e)})
 
-    return {"results": results, "cache_dir": str(cache_dir)}
+    return {"results": results, "cache_dir": str(cache_dir), "tts_provider": tts_provider}
 
 
 # ============================================================
@@ -2006,29 +2138,17 @@ async def start_wizard_voice_session(
     if not livekit_manager._initialized:
         await livekit_manager.initialize()
 
-    # Farah Qubit - Platform Wizard Guide (hardcoded configuration)
-    # These are platform-level defaults, NOT loaded from any client database
+    # Farah Qubit - Platform Wizard Guide
+    # Farah's canonical agent record lives in the Autonomite client database
+    # (slug = "farah"). Fetch her CURRENT voice/sound settings at session start
+    # so updates made through the normal admin UI propagate automatically with
+    # no code changes required. Falls back to a known-good Cartesia config if
+    # the lookup fails so the wizard never breaks because of a transient DB
+    # error.
     guide_agent_slug = "farah-qubit"
     guide_agent_name = "Farah Qubit"
 
-    # Farah's voice settings (platform defaults)
-    farah_voice_settings = {
-        "voice_id": "1013a0b6-8ce7-44dd-8bce-aadf7ac495a0",  # Farah's Cartesia voice
-        "tts_provider": "cartesia",
-        "stt_provider": "cartesia",
-        "llm_provider": "cerebras",
-        "llm_model": "zai-glm-4.7",
-        "model": "sonic-3",
-        "temperature": 0.8,
-    }
-
-    # Farah's sound settings (platform defaults)
-    farah_sound_settings = {
-        "thinking_sound": "beta1",
-        "thinking_volume": 0.5,
-        "ambient_sound": "office",
-        "ambient_volume": 0.65,
-    }
+    farah_voice_settings, farah_sound_settings, farah_provider_keys = await _load_farah_live_settings()
 
     agent_service = AgentService()
     client_service = ClientService()
@@ -2105,7 +2225,11 @@ async def start_wizard_voice_session(
         "conversation_id": conversation_id,  # Required by agent
         "voice_settings": farah_voice_settings,  # Platform hardcoded defaults
         "sound_settings": farah_sound_settings,  # Platform hardcoded defaults
-        "api_keys": {k: v for k, v in api_keys.items() if v},
+        # Merge wizard-user keys with Farah's required provider keys (pulled
+        # from Autonomite + env). Farah's keys take precedence so the wizard
+        # always works with whatever providers her live config demands, even
+        # when the wizard user's own tenant has none of them configured.
+        "api_keys": {k: v for k, v in {**api_keys, **farah_provider_keys}.items() if v},
         # Client Supabase credentials (required by agent for context management)
         "supabase_url": client_supabase_url,
         "supabase_anon_key": client_supabase_anon_key,
@@ -2115,27 +2239,60 @@ async def start_wizard_voice_session(
         "platform_supabase_service_role_key": app_settings.supabase_service_role_key,
     }
 
-    # Add embedding config if available, with fallback default
-    embedding_added = False
-    if platform_client and hasattr(platform_client, 'settings') and platform_client.settings:
-        if hasattr(platform_client.settings, 'embedding') and platform_client.settings.embedding:
-            emb = platform_client.settings.embedding
-            if hasattr(emb, 'model_dump'):
-                room_metadata["embedding"] = emb.model_dump()
-                embedding_added = True
-            elif hasattr(emb, 'dict'):
-                room_metadata["embedding"] = emb.dict()
-                embedding_added = True
+    # Add embedding config from any of the three locations a ClientService might
+    # populate, with fallback to platform default. Order matches trigger_multitenant
+    # for consistency: structured field, settings.additional_settings JSONB,
+    # top-level additional_settings JSONB.
+    def _coerce_embedding(obj) -> dict:
+        if obj is None:
+            return {}
+        if hasattr(obj, "model_dump"):
+            try:
+                return obj.model_dump() or {}
+            except Exception:
+                return {}
+        if hasattr(obj, "dict"):
+            try:
+                return obj.dict() or {}
+            except Exception:
+                return {}
+        if isinstance(obj, dict):
+            return obj
+        return {}
 
-    # Fallback: provide default embedding config if not set (required by agent context manager)
-    if not embedding_added:
-        room_metadata["embedding"] = {
+    embedding_cfg = {}
+    if platform_client and getattr(platform_client, 'settings', None):
+        embedding_cfg = _coerce_embedding(getattr(platform_client.settings, 'embedding', None))
+        if not embedding_cfg.get("provider"):
+            settings_add = getattr(platform_client.settings, 'additional_settings', None)
+            if isinstance(settings_add, dict):
+                embedding_cfg = _coerce_embedding(settings_add.get("embedding"))
+    if not embedding_cfg.get("provider"):
+        top_add = getattr(platform_client, 'additional_settings', None) if platform_client else None
+        if isinstance(top_add, dict):
+            embedding_cfg = _coerce_embedding(top_add.get("embedding"))
+
+    # Last-resort fallback: platform canonical default. Must match
+    # ai_processor.AIProcessor.DEFAULT_EMBEDDING_MODEL and
+    # provisioning_worker.PLATFORM_EMBEDDING_DEFAULTS.
+    if not embedding_cfg.get("provider"):
+        embedding_cfg = {
             "provider": "siliconflow",
             "document_model": "Qwen/Qwen3-Embedding-4B",
             "conversation_model": "Qwen/Qwen3-Embedding-4B",
             "dimension": 1024,
         }
-        logger.info("Using fallback embedding config for wizard voice session")
+        logger.warning(
+            "Wizard voice session: client %s has no embedding config; "
+            "falling back to platform default (siliconflow Qwen3-Embedding-4B)",
+            client_id,
+        )
+
+    room_metadata["embedding"] = embedding_cfg
+    logger.info(
+        f"Wizard voice session: embedding config = "
+        f"{embedding_cfg.get('provider')}/{embedding_cfg.get('document_model')}"
+    )
 
     # Create room name with unique suffix so agent doesn't skip greeting due to deduplication
     # Using timestamp ensures each voice session attempt is a completely fresh room

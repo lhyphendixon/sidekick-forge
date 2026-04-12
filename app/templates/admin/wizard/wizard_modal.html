@@ -441,23 +441,26 @@
                             </p>
                         </div>
 
-                        <!-- Progress text below avatar (no dots — dots are on the overlay) -->
-                        <div x-show="(generatingAvatar || editingAvatar) && stepData.avatar_url" class="text-center mb-4">
+                        <!-- Progress text below avatar — only when no avatar exists yet (overlay handles the case when avatar_url is set) -->
+                        <div x-show="(generatingAvatar || editingAvatar) && !stepData.avatar_url" class="text-center mb-4">
                             <p class="text-sm text-dark-text-secondary" x-text="avatarProgress"></p>
                         </div>
 
                         <!-- Avatar History Grid -->
-                        <div x-show="avatarHistory.length > 1" class="mb-4">
-                            <p class="text-xs text-dark-text-secondary text-center mb-2">Previous versions — click to select:</p>
+                        <div x-show="avatarHistory.length >= 1" class="mb-4">
+                            <p class="text-xs text-dark-text-secondary text-center mb-2" x-text="avatarHistory.length > 1 ? 'Pick by number, click to select, or double-click to enlarge:' : ''"></p>
                             <div class="relative">
                                 <div class="grid grid-cols-4 gap-2 max-h-28 overflow-y-auto pr-1">
-                                    <template x-for="avatar in avatarHistory" :key="avatar.id">
+                                    <template x-for="(avatar, idx) in avatarHistory" :key="avatar.id">
                                         <button @click="selectAvatarImage(avatar)"
                                                 @dblclick.stop="openAvatarLightbox(avatar)"
                                                 :class="{ 'ring-2 ring-brand-teal': stepData.avatar_url === avatar.image_url }"
                                                 class="avatar-card relative group aspect-square rounded-lg overflow-hidden"
                                                 title="Double-click to view full size">
                                             <img :src="avatar.image_url" :alt="avatar.prompt" class="w-full h-full object-cover">
+                                            <!-- Number badge -->
+                                            <span class="absolute top-1 left-1 bg-black/70 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center"
+                                                  x-text="idx + 1"></span>
                                             <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                                 <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/>
@@ -724,6 +727,8 @@
                                     <option value="openai">OpenAI</option>
                                     <option value="deepgram">Deepgram</option>
                                     <option value="speechify">Speechify</option>
+                                    <option value="inworld">Inworld</option>
+                                    <option value="fish_audio">Fish Audio</option>
                                 </select>
                                 <!-- API Key field for TTS (only if different from LLM) -->
                                 <div x-show="stepData.providers.tts && !isApiKeyShared('tts')" class="mt-3">
@@ -1243,6 +1248,10 @@
             document.removeEventListener('keydown', window._wizardEnterKeyHandler);
             window._wizardEnterKeyHandler = null;
         }
+        // Disconnect LiveKit room if still connected
+        if (typeof window._wizardDisconnectLiveKit === 'function') {
+            window._wizardDisconnectLiveKit();
+        }
         // If we're on the dedicated wizard page, navigate back to agents
         if (window.location.pathname === '/admin/wizard') {
             window.location.href = '/admin/agents';
@@ -1409,6 +1418,7 @@
                     cerebras: '',
                     deepinfra: '',
                     speechify: '',
+                    inworld: '',
                     siliconflow: '',
                     novita: ''
                 }
@@ -2044,83 +2054,70 @@
                 console.log('🔊 playVoiceSample called:', voice?.name, voice?.id);
                 console.log('🔊 voice.sample_url:', voice?.sample_url);
 
-                // Get or create audio element
-                let audioEl = this.$refs.voiceSampleAudio;
-                if (!audioEl) {
-                    console.log('🔊 Creating audio element');
-                    audioEl = document.createElement('audio');
-                    audioEl.id = 'voiceSampleAudio';
-                    document.body.appendChild(audioEl);
-                    this.$refs.voiceSampleAudio = audioEl;
+                if (!voice?.sample_url) {
+                    console.error('🔊 Voice sample URL not found for:', voice?.name);
+                    return;
                 }
 
-                // If same voice is playing, pause it
-                if (this.playingVoiceId === voice.id) {
+                // Use ONE persistent <audio> element on window, not Alpine $refs.
+                // ($refs is a read-only Proxy in Alpine; assigning to it is a no-op,
+                // which previously caused a new orphaned <audio> element on every
+                // click and may have contributed to playback dropouts.)
+                let audioEl = window._wizardVoiceSampleAudio;
+                if (!audioEl) {
+                    audioEl = document.createElement('audio');
+                    audioEl.id = 'voiceSampleAudio';
+                    audioEl.preload = 'auto';
+                    audioEl.crossOrigin = 'anonymous';
+                    document.body.appendChild(audioEl);
+                    window._wizardVoiceSampleAudio = audioEl;
+
+                    // Bind one-time handlers
+                    audioEl.addEventListener('ended', () => {
+                        console.log('🔊 Audio ended');
+                        this.playingVoiceId = null;
+                    });
+                    audioEl.addEventListener('error', (e) => {
+                        console.error('🔊 Audio playback error:', audioEl.error);
+                        this.playingVoiceId = null;
+                    });
+                }
+
+                // If same voice is currently playing, toggle off
+                if (this.playingVoiceId === voice.id && !audioEl.paused) {
                     console.log('🔊 Pausing same voice');
                     audioEl.pause();
                     this.playingVoiceId = null;
                     return;
                 }
 
-                // Stop any currently playing sample
-                if (this.playingVoiceId) {
+                // Stop anything currently playing
+                if (!audioEl.paused) {
                     audioEl.pause();
                 }
 
-                if (!voice.sample_url) {
-                    console.error('🔊 Voice sample URL not found for:', voice?.name);
-                    return;
-                }
-
-                // Set loading state
+                // Set state and source. Use the URL directly (HTTP streaming) instead
+                // of fetching to a Blob. The voice-sample endpoint is unauthenticated
+                // and Cartesia's WAV bytes use a streaming RIFF header (size=0xFFFFFFFF)
+                // which Chromium refuses to decode through Blob URLs but plays fine
+                // when streamed from an HTTP src.
                 this.playingVoiceId = voice.id;
                 this.voiceSampleLoading = true;
-                console.log('🔊 Fetching sample from:', voice.sample_url);
+                console.log('🔊 Setting src to:', voice.sample_url);
 
                 try {
-                    // Fetch with auth token
-                    const response = await authFetch(voice.sample_url, {});
-
-                    console.log('🔊 Fetch response:', response.status, response.statusText);
-
-                    if (!response.ok) {
-                        const errorText = await response.text();
-                        console.error('🔊 Response error body:', errorText);
-                        throw new Error(`Failed to load sample: ${response.status}`);
-                    }
-
-                    // Create blob URL from audio data
-                    const audioBlob = await response.blob();
-                    console.log('🔊 Audio blob size:', audioBlob.size, 'type:', audioBlob.type);
-
-                    // Ensure correct MIME type for WAV
-                    const wavBlob = new Blob([audioBlob], { type: 'audio/wav' });
-                    const audioUrl = URL.createObjectURL(wavBlob);
-                    console.log('🔊 Created blob URL:', audioUrl);
-
-                    // Set source and play
-                    audioEl.src = audioUrl;
-                    audioEl.volume = 1.0;  // Ensure volume is up
-
-                    audioEl.onloadeddata = () => {
-                        console.log('🔊 Audio loaded, duration:', audioEl.duration);
-                    };
-                    audioEl.onended = () => {
-                        console.log('🔊 Audio ended');
-                        this.playingVoiceId = null;
-                        URL.revokeObjectURL(audioUrl);
-                    };
-                    audioEl.onerror = (e) => {
-                        console.error('🔊 Audio playback error:', e, audioEl.error);
-                        this.playingVoiceId = null;
-                        URL.revokeObjectURL(audioUrl);
-                    };
+                    audioEl.src = voice.sample_url;
+                    audioEl.volume = 1.0;
+                    audioEl.muted = false;
+                    audioEl.load();
 
                     console.log('🔊 Starting playback...');
                     await audioEl.play();
-                    console.log('🔊 Playback started successfully, currentTime:', audioEl.currentTime);
+                    console.log('🔊 Playback started, duration:', audioEl.duration);
                 } catch (error) {
-                    console.error('🔊 Error playing voice sample:', error);
+                    // play() rejects on autoplay policy violations or AbortError
+                    // when src is reassigned mid-play. Both are recoverable.
+                    console.error('🔊 Error playing voice sample:', error?.name, error?.message);
                     this.playingVoiceId = null;
                 } finally {
                     this.voiceSampleLoading = false;
@@ -2138,9 +2135,10 @@
                     if (response.ok) {
                         const avatars = await response.json();
                         if (avatars.length > this.avatarHistory.length) {
+                            const hadHistory = this.avatarHistory.length > 0;
                             this.avatarHistory = avatars;
-                            // Pick the newest if no avatar selected or a new one arrived
-                            if (!this.stepData.avatar_url || avatars.length > 0) {
+                            // Only auto-select if no avatar is currently set (don't overwrite restored session data)
+                            if (!this.stepData.avatar_url) {
                                 const selected = avatars.find(a => a.selected) || avatars[0];
                                 if (selected) this.stepData.avatar_url = selected.image_url;
                             }
@@ -2591,7 +2589,7 @@
                 }
             },
 
-            prevStep() {
+            async prevStep() {
                 if (this.currentStep > 1) {
                     let prevStep = this.currentStep - 1;
 
@@ -2602,6 +2600,27 @@
                     }
 
                     this.currentStep = prevStep;
+
+                    // Notify the agent that the user revisited a previous step
+                    if (this.livekitMode && this.livekitConnected && this.livekitRoom) {
+                        try {
+                            const message = {
+                                type: 'wizard_ui_action',
+                                data: {
+                                    action: 'step_revisited',
+                                    step: prevStep,
+                                    field_data: {}
+                                },
+                                timestamp: Date.now()
+                            };
+                            const encoder = new TextEncoder();
+                            const data = encoder.encode(JSON.stringify(message));
+                            await this.livekitRoom.localParticipant.publishData(data, { reliable: true });
+                            console.log(`prevStep: Sent step_revisited for step ${prevStep}`);
+                        } catch (e) {
+                            console.warn('prevStep: Failed to notify agent of step revisit:', e);
+                        }
+                    }
                 }
             },
 
@@ -2617,6 +2636,8 @@
                     'elevenlabs': 'elevenlabs',
                     'deepgram': 'deepgram',
                     'speechify': 'speechify',
+                    'inworld': 'inworld',
+                    'fish_audio': 'fish_audio',
                     'siliconflow': 'siliconflow',
                     'novita': 'novita',
                     'local': null  // No API key needed
@@ -2634,6 +2655,8 @@
                     'elevenlabs': 'your-elevenlabs-key',
                     'deepgram': 'your-deepgram-key',
                     'speechify': 'your-speechify-key',
+                    'inworld': 'base64-encoded-inworld-key',
+                    'fish_audio': 'your-fish-audio-key',
                     'siliconflow': 'sk-...',
                     'novita': 'your-novita-key'
                 };
@@ -2741,6 +2764,16 @@
                     return false;
                 }
 
+                // Idempotency guard for direct callers: if we're already connected,
+                // do not start a second session. A duplicate POST would delete the
+                // live LiveKit room out from under the user's mic connection.
+                // (enableVoiceWithAgent is the canonical caller and sets
+                // livekitConnecting=true synchronously before calling us.)
+                if (this.livekitConnected && this.livekitRoom) {
+                    console.warn('startAgentVoiceSession: already connected, skipping duplicate call');
+                    return true;
+                }
+
                 this.livekitConnecting = true;
                 console.log('startAgentVoiceSession: Creating voice session...');
 
@@ -2802,6 +2835,8 @@
                     console.log('LiveKit room connected');
                     this.livekitConnected = true;
                     this.livekitConnecting = false;
+                    // Expose disconnect for closeWizardModal() cleanup
+                    window._wizardDisconnectLiveKit = () => this.disconnectLiveKit();
                 });
 
                 this.livekitRoom.on(RoomEvent.Disconnected, () => {
@@ -2965,6 +3000,14 @@
                                 this.selectAvatar(this.avatarHistory[message.data.index]);
                             }
                             break;
+                        case 'wizard_avatar_edit':
+                            // Agent triggered edit on current avatar
+                            console.log('Agent triggered avatar edit:', message.data);
+                            if (message.data.edit_prompt) {
+                                this.avatarPrompt = message.data.edit_prompt;
+                            }
+                            this.editAvatar();
+                            break;
                         default:
                             console.log('Unknown message type:', message.type);
                     }
@@ -3055,6 +3098,7 @@
 
                 this.livekitConnected = false;
                 this.livekitMode = false;
+                window._wizardDisconnectLiveKit = null;
 
                 // Also call the API to clean up the room
                 try {
@@ -3160,6 +3204,20 @@
                     this.sessionError = 'Session not ready yet. Please wait...';
                     return;
                 }
+
+                // Idempotency guard: prevent rapid double-clicks or duplicate
+                // event handlers from firing two voice-session starts in parallel.
+                // Without this, the second call deletes the first LiveKit room and
+                // strands the user's mic connection on a dead room.
+                // CRITICAL: set livekitConnecting=true SYNCHRONOUSLY before any
+                // await so that a second click landing in the same tick is caught
+                // by this guard (the button's :disabled binding alone is not
+                // enough because Alpine hasn't re-rendered yet).
+                if (this.livekitConnecting || (this.livekitConnected && this.livekitRoom)) {
+                    console.warn('enableVoiceWithAgent: voice session already starting/active, ignoring');
+                    return;
+                }
+                this.livekitConnecting = true;
 
                 this.sessionError = null;  // Clear any previous errors
                 this.livekitMode = true;
