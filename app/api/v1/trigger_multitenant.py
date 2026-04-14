@@ -262,6 +262,17 @@ async def handle_voice_trigger(
         "api_keys": {k: v for k, v in api_keys.items() if v}  # Include all available API keys
     }
 
+    # Resolve Lore target — where this user's personal Lore lives.
+    try:
+        from app.utils.lore_resolver import resolve_lore_target_for_session
+        agent_context["lore"] = await resolve_lore_target_for_session(
+            session_user_id=request.user_id,
+            sidekick_client_id=client_info.get("id"),
+        )
+    except Exception as exc:
+        logger.warning(f"Lore resolver failed: {exc}")
+        agent_context["lore"] = {"user_id": request.user_id}
+
     # Attach embedding settings (client-level) - required for RAG context.
     # The data may live in any of three places depending on which client service
     # loaded the row, so check all three. Order matters: client.settings.embedding

@@ -1641,15 +1641,36 @@ Do NOT update for:
             },
         }
 
+        # Section → Lore category mapping. Old tool schema keeps using the
+        # five legacy section names, but writes are routed to Lore.
+        LEGACY_SECTION_TO_LORE = {
+            "identity":             "identity",
+            "goals":                "goals_and_priorities",
+            "working_style":        "communication_style",
+            "important_context":    "preferences_and_constraints",
+            "relationship_history": "team_and_relationships",
+        }
+        LORE_CATEGORY_HEADERS = {
+            "identity":                    "# Identity",
+            "goals_and_priorities":        "# Goals and Priorities",
+            "communication_style":         "# Communication Style",
+            "preferences_and_constraints": "# Preferences and Constraints",
+            "team_and_relationships":      "# Team and Relationships",
+        }
+
         async def _invoke_update_overview(**kwargs: Any) -> str:
-            """Execute the user overview update via Supabase RPC."""
+            """Route legacy update_user_overview calls to the Lore MCP.
+
+            Phase 3h: user_overviews is deprecated. Writes from this tool
+            now land in lore_files via the Lore MCP admin API. The tool
+            schema is unchanged so existing agents work transparently.
+            """
             section = kwargs.get("section")
             action = kwargs.get("action")
-            key = kwargs.get("key")  # Can be None for important_context
+            key = kwargs.get("key")
             value = kwargs.get("value")
             reason = kwargs.get("reason")
 
-            # Validate required fields - return soft error to prevent LLM retry loops
             missing = []
             if not section:
                 missing.append("section")
@@ -1659,93 +1680,118 @@ Do NOT update for:
                 missing.append("value")
             if not reason:
                 missing.append("reason")
-
             if missing:
-                # Return error message instead of raising - prevents infinite retry loops
                 self._logger.warning(f"update_user_overview called with missing fields: {missing}")
                 return f"[Tool skipped - missing required fields: {', '.join(missing)}. Respond to the user instead.]"
 
-            if section not in ["identity", "goals", "working_style", "important_context", "relationship_history"]:
-                raise ToolError(f"Invalid section '{section}'. Must be one of: identity, goals, working_style, important_context, relationship_history.")
-
-            if action not in ["set", "append", "remove"]:
+            lore_category = LEGACY_SECTION_TO_LORE.get(section)
+            if not lore_category:
+                raise ToolError(
+                    f"Invalid section '{section}'. Must be one of: "
+                    + ", ".join(LEGACY_SECTION_TO_LORE.keys())
+                )
+            if action not in ("set", "append", "remove"):
                 raise ToolError(f"Invalid action '{action}'. Must be one of: set, append, remove.")
 
-            # Get user_id and client_id from runtime context
             runtime_ctx = self._runtime_context.get(slug) or {}
-            user_id = runtime_ctx.get("user_id")
-            client_id = runtime_ctx.get("client_id")
-            agent_id = runtime_ctx.get("agent_id")
+            # Prefer lore_user_id (real platform user) over session user_id
+            # (which may be a shadow user when using an embed across clients)
+            user_id = runtime_ctx.get("lore_user_id") or runtime_ctx.get("user_id")
+            if not user_id:
+                raise ToolError("Cannot update Lore: missing user_id in context.")
 
-            if not user_id or not client_id:
-                raise ToolError("Cannot update user overview: missing user_id or client_id in context.")
+            # Lore target: where this user's Lore actually lives. Passed in
+            # via room metadata → runtime_context.
+            lore_target_url = runtime_ctx.get("lore_target_url")
+            lore_target_key = runtime_ctx.get("lore_target_key")
 
             try:
                 self._logger.info(
-                    f"📝 Updating user overview: user={user_id[:8]}..., section={section}, action={action}, key={key}"
+                    f"📝 Routing update_user_overview → Lore: "
+                    f"user={user_id[:8]} section={section} → {lore_category} action={action}"
                 )
             except Exception:
                 pass
 
-            # Call the Supabase RPC function
-            if not self._primary_supabase:
-                raise ToolError("User overview update failed: no database connection available.")
+            lore_mcp_base = os.getenv("LORE_MCP_URL", "http://lore-mcp:8082")
+            params = {"user_id": user_id}
+            if lore_target_url and lore_target_key:
+                params["target_url"] = lore_target_url
+                params["target_key"] = lore_target_key
 
             try:
-                result = await asyncio.to_thread(
-                    lambda: self._primary_supabase.rpc(
-                        "update_user_overview",
-                        {
-                            "p_user_id": user_id,
-                            "p_client_id": client_id,
-                            "p_section": section,
-                            "p_action": action,
-                            "p_key": key,
-                            "p_value": value,
-                            "p_agent_id": agent_id,
-                            "p_reason": reason,
-                        }
-                    ).execute()
-                )
+                import httpx as _httpx
 
-                if result.data:
-                    response_data = result.data
-                    if isinstance(response_data, dict):
-                        if response_data.get("success"):
-                            output_msg = f"Updated user overview: {section}/{key or 'list'} ({action}). Reason: {reason}"
-                            self._emit_tool_result(
-                                slug=slug,
-                                tool_type="user_overview",
-                                success=True,
-                                output=output_msg,
-                                raw_output=response_data,
-                            )
-                            try:
-                                self._logger.info(f"✅ User overview updated: {response_data}")
-                            except Exception:
-                                pass
-                            return output_msg
-                        else:
-                            error_msg = response_data.get("message", "Unknown error")
-                            raise ToolError(f"User overview update failed: {error_msg}")
+                # Internal auth header for the Lore MCP
+                lore_headers = {"X-Lore-Internal": os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")}
+
+                # 1. Read existing Lore category content
+                async with _httpx.AsyncClient(timeout=10.0) as client:
+                    read_resp = await client.get(
+                        f"{lore_mcp_base}/admin-api/category/{lore_category}",
+                        params=params,
+                        headers=lore_headers,
+                    )
+                    existing = ""
+                    if read_resp.status_code == 200:
+                        existing = (read_resp.json().get("content") or "").strip()
+
+                # 2. Build new content based on action
+                header = LORE_CATEGORY_HEADERS.get(lore_category, f"# {lore_category.replace('_', ' ').title()}")
+                key_label = (key or "note").replace("_", " ").title()
+                new_bullet = f"- **{key_label}**: {value}" if key else f"- {value}"
+
+                if not existing:
+                    new_content = f"{header}\n\n{new_bullet}"
+                elif action == "set":
+                    # Replace any existing bullet that matches the key label
+                    import re as _re
+                    pattern = _re.compile(
+                        rf"^- \*\*{_re.escape(key_label)}\*\*:.*$",
+                        _re.MULTILINE,
+                    ) if key else None
+                    if pattern and pattern.search(existing):
+                        new_content = pattern.sub(new_bullet, existing)
                     else:
-                        # Unexpected response format
-                        output_msg = f"Updated user overview: {section}/{key or 'list'} ({action})"
-                        self._emit_tool_result(
-                            slug=slug,
-                            tool_type="user_overview",
-                            success=True,
-                            output=output_msg,
-                            raw_output=response_data,
-                        )
-                        return output_msg
+                        new_content = f"{existing}\n{new_bullet}"
+                elif action == "append":
+                    new_content = f"{existing}\n{new_bullet}"
+                elif action == "remove":
+                    # Remove lines containing the value
+                    lines = [l for l in existing.splitlines() if value not in l]
+                    new_content = "\n".join(lines)
                 else:
-                    raise ToolError("User overview update returned no data.")
+                    new_content = f"{existing}\n{new_bullet}"
+
+                # 3. Write back to Lore
+                async with _httpx.AsyncClient(timeout=10.0) as client:
+                    write_resp = await client.put(
+                        f"{lore_mcp_base}/admin-api/category/{lore_category}",
+                        params=params,
+                        headers=lore_headers,
+                        json={"content": new_content},
+                    )
+                    if write_resp.status_code != 200:
+                        raise ToolError(f"Lore write returned HTTP {write_resp.status_code}: {write_resp.text[:200]}")
+
+                output_msg = (
+                    f"Updated Lore: {section} → {lore_category}/{key or 'note'} ({action}). "
+                    f"Reason: {reason}"
+                )
+                self._emit_tool_result(
+                    slug=slug,
+                    tool_type="user_overview",
+                    success=True,
+                    output=output_msg,
+                    raw_output={"lore_category": lore_category, "action": action, "key": key},
+                )
+                self._logger.info(f"✅ Lore updated via legacy tool: {lore_category} ({action})")
+                return output_msg
 
             except ToolError:
                 raise
             except Exception as exc:
-                error_msg = f"User overview update failed: {str(exc)}"
+                error_msg = f"Lore update failed: {exc}"
                 self._emit_tool_result(
                     slug=slug,
                     tool_type="user_overview",
@@ -1753,7 +1799,7 @@ Do NOT update for:
                     error=error_msg,
                 )
                 try:
-                    self._logger.error(f"❌ User overview update error: {exc}", exc_info=True)
+                    self._logger.error(f"❌ Lore update error: {exc}", exc_info=True)
                 except Exception:
                     pass
                 raise ToolError(error_msg)

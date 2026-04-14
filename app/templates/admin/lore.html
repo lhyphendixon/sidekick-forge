@@ -1,0 +1,3113 @@
+{% extends "admin/base.html" %}
+{% block title %}Lore — Personal Context{% endblock %}
+
+{% block extra_head %}
+<style>
+    .lore-category-card {
+        background: rgba(20, 20, 20, 0.55);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        transition: all 0.2s ease;
+    }
+    .lore-category-card:hover {
+        border-color: rgba(1, 164, 166, 0.4);
+        box-shadow: 0 4px 20px rgba(1, 164, 166, 0.1);
+    }
+    .lore-category-card.active {
+        border-color: #01a4a6;
+        box-shadow: 0 4px 20px rgba(1, 164, 166, 0.15);
+    }
+    .lore-editor {
+        background: rgba(20, 20, 20, 0.55);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+    }
+    .lore-editor textarea {
+        background: rgba(32, 32, 32, 0.55) !important;
+        border-color: rgba(255, 255, 255, 0.08) !important;
+        color: #e0e0e0 !important;
+        font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+        font-size: 13px;
+        line-height: 1.6;
+        resize: vertical;
+    }
+    .lore-editor textarea:focus {
+        border-color: #01a4a6 !important;
+        box-shadow: 0 0 0 3px rgba(1, 164, 166, 0.15) !important;
+        outline: none;
+    }
+    .category-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .save-indicator {
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+    .save-indicator.visible {
+        opacity: 1;
+    }
+
+    /* Depth Score Panel */
+    .depth-panel {
+        background: rgba(20, 20, 20, 0.55);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 12px;
+    }
+    .depth-bar-track {
+        height: 6px;
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 3px;
+        overflow: hidden;
+    }
+    .depth-bar-fill {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.6s ease;
+    }
+    .depth-layer {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+    }
+    .depth-layer-icon {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .depth-layer-icon.strong { color: #01a4a6; }
+    .depth-layer-icon.growing { color: #fbbf24; }
+    .depth-layer-icon.emerging { color: #fc7244; }
+    .depth-layer-icon.not_captured { color: rgba(255, 255, 255, 0.15); }
+    .depth-layer-label { flex: 1; font-size: 12px; }
+    .depth-layer-badge {
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 500;
+    }
+    /* MCP visibility toggle switch */
+    .mcp-toggle {
+        position: relative;
+        display: inline-block;
+        width: 32px;
+        height: 18px;
+        flex-shrink: 0;
+    }
+    .mcp-toggle input { opacity: 0; width: 0; height: 0; }
+    .mcp-toggle-slider {
+        position: absolute; cursor: pointer; inset: 0;
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 20px;
+        transition: background 0.2s, border-color 0.2s;
+    }
+    .mcp-toggle-slider::before {
+        content: ""; position: absolute;
+        left: 2px; top: 2px;
+        width: 12px; height: 12px;
+        background: rgba(255,255,255,0.55);
+        border-radius: 50%;
+        transition: transform 0.2s, background 0.2s;
+    }
+    .mcp-toggle input:checked + .mcp-toggle-slider {
+        background: rgba(1,164,166,0.45);
+        border-color: rgba(1,164,166,0.8);
+    }
+    .mcp-toggle input:checked + .mcp-toggle-slider::before {
+        transform: translateX(14px);
+        background: #fff;
+    }
+    .mcp-toggle input:disabled + .mcp-toggle-slider { opacity: 0.4; cursor: not-allowed; }
+
+    /* Card visually dimmed when its MCP node is disabled */
+    .lore-node-disabled { opacity: 0.45; }
+    .lore-node-disabled .lore-node-body { filter: grayscale(0.6); }
+
+    /* Astrology skeleton shimmer for initial load */
+    @keyframes lore-shimmer {
+        0%   { opacity: 0.35; }
+        50%  { opacity: 0.7; }
+        100% { opacity: 0.35; }
+    }
+    .lore-skeleton-line {
+        background: rgba(255,255,255,0.08);
+        border-radius: 4px;
+        animation: lore-shimmer 1.3s ease-in-out infinite;
+    }
+
+    .depth-layer-badge.strong { background: rgba(1, 164, 166, 0.15); color: #01a4a6; }
+    .depth-layer-badge.growing { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+    .depth-layer-badge.emerging { background: rgba(252, 114, 68, 0.15); color: #fc7244; }
+    .depth-layer-badge.not_captured { background: rgba(255, 255, 255, 0.05); color: rgba(255, 255, 255, 0.3); }
+
+    /* Interview Modal */
+    .interview-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        background: rgba(0,0,0,0.85); backdrop-filter: blur(8px);
+        display: flex; align-items: center; justify-content: center;
+    }
+    .interview-panel {
+        background: rgb(16, 16, 16);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 20px;
+        width: 90%; max-width: 500px; padding: 32px;
+        text-align: center;
+    }
+    .mic-ring {
+        width: 80px; height: 80px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        margin: 0 auto 20px;
+        background: rgba(167,139,250,0.1);
+        border: 2px solid rgba(167,139,250,0.3);
+        transition: all 0.3s;
+    }
+    .mic-ring.active {
+        border-color: #a78bfa;
+        box-shadow: 0 0 30px rgba(167,139,250,0.3);
+        animation: mic-pulse 2s ease-in-out infinite;
+    }
+    @keyframes mic-pulse {
+        0%, 100% { box-shadow: 0 0 20px rgba(167,139,250,0.2); }
+        50% { box-shadow: 0 0 40px rgba(167,139,250,0.4); }
+    }
+
+    /* Import Modal */
+    .import-overlay {
+        position: fixed; inset: 0; z-index: 9998;
+        background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+        display: flex; align-items: center; justify-content: center;
+    }
+    .import-modal {
+        background: rgb(20, 20, 20);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 16px;
+        width: 90%; max-width: 720px; max-height: 85vh;
+        overflow-y: auto; padding: 0;
+    }
+    .import-modal-header {
+        padding: 20px 24px; border-bottom: 1px solid rgba(255,255,255,0.08);
+        display: flex; align-items: center; justify-content: space-between;
+    }
+    .import-modal-body { padding: 24px; }
+    .import-drop-zone {
+        border: 2px dashed rgba(255,255,255,0.12); border-radius: 12px;
+        padding: 48px 24px; text-align: center; transition: all 0.2s;
+        cursor: pointer;
+    }
+    .import-drop-zone:hover, .import-drop-zone.dragover {
+        border-color: #01a4a6; background: rgba(1,164,166,0.05);
+    }
+    .import-step-indicator {
+        display: flex; align-items: center; gap: 8px; padding: 8px 0;
+        font-size: 13px;
+    }
+    .import-step-indicator .step-dot {
+        width: 20px; height: 20px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 10px; font-weight: 600;
+    }
+    .step-dot.active { background: #01a4a6; color: white; }
+    .step-dot.done { background: #01a4a6; color: white; }
+    .step-dot.pending { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.3); }
+    .proposal-card {
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px; padding: 16px; margin-bottom: 12px;
+    }
+    .proposal-card.selected { border-color: #01a4a6; background: rgba(1,164,166,0.05); }
+    .proposal-preview {
+        max-height: 150px; overflow-y: auto;
+        background: rgba(0,0,0,0.3); border-radius: 8px; padding: 12px;
+        font-family: 'SF Mono', monospace; font-size: 12px; line-height: 1.5;
+        color: #a0a0a0; margin-top: 8px; white-space: pre-wrap;
+    }
+
+    /* MCP API Keys panel */
+    .mcp-keys-panel {
+        background: rgba(20,20,20,0.55);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 12px;
+        padding: 20px;
+        margin-top: 16px;
+    }
+    .mcp-key-row {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 10px 12px;
+        background: rgba(255,255,255,0.02);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 8px;
+        margin-top: 8px;
+    }
+    .mcp-key-row.revoked { opacity: 0.4; }
+    .mcp-token-reveal {
+        background: rgba(0,0,0,0.4);
+        border: 1px solid rgba(1,164,166,0.3);
+        border-radius: 8px;
+        padding: 12px;
+        font-family: 'SF Mono', monospace;
+        font-size: 12px;
+        color: #01a4a6;
+        word-break: break-all;
+        margin-top: 8px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-semibold text-white" style="font-family: 'futura-pt', sans-serif; letter-spacing: 1px;">LORE</h1>
+            <p class="mt-1 text-sm text-dark-text-secondary">Your portable personal context layer. Edit your profile categories below.</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <button onclick="startVoiceInterview()" id="interviewBtn"
+                    class="px-4 py-1.5 text-sm rounded-lg font-medium transition-colors flex items-center gap-2"
+                    style="background: rgba(167,139,250,0.15); color: #a78bfa; border: 1px solid rgba(167,139,250,0.3);"
+                    onmouseover="this.style.background='rgba(167,139,250,0.25)'"
+                    onmouseout="this.style.background='rgba(167,139,250,0.15)'">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+                </svg>
+                Voice Interview
+            </button>
+            <button onclick="openImportModal()"
+                    class="px-4 py-1.5 text-sm rounded-lg font-medium transition-colors flex items-center gap-2"
+                    style="background: rgba(1,164,166,0.15); color: #01a4a6; border: 1px solid rgba(1,164,166,0.3);"
+                    onmouseover="this.style.background='rgba(1,164,166,0.25)'"
+                    onmouseout="this.style.background='rgba(1,164,166,0.15)'">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4v16m8-8H4"/>
+                </svg>
+                Add Lore
+            </button>
+            <span id="saveIndicator" class="save-indicator text-sm text-brand-teal">Saved</span>
+            <span id="connectionStatus" class="flex items-center gap-2 text-xs text-dark-text-secondary">
+                <span class="status-dot" style="width:8px;height:8px;border-radius:50%;background:#01a4a6;flex-shrink:0;"></span>
+                MCP Connected
+            </span>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <!-- Left Column: Depth Score + Category List -->
+    <div class="lg:col-span-3">
+
+        <!-- Profile Avatar -->
+        <button type="button" id="profileAvatarBtn" onclick="document.getElementById('profileAvatarInput').click()"
+                title="Upload profile photo"
+                class="relative group block w-full mb-4"
+                style="aspect-ratio:1/1;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);cursor:pointer;padding:0;">
+            <img id="profileAvatarImg" src="" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
+            <div id="profileAvatarPlaceholder" class="absolute inset-0 flex items-center justify-center text-5xl font-medium text-white" style="background:linear-gradient(135deg, rgba(1,164,166,0.28), rgba(192,132,252,0.22));">
+                <span id="profileAvatarInitials">··</span>
+            </div>
+            <!-- Bottom gradient scrim + name/email overlay -->
+            <div class="absolute inset-x-0 bottom-0 px-3 pt-10 pb-3 text-left"
+                 style="background:linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.55) 55%, rgba(0,0,0,0) 100%);">
+                <div id="profileAvatarName" class="text-sm font-semibold text-white truncate" style="text-shadow:0 1px 3px rgba(0,0,0,0.6);">&nbsp;</div>
+                <div id="profileAvatarEmail" class="text-xs truncate" style="color:rgba(255,255,255,0.75);text-shadow:0 1px 2px rgba(0,0,0,0.6);">&nbsp;</div>
+            </div>
+            <!-- Hover camera overlay -->
+            <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" style="background:rgba(0,0,0,0.5);">
+                <div class="flex items-center gap-2 px-3 py-2 rounded-lg" style="background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.15);">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                    <span class="text-xs text-white font-medium">Change photo</span>
+                </div>
+            </div>
+        </button>
+        <input type="file" id="profileAvatarInput" accept="image/*" class="hidden" onchange="uploadProfileAvatar(event)">
+
+        <!-- Depth Score Panel -->
+        <div class="depth-panel" id="depthPanel">
+            <div class="flex items-start justify-between mb-3 gap-3">
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                        <h3 class="text-sm font-semibold text-white" style="letter-spacing: 0.5px;">Lore Depth</h3>
+                        <button type="button" onclick="regradeDepthScore()" id="depthRegradeBtn"
+                                title="Re-run the LLM grader on every node"
+                                class="opacity-50 hover:opacity-100 transition-opacity"
+                                style="background:transparent;border:none;padding:2px;cursor:pointer;">
+                            <svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div id="depthBandLabel" class="text-base font-semibold text-white mt-1">—</div>
+                    <p id="depthSummary" class="text-xs text-dark-text-secondary mt-0.5">Loading...</p>
+                </div>
+                <div id="depthCount" class="text-right flex-shrink-0">
+                    <div class="text-lg font-semibold text-brand-teal leading-none">—</div>
+                    <div class="text-[10px] text-dark-text-secondary mt-1">/ <span id="depthMax">42</span></div>
+                </div>
+            </div>
+            <div class="depth-bar-track">
+                <div id="depthBarFill" class="depth-bar-fill" style="width: 0%; background: linear-gradient(90deg, #fc7244, #fbbf24, #01a4a6);"></div>
+            </div>
+        </div>
+
+        <!-- Category List -->
+        <div class="space-y-2" id="categoryList">
+            {% for cat in categories %}
+            <button onclick="selectCategory('{{ cat.key }}')"
+                    id="cat-btn-{{ cat.key }}"
+                    class="lore-category-card w-full text-left px-4 py-3 flex items-center gap-3 {% if cat.key == active_category %}active{% endif %}">
+                <div class="category-icon" style="background: {{ cat.color }}20;">
+                    <svg class="w-4 h-4" style="color: {{ cat.color }};" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="{{ cat.icon }}"/>
+                    </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm font-medium text-white truncate">{{ cat.label }}</div>
+                    <div class="text-xs text-dark-text-secondary truncate">{{ cat.description }}</div>
+                </div>
+                <span class="depth-layer-badge {{ 'strong' if cat.has_content else 'not_captured' }}" id="badge-{{ cat.key }}">{{ 'Strong' if cat.has_content else 'Not yet' }}</span>
+            </button>
+            {% endfor %}
+        </div>
+
+        <!-- Astrology Section (Birth Chart + Human Design) -->
+        <div id="astrologySection" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.08);">
+            <p class="text-xs text-dark-text-secondary mb-3" style="text-transform:uppercase;letter-spacing:1px;opacity:0.5;">Astrology</p>
+            <div class="space-y-2">
+                <!-- Birth Chart card -->
+                <div id="birthChartCard" class="lore-category-card px-4 py-3 flex items-center gap-3">
+                    <div class="lore-node-body flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onclick="handleBirthChartClick()">
+                        <div class="category-icon" style="background: rgba(251, 191, 36, 0.12);">
+                            <img id="zodiacIcon" src="/static/images/astrology/placeholder.svg" alt="Zodiac sign" class="w-5 h-5">
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div id="sunSignTitle" class="text-sm font-medium text-white truncate">Birth Chart</div>
+                            <div id="birthChartSubtitle" class="text-xs text-dark-text-secondary truncate">
+                                <span class="lore-skeleton-line" style="display:inline-block;width:90px;height:10px;"></span>
+                            </div>
+                            <div class="text-xs mt-1" style="color:#fbbf24;">View / edit →</div>
+                        </div>
+                    </div>
+                    <label class="mcp-toggle" title="Expose to MCP tools"
+                           onclick="event.stopPropagation()">
+                        <input type="checkbox" id="toggle-birth_chart" onchange="setMcpVisibility('birth_chart', this.checked)">
+                        <span class="mcp-toggle-slider"></span>
+                    </label>
+                </div>
+
+                <!-- Human Design card -->
+                <div id="humanDesignCard" class="lore-category-card px-4 py-3 flex items-center gap-3">
+                    <div class="lore-node-body flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onclick="handleHumanDesignClick()">
+                        <div class="category-icon" style="background: rgba(192, 132, 252, 0.12);">
+                            <img src="/static/images/astrology/bodygraph.svg" alt="Human Design" class="w-5 h-5">
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div id="hdTypeTitle" class="text-sm font-medium text-white truncate">Human Design</div>
+                            <div id="hdSummary" class="text-xs text-dark-text-secondary truncate">
+                                <span class="lore-skeleton-line" style="display:inline-block;width:130px;height:10px;"></span>
+                            </div>
+                            <div class="text-xs mt-1" style="color:#c084fc;">View / edit →</div>
+                        </div>
+                    </div>
+                    <label class="mcp-toggle" title="Expose to MCP tools"
+                           onclick="event.stopPropagation()">
+                        <input type="checkbox" id="toggle-human_design" onchange="setMcpVisibility('human_design', this.checked)">
+                        <span class="mcp-toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Personality Section (MBTI + Big Five) -->
+        <div id="personalitySection" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.08);">
+            <p class="text-xs text-dark-text-secondary mb-3" style="text-transform:uppercase;letter-spacing:1px;opacity:0.5;">Personality</p>
+            <div class="space-y-2">
+                <!-- MBTI card -->
+                <div id="mbtiCard" class="lore-category-card px-4 py-3 flex items-center gap-3">
+                    <div class="lore-node-body flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onclick="openMbtiModal()">
+                        <div class="category-icon" style="background: rgba(1, 164, 166, 0.12);">
+                            <svg class="w-5 h-5" fill="none" stroke="#01a4a6" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                            </svg>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div id="mbtiCardTitle" class="text-sm font-medium text-white truncate">Myers-Briggs</div>
+                            <div id="mbtiCardSubtitle" class="text-xs text-dark-text-secondary truncate">
+                                <span class="lore-skeleton-line" style="display:inline-block;width:70px;height:10px;"></span>
+                            </div>
+                            <div class="text-xs text-brand-teal truncate">View / edit →</div>
+                        </div>
+                    </div>
+                    <label class="mcp-toggle" title="Expose to MCP tools" onclick="event.stopPropagation()">
+                        <input type="checkbox" id="toggle-mbti" onchange="setMcpVisibility('mbti', this.checked)">
+                        <span class="mcp-toggle-slider"></span>
+                    </label>
+                </div>
+
+                <!-- Big Five card -->
+                <div id="big5Card" class="lore-category-card px-4 py-3 flex items-start gap-3">
+                    <div class="lore-node-body flex items-start gap-3 flex-1 min-w-0 cursor-pointer" onclick="openBig5Modal()">
+                        <div class="category-icon mt-0.5" style="background: rgba(252, 114, 68, 0.12);">
+                            <svg class="w-5 h-5" fill="none" stroke="#fc7244" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 12h2M19 12h2M5 6h14M5 18h14M5 12l14 0"/>
+                            </svg>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-sm font-medium text-white truncate">Big Five (OCEAN)</div>
+                            <div id="big5CardBars" class="mt-1.5 space-y-1 hidden"></div>
+                            <div id="big5CardEmpty" class="text-xs text-dark-text-secondary truncate">
+                                <span class="lore-skeleton-line" style="display:inline-block;width:70px;height:10px;"></span>
+                            </div>
+                            <div class="text-xs mt-1" style="color:#fc7244;">View / edit →</div>
+                        </div>
+                    </div>
+                    <label class="mcp-toggle mt-0.5" title="Expose to MCP tools" onclick="event.stopPropagation()">
+                        <input type="checkbox" id="toggle-big5" onchange="setMcpVisibility('big5', this.checked)">
+                        <span class="mcp-toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Editor Panel -->
+    <div class="lg:col-span-9">
+        <div class="lore-editor">
+            <div class="px-6 py-4 border-b" style="border-color: rgba(255,255,255,0.08);">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 id="editorTitle" class="text-lg font-medium text-white">{{ active_label }}</h2>
+                        <p id="editorDescription" class="text-sm text-dark-text-secondary mt-0.5">{{ active_description }}</p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button onclick="toggleEditMode()" id="editToggleBtn"
+                                class="px-3 py-1.5 text-sm rounded-lg border transition-colors flex items-center gap-1.5"
+                                style="border-color: rgba(255,255,255,0.1); color: #a0a0a0;"
+                                onmouseover="this.style.borderColor='#01a4a6'; this.style.color='#01a4a6';"
+                                onmouseout="if(!isEditing){this.style.borderColor='rgba(255,255,255,0.1)'; this.style.color='#a0a0a0';}">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                            </svg>
+                            Edit
+                        </button>
+                        <button onclick="revertCategory()" id="revertBtn"
+                                class="px-3 py-1.5 text-sm rounded-lg border transition-colors"
+                                style="border-color: rgba(255,255,255,0.1); color: #a0a0a0; display: none;"
+                                onmouseover="this.style.borderColor='#f56453'; this.style.color='#f56453';"
+                                onmouseout="this.style.borderColor='rgba(255,255,255,0.1)'; this.style.color='#a0a0a0';">
+                            Revert
+                        </button>
+                        <button onclick="saveCategory()" id="saveBtn"
+                                class="btn-primary px-4 py-1.5 text-sm rounded-lg font-medium transition-colors"
+                                style="display: none;">
+                            Save
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="p-6">
+                <textarea id="editorContent"
+                          class="w-full rounded-lg border px-4 py-3"
+                          style="min-height: 500px;"
+                          spellcheck="false"
+                          readonly
+                          placeholder="Start writing your {{ active_label }} context...">{{ active_content }}</textarea>
+            </div>
+        </div>
+
+        <!-- MCP API Keys panel — external access to your Lore -->
+        <div class="mcp-keys-panel">
+            <div class="flex items-center justify-between mb-3">
+                <div>
+                    <h3 class="text-sm font-semibold text-white" style="letter-spacing: 0.5px;">MCP Access Keys</h3>
+                    <p class="text-xs text-dark-text-secondary mt-0.5">
+                        Grant external AI tools (Claude.ai, Cursor, Claude Desktop) read/write access to your Lore.
+                    </p>
+                </div>
+                <button onclick="createLoreKey()"
+                        class="px-3 py-1.5 text-sm rounded-lg border transition-colors"
+                        style="border-color: rgba(1,164,166,0.3); color: #01a4a6; background: rgba(1,164,166,0.08);"
+                        onmouseover="this.style.background='rgba(1,164,166,0.15)'"
+                        onmouseout="this.style.background='rgba(1,164,166,0.08)'">
+                    + New Key
+                </button>
+            </div>
+            <div id="mcpKeysList" class="mt-3"></div>
+            <p class="text-xs text-dark-text-secondary mt-4" style="opacity:0.5;">
+                Endpoint: <code style="color:#01a4a6;">https://lore-staging.sidekickforge.com/mcp/sse</code>
+                &nbsp;·&nbsp; Use the token as an <code>Authorization: Bearer</code> header.
+            </p>
+        </div>
+
+        <!-- Lore Portability — "Your Lore belongs to you" -->
+        <div class="mcp-keys-panel mt-4" style="border-color: rgba(252, 114, 68, 0.2);">
+            <div class="mb-3">
+                <h3 class="text-sm font-semibold text-white" style="letter-spacing: 0.5px;">Your Lore belongs to you.</h3>
+                <p class="text-xs text-dark-text-secondary mt-1" style="line-height: 1.55;">
+                    Export anytime as markdown, JSON, or a self-hostable MCP server package.
+                    <br/>Your context, your infrastructure, your call.
+                </p>
+            </div>
+            <div class="grid grid-cols-1 gap-2 mt-4">
+                <a href="/admin/lore/api/export/markdown" download
+                   class="lore-export-btn group flex items-start gap-3 px-4 py-3 rounded-lg border transition-all"
+                   style="border-color: rgba(1,164,166,0.25); background: rgba(1,164,166,0.05);"
+                   onmouseover="this.style.background='rgba(1,164,166,0.1)'; this.style.borderColor='#01a4a6';"
+                   onmouseout="this.style.background='rgba(1,164,166,0.05)'; this.style.borderColor='rgba(1,164,166,0.25)';">
+                    <svg class="w-5 h-5 mt-0.5 flex-shrink-0" fill="none" stroke="#01a4a6" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    <div class="flex-1">
+                        <div class="text-sm font-medium" style="color: #01a4a6;">Markdown package</div>
+                        <div class="text-xs text-dark-text-secondary mt-0.5">All ten files as .md. Opens in Obsidian, Notion, any editor.</div>
+                    </div>
+                    <span class="text-xs text-dark-text-secondary" style="opacity: 0.5;">.zip</span>
+                </a>
+
+                <a href="/admin/lore/api/export/json" download
+                   class="lore-export-btn group flex items-start gap-3 px-4 py-3 rounded-lg border transition-all"
+                   style="border-color: rgba(1,164,166,0.25); background: rgba(1,164,166,0.05);"
+                   onmouseover="this.style.background='rgba(1,164,166,0.1)'; this.style.borderColor='#01a4a6';"
+                   onmouseout="this.style.background='rgba(1,164,166,0.05)'; this.style.borderColor='rgba(1,164,166,0.25)';">
+                    <svg class="w-5 h-5 mt-0.5 flex-shrink-0" fill="none" stroke="#01a4a6" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                    <div class="flex-1">
+                        <div class="text-sm font-medium" style="color: #01a4a6;">JSON export</div>
+                        <div class="text-xs text-dark-text-secondary mt-0.5">Structured, machine-readable. For programmatic imports.</div>
+                    </div>
+                    <span class="text-xs text-dark-text-secondary" style="opacity: 0.5;">.json</span>
+                </a>
+
+                <a href="/admin/lore/api/export/self-host" download
+                   class="lore-export-btn group flex items-start gap-3 px-4 py-3 rounded-lg border transition-all"
+                   style="border-color: rgba(252,114,68,0.3); background: rgba(252,114,68,0.06);"
+                   onmouseover="this.style.background='rgba(252,114,68,0.12)'; this.style.borderColor='#fc7244';"
+                   onmouseout="this.style.background='rgba(252,114,68,0.06)'; this.style.borderColor='rgba(252,114,68,0.3)';">
+                    <svg class="w-5 h-5 mt-0.5 flex-shrink-0" fill="none" stroke="#fc7244" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+                    <div class="flex-1">
+                        <div class="text-sm font-medium" style="color: #fc7244;">Self-host package</div>
+                        <div class="text-xs text-dark-text-secondary mt-0.5">
+                            Runnable MCP server + your data. Deploy to Railway, Render, Docker, or localhost in under 5 minutes.
+                        </div>
+                    </div>
+                    <span class="text-xs text-dark-text-secondary" style="opacity: 0.5;">.zip</span>
+                </a>
+            </div>
+            <p class="text-xs text-dark-text-secondary mt-3" style="opacity: 0.6;">
+                Export is not a goodbye — it's a capability. You can always re-import back into managed hosting.
+            </p>
+        </div>
+
+        <!-- Self-host mode — point platform runtime at your own server -->
+        <div class="mcp-keys-panel mt-4" id="selfHostPanel" style="border-color: rgba(252, 114, 68, 0.2);">
+            <div class="flex items-center justify-between mb-3">
+                <div>
+                    <h3 class="text-sm font-semibold text-white" style="letter-spacing: 0.5px;">Self-host mode</h3>
+                    <p class="text-xs text-dark-text-secondary mt-1" style="line-height: 1.55;">
+                        Running the self-host package? Point your Sidekick agents at your own server. Reads and writes will route through your URL — your context never touches our database.
+                    </p>
+                </div>
+                <span id="selfHostStatusBadge" class="text-xs px-2 py-1 rounded-full" style="background: rgba(160,160,160,0.1); color: #a0a0a0;">not configured</span>
+            </div>
+
+            <div id="selfHostForm" class="space-y-3 mt-3">
+                <div>
+                    <label class="text-xs uppercase tracking-wider text-dark-text-secondary block mb-1">Server URL</label>
+                    <input id="selfHostUrl" type="url" placeholder="https://my-lore.up.railway.app"
+                           class="w-full px-3 py-2 rounded-lg text-sm"
+                           style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); color: #e0e0e0;"
+                           oninput="clearSelfHostMessage()">
+                </div>
+                <div>
+                    <label class="text-xs uppercase tracking-wider text-dark-text-secondary block mb-1">
+                        Bearer token
+                        <span class="text-dark-text-secondary" style="text-transform: none; letter-spacing: 0; opacity: 0.6;">(your LORE_AUTH_TOKEN)</span>
+                    </label>
+                    <input id="selfHostToken" type="password" placeholder="paste token here"
+                           class="w-full px-3 py-2 rounded-lg text-sm font-mono"
+                           style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); color: #e0e0e0;"
+                           oninput="clearSelfHostMessage()">
+                </div>
+                <div class="flex gap-2 pt-1">
+                    <button onclick="testSelfHost()"
+                            class="px-3 py-1.5 text-xs rounded-lg border transition-colors"
+                            style="border-color: rgba(1,164,166,0.3); color: #01a4a6; background: rgba(1,164,166,0.08);"
+                            onmouseover="this.style.background='rgba(1,164,166,0.15)'"
+                            onmouseout="this.style.background='rgba(1,164,166,0.08)'">
+                        Test Connection
+                    </button>
+                    <button onclick="saveSelfHost()"
+                            class="px-3 py-1.5 text-xs rounded-lg border transition-colors"
+                            style="border-color: rgba(252,114,68,0.35); color: #fc7244; background: rgba(252,114,68,0.08);"
+                            onmouseover="this.style.background='rgba(252,114,68,0.18)'"
+                            onmouseout="this.style.background='rgba(252,114,68,0.08)'">
+                        Save &amp; Enable
+                    </button>
+                    <button id="selfHostRemoveBtn" onclick="removeSelfHost()"
+                            class="px-3 py-1.5 text-xs rounded-lg border transition-colors hidden ml-auto"
+                            style="border-color: rgba(245,100,83,0.35); color: #f56453; background: transparent;">
+                        Disconnect
+                    </button>
+                </div>
+                <div id="selfHostMessage" class="hidden text-xs px-3 py-2 rounded-lg"></div>
+            </div>
+
+            <p class="text-xs text-dark-text-secondary mt-4" style="opacity: 0.55; line-height: 1.55;">
+                When enabled, agent workers, the Lore interview, and this admin page all read and write against your self-hosted server. Disabling reverts to managed storage.
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+const LORE_API = '/admin/lore/api';
+let currentCategory = '{{ active_category }}';
+let originalContent = document.getElementById('editorContent').value;
+let isDirty = false;
+let isEditing = false;
+
+function toggleEditMode() {
+    isEditing = !isEditing;
+    const textarea = document.getElementById('editorContent');
+    const editBtn = document.getElementById('editToggleBtn');
+    const saveBtn = document.getElementById('saveBtn');
+    const revertBtn = document.getElementById('revertBtn');
+
+    if (isEditing) {
+        textarea.removeAttribute('readonly');
+        textarea.style.borderColor = 'rgba(1, 164, 166, 0.3)';
+        textarea.focus();
+        editBtn.style.borderColor = '#01a4a6';
+        editBtn.style.color = '#01a4a6';
+        editBtn.innerHTML = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg> Editing';
+        saveBtn.style.display = '';
+        revertBtn.style.display = '';
+    } else {
+        textarea.setAttribute('readonly', '');
+        textarea.style.borderColor = '';
+        editBtn.style.borderColor = 'rgba(255,255,255,0.1)';
+        editBtn.style.color = '#a0a0a0';
+        editBtn.innerHTML = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg> Edit';
+        saveBtn.style.display = 'none';
+        revertBtn.style.display = 'none';
+    }
+}
+
+function exitEditMode() {
+    if (isEditing) {
+        isEditing = false;
+        const textarea = document.getElementById('editorContent');
+        const editBtn = document.getElementById('editToggleBtn');
+        textarea.setAttribute('readonly', '');
+        textarea.style.borderColor = '';
+        editBtn.style.borderColor = 'rgba(255,255,255,0.1)';
+        editBtn.style.color = '#a0a0a0';
+        editBtn.innerHTML = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg> Edit';
+        document.getElementById('saveBtn').style.display = 'none';
+        document.getElementById('revertBtn').style.display = 'none';
+    }
+}
+
+const categoryMeta = {
+    {% for cat in categories %}
+    '{{ cat.key }}': {
+        label: '{{ cat.label }}',
+        description: '{{ cat.description }}',
+        color: '{{ cat.color }}',
+    },
+    {% endfor %}
+};
+
+const LEVEL_LABELS = {
+    strong: 'Strong',
+    growing: 'Growing',
+    emerging: 'Emerging',
+    not_captured: 'Not yet captured',
+};
+const LEVEL_ICONS = {
+    strong: '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="6"/></svg>',
+    growing: '<svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 3.5A4.5 4.5 0 018 12.5V3.5z" fill="currentColor"/></svg>',
+    emerging: '<svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4A4 4 0 008 12z" fill="currentColor" opacity="0.4"/></svg>',
+    not_captured: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/></svg>',
+};
+
+async function loadDepthScore() {
+    try {
+        const resp = await fetch(`${LORE_API}/depth-score`, { headers: getHeaders() });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        renderDepthScore(data);
+    } catch {}
+}
+
+function renderDepthScore(data) {
+    const layers = data.layers || [];
+    const total_score = data.total_score || 0;
+    const max_score = data.max_score || (layers.length * 3) || 42;
+    const band_label = data.band_label || '—';
+    const pct = typeof data.percentage === 'number' ? data.percentage : Math.round((total_score / max_score) * 100);
+
+    document.getElementById('depthBandLabel').textContent = band_label;
+    document.getElementById('depthCount').innerHTML =
+        `<div class="text-lg font-semibold text-brand-teal leading-none">${total_score}</div>` +
+        `<div class="text-[10px] text-dark-text-secondary mt-1">/ ${max_score}</div>`;
+    document.getElementById('depthBarFill').style.width = `${pct}%`;
+
+    const summaryEl = document.getElementById('depthSummary');
+    const staleCount = (data.stale_nodes || []).length;
+    if (total_score === 0) {
+        summaryEl.textContent = 'Your Sidekick will know you better as your Lore grows';
+    } else if (pct < 25) {
+        summaryEl.textContent = `${pct}% captured — early days`;
+    } else if (pct < 50) {
+        summaryEl.textContent = `${pct}% captured — gaining shape`;
+    } else if (pct < 75) {
+        summaryEl.textContent = `${pct}% captured — solid context`;
+    } else {
+        summaryEl.textContent = `${pct}% captured — deep context`;
+    }
+    if (staleCount > 0) {
+        summaryEl.textContent += ` · grading ${staleCount} node${staleCount === 1 ? '' : 's'}…`;
+    }
+
+    // Update badges on category cards (only the 10 lore categories have badges)
+    layers.forEach(layer => {
+        const badge = document.getElementById(`badge-${layer.key}`);
+        if (badge) {
+            badge.className = `depth-layer-badge ${layer.level}`;
+            badge.textContent = LEVEL_LABELS[layer.level] || layer.level;
+        }
+    });
+}
+
+async function regradeDepthScore() {
+    const btn = document.getElementById('depthRegradeBtn');
+    const originalHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<svg class="w-3.5 h-3.5 text-white animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 20l5-5M20 4l-5 5"/></svg>';
+    }
+    showNotification('info', 'Re-grading your Lore with the LLM rubric…');
+    try {
+        const resp = await fetch(`${LORE_API}/depth-score/regrade`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showNotification('error', data.error || 'Regrade failed');
+            return;
+        }
+        renderDepthScore(data);
+        showNotification('success', `Lore graded: ${data.band_label} (${data.total_score} / ${data.max_score})`);
+    } catch (err) {
+        showNotification('error', `Regrade failed: ${err.message || err}`);
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+    }
+}
+
+function selectCategory(key) {
+    if (isDirty) {
+        if (!confirm('You have unsaved changes. Discard them?')) return;
+    }
+    loadCategory(key);
+}
+
+async function loadCategory(key) {
+    try {
+        const resp = await fetch(`${LORE_API}/category/${key}`, {
+            headers: getHeaders()
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        currentCategory = key;
+        originalContent = data.content;
+        isDirty = false;
+        exitEditMode();
+
+        document.getElementById('editorContent').value = data.content;
+        document.getElementById('editorTitle').textContent = categoryMeta[key].label;
+        document.getElementById('editorDescription').textContent = categoryMeta[key].description;
+
+        document.querySelectorAll('#categoryList .lore-category-card').forEach(el => {
+            el.classList.remove('active');
+        });
+        const btn = document.getElementById(`cat-btn-${key}`);
+        if (btn) btn.classList.add('active');
+
+    } catch (err) {
+        showNotification('error', `Failed to load category: ${err.message}`);
+    }
+}
+
+async function saveCategory() {
+    const content = document.getElementById('editorContent').value;
+    const saveBtn = document.getElementById('saveBtn');
+
+    saveBtn.classList.add('loading');
+    saveBtn.disabled = true;
+
+    try {
+        const resp = await fetch(`${LORE_API}/category/${currentCategory}`, {
+            method: 'PUT',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: content })
+        });
+        if (!resp.ok) {
+            const errData = await resp.json().catch(() => ({}));
+            throw new Error(errData.error || `HTTP ${resp.status}`);
+        }
+
+        originalContent = content;
+        isDirty = false;
+        exitEditMode();
+
+        const indicator = document.getElementById('saveIndicator');
+        indicator.classList.add('visible');
+        setTimeout(() => indicator.classList.remove('visible'), 2000);
+
+        // Refresh depth score after save
+        loadDepthScore();
+
+    } catch (err) {
+        showNotification('error', `Failed to save: ${err.message}`);
+    } finally {
+        saveBtn.classList.remove('loading');
+        saveBtn.disabled = false;
+    }
+}
+
+function revertCategory() {
+    if (!isDirty) return;
+    if (!confirm('Revert all changes to the last saved version?')) return;
+    document.getElementById('editorContent').value = originalContent;
+    isDirty = false;
+    exitEditMode();
+}
+
+document.getElementById('editorContent').addEventListener('input', () => {
+    isDirty = document.getElementById('editorContent').value !== originalContent;
+});
+
+document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveCategory();
+    }
+});
+
+function getHeaders() {
+    const headers = { 'X-Requested-With': 'XMLHttpRequest' };
+    const adminToken = getCookie('admin_token');
+    if (adminToken) headers['Authorization'] = `Bearer ${adminToken}`;
+    return headers;
+}
+
+function getCookie(name) {
+    const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+    return match ? match[2] : null;
+}
+
+function showNotification(type, message) {
+    const colors = {
+        success: { bg: 'rgba(1,164,166,0.15)', border: '#01a4a6', text: '#01a4a6' },
+        error: { bg: 'rgba(245,100,83,0.15)', border: '#f56453', text: '#f56453' }
+    };
+    const c = colors[type] || colors.error;
+    const el = document.createElement('div');
+    el.style.cssText = `position:fixed;top:24px;right:24px;z-index:9999;padding:12px 20px;border-radius:8px;background:${c.bg};border:1px solid ${c.border};color:${c.text};font-size:14px;max-width:400px;backdrop-filter:blur(12px);transition:opacity 0.3s;`;
+    el.textContent = message;
+    document.body.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3000);
+}
+
+// ---------------------------------------------------------------------------
+// Import Flow
+// ---------------------------------------------------------------------------
+let importJobId = null;
+let importPollingTimer = null;
+let importProposals = {};
+let currentSource = 'zip';
+
+const SOURCE_CONFIG = {
+    zip:   { accept: '.zip', label: 'Drop your ChatGPT or Claude export ZIP here, or click to browse', hint: 'Supports ChatGPT (conversations.json) and Claude (conversations.jsonl)' },
+    audio: { accept: '.mp3,.wav,.m4a,.ogg,.webm,.mp4,.flac', label: 'Drop your audio file here, or click to browse', hint: 'Voice memos, recordings, interviews — MP3, WAV, M4A, OGG, FLAC' },
+    text:  { accept: '.txt,.md,.csv,.srt,.pdf,.doc,.docx,.json,.jsonl', label: 'Drop your document here, or click to browse', hint: 'PDF, TXT, Markdown, DOCX, CSV, SRT, JSON' },
+};
+
+function openImportModal() {
+    document.getElementById('importModal').style.display = 'flex';
+    resetImportState();
+}
+function closeImportModal() {
+    document.getElementById('importModal').style.display = 'none';
+    if (importPollingTimer) clearInterval(importPollingTimer);
+}
+function resetImportState() {
+    importJobId = null;
+    importProposals = {};
+    document.getElementById('importSourceView').style.display = 'block';
+    document.getElementById('importUploadView').style.display = 'none';
+    document.getElementById('importProgressView').style.display = 'none';
+    document.getElementById('importReviewView').style.display = 'none';
+}
+function pickSource(source) {
+    currentSource = source;
+    const cfg = SOURCE_CONFIG[source];
+    document.getElementById('importSourceView').style.display = 'none';
+    document.getElementById('importUploadView').style.display = 'block';
+    document.getElementById('dropZoneLabel').textContent = cfg.label;
+    document.getElementById('dropZoneHint').textContent = cfg.hint;
+    const fileInput = document.getElementById('importFileInput');
+    fileInput.accept = cfg.accept;
+    fileInput.value = '';
+    initDropZone();
+}
+function backToSourcePicker() {
+    document.getElementById('importUploadView').style.display = 'none';
+    document.getElementById('importSourceView').style.display = 'block';
+}
+
+// Drag & drop — attach after DOM is fully loaded (modal HTML is below the script)
+let dropZoneInitialized = false;
+function initDropZone() {
+    if (dropZoneInitialized) return;
+    const dropZone = document.getElementById('importDropZone');
+    const fileInput = document.getElementById('importFileInput');
+    if (!dropZone || !fileInput) return;
+    dropZoneInitialized = true;
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault(); dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) startImport(e.dataTransfer.files[0]);
+    });
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length) startImport(e.target.files[0]);
+    });
+}
+
+const CHUNK_SIZE = 80 * 1024 * 1024; // 80MB chunks — stays under Cloudflare's 100MB limit
+
+async function startImport(file) {
+    document.getElementById('importUploadView').style.display = 'none';
+    document.getElementById('importProgressView').style.display = 'block';
+
+    const fileSizeMB = (file.size / (1024 * 1024)).toFixed(1);
+
+    try {
+        if (currentSource === 'zip') {
+            await startChunkedZipImport(file, fileSizeMB);
+        } else {
+            await startDirectFileImport(file, fileSizeMB);
+        }
+    } catch (err) {
+        hideUploadBar();
+        updateImportProgress('error', err.message);
+    }
+}
+
+async function startChunkedZipImport(file, fileSizeMB) {
+    updateImportProgress('uploading', `Preparing upload (${fileSizeMB} MB)...`);
+    showUploadBar(0);
+
+    const initResp = await fetch(`${LORE_API}/import/init`, {
+        method: 'POST',
+        headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, file_size: file.size }),
+    });
+    if (!initResp.ok) {
+        const err = await initResp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${initResp.status}`);
+    }
+    const { upload_id } = await initResp.json();
+
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    let bytesSent = 0;
+
+    for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const blob = file.slice(start, end);
+        const chunkForm = new FormData();
+        chunkForm.append('file', blob, `chunk_${i}`);
+
+        const chunkResp = await fetch(`${LORE_API}/import/chunk/${upload_id}`, {
+            method: 'POST', headers: getHeaders(), body: chunkForm,
+        });
+        if (!chunkResp.ok) {
+            const err = await chunkResp.json().catch(() => ({}));
+            throw new Error(err.error || `Chunk ${i + 1} failed: HTTP ${chunkResp.status}`);
+        }
+        bytesSent = end;
+        const pct = Math.round((bytesSent / file.size) * 100);
+        showUploadBar(pct);
+        updateImportProgress('uploading', `Uploading ${(bytesSent / (1024*1024)).toFixed(1)} / ${fileSizeMB} MB (${pct}%)`);
+    }
+
+    hideUploadBar();
+    updateImportProgress('uploading', 'Upload complete. Starting analysis...');
+
+    const finalResp = await fetch(`${LORE_API}/import/finalize/${upload_id}`, {
+        method: 'POST', headers: getHeaders(),
+    });
+    if (!finalResp.ok) {
+        let errMsg = `Finalize failed: HTTP ${finalResp.status}`;
+        try { const err = await finalResp.json(); errMsg = err.error || err.detail || errMsg; } catch {}
+        throw new Error(errMsg);
+    }
+    const data = await finalResp.json();
+    importJobId = data.job_id;
+    pollImportStatus();
+}
+
+async function startDirectFileImport(file, fileSizeMB) {
+    updateImportProgress('uploading', `Uploading ${fileSizeMB} MB...`);
+    showUploadBar(0);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const data = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${LORE_API}/add-content`);
+        const headers = getHeaders();
+        for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                showUploadBar(pct);
+                updateImportProgress('uploading', `Uploading ${(e.loaded/(1024*1024)).toFixed(1)} / ${fileSizeMB} MB (${pct}%)`);
+            }
+        });
+        xhr.addEventListener('load', () => {
+            hideUploadBar();
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try { resolve(JSON.parse(xhr.responseText)); }
+                catch { reject(new Error('Invalid response from server')); }
+            } else {
+                let msg = `HTTP ${xhr.status}`;
+                try { const err = JSON.parse(xhr.responseText); msg = err.error || err.detail || msg; } catch {}
+                reject(new Error(msg));
+            }
+        });
+        xhr.addEventListener('error', () => { hideUploadBar(); reject(new Error('Network error during upload')); });
+        xhr.send(formData);
+    });
+
+    importJobId = data.job_id;
+    pollImportStatus();
+}
+
+function showUploadBar(pct) {
+    let bar = document.getElementById('uploadProgressBar');
+    if (!bar) {
+        const wrapper = document.createElement('div');
+        wrapper.id = 'uploadProgressWrapper';
+        wrapper.style.cssText = 'margin-top:12px;';
+        wrapper.innerHTML = `
+            <div style="height:6px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden;">
+                <div id="uploadProgressBar" style="height:100%;width:0%;border-radius:3px;background:linear-gradient(90deg,#01a4a6,#34d399);transition:width 0.3s ease;"></div>
+            </div>
+            <p id="uploadProgressPct" style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:4px;text-align:right;">0%</p>`;
+        document.getElementById('importProgressDetail').after(wrapper);
+        bar = document.getElementById('uploadProgressBar');
+    }
+    bar.style.width = pct + '%';
+    const pctLabel = document.getElementById('uploadProgressPct');
+    if (pctLabel) pctLabel.textContent = pct + '%';
+}
+
+function hideUploadBar() {
+    const wrapper = document.getElementById('uploadProgressWrapper');
+    if (wrapper) wrapper.remove();
+}
+
+function pollImportStatus() {
+    importPollingTimer = setInterval(async () => {
+        try {
+            const resp = await fetch(`${LORE_API}/import/${importJobId}`, { headers: getHeaders() });
+            const job = await resp.json();
+            updateImportProgress(job.step || job.status, job.detail || '');
+            if (job.status === 'complete') {
+                clearInterval(importPollingTimer);
+                importProposals = job.result?.proposals || {};
+                showImportReview(job.result);
+            } else if (job.status === 'error') {
+                clearInterval(importPollingTimer);
+                updateImportProgress('error', job.detail || 'Import failed.');
+            }
+        } catch {}
+    }, 1500);
+}
+
+const STEP_ORDER = ['uploading', 'parsing', 'chunking', 'extracting', 'consolidating', 'merging', 'complete'];
+const STEP_LABELS = {
+    starting: 'Starting...', uploading: 'Uploading file', parsing: 'Parsing export', chunking: 'Chunking messages',
+    extracting: 'Extracting signals', consolidating: 'Consolidating', merging: 'Merging with Lore',
+    complete: 'Complete', error: 'Error',
+};
+
+function updateImportProgress(step, detail) {
+    const container = document.getElementById('importSteps');
+    const currentIdx = STEP_ORDER.indexOf(step);
+    container.innerHTML = STEP_ORDER.map((s, i) => {
+        const dotClass = i < currentIdx ? 'done' : (i === currentIdx ? 'active' : 'pending');
+        const icon = i < currentIdx ? '<svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg>' : (i + 1);
+        return `<div class="import-step-indicator">
+            <span class="step-dot ${dotClass}">${icon}</span>
+            <span style="color: ${dotClass === 'pending' ? 'rgba(255,255,255,0.3)' : '#e0e0e0'}">${STEP_LABELS[s]}</span>
+        </div>`;
+    }).join('');
+    document.getElementById('importProgressDetail').textContent = detail;
+    if (step === 'error') {
+        document.getElementById('importProgressDetail').style.color = '#f56453';
+    }
+}
+
+function showImportReview(result) {
+    document.getElementById('importProgressView').style.display = 'none';
+    document.getElementById('importReviewView').style.display = 'block';
+
+    const stats = result.stats;
+    document.getElementById('importStats').innerHTML =
+        `<span class="text-brand-teal">${stats.messages_parsed}</span> messages parsed, ` +
+        `<span class="text-brand-teal">${stats.chunks}</span> chunks analyzed, ` +
+        `<span class="text-brand-teal">${stats.signals_extracted}</span> signals extracted from <span class="text-white">${result.source}</span> export`;
+
+    const container = document.getElementById('importProposalList');
+    const cats = Object.entries(result.proposals);
+    container.innerHTML = cats.map(([cat, prop]) => {
+        const meta = categoryMeta[cat] || {};
+        const preview = prop.content.substring(0, 400) + (prop.content.length > 400 ? '...' : '');
+        return `<div class="proposal-card selected" id="proposal-${cat}" onclick="toggleProposal('${cat}')">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" checked id="check-${cat}" class="accent-brand-teal" onclick="event.stopPropagation()">
+                    <span class="text-sm font-medium text-white">${meta.label || cat}</span>
+                    ${prop.has_existing ? '<span class="text-xs px-2 py-0.5 rounded" style="background:rgba(251,191,36,0.15);color:#fbbf24;">Merged</span>' : '<span class="text-xs px-2 py-0.5 rounded" style="background:rgba(1,164,166,0.15);color:#01a4a6;">New</span>'}
+                </div>
+                <span class="text-xs text-dark-text-secondary">${prop.signal_count} signals</span>
+            </div>
+            <div class="proposal-preview">${escapeHtml(preview)}</div>
+        </div>`;
+    }).join('');
+}
+
+function toggleProposal(cat) {
+    const card = document.getElementById(`proposal-${cat}`);
+    const check = document.getElementById(`check-${cat}`);
+    check.checked = !check.checked;
+    card.classList.toggle('selected', check.checked);
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+async function applyImportProposals() {
+    const selected = Object.keys(importProposals).filter(cat => {
+        const check = document.getElementById(`check-${cat}`);
+        return check && check.checked;
+    });
+    if (!selected.length) { showNotification('error', 'No categories selected.'); return; }
+
+    const btn = document.getElementById('applyImportBtn');
+    btn.classList.add('loading'); btn.disabled = true;
+
+    try {
+        const resp = await fetch(`${LORE_API}/import/${importJobId}/apply`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ categories: selected }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const savedCount = Object.values(data.results).filter(r => r === 'saved').length;
+        showNotification('success', `Applied ${savedCount} Lore categories.`);
+        closeImportModal();
+        loadDepthScore();
+        loadCategory(currentCategory);
+    } catch (err) {
+        showNotification('error', `Failed to apply: ${err.message}`);
+    } finally {
+        btn.classList.remove('loading'); btn.disabled = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Voice Interview
+// ---------------------------------------------------------------------------
+let interviewRoom = null;
+
+async function startVoiceInterview() {
+    const btn = document.getElementById('interviewBtn');
+    btn.classList.add('loading'); btn.disabled = true;
+
+    try {
+        const resp = await fetch(`${LORE_API}/interview/start`, {
+            method: 'POST',
+            headers: getHeaders(),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+
+        if (data.status === 'no_gaps') {
+            showNotification('success', data.message);
+            return;
+        }
+
+        showInterviewModal(data);
+    } catch (err) {
+        showNotification('error', `Interview failed: ${err.message}`);
+    } finally {
+        btn.classList.remove('loading'); btn.disabled = false;
+    }
+}
+
+async function showInterviewModal(data) {
+    document.getElementById('interviewModal').style.display = 'flex';
+    const catList = data.target_categories.map(c => categoryMeta[c]?.label || c).join(', ');
+    document.getElementById('interviewCategoryList').textContent = catList;
+    document.getElementById('interviewStatus').textContent = 'Connecting...';
+    document.getElementById('micRing').classList.remove('active');
+
+    try {
+        const LK = window.LivekitClient || window.LiveKitSDK || window.LiveKit;
+        if (!LK || !LK.Room) {
+            throw new Error('LiveKit SDK not loaded. Please refresh the page.');
+        }
+        interviewRoom = new LK.Room();
+
+        interviewRoom.on(LK.RoomEvent.DataReceived, (payload) => {
+            try {
+                const msg = JSON.parse(new TextDecoder().decode(payload));
+                if (msg.type === 'lore_interview_complete') {
+                    document.getElementById('interviewStatus').textContent = `Done! Updated ${msg.data?.categories_covered || 0} categories.`;
+                    document.getElementById('micRing').classList.remove('active');
+                    loadDepthScore();
+                    loadCategory(currentCategory);
+                    setTimeout(() => closeInterviewModal(), 3000);
+                } else if (msg.type === 'wizard_step_change') {
+                    const step = msg.data?.step || 0;
+                    const total = msg.data?.total || 0;
+                    document.getElementById('interviewStatus').textContent = `Question ${step} of ${total}`;
+                }
+            } catch {}
+        });
+
+        // Attach remote audio tracks when the agent publishes them
+        interviewRoom.on(LK.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+            if (track.kind === LK.Track.Kind.Audio) {
+                const el = track.attach();
+                el.id = 'interview-audio';
+                document.body.appendChild(el);
+            }
+        });
+        interviewRoom.on(LK.RoomEvent.TrackUnsubscribed, (track) => {
+            track.detach().forEach(el => el.remove());
+        });
+
+        await interviewRoom.connect(data.ws_url, data.token);
+        document.getElementById('interviewStatus').textContent = 'Listening...';
+        document.getElementById('micRing').classList.add('active');
+
+        await interviewRoom.localParticipant.setMicrophoneEnabled(true);
+    } catch (err) {
+        document.getElementById('interviewStatus').textContent = `Error: ${err.message}`;
+    }
+}
+
+function closeInterviewModal() {
+    document.getElementById('micRing').classList.remove('active');
+    document.getElementById('interviewStatus').textContent = 'Saving your responses...';
+
+    if (interviewRoom) {
+        interviewRoom.disconnect();
+        interviewRoom = null;
+    }
+    const audioEl = document.getElementById('interview-audio');
+    if (audioEl) audioEl.remove();
+
+    // Poll until the agent finishes saving, then close and refresh
+    pollForInterviewSave();
+}
+
+async function pollForInterviewSave() {
+    const statusEl = document.getElementById('interviewStatus');
+    const maxWait = 20;
+    let waited = 0;
+
+    // Snapshot current depth score to detect changes
+    let initialScore = null;
+    try {
+        const resp = await fetch(`${LORE_API}/depth-score`, { headers: getHeaders() });
+        if (resp.ok) initialScore = JSON.stringify(await resp.json());
+    } catch {}
+
+    const interval = setInterval(async () => {
+        waited++;
+        const dots = '.'.repeat((waited % 3) + 1);
+        statusEl.textContent = `Processing your responses${dots}`;
+
+        try {
+            const resp = await fetch(`${LORE_API}/depth-score`, { headers: getHeaders() });
+            if (resp.ok) {
+                const current = JSON.stringify(await resp.json());
+                if (current !== initialScore) {
+                    // Depth score changed — agent saved successfully
+                    clearInterval(interval);
+                    finishInterviewClose();
+                    return;
+                }
+            }
+        } catch {}
+
+        if (waited >= maxWait) {
+            clearInterval(interval);
+            finishInterviewClose();
+        }
+    }, 1000);
+}
+
+function finishInterviewClose() {
+    document.getElementById('interviewModal').style.display = 'none';
+    loadDepthScore();
+    loadCategory(currentCategory);
+    showNotification('success', 'Interview responses saved to your Lore.');
+}
+
+// ---------------------------------------------------------------------------
+// Social Connect
+// ---------------------------------------------------------------------------
+async function loadSocialStatus() {
+    try {
+        const resp = await fetch(`${LORE_API}/social/status`, { headers: getHeaders() });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        let anyVisible = false;
+        ['linkedin', 'twitter', 'facebook'].forEach(p => {
+            const btn = document.getElementById(`social-btn-${p}`);
+            if (btn) {
+                if (data[p]) { btn.classList.remove('hidden'); anyVisible = true; }
+            }
+        });
+        if (data.astrology) {
+            const bc = document.getElementById('social-btn-birth-chart');
+            if (bc) { bc.classList.remove('hidden'); anyVisible = true; }
+        }
+        if (data.human_design) {
+            const hd = document.getElementById('social-btn-human-design');
+            if (hd) { hd.classList.remove('hidden'); anyVisible = true; }
+        }
+        const msg = document.getElementById('noSocialMsg');
+        if (msg) { if (anyVisible) msg.classList.add('hidden'); else msg.classList.remove('hidden'); }
+    } catch {}
+}
+
+// ---------------------------------------------------------------------------
+// Astrology (Birth Chart + Human Design)
+// ---------------------------------------------------------------------------
+
+const ZODIAC_SIGNS = [
+    'aries','taurus','gemini','cancer','leo','virgo',
+    'libra','scorpio','sagittarius','capricorn','aquarius','pisces'
+];
+
+// Tracks whether astrology data is already on file; click handlers use this
+// to decide whether to open the form (unset) or the detail modal (set).
+let astrologyConnected = false;
+
+function setAstrologyEmpty() {
+    astrologyConnected = false;
+    const title = document.getElementById('sunSignTitle');
+    if (title) title.textContent = 'Birth Chart';
+    const sub = document.getElementById('birthChartSubtitle');
+    if (sub) sub.textContent = 'Not set';
+    const icon = document.getElementById('zodiacIcon');
+    if (icon) icon.src = '/static/images/astrology/placeholder.svg';
+    const hdTitle = document.getElementById('hdTypeTitle');
+    if (hdTitle) hdTitle.textContent = 'Human Design';
+    const hdSum = document.getElementById('hdSummary');
+    if (hdSum) hdSum.textContent = 'Not set';
+}
+
+async function loadAstrology() {
+    try {
+        const resp = await fetch(`${LORE_API}/astrology`, { headers: getHeaders() });
+        if (!resp.ok) { setAstrologyEmpty(); return; }
+        const data = await resp.json();
+        if (!data || !data.connected) { setAstrologyEmpty(); return; }
+
+        astrologyConnected = true;
+
+        const sunSign = (data.sun_sign || '').toLowerCase();
+        const title = document.getElementById('sunSignTitle');
+        const sub = document.getElementById('birthChartSubtitle');
+        const icon = document.getElementById('zodiacIcon');
+        if (title) title.textContent = data.sun_sign ? `${data.sun_sign} Sun` : 'Birth Chart';
+        if (sub) sub.textContent = data.birth_date ? `Born ${data.birth_date}` : 'Connected';
+        if (icon) {
+            const known = ZODIAC_SIGNS.includes(sunSign);
+            icon.src = `/static/images/astrology/${known ? sunSign : 'placeholder'}.svg`;
+        }
+
+        const hdTitle = document.getElementById('hdTypeTitle');
+        const hdSum = document.getElementById('hdSummary');
+        if (hdTitle) hdTitle.textContent = data.hd_type || 'Human Design';
+        if (hdSum) {
+            const bits = [data.hd_strategy, data.hd_authority, data.hd_profile].filter(Boolean);
+            hdSum.textContent = bits.length ? bits.join(' · ') : 'Connected';
+        }
+    } catch {
+        setAstrologyEmpty();
+    }
+}
+
+function handleBirthChartClick() {
+    if (astrologyConnected) openBirthChartModal();
+    else openAstrologyForm();
+}
+
+function handleHumanDesignClick() {
+    if (astrologyConnected) openHumanDesignModal();
+    else openAstrologyForm();
+}
+
+// ---------------------------------------------------------------------------
+// Profile avatar — upload + display above the Lore Depth panel.
+// ---------------------------------------------------------------------------
+
+function applyProfileAvatar(profile) {
+    const name = (profile && profile.full_name) || (profile && profile.email) || '';
+    const email = (profile && profile.email) || '';
+    const url = profile && profile.avatar_url;
+
+    document.getElementById('profileAvatarName').textContent = name || '\u00A0';
+    document.getElementById('profileAvatarEmail').textContent = email || '\u00A0';
+
+    const img = document.getElementById('profileAvatarImg');
+    const placeholder = document.getElementById('profileAvatarPlaceholder');
+    if (url) {
+        img.src = url;
+        img.style.display = 'block';
+        placeholder.style.display = 'none';
+    } else {
+        img.style.display = 'none';
+        placeholder.style.display = 'flex';
+        const initials = (name || '·').trim().split(/\s+/).map(p => p[0] || '').join('').slice(0, 2).toUpperCase() || '··';
+        document.getElementById('profileAvatarInitials').textContent = initials;
+    }
+}
+
+async function loadProfileAvatar() {
+    try {
+        const resp = await fetch(`${LORE_API}/me/profile`, { headers: getHeaders() });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        applyProfileAvatar(data);
+    } catch {}
+}
+
+async function uploadProfileAvatar(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+        showNotification('error', 'File must be an image');
+        return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+        showNotification('error', 'Image must be under 5 MB');
+        return;
+    }
+    const form = new FormData();
+    form.append('file', file);
+    try {
+        const resp = await fetch(`${LORE_API}/me/avatar`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: form,
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showNotification('error', data.error || 'Upload failed');
+            return;
+        }
+        // Re-load the profile so the initials fall back correctly if needed
+        const img = document.getElementById('profileAvatarImg');
+        img.src = data.avatar_url;
+        img.style.display = 'block';
+        document.getElementById('profileAvatarPlaceholder').style.display = 'none';
+        showNotification('success', 'Profile photo updated');
+    } catch (err) {
+        showNotification('error', `Upload failed: ${err.message || err}`);
+    } finally {
+        event.target.value = '';
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MCP Visibility toggles — one flag per node (birth_chart, human_design,
+// mbti, big5). The raw row stays in the DB either way; toggling `false`
+// only hides it from MCP tool reads and from the Lore summary injection.
+// ---------------------------------------------------------------------------
+
+const MCP_NODES = ['birth_chart', 'human_design', 'mbti', 'big5'];
+const MCP_NODE_CARD_IDS = {
+    birth_chart: 'birthChartCard',
+    human_design: 'humanDesignCard',
+    mbti: 'mbtiCard',
+    big5: 'big5Card',
+};
+let mcpVisibilityCache = { birth_chart: true, human_design: true, mbti: true, big5: true };
+
+function applyMcpVisibilityToUI(flags) {
+    mcpVisibilityCache = { ...mcpVisibilityCache, ...flags };
+    for (const node of MCP_NODES) {
+        const enabled = mcpVisibilityCache[node] !== false;
+        const toggle = document.getElementById(`toggle-${node}`);
+        if (toggle) toggle.checked = enabled;
+        const card = document.getElementById(MCP_NODE_CARD_IDS[node]);
+        if (card) card.classList.toggle('lore-node-disabled', !enabled);
+    }
+}
+
+async function loadMcpVisibility() {
+    try {
+        const resp = await fetch(`${LORE_API}/mcp-visibility`, { headers: getHeaders() });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        applyMcpVisibilityToUI(data || {});
+    } catch {}
+}
+
+async function setMcpVisibility(node, enabled) {
+    // Optimistic update
+    const prev = { ...mcpVisibilityCache };
+    applyMcpVisibilityToUI({ [node]: enabled });
+    try {
+        const resp = await fetch(`${LORE_API}/mcp-visibility`, {
+            method: 'PUT',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [node]: enabled }),
+        });
+        if (!resp.ok) throw new Error(`Status ${resp.status}`);
+        const data = await resp.json();
+        applyMcpVisibilityToUI(data || {});
+        showNotification('success', `${node.replace('_', ' ')} ${enabled ? 'enabled' : 'disabled'} for MCP`);
+    } catch (err) {
+        // Roll back on failure
+        applyMcpVisibilityToUI(prev);
+        showNotification('error', `Failed to update visibility: ${err.message || err}`);
+    }
+}
+
+function openAstrologyForm() {
+    document.getElementById('astrologyFormModal').style.display = 'flex';
+    const err = document.getElementById('astrologyFormError');
+    if (err) { err.textContent = ''; err.classList.add('hidden'); }
+    const submit = document.getElementById('astrologyFormSubmit');
+    if (submit) { submit.disabled = false; submit.textContent = 'Connect'; }
+    document.getElementById('astroBirthCity').value = '';
+    document.getElementById('astroBirthCountryCode').value = '';
+    hideBirthPlaceSuggestions();
+}
+
+// Debounced Nominatim-backed city autosuggest. The displayed value and the
+// hidden city/country_code fields only align when the user picks a suggestion,
+// so the backend can reject free-text submissions.
+let _birthPlaceTimer = null;
+let _birthPlaceReqId = 0;
+
+function onBirthPlaceInput() {
+    const input = document.getElementById('astroBirthPlace');
+    const value = input.value.trim();
+    // Clear resolved city/country whenever the visible text drifts from the
+    // last accepted suggestion — user has to re-pick.
+    document.getElementById('astroBirthCity').value = '';
+    document.getElementById('astroBirthCountryCode').value = '';
+    if (_birthPlaceTimer) clearTimeout(_birthPlaceTimer);
+    if (value.length < 2) {
+        hideBirthPlaceSuggestions();
+        return;
+    }
+    _birthPlaceTimer = setTimeout(() => searchBirthPlace(value), 250);
+}
+
+async function searchBirthPlace(query) {
+    const reqId = ++_birthPlaceReqId;
+    try {
+        const resp = await fetch(`${LORE_API}/astrology/city-search?q=${encodeURIComponent(query)}`,
+            { headers: getHeaders() });
+        if (!resp.ok) { hideBirthPlaceSuggestions(); return; }
+        const data = await resp.json();
+        // Drop stale responses if a newer request has fired
+        if (reqId !== _birthPlaceReqId) return;
+        renderBirthPlaceSuggestions(data.results || []);
+    } catch {
+        hideBirthPlaceSuggestions();
+    }
+}
+
+function renderBirthPlaceSuggestions(results) {
+    const box = document.getElementById('astroBirthPlaceSuggestions');
+    if (!results.length) {
+        box.innerHTML = `<div class="px-3 py-2 text-xs text-dark-text-secondary">No matches — keep typing.</div>`;
+        box.classList.remove('hidden');
+        return;
+    }
+    box.innerHTML = results.map((r, i) => `
+        <button type="button"
+                class="w-full text-left px-3 py-2 text-sm hover:bg-white/5 transition-colors"
+                style="color:#e0e0e0;border-bottom:1px solid rgba(255,255,255,0.04);"
+                onmousedown="event.preventDefault()"
+                onclick="pickBirthPlace(${i})">
+            <div>${escapeHtml(r.label)}</div>
+            <div class="text-xs text-dark-text-secondary">${escapeHtml(r.city)} · ${escapeHtml(r.country_code)}</div>
+        </button>
+    `).join('');
+    box.dataset.results = JSON.stringify(results);
+    box.classList.remove('hidden');
+}
+
+function pickBirthPlace(index) {
+    const box = document.getElementById('astroBirthPlaceSuggestions');
+    let results = [];
+    try { results = JSON.parse(box.dataset.results || '[]'); } catch {}
+    const choice = results[index];
+    if (!choice) return;
+    document.getElementById('astroBirthPlace').value = choice.label;
+    document.getElementById('astroBirthCity').value = choice.city;
+    document.getElementById('astroBirthCountryCode').value = choice.country_code;
+    hideBirthPlaceSuggestions();
+}
+
+function hideBirthPlaceSuggestions() {
+    const box = document.getElementById('astroBirthPlaceSuggestions');
+    if (box) { box.classList.add('hidden'); box.innerHTML = ''; }
+}
+
+function closeAstrologyForm() {
+    document.getElementById('astrologyFormModal').style.display = 'none';
+}
+
+async function submitAstrologyForm(ev) {
+    if (ev) ev.preventDefault();
+    const fullName = document.getElementById('astroFullName').value.trim();
+    const birthDate = document.getElementById('astroBirthDate').value;
+    const birthTime = document.getElementById('astroBirthTime').value;
+    const birthPlace = document.getElementById('astroBirthPlace').value.trim();
+    const city = document.getElementById('astroBirthCity').value.trim();
+    const countryCode = document.getElementById('astroBirthCountryCode').value.trim();
+    const errBox = document.getElementById('astrologyFormError');
+    const submit = document.getElementById('astrologyFormSubmit');
+
+    errBox.classList.add('hidden');
+    if (!birthDate || !birthTime || !birthPlace) {
+        errBox.textContent = 'Birth date, time, and place are all required.';
+        errBox.classList.remove('hidden');
+        return;
+    }
+    if (!city || !countryCode) {
+        errBox.textContent = 'Pick a birth place from the suggestions so we can resolve city + country.';
+        errBox.classList.remove('hidden');
+        return;
+    }
+
+    submit.disabled = true;
+    submit.textContent = 'Fetching chart & analyzing…';
+    try {
+        const resp = await fetch(`${LORE_API}/astrology/connect`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                full_name: fullName,
+                birth_date: birthDate,
+                birth_time: birthTime,
+                birth_place: birthPlace,
+                city: city,
+                country_code: countryCode,
+            }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            errBox.textContent = data.error || 'Failed to connect.';
+            errBox.classList.remove('hidden');
+            submit.disabled = false;
+            submit.textContent = 'Connect';
+            return;
+        }
+        showNotification('success', `${data.sun_sign || 'Birth chart'} · ${data.hd_type || 'Human Design'} connected.`);
+        closeAstrologyForm();
+        closeImportModal();
+        loadAstrology();
+        loadDepthScore();
+    } catch (err) {
+        errBox.textContent = `Request failed: ${err.message || err}`;
+        errBox.classList.remove('hidden');
+        submit.disabled = false;
+        submit.textContent = 'Connect';
+    }
+}
+
+async function openBirthChartModal() {
+    const modal = document.getElementById('birthChartModal');
+    modal.style.display = 'flex';
+    const body = document.getElementById('birthChartModalBody');
+    body.innerHTML = '<p class="text-sm text-dark-text-secondary">Loading…</p>';
+    try {
+        const resp = await fetch(`${LORE_API}/astrology/birth-chart`, { headers: getHeaders() });
+        if (!resp.ok) {
+            body.innerHTML = `<p class="text-sm text-red-400">${(await resp.json()).error || 'Failed to load chart.'}</p>`;
+            return;
+        }
+        const data = await resp.json();
+        body.innerHTML = renderBirthChart(data);
+    } catch (err) {
+        body.innerHTML = `<p class="text-sm text-red-400">${err.message || err}</p>`;
+    }
+}
+
+function closeBirthChartModal() {
+    document.getElementById('birthChartModal').style.display = 'none';
+}
+
+// astrology-api.io returns 3-letter abbreviated sign names — expand them.
+const SIGN_ABBR_MAP = {
+    ari: 'Aries', tau: 'Taurus', gem: 'Gemini', can: 'Cancer',
+    leo: 'Leo', vir: 'Virgo', lib: 'Libra', sco: 'Scorpio',
+    sag: 'Sagittarius', cap: 'Capricorn', aqu: 'Aquarius', pis: 'Pisces',
+};
+function normalizeSign(s) {
+    if (!s) return '';
+    const key = String(s).trim().slice(0, 3).toLowerCase();
+    return SIGN_ABBR_MAP[key] || String(s);
+}
+
+function renderBirthChart(data) {
+    const chart = data.chart_json || {};
+    const chartData = chart.chart_data || chart;
+    const planets = Array.isArray(chartData.planetary_positions) ? chartData.planetary_positions : [];
+    const houseCusps = Array.isArray(chartData.house_cusps) ? chartData.house_cusps : [];
+    const aspects = Array.isArray(chartData.aspects) ? chartData.aspects : [];
+
+    const headerBits = [];
+    if (data.full_name) headerBits.push(`<span class="text-white">${escapeHtml(data.full_name)}</span>`);
+    if (data.birth_date) headerBits.push(`Born ${escapeHtml(data.birth_date)}${data.birth_time ? ' · ' + escapeHtml(data.birth_time) : ''}`);
+    if (data.birth_place) headerBits.push(escapeHtml(data.birth_place));
+
+    const sunSign = data.sun_sign || (() => {
+        const sun = planets.find(p => String(p.name || '').toLowerCase() === 'sun');
+        return sun ? normalizeSign(sun.sign) : '';
+    })();
+
+    const heroBlock = `
+      <div class="mb-5 flex items-center gap-4 p-4 rounded-lg" style="background: linear-gradient(135deg, rgba(251,191,36,0.08), rgba(192,132,252,0.06));border:1px solid rgba(255,255,255,0.06);">
+        ${sunSign ? `<img src="/static/images/astrology/${sunSign.toLowerCase()}.svg" class="w-12 h-12" alt="${escapeHtml(sunSign)}">` : ''}
+        <div>
+          ${sunSign ? `<div class="text-base font-medium text-white">Sun in ${escapeHtml(sunSign)}</div>` : '<div class="text-base font-medium text-white">Birth Chart</div>'}
+          <div class="text-xs text-dark-text-secondary mt-0.5">${headerBits.join(' · ')}</div>
+        </div>
+      </div>
+    `;
+
+    const analysisBlock = data.birth_chart_analysis ? `
+      <div class="mb-5 p-4 rounded-lg" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);">
+        <h4 class="text-xs uppercase tracking-wider text-dark-text-secondary mb-2">Reading</h4>
+        <div style="line-height:1.65;font-size:13px;color:rgba(255,255,255,0.88);white-space:pre-wrap;">${escapeHtml(data.birth_chart_analysis)}</div>
+      </div>
+    ` : '';
+
+    if (!planets.length) {
+        return heroBlock + `<p class="text-sm text-dark-text-secondary">No planetary data available.</p>`;
+    }
+
+    const planetRows = planets.map(p => {
+        const name = String(p.name || '—').replace(/_/g, ' ');
+        const sign = normalizeSign(p.sign);
+        const house = p.house != null ? p.house : '';
+        const deg = typeof p.degree === 'number' ? p.degree.toFixed(2) + '°' : (p.degree || '');
+        const retro = p.is_retrograde ? ' <span style="color:#fc7244;">℞</span>' : '';
+        const iconName = sign.toLowerCase();
+        return `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+            <td class="py-2 pr-3 text-white">${escapeHtml(name)}${retro}</td>
+            <td class="py-2 pr-3">
+              <span class="inline-flex items-center gap-1.5">
+                ${sign ? `<img src="/static/images/astrology/${iconName}.svg" class="w-4 h-4" alt="${escapeHtml(sign)}">` : ''}
+                <span class="text-dark-text-secondary">${escapeHtml(sign)}</span>
+              </span>
+            </td>
+            <td class="py-2 pr-3 text-dark-text-secondary">${house !== '' ? 'House ' + escapeHtml(String(house)) : ''}</td>
+            <td class="py-2 text-dark-text-secondary font-mono text-xs">${escapeHtml(String(deg))}</td>
+          </tr>
+        `;
+    }).join('');
+
+    const housesBlock = houseCusps.length ? `
+      <h4 class="text-xs uppercase tracking-wider text-dark-text-secondary mt-6 mb-2">Houses</h4>
+      <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+        ${houseCusps.map(h => {
+            const sign = normalizeSign(h.sign);
+            const deg = typeof h.degree === 'number' ? h.degree.toFixed(2) + '°' : (h.degree || '');
+            return `<div class="flex items-center gap-2">
+              <span class="text-dark-text-secondary" style="width:48px;">House ${escapeHtml(String(h.house))}</span>
+              ${sign ? `<img src="/static/images/astrology/${sign.toLowerCase()}.svg" class="w-3.5 h-3.5">` : ''}
+              <span class="text-white">${escapeHtml(sign)}</span>
+              <span class="text-dark-text-secondary font-mono">${escapeHtml(String(deg))}</span>
+            </div>`;
+        }).join('')}
+      </div>
+    ` : '';
+
+    const aspectsBlock = aspects.length ? `
+      <h4 class="text-xs uppercase tracking-wider text-dark-text-secondary mt-6 mb-2">Major Aspects</h4>
+      <div class="text-xs space-y-1" style="max-height:180px;overflow-y:auto;">
+        ${aspects.slice(0, 25).map(a => {
+            const p1 = String(a.point1 || '').replace(/_/g, ' ');
+            const p2 = String(a.point2 || '').replace(/_/g, ' ');
+            const type = String(a.aspect_type || '');
+            const orb = typeof a.orb === 'number' ? `${a.orb.toFixed(1)}°` : '';
+            return `<div class="flex items-center gap-2">
+              <span class="text-white" style="min-width:80px;">${escapeHtml(p1)}</span>
+              <span class="text-brand-teal" style="min-width:70px;">${escapeHtml(type)}</span>
+              <span class="text-white" style="min-width:80px;">${escapeHtml(p2)}</span>
+              <span class="text-dark-text-secondary font-mono">${escapeHtml(orb)}</span>
+            </div>`;
+        }).join('')}
+      </div>
+    ` : '';
+
+    return heroBlock + analysisBlock + `
+      <h4 class="text-xs uppercase tracking-wider text-dark-text-secondary mb-2">Planetary Positions</h4>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs uppercase tracking-wider text-dark-text-secondary">
+            <th class="text-left pb-2 pr-3">Body</th>
+            <th class="text-left pb-2 pr-3">Sign</th>
+            <th class="text-left pb-2 pr-3">House</th>
+            <th class="text-left pb-2">Degree</th>
+          </tr>
+        </thead>
+        <tbody>${planetRows}</tbody>
+      </table>
+      ${housesBlock}
+      ${aspectsBlock}
+    `;
+}
+
+async function openHumanDesignModal() {
+    const modal = document.getElementById('humanDesignModal');
+    modal.style.display = 'flex';
+    const body = document.getElementById('humanDesignModalBody');
+    body.innerHTML = '<p class="text-sm text-dark-text-secondary">Loading…</p>';
+    try {
+        const resp = await fetch(`${LORE_API}/astrology/human-design`, { headers: getHeaders() });
+        if (!resp.ok) {
+            body.innerHTML = `<p class="text-sm text-red-400">${(await resp.json()).error || 'Failed to load report.'}</p>`;
+            return;
+        }
+        const data = await resp.json();
+        body.innerHTML = renderHumanDesign(data);
+    } catch (err) {
+        body.innerHTML = `<p class="text-sm text-red-400">${err.message || err}</p>`;
+    }
+}
+
+function closeHumanDesignModal() {
+    document.getElementById('humanDesignModal').style.display = 'none';
+}
+
+// ---------------------------------------------------------------------------
+// Human Design bodygraph rendering
+// ---------------------------------------------------------------------------
+//
+// Canonical 9-center Human Design bodygraph. Each center has a fixed position,
+// shape, and the set of gates that anchor on it. Channels connect two gates
+// across two centers. We render:
+//   - defined centers as filled shapes, undefined as outlines only
+//   - active channels (both gates activated) as thick colored lines
+//   - hanging gates (one side only) as dashed stubs
+//   - active gate numbers drawn as small labels at the gate anchor points
+
+const HD_CENTER_COLORS = {
+    head: '#fcd34d',           // yellow
+    ajna: '#34d399',           // green
+    throat: '#a78bfa',          // brown/violet — HD tradition is brown, we use violet
+    g: '#fbbf24',               // yellow/gold
+    heart: '#f87171',           // red (will/ego)
+    will: '#f87171',
+    spleen: '#a3a3a3',          // dark grey/brown
+    solar_plexus: '#fbbf24',    // amber/brown
+    sacral: '#f87171',          // red
+    root: '#d97706',            // brown
+};
+
+// Canonical HD bodygraph layout. viewBox 0..240 wide, 0..360 tall.
+// Each center: x,y,w,h (bounding box), shape ('triangle-up'|'triangle-down'|'square'|'diamond')
+const HD_CENTERS = {
+    head:         { x: 120, y: 20,  size: 60, shape: 'triangle-up',   label: 'Head' },
+    ajna:         { x: 120, y: 80,  size: 60, shape: 'triangle-down', label: 'Ajna' },
+    throat:       { x: 120, y: 140, size: 56, shape: 'square',        label: 'Throat' },
+    g:            { x: 120, y: 195, size: 52, shape: 'diamond',       label: 'G' },
+    heart:        { x: 75,  y: 200, size: 38, shape: 'triangle-right',label: 'Will' },
+    sacral:       { x: 120, y: 245, size: 56, shape: 'square',        label: 'Sacral' },
+    spleen:       { x: 45,  y: 250, size: 48, shape: 'triangle-right',label: 'Spleen' },
+    solar_plexus: { x: 195, y: 250, size: 48, shape: 'triangle-left', label: 'Solar Plexus' },
+    root:         { x: 120, y: 310, size: 56, shape: 'square',        label: 'Root' },
+};
+
+// Gate → (center, anchor x/y offset within the center in %).
+// We only need anchor points to draw channels as straight lines from one
+// gate's position to another. The exact gate numbers are mapped by the
+// standard HD chart — we use the center-to-center line connection which is
+// sufficient for a recognizable bodygraph even without placing every gate.
+const HD_GATE_TO_CENTER = {
+    // Head
+    64: 'head', 61: 'head', 63: 'head',
+    // Ajna
+    47: 'ajna', 24: 'ajna', 4: 'ajna', 17: 'ajna', 43: 'ajna', 11: 'ajna',
+    // Throat
+    62: 'throat', 23: 'throat', 56: 'throat', 35: 'throat', 12: 'throat',
+    45: 'throat', 33: 'throat', 8: 'throat', 31: 'throat', 7: 'throat',
+    1: 'throat', 13: 'throat', 10: 'throat', 20: 'throat', 16: 'throat',
+    // Actually 7/1/13/10 live on G. Corrections below override.
+    // G center
+    // (overrides)
+    // Heart/Will
+    21: 'heart', 40: 'heart', 26: 'heart', 51: 'heart',
+    // Spleen
+    48: 'spleen', 57: 'spleen', 44: 'spleen', 50: 'spleen', 32: 'spleen',
+    28: 'spleen', 18: 'spleen',
+    // Solar Plexus
+    36: 'solar_plexus', 22: 'solar_plexus', 37: 'solar_plexus',
+    6: 'solar_plexus', 49: 'solar_plexus', 55: 'solar_plexus', 30: 'solar_plexus',
+    // Sacral
+    5: 'sacral', 14: 'sacral', 29: 'sacral', 59: 'sacral', 9: 'sacral',
+    3: 'sacral', 42: 'sacral', 27: 'sacral', 34: 'sacral',
+    // Root
+    53: 'root', 60: 'root', 52: 'root', 19: 'root', 39: 'root',
+    41: 'root', 58: 'root', 38: 'root', 54: 'root',
+};
+// G center gates (override throat-anchored from loop above)
+[1, 13, 25, 46, 2, 15, 10, 7].forEach(g => { HD_GATE_TO_CENTER[g] = 'g'; });
+// 20 belongs to both throat and splenic system — we anchor to throat
+HD_GATE_TO_CENTER[20] = 'throat';
+
+function hdCenterPoint(key) {
+    const c = HD_CENTERS[key];
+    if (!c) return null;
+    return { cx: c.x, cy: c.y };
+}
+
+function renderHDBodygraph(bodygraph) {
+    if (!bodygraph || typeof bodygraph !== 'object') return '';
+    const centers = bodygraph.centers || {};
+    const channels = bodygraph.channels || [];
+    const personalityGates = bodygraph.personality_gates || [];
+    const designGates = bodygraph.design_gates || [];
+    const allGates = new Set();
+    [...personalityGates, ...designGates].forEach(g => {
+        if (g && g.gate != null) allGates.add(g.gate);
+    });
+
+    // Collect active channels: both endpoints defined and the channel is in the
+    // channels list returned by the API (meaning it's actually activated).
+    const activeChannels = channels.filter(c => Array.isArray(c.gates) && c.gates.length === 2);
+
+    // --- Centers ---
+    const centerSvg = Object.entries(HD_CENTERS).map(([key, c]) => {
+        const def = centers[key];
+        const defined = def && def.defined;
+        const color = HD_CENTER_COLORS[key] || '#888';
+        const fill = defined ? color : 'transparent';
+        const stroke = defined ? color : 'rgba(255,255,255,0.4)';
+        const strokeWidth = defined ? 1.5 : 1;
+
+        if (c.shape === 'triangle-up') {
+            const h = c.size * 0.866;
+            const x1 = c.x, y1 = c.y - h / 2;
+            const x2 = c.x - c.size / 2, y2 = c.y + h / 2;
+            const x3 = c.x + c.size / 2, y3 = c.y + h / 2;
+            return `<polygon points="${x1},${y1} ${x2},${y2} ${x3},${y3}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`;
+        }
+        if (c.shape === 'triangle-down') {
+            const h = c.size * 0.866;
+            const x1 = c.x - c.size / 2, y1 = c.y - h / 2;
+            const x2 = c.x + c.size / 2, y2 = c.y - h / 2;
+            const x3 = c.x, y3 = c.y + h / 2;
+            return `<polygon points="${x1},${y1} ${x2},${y2} ${x3},${y3}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`;
+        }
+        if (c.shape === 'triangle-right') {
+            const h = c.size * 0.866;
+            const x1 = c.x - c.size / 2, y1 = c.y - h / 2;
+            const x2 = c.x + c.size / 2, y2 = c.y;
+            const x3 = c.x - c.size / 2, y3 = c.y + h / 2;
+            return `<polygon points="${x1},${y1} ${x2},${y2} ${x3},${y3}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`;
+        }
+        if (c.shape === 'triangle-left') {
+            const h = c.size * 0.866;
+            const x1 = c.x + c.size / 2, y1 = c.y - h / 2;
+            const x2 = c.x - c.size / 2, y2 = c.y;
+            const x3 = c.x + c.size / 2, y3 = c.y + h / 2;
+            return `<polygon points="${x1},${y1} ${x2},${y2} ${x3},${y3}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`;
+        }
+        if (c.shape === 'diamond') {
+            const s = c.size / 2;
+            return `<polygon points="${c.x},${c.y - s} ${c.x + s},${c.y} ${c.x},${c.y + s} ${c.x - s},${c.y}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`;
+        }
+        // square
+        const s = c.size;
+        return `<rect x="${c.x - s/2}" y="${c.y - s/2}" width="${s}" height="${s}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    }).join('');
+
+    // --- Active channels (lines between center midpoints) ---
+    const channelSvg = activeChannels.map(ch => {
+        const cts = ch.centers || [];
+        if (cts.length !== 2) return '';
+        const a = hdCenterPoint(cts[0]);
+        const b = hdCenterPoint(cts[1]);
+        if (!a || !b) return '';
+        return `<line x1="${a.cx}" y1="${a.cy}" x2="${b.cx}" y2="${b.cy}" stroke="#c084fc" stroke-width="3" stroke-linecap="round" opacity="0.75"/>`;
+    }).join('');
+
+    // --- Center labels ---
+    const labelSvg = Object.entries(HD_CENTERS).map(([key, c]) => {
+        const def = centers[key];
+        const defined = def && def.defined;
+        const color = defined ? '#fff' : 'rgba(255,255,255,0.45)';
+        return `<text x="${c.x}" y="${c.y + 3}" text-anchor="middle" font-size="7" font-family="ui-sans-serif, system-ui" fill="${color}" style="pointer-events:none;">${escapeHtml(c.label)}</text>`;
+    }).join('');
+
+    return `
+      <svg viewBox="0 0 240 360" style="width:100%;max-width:320px;height:auto;display:block;margin:0 auto;">
+        ${channelSvg}
+        ${centerSvg}
+        ${labelSvg}
+      </svg>
+    `;
+}
+
+function renderHumanDesign(data) {
+    const hd = data.human_design_json || {};
+    const bg = (hd.data && hd.data.bodygraph) || hd.bodygraph || hd || {};
+
+    const headerBits = [];
+    if (data.hd_strategy) headerBits.push(`Strategy: ${escapeHtml(data.hd_strategy)}`);
+    if (data.hd_authority) headerBits.push(`Authority: ${escapeHtml(data.hd_authority)}`);
+    if (data.hd_profile) headerBits.push(`Profile: ${escapeHtml(data.hd_profile)}`);
+
+    const heroBlock = `
+      <div class="mb-5 flex items-center gap-4 p-4 rounded-lg" style="background: linear-gradient(135deg, rgba(192,132,252,0.10), rgba(251,191,36,0.06));border:1px solid rgba(255,255,255,0.06);">
+        <img src="/static/images/astrology/bodygraph.svg" class="w-12 h-12" alt="Human Design">
+        <div>
+          <div class="text-base font-medium text-white">${escapeHtml(data.hd_type || 'Human Design')}</div>
+          <div class="text-xs text-dark-text-secondary mt-0.5">${headerBits.join(' · ')}</div>
+        </div>
+      </div>
+    `;
+
+    const bodygraphBlock = `
+      <div class="mb-5 p-4 rounded-lg" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);">
+        <h4 class="text-xs uppercase tracking-wider text-dark-text-secondary mb-3 text-center">Bodygraph</h4>
+        ${renderHDBodygraph(bg)}
+        <div class="text-xs text-dark-text-secondary text-center mt-3" style="opacity:0.7;">
+          <span style="color:#c084fc;">●</span> defined centers &nbsp;·&nbsp; <span style="color:rgba(255,255,255,0.4);">○</span> open centers
+        </div>
+      </div>
+    `;
+
+    const analysisBlock = data.human_design_analysis ? `
+      <div class="mb-2 p-4 rounded-lg" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);">
+        <h4 class="text-xs uppercase tracking-wider text-dark-text-secondary mb-2">Reading</h4>
+        <div style="line-height:1.65;font-size:13px;color:rgba(255,255,255,0.88);white-space:pre-wrap;">${escapeHtml(data.human_design_analysis)}</div>
+      </div>
+    ` : '';
+
+    return heroBlock + bodygraphBlock + analysisBlock;
+}
+
+function escapeHtml(str) {
+    return String(str || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function startSocialConnect(provider) {
+    try {
+        const resp = await fetch(`${LORE_API}/social/authorize/${provider}`, { headers: getHeaders() });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            showNotification('error', err.error || `Failed to start ${provider} connection`);
+            return;
+        }
+        const data = await resp.json();
+        const popup = window.open(data.authorization_url, `lore_${provider}`, 'width=600,height=700,scrollbars=yes');
+        if (!popup) {
+            showNotification('error', 'Popup blocked. Please allow popups for this site.');
+        }
+    } catch (err) {
+        showNotification('error', `Connection failed: ${err.message}`);
+    }
+}
+
+window.addEventListener('message', (event) => {
+    if (!event.data || event.data.type !== 'lore-social-done') return;
+    const { provider, job_id } = event.data;
+    if (!job_id) {
+        showNotification('error', `No data found from ${provider}. Nothing to import.`);
+        return;
+    }
+    importJobId = job_id;
+    document.getElementById('importSourceView').style.display = 'none';
+    document.getElementById('importProgressView').style.display = 'block';
+    updateImportProgress('extracting', `Processing ${provider} data...`);
+    pollImportStatus();
+});
+
+// ---------------------------------------------------------------------------
+// MCP Access Keys
+// ---------------------------------------------------------------------------
+async function loadMcpKeys() {
+    try {
+        const resp = await fetch(`${LORE_API}/keys`, { headers: getHeaders() });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        renderMcpKeys(data.keys || []);
+    } catch {}
+}
+
+function renderMcpKeys(keys) {
+    const container = document.getElementById('mcpKeysList');
+    if (!keys.length) {
+        container.innerHTML = `<p class="text-xs text-dark-text-secondary" style="opacity:0.5;">No access keys yet. Click "+ New Key" to create one.</p>`;
+        return;
+    }
+    container.innerHTML = keys.map(k => {
+        const created = k.created_at ? new Date(k.created_at).toLocaleDateString() : '—';
+        const lastUsed = k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never';
+        const revoked = !!k.revoked_at;
+        return `<div class="mcp-key-row ${revoked ? 'revoked' : ''}">
+            <div>
+                <div class="text-sm font-medium text-white">${escapeHtml(k.name || 'Unnamed')}${revoked ? ' (revoked)' : ''}</div>
+                <div class="text-xs text-dark-text-secondary mt-0.5">
+                    <span style="font-family:'SF Mono',monospace;color:#01a4a6;">${k.prefix}…</span>
+                    &nbsp;· created ${created}
+                    &nbsp;· last used ${lastUsed}
+                </div>
+            </div>
+            ${revoked ? '' : `<button onclick="revokeLoreKey('${k.id}')"
+                    class="text-xs px-2 py-1 rounded border"
+                    style="border-color:rgba(245,100,83,0.3);color:#f56453;">
+                Revoke
+            </button>`}
+        </div>`;
+    }).join('');
+}
+
+async function createLoreKey() {
+    const name = prompt('Name for this key (e.g. "Claude.ai personal")') || '';
+    if (!name.trim()) return;
+    try {
+        const resp = await fetch(`${LORE_API}/keys`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name.trim() }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        showKeyRevealModal(data.raw_token, data.name);
+        loadMcpKeys();
+    } catch (err) {
+        showNotification('error', `Failed to create key: ${err.message}`);
+    }
+}
+
+function showKeyRevealModal(rawToken, name) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+        <div style="background:rgb(16,16,16);border:1px solid rgba(1,164,166,0.3);border-radius:16px;padding:28px;max-width:560px;width:90%;">
+            <h3 class="text-lg font-medium text-white mb-2">Your new MCP access key</h3>
+            <p class="text-xs text-dark-text-secondary mb-4">
+                <strong style="color:#fbbf24;">This is the only time you'll see this token.</strong>
+                Copy it now and paste it into your MCP client as a Bearer credential.
+            </p>
+            <div class="mcp-token-reveal" id="revealedToken">${escapeHtml(rawToken)}</div>
+            <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+                <button onclick="navigator.clipboard.writeText(document.getElementById('revealedToken').textContent); this.textContent='Copied ✓';"
+                        class="btn-primary px-4 py-2 text-sm rounded-lg font-medium">
+                    Copy to clipboard
+                </button>
+                <button onclick="this.closest('[data-overlay]').remove();"
+                        class="px-4 py-2 text-sm rounded-lg border"
+                        style="border-color:rgba(255,255,255,0.1);color:#a0a0a0;">
+                    I've saved it
+                </button>
+            </div>
+        </div>`;
+    overlay.setAttribute('data-overlay', '1');
+    document.body.appendChild(overlay);
+}
+
+async function revokeLoreKey(keyId) {
+    if (!confirm('Revoke this key? External tools using it will immediately lose access.')) return;
+    try {
+        const resp = await fetch(`${LORE_API}/keys/${keyId}`, {
+            method: 'DELETE',
+            headers: getHeaders(),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        loadMcpKeys();
+        showNotification('success', 'Key revoked.');
+    } catch (err) {
+        showNotification('error', `Failed to revoke: ${err.message}`);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Personality — MBTI + Big Five
+// ---------------------------------------------------------------------------
+const BIG5_TRAITS = [
+    { key: 'openness',          label: 'Openness',          color: '#01a4a6' },
+    { key: 'conscientiousness', label: 'Conscientiousness', color: '#fbbf24' },
+    { key: 'extraversion',      label: 'Extraversion',      color: '#fc7244' },
+    { key: 'agreeableness',     label: 'Agreeableness',     color: '#a78bfa' },
+    { key: 'neuroticism',       label: 'Neuroticism',       color: '#f56453' },
+];
+
+let _personalityCache = { mbti: null, big5: null };
+
+async function loadPersonality() {
+    try {
+        const resp = await fetch(`${LORE_API}/personality`, { headers: getHeaders() });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        _personalityCache = { mbti: data.mbti || null, big5: data.big5 || null };
+        renderMbtiCard(data.mbti);
+        renderBig5Card(data.big5);
+    } catch (err) {
+        console.warn('loadPersonality failed:', err);
+    }
+}
+
+function renderMbtiCard(mbti) {
+    const title = document.getElementById('mbtiCardTitle');
+    const subtitle = document.getElementById('mbtiCardSubtitle');
+    if (!mbti || !mbti.type) {
+        title.textContent = 'Myers-Briggs';
+        subtitle.textContent = 'Not set';
+        return;
+    }
+    title.textContent = mbti.type;
+    const src = mbti.source === 'ai_analysis' ? ' · AI-inferred' : '';
+    subtitle.textContent = (mbti.summary || '').slice(0, 80) + (mbti.summary && mbti.summary.length > 80 ? '…' : '') + src;
+}
+
+function renderBig5Card(big5) {
+    const bars = document.getElementById('big5CardBars');
+    const empty = document.getElementById('big5CardEmpty');
+    if (!big5 || big5.openness == null) {
+        bars.classList.add('hidden'); bars.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+    }
+    empty.classList.add('hidden');
+    bars.classList.remove('hidden');
+    bars.innerHTML = BIG5_TRAITS.map(t => {
+        const v = big5[t.key] ?? 0;
+        return `<div class="flex items-center gap-2">
+            <div class="text-[10px] text-dark-text-secondary" style="width:52px;letter-spacing:0.3px;">${t.label.slice(0,4)}</div>
+            <div class="flex-1 h-1.5 rounded-full" style="background:rgba(255,255,255,0.06);">
+                <div style="width:${v}%;height:100%;background:${t.color};border-radius:999px;"></div>
+            </div>
+            <div class="text-[10px]" style="color:${t.color};width:22px;text-align:right;">${v}</div>
+        </div>`;
+    }).join('');
+}
+
+function setPersonalityMessage(elId, kind, text) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    if (!text) { el.classList.add('hidden'); return; }
+    const palette = {
+        ok:    { bg: 'rgba(1,164,166,0.12)',  border: 'rgba(1,164,166,0.35)',  color: '#01a4a6' },
+        error: { bg: 'rgba(245,100,83,0.12)', border: 'rgba(245,100,83,0.35)', color: '#f56453' },
+        info:  { bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.1)', color: '#a0a0a0' },
+    }[kind] || {};
+    el.style.background = palette.bg; el.style.border = `1px solid ${palette.border}`; el.style.color = palette.color;
+    el.textContent = text;
+    el.classList.remove('hidden');
+}
+
+function setSourceBadge(elId, source, updatedAt) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    if (!source) { el.classList.add('hidden'); return; }
+    const label = source === 'ai_analysis' ? 'AI-inferred' : 'Manually entered';
+    const ts = updatedAt ? ` · updated ${new Date(updatedAt).toLocaleDateString()}` : '';
+    el.innerHTML = `<span style="color:#a0a0a0;">Source:</span> <span style="color:#e0e0e0;">${label}</span><span style="color:#a0a0a0;">${ts}</span>`;
+    el.classList.remove('hidden');
+}
+
+// ---- MBTI modal ----
+// Canonical standard summaries for each of the 16 MBTI types. Shown
+// automatically when the user enters a valid 4-letter type. AI Analysis
+// overrides the display with its own personalized summary.
+const MBTI_SUMMARIES = {
+    INTJ: "The Architect. Strategic, independent, and driven by long-range vision. INTJs build systems, question assumptions, and expect competence — from themselves and everyone around them. They need autonomy and intellectual depth to thrive.",
+    INTP: "The Logician. Analytical, curious, and deeply theoretical. INTPs chase ideas for their own sake, map problems from first principles, and resist any framework they can't verify. They want freedom to think and a small circle of sharp peers.",
+    ENTJ: "The Commander. Decisive, strategic, and naturally organizing. ENTJs see the end state and marshal people and resources to get there. They're direct, efficient, and energized by high-stakes challenges and measurable progress.",
+    ENTP: "The Debater. Inventive, quick, and idea-driven. ENTPs generate possibilities, stress-test every assumption, and love playing devil's advocate. They need variety, intellectual sparring, and room to pivot when something better appears.",
+    INFJ: "The Advocate. Insightful, purpose-driven, and quietly intense. INFJs read people and systems deeply and work toward a meaningful long-term vision. They protect their inner world carefully and need solitude to recharge.",
+    INFP: "The Mediator. Idealistic, values-driven, and imaginative. INFPs measure decisions against personal principles and care deeply about authenticity. They bring rich inner worlds to creative work and need space that respects their emotional landscape.",
+    ENFJ: "The Protagonist. Warm, charismatic, and people-focused. ENFJs sense group dynamics, champion growth in others, and build toward shared vision. They're energized by meaningful connection and tend to shoulder more than their share.",
+    ENFP: "The Campaigner. Enthusiastic, curious, and relationship-rich. ENFPs chase possibilities, inspire others, and move fluidly between ideas and people. They need variety, freedom, and purpose to stay engaged.",
+    ISTJ: "The Logistician. Dependable, methodical, and duty-driven. ISTJs honor commitments, follow proven processes, and hold institutions together. They prefer clear expectations, concrete facts, and steady execution over improvisation.",
+    ISFJ: "The Defender. Loyal, attentive, and service-oriented. ISFJs remember the details that matter to people and quietly keep things running. They prize harmony, tradition, and tangible acts of care over recognition.",
+    ESTJ: "The Executive. Organized, pragmatic, and results-driven. ESTJs establish order, enforce standards, and drive teams toward clear goals. They respect proven methods, hard work, and accountability.",
+    ESFJ: "The Consul. Warm, social, and community-minded. ESFJs keep relationships strong, tend to group harmony, and take genuine pleasure in helping. They need appreciation and belonging to feel at their best.",
+    ISTP: "The Virtuoso. Calm, hands-on, and mechanically minded. ISTPs troubleshoot by doing — taking things apart, trying options, and figuring out what actually works. They need autonomy, challenge, and real-world problems to solve.",
+    ISFP: "The Adventurer. Gentle, aesthetic, and present-moment. ISFPs live by personal values, express themselves through action and craft, and resist being boxed in. They need freedom, sensory richness, and space to move at their own pace.",
+    ESTP: "The Entrepreneur. Bold, pragmatic, and action-oriented. ESTPs read a room fast, take calculated risks, and thrive where plans collide with reality. They need stimulation, flexibility, and real stakes to stay sharp.",
+    ESFP: "The Entertainer. Spontaneous, warm, and high-energy. ESFPs draw people in, live fully in the moment, and find joy in shared experience. They need variety, connection, and room to improvise.",
+};
+
+function isValidMbti(t) {
+    return /^[EI][SN][TF][JP]$/.test((t || '').toUpperCase());
+}
+
+function setMbtiSummaryDisplay(text, placeholder) {
+    const el = document.getElementById('mbtiSummaryDisplay');
+    if (!el) return;
+    if (text && text.trim()) {
+        el.textContent = text.trim();
+        el.dataset.summary = text.trim();
+    } else {
+        el.innerHTML = `<span style="color: rgba(255,255,255,0.35);">${escapeHtml(placeholder || 'Enter a 4-letter type above, or run AI Analysis, to see the summary.')}</span>`;
+        el.dataset.summary = '';
+    }
+}
+
+function onMbtiTypeInput(input) {
+    input.value = (input.value || '').toUpperCase();
+    const type = input.value.trim();
+    if (isValidMbti(type)) {
+        setMbtiSummaryDisplay(MBTI_SUMMARIES[type], null);
+    } else if (type.length === 0) {
+        setMbtiSummaryDisplay(null, null);
+    } else {
+        setMbtiSummaryDisplay(null, 'Keep typing — needs all 4 letters (E/I, S/N, T/F, J/P).');
+    }
+}
+
+function openMbtiModal() {
+    document.getElementById('mbtiModal').style.display = 'flex';
+    setPersonalityMessage('mbtiMessage', null, '');
+    const mbti = _personalityCache.mbti;
+    const typeVal = (mbti && mbti.type) || '';
+    document.getElementById('mbtiTypeInput').value = typeVal;
+    if (mbti && mbti.summary) {
+        setMbtiSummaryDisplay(mbti.summary, null);
+    } else if (isValidMbti(typeVal)) {
+        setMbtiSummaryDisplay(MBTI_SUMMARIES[typeVal], null);
+    } else {
+        setMbtiSummaryDisplay(null, null);
+    }
+    if (mbti) setSourceBadge('mbtiSourceBadge', mbti.source, mbti.updated_at);
+    else document.getElementById('mbtiSourceBadge').classList.add('hidden');
+}
+function closeMbtiModal() { document.getElementById('mbtiModal').style.display = 'none'; }
+
+async function saveMbti(source) {
+    const type = (document.getElementById('mbtiTypeInput').value || '').trim().toUpperCase();
+    if (!isValidMbti(type)) {
+        setPersonalityMessage('mbtiMessage', 'error', 'MBTI type must be 4 letters like INTJ (E/I, S/N, T/F, J/P).');
+        return;
+    }
+    // Prefer whatever is currently displayed (AI analysis result, if just run;
+    // otherwise the standard summary for the entered type).
+    const displayed = (document.getElementById('mbtiSummaryDisplay').dataset.summary || '').trim();
+    const summary = displayed || MBTI_SUMMARIES[type] || '';
+    setPersonalityMessage('mbtiMessage', 'info', 'Saving…');
+    try {
+        const resp = await fetch(`${LORE_API}/personality`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mbti: { type, summary, source: source || 'manual' } }),
+        });
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            setPersonalityMessage('mbtiMessage', 'error', data.error || 'Save failed');
+            return;
+        }
+        setPersonalityMessage('mbtiMessage', 'ok', 'Saved.');
+        await loadPersonality();
+        setTimeout(closeMbtiModal, 600);
+    } catch (err) {
+        setPersonalityMessage('mbtiMessage', 'error', `Request failed: ${err.message || err}`);
+    }
+}
+
+async function analyzeMbti() {
+    const btn = document.getElementById('mbtiAnalyzeBtn');
+    btn.disabled = true;
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 20l5-5M20 4l-5 5"/></svg> Analyzing…';
+    setPersonalityMessage('mbtiMessage', 'info', 'Reading your lore and running AI analysis…');
+    try {
+        const resp = await fetch(`${LORE_API}/personality/analyze`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: 'mbti' }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            setPersonalityMessage('mbtiMessage', 'error', data.error || 'Analysis failed');
+            return;
+        }
+        document.getElementById('mbtiTypeInput').value = data.mbti.type;
+        setMbtiSummaryDisplay(data.mbti.summary || MBTI_SUMMARIES[data.mbti.type] || '', null);
+        setPersonalityMessage('mbtiMessage', 'ok', `AI analysis complete (${data.model || 'model'}).`);
+        await loadPersonality();
+    } catch (err) {
+        setPersonalityMessage('mbtiMessage', 'error', `Request failed: ${err.message || err}`);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+}
+
+// ---- Big 5 modal ----
+function renderBig5Inputs() {
+    const wrap = document.getElementById('big5Inputs');
+    const big5 = _personalityCache.big5 || {};
+    wrap.innerHTML = BIG5_TRAITS.map(t => {
+        const v = big5[t.key] != null ? big5[t.key] : 50;
+        return `<div>
+            <div class="flex items-center justify-between mb-1">
+                <label class="text-xs uppercase tracking-wider text-dark-text-secondary">${t.label}</label>
+                <span id="big5Val-${t.key}" class="text-xs font-mono" style="color:${t.color};">${v}</span>
+            </div>
+            <input type="range" min="0" max="100" value="${v}" id="big5Input-${t.key}"
+                   class="w-full" style="accent-color: ${t.color};"
+                   oninput="document.getElementById('big5Val-${t.key}').textContent = this.value">
+        </div>`;
+    }).join('');
+}
+
+function openBig5Modal() {
+    document.getElementById('big5Modal').style.display = 'flex';
+    setPersonalityMessage('big5Message', null, '');
+    renderBig5Inputs();
+    const big5 = _personalityCache.big5;
+    document.getElementById('big5SummaryInput').value = (big5 && big5.summary) || '';
+    if (big5) setSourceBadge('big5SourceBadge', big5.source, big5.updated_at);
+    else document.getElementById('big5SourceBadge').classList.add('hidden');
+}
+function closeBig5Modal() { document.getElementById('big5Modal').style.display = 'none'; }
+
+async function saveBig5(source) {
+    const payload = { big5: { summary: (document.getElementById('big5SummaryInput').value || '').trim(), source: source || 'manual' } };
+    for (const t of BIG5_TRAITS) {
+        payload.big5[t.key] = parseInt(document.getElementById(`big5Input-${t.key}`).value, 10);
+    }
+    setPersonalityMessage('big5Message', 'info', 'Saving…');
+    try {
+        const resp = await fetch(`${LORE_API}/personality`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            setPersonalityMessage('big5Message', 'error', data.error || 'Save failed');
+            return;
+        }
+        setPersonalityMessage('big5Message', 'ok', 'Saved.');
+        await loadPersonality();
+        setTimeout(closeBig5Modal, 600);
+    } catch (err) {
+        setPersonalityMessage('big5Message', 'error', `Request failed: ${err.message || err}`);
+    }
+}
+
+async function analyzeBig5() {
+    const btn = document.getElementById('big5AnalyzeBtn');
+    btn.disabled = true;
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 20l5-5M20 4l-5 5"/></svg> Analyzing…';
+    setPersonalityMessage('big5Message', 'info', 'Reading your lore and running AI analysis…');
+    try {
+        const resp = await fetch(`${LORE_API}/personality/analyze`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: 'big5' }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            setPersonalityMessage('big5Message', 'error', data.error || 'Analysis failed');
+            return;
+        }
+        _personalityCache.big5 = data.big5;
+        renderBig5Inputs();
+        document.getElementById('big5SummaryInput').value = data.big5.summary;
+        setPersonalityMessage('big5Message', 'ok', `AI analysis complete (${data.model || 'model'}).`);
+        await loadPersonality();
+    } catch (err) {
+        setPersonalityMessage('big5Message', 'error', `Request failed: ${err.message || err}`);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Self-host mode
+// ---------------------------------------------------------------------------
+function setSelfHostMessage(kind, text) {
+    const el = document.getElementById('selfHostMessage');
+    if (!el) return;
+    if (!text) { el.classList.add('hidden'); return; }
+    const palette = {
+        ok:    { bg: 'rgba(1,164,166,0.12)',  border: 'rgba(1,164,166,0.35)',  color: '#01a4a6' },
+        error: { bg: 'rgba(245,100,83,0.12)', border: 'rgba(245,100,83,0.35)', color: '#f56453' },
+        info:  { bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.1)', color: '#a0a0a0' },
+    }[kind] || {};
+    el.style.background = palette.bg; el.style.border = `1px solid ${palette.border}`; el.style.color = palette.color;
+    el.textContent = text;
+    el.classList.remove('hidden');
+}
+function clearSelfHostMessage() { setSelfHostMessage(null, ''); }
+
+function setSelfHostBadge(kind, text) {
+    const badge = document.getElementById('selfHostStatusBadge');
+    if (!badge) return;
+    const palette = {
+        off:   { bg: 'rgba(160,160,160,0.12)', color: '#a0a0a0' },
+        on:    { bg: 'rgba(252,114,68,0.15)',  color: '#fc7244' },
+        error: { bg: 'rgba(245,100,83,0.12)',  color: '#f56453' },
+    }[kind] || {};
+    badge.style.background = palette.bg; badge.style.color = palette.color;
+    badge.textContent = text;
+}
+
+async function loadSelfHostConfig() {
+    try {
+        const resp = await fetch(`${LORE_API}/external-endpoint`, { headers: getHeaders() });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const urlInput = document.getElementById('selfHostUrl');
+        const tokInput = document.getElementById('selfHostToken');
+        const removeBtn = document.getElementById('selfHostRemoveBtn');
+        if (!data.configured) {
+            setSelfHostBadge('off', 'not configured');
+            removeBtn.classList.add('hidden');
+            return;
+        }
+        urlInput.value = data.base_url || '';
+        tokInput.placeholder = data.token_masked || 'token saved';
+        removeBtn.classList.remove('hidden');
+        if (data.enabled && data.last_tested_status === 'ok') {
+            setSelfHostBadge('on', 'active · self-hosted');
+        } else if (!data.enabled) {
+            setSelfHostBadge('off', 'disabled');
+        } else {
+            setSelfHostBadge('error', data.last_tested_status || 'untested');
+        }
+    } catch (err) {
+        console.warn('loadSelfHostConfig failed:', err);
+    }
+}
+
+async function testSelfHost() {
+    const base_url = document.getElementById('selfHostUrl').value.trim();
+    const auth_token = document.getElementById('selfHostToken').value.trim();
+    if (!base_url || !auth_token) {
+        setSelfHostMessage('error', 'URL and token required to run a test.');
+        return;
+    }
+    setSelfHostMessage('info', 'Testing connection…');
+    try {
+        const resp = await fetch(`${LORE_API}/external-endpoint/test`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base_url, auth_token }),
+        });
+        const data = await resp.json();
+        if (data.ok) setSelfHostMessage('ok', `Connection OK — ${data.detail}`);
+        else setSelfHostMessage('error', data.detail || 'Test failed');
+    } catch (err) {
+        setSelfHostMessage('error', `Request failed: ${err.message || err}`);
+    }
+}
+
+async function saveSelfHost() {
+    const base_url = document.getElementById('selfHostUrl').value.trim();
+    const auth_token = document.getElementById('selfHostToken').value.trim();
+    if (!base_url || !auth_token) {
+        setSelfHostMessage('error', 'URL and token required.');
+        return;
+    }
+    setSelfHostMessage('info', 'Saving…');
+    try {
+        const resp = await fetch(`${LORE_API}/external-endpoint`, {
+            method: 'POST',
+            headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base_url, auth_token, enabled: true }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            setSelfHostMessage('error', data.error || 'Save failed');
+            return;
+        }
+        setSelfHostMessage('ok', 'Self-host active. Your Sidekicks will now read and write against your server.');
+        setSelfHostBadge('on', 'active · self-hosted');
+        document.getElementById('selfHostToken').value = '';
+        document.getElementById('selfHostToken').placeholder = data.token_masked || 'token saved';
+        document.getElementById('selfHostRemoveBtn').classList.remove('hidden');
+    } catch (err) {
+        setSelfHostMessage('error', `Request failed: ${err.message || err}`);
+    }
+}
+
+async function removeSelfHost() {
+    if (!confirm('Disconnect self-host mode? Your Sidekicks will revert to managed Lore storage. Your self-hosted data is not touched.')) return;
+    try {
+        const resp = await fetch(`${LORE_API}/external-endpoint`, { method: 'DELETE', headers: getHeaders() });
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            setSelfHostMessage('error', data.error || 'Disconnect failed');
+            return;
+        }
+        setSelfHostBadge('off', 'not configured');
+        document.getElementById('selfHostUrl').value = '';
+        document.getElementById('selfHostToken').value = '';
+        document.getElementById('selfHostToken').placeholder = 'paste token here';
+        document.getElementById('selfHostRemoveBtn').classList.add('hidden');
+        setSelfHostMessage('ok', 'Reverted to managed Lore storage.');
+    } catch (err) {
+        setSelfHostMessage('error', `Request failed: ${err.message || err}`);
+    }
+}
+
+// Init: load depth score + check MCP connectivity
+(async function init() {
+    loadProfileAvatar();
+    loadDepthScore();
+    loadSocialStatus();
+    loadAstrology();
+    loadMcpVisibility();
+    loadMcpKeys();
+    loadSelfHostConfig();
+    loadPersonality();
+    try {
+        const resp = await fetch(`${LORE_API}/status`, { headers: getHeaders() });
+        const data = await resp.json();
+        const dot = document.getElementById('connectionStatus').querySelector('.status-dot');
+        if (data.status !== 'ok' && dot) dot.style.background = 'rgba(255,255,255,0.15)';
+    } catch {
+        const dot = document.getElementById('connectionStatus').querySelector('.status-dot');
+        if (dot) dot.style.background = 'rgba(255,255,255,0.15)';
+    }
+})();
+</script>
+
+<!-- Voice Interview Modal -->
+<div id="interviewModal" class="interview-overlay" style="display:none;">
+    <div class="interview-panel">
+        <div class="mic-ring" id="micRing">
+            <svg class="w-8 h-8" style="color: #a78bfa;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+            </svg>
+        </div>
+        <h3 class="text-lg font-medium text-white mb-2">Lore Interview</h3>
+        <p id="interviewStatus" class="text-sm text-dark-text-secondary mb-4">Starting...</p>
+        <p class="text-xs text-dark-text-secondary mb-6">
+            Covering: <span id="interviewCategoryList" class="text-white"></span>
+        </p>
+        <button onclick="closeInterviewModal()"
+                class="px-5 py-2 text-sm rounded-lg border transition-colors"
+                style="border-color: rgba(255,255,255,0.1); color: #a0a0a0;">
+            End Interview
+        </button>
+    </div>
+</div>
+
+<!-- Astrology Form Modal (nested — collects birth data) -->
+<div id="astrologyFormModal" class="import-overlay" style="display:none;z-index:9999;" onclick="if(event.target===this)closeAstrologyForm()">
+    <div class="import-modal" style="max-width:520px;overflow:visible;">
+        <div class="import-modal-header">
+            <h3 class="text-lg font-medium text-white">Astrology & Human Design</h3>
+            <button onclick="closeAstrologyForm()" class="text-dark-text-secondary hover:text-white transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <div class="import-modal-body">
+            <p class="text-xs text-dark-text-secondary mb-4">
+                Enter birth details to fetch a western tropical natal chart and a Human Design bodygraph. Exact birth time matters — try to get it from a birth certificate.
+            </p>
+            <form onsubmit="submitAstrologyForm(event)" class="space-y-3">
+                <div>
+                    <label class="block text-xs text-dark-text-secondary mb-1">Full name</label>
+                    <input id="astroFullName" type="text" placeholder="Optional" autocomplete="off"
+                           class="w-full px-3 py-2 rounded-md text-sm text-white"
+                           style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-dark-text-secondary mb-1">Birth date *</label>
+                        <input id="astroBirthDate" type="date" required
+                               class="w-full px-3 py-2 rounded-md text-sm text-white"
+                               style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-dark-text-secondary mb-1">Birth time *</label>
+                        <input id="astroBirthTime" type="time" required
+                               class="w-full px-3 py-2 rounded-md text-sm text-white"
+                               style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);">
+                    </div>
+                </div>
+                <div style="position:relative;overflow:visible;">
+                    <label class="block text-xs text-dark-text-secondary mb-1">Birth place *</label>
+                    <input id="astroBirthPlace" type="text" required autocomplete="off" placeholder="Start typing a city…"
+                           class="w-full px-3 py-2 rounded-md text-sm text-white"
+                           style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);"
+                           oninput="onBirthPlaceInput()"
+                           onfocus="onBirthPlaceInput()"
+                           onblur="setTimeout(hideBirthPlaceSuggestions, 200)">
+                    <input type="hidden" id="astroBirthCity">
+                    <input type="hidden" id="astroBirthCountryCode">
+                    <div id="astroBirthPlaceSuggestions"
+                         class="hidden"
+                         style="position:absolute;left:0;right:0;top:100%;z-index:10;max-height:220px;overflow-y:auto;background:rgb(20,20,20);border:1px solid rgba(255,255,255,0.1);border-radius:8px;margin-top:4px;box-shadow:0 8px 24px rgba(0,0,0,0.4);"></div>
+                    <p id="astroBirthPlaceHint" class="text-xs text-dark-text-secondary mt-1" style="opacity:0.6;">Pick a suggestion so we can send a clean city + country to the API.</p>
+                </div>
+                <p id="astrologyFormError" class="text-xs text-red-400 hidden"></p>
+                <div class="flex justify-end gap-3 pt-2">
+                    <button type="button" onclick="closeAstrologyForm()"
+                            class="px-4 py-2 text-sm rounded-lg border transition-colors"
+                            style="border-color: rgba(255,255,255,0.1); color: #a0a0a0;">
+                        Cancel
+                    </button>
+                    <button id="astrologyFormSubmit" type="submit"
+                            class="btn-primary px-6 py-2 text-sm rounded-lg font-medium transition-colors">
+                        Connect
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Birth Chart Detail Modal -->
+<div id="birthChartModal" class="import-overlay" style="display:none;z-index:9999;" onclick="if(event.target===this)closeBirthChartModal()">
+    <div class="import-modal">
+        <div class="import-modal-header">
+            <h3 class="text-lg font-medium text-white">Birth Chart</h3>
+            <button onclick="closeBirthChartModal()" class="text-dark-text-secondary hover:text-white transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <div id="birthChartModalBody" class="import-modal-body"></div>
+    </div>
+</div>
+
+<!-- Human Design Detail Modal -->
+<div id="humanDesignModal" class="import-overlay" style="display:none;z-index:9999;" onclick="if(event.target===this)closeHumanDesignModal()">
+    <div class="import-modal">
+        <div class="import-modal-header">
+            <h3 class="text-lg font-medium text-white">Human Design</h3>
+            <button onclick="closeHumanDesignModal()" class="text-dark-text-secondary hover:text-white transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <div id="humanDesignModalBody" class="import-modal-body"></div>
+    </div>
+</div>
+
+<!-- MBTI Modal — view, edit, or AI-analyze Myers-Briggs -->
+<div id="mbtiModal" class="import-overlay" style="display:none;z-index:9999;" onclick="if(event.target===this)closeMbtiModal()">
+    <div class="import-modal">
+        <div class="import-modal-header">
+            <h3 class="text-lg font-medium text-white">Myers-Briggs</h3>
+            <button onclick="closeMbtiModal()" class="text-dark-text-secondary hover:text-white transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <div class="import-modal-body">
+            <p class="text-sm text-dark-text-secondary mb-4">
+                Enter your MBTI type and the standard summary loads automatically, or let AI infer your type from your existing Lore.
+            </p>
+
+            <div class="mb-4">
+                <label class="text-xs uppercase tracking-wider text-dark-text-secondary block mb-1">Type (4 letters)</label>
+                <input id="mbtiTypeInput" type="text" maxlength="4" placeholder="e.g. INTJ"
+                       class="w-full px-3 py-2 rounded-lg text-sm font-mono uppercase"
+                       style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); color: #e0e0e0; letter-spacing: 4px;"
+                       oninput="onMbtiTypeInput(this)">
+            </div>
+            <div class="mb-4">
+                <label class="text-xs uppercase tracking-wider text-dark-text-secondary block mb-1">Summary</label>
+                <div id="mbtiSummaryDisplay"
+                     class="w-full px-3 py-2 rounded-lg text-sm"
+                     style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); color: #e0e0e0; min-height: 110px; line-height: 1.55; white-space: pre-wrap;">
+                    <span style="color: rgba(255,255,255,0.35);">Enter a 4-letter type above, or run AI Analysis, to see the summary.</span>
+                </div>
+            </div>
+
+            <div id="mbtiSourceBadge" class="text-xs mb-3 hidden"></div>
+            <div id="mbtiMessage" class="text-xs px-3 py-2 rounded-lg mb-3 hidden"></div>
+
+            <div class="flex gap-2 flex-wrap items-center">
+                <div class="flex flex-col">
+                    <button onclick="analyzeMbti()" id="mbtiAnalyzeBtn"
+                            class="px-3 py-2 text-sm rounded-lg border transition-colors flex items-center gap-2"
+                            style="border-color: rgba(1,164,166,0.3); color: #01a4a6; background: rgba(1,164,166,0.08);">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                        <span>AI Analysis</span>
+                    </button>
+                    <p class="text-xs mt-1" style="color: rgba(255,255,255,0.4);">Let AI guess for you based on your Lore</p>
+                </div>
+                <button onclick="saveMbti('manual')" id="mbtiSaveBtn"
+                        class="btn-primary px-4 py-2 text-sm rounded-lg font-medium ml-auto">
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Big Five Modal -->
+<div id="big5Modal" class="import-overlay" style="display:none;z-index:9999;" onclick="if(event.target===this)closeBig5Modal()">
+    <div class="import-modal">
+        <div class="import-modal-header">
+            <h3 class="text-lg font-medium text-white">Big Five (OCEAN)</h3>
+            <button onclick="closeBig5Modal()" class="text-dark-text-secondary hover:text-white transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <div class="import-modal-body">
+            <p class="text-sm text-dark-text-secondary mb-4">
+                Enter Big Five scores (0–100) manually, or let AI infer them from your existing Lore.
+            </p>
+
+            <div id="big5Inputs" class="space-y-3 mb-4"></div>
+
+            <div class="mb-4">
+                <label class="text-xs uppercase tracking-wider text-dark-text-secondary block mb-1">Summary</label>
+                <textarea id="big5SummaryInput" rows="5" placeholder="A short narrative tying scores to lore signals…"
+                          class="w-full px-3 py-2 rounded-lg text-sm"
+                          style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); color: #e0e0e0; resize: vertical;"></textarea>
+            </div>
+
+            <div id="big5SourceBadge" class="text-xs mb-3 hidden"></div>
+            <div id="big5Message" class="text-xs px-3 py-2 rounded-lg mb-3 hidden"></div>
+
+            <div class="flex gap-2 flex-wrap items-center">
+                <div class="flex flex-col">
+                    <button onclick="analyzeBig5()" id="big5AnalyzeBtn"
+                            class="px-3 py-2 text-sm rounded-lg border transition-colors flex items-center gap-2"
+                            style="border-color: rgba(252,114,68,0.3); color: #fc7244; background: rgba(252,114,68,0.08);">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                        <span>AI Analysis</span>
+                    </button>
+                    <p class="text-xs mt-1" style="color: rgba(255,255,255,0.4);">Let AI guess for you based on your Lore</p>
+                </div>
+                <button onclick="saveBig5('manual')" id="big5SaveBtn"
+                        class="btn-primary px-4 py-2 text-sm rounded-lg font-medium ml-auto">
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Lore Modal -->
+<div id="importModal" class="import-overlay" style="display:none;" onclick="if(event.target===this)closeImportModal()">
+    <div class="import-modal">
+        <div class="import-modal-header">
+            <h3 class="text-lg font-medium text-white">Add Lore</h3>
+            <button onclick="closeImportModal()" class="text-dark-text-secondary hover:text-white transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <div class="import-modal-body">
+
+            <!-- Source Picker View -->
+            <div id="importSourceView">
+                <p class="text-sm text-dark-text-secondary mb-4">
+                    Add to your Lore from any source. We'll extract personal context signals and propose updates.
+                </p>
+
+                <!-- File Sources -->
+                <p class="text-xs text-dark-text-secondary mb-2" style="text-transform:uppercase;letter-spacing:1px;opacity:0.5;">Upload</p>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+                    <button onclick="pickSource('zip')" class="lore-category-card px-4 py-5 text-center hover:border-brand-teal/40 transition-all">
+                        <svg class="w-8 h-8 mx-auto mb-2" style="color: #01a4a6;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                        </svg>
+                        <p class="text-sm font-medium text-white">Chat Export</p>
+                        <p class="text-xs text-dark-text-secondary mt-1">ChatGPT or Claude ZIP</p>
+                    </button>
+                    <button onclick="pickSource('audio')" class="lore-category-card px-4 py-5 text-center hover:border-brand-teal/40 transition-all">
+                        <svg class="w-8 h-8 mx-auto mb-2" style="color: #a78bfa;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+                        </svg>
+                        <p class="text-sm font-medium text-white">Audio</p>
+                        <p class="text-xs text-dark-text-secondary mt-1">Voice memos, recordings</p>
+                    </button>
+                    <button onclick="pickSource('text')" class="lore-category-card px-4 py-5 text-center hover:border-brand-teal/40 transition-all">
+                        <svg class="w-8 h-8 mx-auto mb-2" style="color: #fbbf24;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        <p class="text-sm font-medium text-white">Document / Text</p>
+                        <p class="text-xs text-dark-text-secondary mt-1">PDF, TXT, MD, DOCX</p>
+                    </button>
+                </div>
+
+                <!-- Social Connect -->
+                <p class="text-xs text-dark-text-secondary mb-2" style="text-transform:uppercase;letter-spacing:1px;opacity:0.5;">Connect</p>
+                <div id="socialConnectGrid" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <button onclick="startSocialConnect('linkedin')" id="social-btn-linkedin"
+                            class="lore-category-card px-4 py-5 text-center hover:border-brand-teal/40 transition-all hidden">
+                        <svg class="w-8 h-8 mx-auto mb-2" style="color: #0A66C2;" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+                        </svg>
+                        <p class="text-sm font-medium text-white">LinkedIn</p>
+                        <p class="text-xs text-dark-text-secondary mt-1">Professional profile & posts</p>
+                    </button>
+                    <button onclick="startSocialConnect('facebook')" id="social-btn-facebook"
+                            class="lore-category-card px-4 py-5 text-center hover:border-brand-teal/40 transition-all hidden">
+                        <svg class="w-8 h-8 mx-auto mb-2" style="color: #1877F2;" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                        </svg>
+                        <p class="text-sm font-medium text-white">Facebook</p>
+                        <p class="text-xs text-dark-text-secondary mt-1 opacity-75">Life events & interests</p>
+                    </button>
+                    <button onclick="openAstrologyForm()" id="social-btn-birth-chart"
+                            class="lore-category-card px-4 py-5 text-center hover:border-brand-teal/40 transition-all hidden">
+                        <svg class="w-8 h-8 mx-auto mb-2" style="color: #fbbf24;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <circle cx="12" cy="12" r="9"/>
+                            <path stroke-linecap="round" d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M5.6 18.4L18.4 5.6"/>
+                        </svg>
+                        <p class="text-sm font-medium text-white">Birth Chart</p>
+                        <p class="text-xs text-dark-text-secondary mt-1">Western tropical natal chart</p>
+                    </button>
+                    <button onclick="openAstrologyForm()" id="social-btn-human-design"
+                            class="lore-category-card px-4 py-5 text-center hover:border-brand-teal/40 transition-all hidden">
+                        <svg class="w-8 h-8 mx-auto mb-2" style="color: #c084fc;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l6 4v6l-6 8-6-8V7z"/>
+                            <circle cx="12" cy="10" r="1.5" fill="currentColor"/>
+                        </svg>
+                        <p class="text-sm font-medium text-white">Human Design</p>
+                        <p class="text-xs text-dark-text-secondary mt-1">Bodygraph type, strategy & authority</p>
+                    </button>
+                    <button onclick="closeImportModal(); openMbtiModal();"
+                            class="lore-category-card px-4 py-5 text-center hover:border-brand-teal/40 transition-all">
+                        <svg class="w-8 h-8 mx-auto mb-2" style="color: #01a4a6;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                        </svg>
+                        <p class="text-sm font-medium text-white">Myers-Briggs</p>
+                        <p class="text-xs text-dark-text-secondary mt-1">MBTI type · manual or AI-inferred</p>
+                    </button>
+                    <button onclick="closeImportModal(); openBig5Modal();"
+                            class="lore-category-card px-4 py-5 text-center hover:border-brand-teal/40 transition-all">
+                        <svg class="w-8 h-8 mx-auto mb-2" style="color: #fc7244;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 12h2M19 12h2M5 6h14M5 18h14M5 12l14 0"/>
+                        </svg>
+                        <p class="text-sm font-medium text-white">Big Five</p>
+                        <p class="text-xs text-dark-text-secondary mt-1">OCEAN traits · manual or AI-inferred</p>
+                    </button>
+                </div>
+                <p id="noSocialMsg" class="text-xs text-dark-text-secondary mt-2 hidden" style="opacity:0.5">
+                    Social integrations will appear here once configured by your administrator.
+                </p>
+
+                <p class="text-xs text-dark-text-secondary mt-4" style="opacity:0.5">
+                    Your data is processed server-side and never stored beyond this session. Only extracted insights are saved to your Lore.
+                </p>
+            </div>
+
+            <!-- Upload View (shown after source pick) -->
+            <div id="importUploadView" style="display:none;">
+                <button onclick="backToSourcePicker()" class="flex items-center gap-1 text-xs text-dark-text-secondary mb-3 hover:text-white transition-colors">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                    Back
+                </button>
+                <div id="importDropZone" class="import-drop-zone">
+                    <svg class="w-10 h-10 mx-auto mb-3" style="color: rgba(255,255,255,0.2);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                    </svg>
+                    <p id="dropZoneLabel" class="text-sm text-dark-text-secondary">Drop your file here, or click to browse</p>
+                    <p id="dropZoneHint" class="text-xs text-dark-text-secondary mt-1" style="opacity:0.5"></p>
+                </div>
+                <input type="file" id="importFileInput" class="hidden" style="display:none;">
+            </div>
+
+            <!-- Progress View -->
+            <div id="importProgressView" style="display:none;">
+                <div id="importSteps" class="space-y-1 mb-4"></div>
+                <p id="importProgressDetail" class="text-sm text-dark-text-secondary"></p>
+            </div>
+
+            <!-- Review View -->
+            <div id="importReviewView" style="display:none;">
+                <p id="importStats" class="text-sm text-dark-text-secondary mb-4"></p>
+                <p class="text-xs text-dark-text-secondary mb-3">Review proposed updates. Uncheck any categories you'd like to skip.</p>
+                <div id="importProposalList" class="mb-4" style="max-height: 400px; overflow-y: auto;"></div>
+                <div class="flex justify-end gap-3">
+                    <button onclick="closeImportModal()"
+                            class="px-4 py-2 text-sm rounded-lg border transition-colors"
+                            style="border-color: rgba(255,255,255,0.1); color: #a0a0a0;">
+                        Cancel
+                    </button>
+                    <button id="applyImportBtn" onclick="applyImportProposals()"
+                            class="btn-primary px-6 py-2 text-sm rounded-lg font-medium transition-colors">
+                        Apply Selected
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

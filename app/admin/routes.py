@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, File, UploadFile, Query, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Set, Tuple
 import redis.asyncio as aioredis
+import asyncio
 import redis
 import base64
 import json
@@ -2705,6 +2706,79 @@ async def admin_set_agent_tools(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse({"success": True})
 
+
+
+@router.get("/api/usage/{client_id}/{agent_id}")
+async def admin_get_agent_usage(
+    client_id: str,
+    agent_id: str,
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(get_admin_user),
+):
+    """Return current-period usage for a single agent in the shape the
+    agent_detail.html JS expects (voice/text/embedding blocks plus the new
+    LiveKit per-model counters)."""
+    from app.services.usage_tracking import usage_tracking_service
+
+    ensure_client_access(client_id, admin_user)
+
+    try:
+        await usage_tracking_service.initialize()
+        record = await usage_tracking_service.get_agent_usage_for_period(client_id, agent_id)
+    except Exception as exc:
+        logger.error("Failed to fetch agent usage for %s/%s: %s", client_id, agent_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch usage") from exc
+
+    def _quota_block(used: int, limit: int) -> Dict[str, Any]:
+        used = int(used or 0)
+        limit = int(limit or 0)
+        percent = (used / limit * 100) if limit > 0 else 0.0
+        return {
+            "used": used,
+            "limit": limit,
+            "remaining": max(0, limit - used) if limit > 0 else 0,
+            "percent_used": round(percent, 1),
+            "is_exceeded": limit > 0 and used >= limit,
+            "is_warning": limit > 0 and percent >= 80,
+        }
+
+    voice_used = int(record.get("voice_seconds_used", 0) or 0)
+    voice_limit = int(record.get("voice_seconds_limit", 0) or 0)
+    voice_percent = (voice_used / voice_limit * 100) if voice_limit > 0 else 0.0
+
+    voice_block = {
+        "used_seconds": voice_used,
+        "limit_seconds": voice_limit,
+        "used_minutes": round(voice_used / 60, 1),
+        "limit_minutes": round(voice_limit / 60, 1),
+        "percent_used": round(voice_percent, 1),
+        "is_exceeded": voice_limit > 0 and voice_used >= voice_limit,
+        "is_warning": voice_limit > 0 and voice_percent >= 80,
+    }
+
+    return JSONResponse({
+        "success": True,
+        "period_start": record.get("period_start"),
+        "session_count": int(record.get("session_count", 0) or 0),
+        "last_session_at": record.get("last_session_at"),
+        "voice": voice_block,
+        "text": _quota_block(
+            record.get("text_messages_used", 0),
+            record.get("text_messages_limit", 0),
+        ),
+        "embedding": _quota_block(
+            record.get("embedding_chunks_used", 0),
+            record.get("embedding_chunks_limit", 0),
+        ),
+        "models": {
+            "llm_input_tokens": int(record.get("llm_input_tokens", 0) or 0),
+            "llm_output_tokens": int(record.get("llm_output_tokens", 0) or 0),
+            "llm_cached_input_tokens": int(record.get("llm_cached_input_tokens", 0) or 0),
+            "tts_characters": int(record.get("tts_characters", 0) or 0),
+            "tts_audio_seconds": float(record.get("tts_audio_seconds", 0) or 0),
+            "stt_audio_seconds": float(record.get("stt_audio_seconds", 0) or 0),
+        },
+    })
 
 
 @router.get("/api/clients/{client_id}/perplexity-key")
@@ -7046,3 +7120,2201 @@ async def docs_billing(request: Request):
 @router.get("/docs/troubleshooting", response_class=HTMLResponse)
 async def docs_troubleshooting(request: Request):
     return templates.TemplateResponse("admin/docs/troubleshooting.html", {"request": request})
+
+
+# ---------------------------------------------------------------------------
+# Lore — Personal Context MCP
+# ---------------------------------------------------------------------------
+import httpx as _httpx
+
+_LORE_MCP_BASE = os.getenv("LORE_MCP_URL", "http://lore-mcp:8082")
+
+
+def _lore_internal_headers() -> Dict[str, str]:
+    """Headers that identify this process as an internal caller of the Lore MCP.
+    The X-Lore-Internal header carries the platform service role key."""
+    return {"X-Lore-Internal": os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")}
+
+_LORE_CATEGORIES = [
+    {"key": "identity", "label": "Identity", "description": "Name, role, org, philosophy, personal context", "icon": "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z", "color": "#01a4a6"},
+    {"key": "roles_and_responsibilities", "label": "Roles & Responsibilities", "description": "Day-to-day work, outputs, decisions, who you serve", "icon": "M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z", "color": "#fc7244"},
+    {"key": "current_projects", "label": "Current Projects", "description": "Active workstreams, status, priority, KPIs", "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4", "color": "#a78bfa"},
+    {"key": "team_and_relationships", "label": "Team & Relationships", "description": "Key people, roles, what each relationship requires", "icon": "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z", "color": "#f472b6"},
+    {"key": "tools_and_systems", "label": "Tools & Systems", "description": "Stack, architecture patterns, constraints", "icon": "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z", "color": "#fbbf24"},
+    {"key": "communication_style", "label": "Communication Style", "description": "Tone, formatting, editing preferences", "icon": "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z", "color": "#34d399"},
+    {"key": "goals_and_priorities", "label": "Goals & Priorities", "description": "Week / quarter / year / career targets", "icon": "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6", "color": "#60a5fa"},
+    {"key": "preferences_and_constraints", "label": "Preferences & Constraints", "description": "Always/never rules, hard constraints", "icon": "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z", "color": "#f87171"},
+    {"key": "domain_knowledge", "label": "Domain Knowledge", "description": "Expertise areas, frameworks, what NOT to explain", "icon": "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z", "color": "#c084fc"},
+    {"key": "decision_log", "label": "Decision Log", "description": "Past decisions and reasoning", "icon": "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z", "color": "#fb923c"},
+]
+
+
+async def _resolve_lore_llm(admin_user: dict):
+    """Resolve an LLM provider for Lore processing. Returns (provider, openai_api_key)."""
+    from app.services.content_catalyst_service import (
+        AnthropicProvider, OpenAIProvider, GroqProvider, CerebrasProvider,
+    )
+    llm_provider = None
+    openai_api_key = None
+
+    # 1. Platform API keys (Cerebras preferred)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from supabase import create_client as _create_sb
+        _sb = _create_sb(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
+        _pk = _sb.table("platform_api_keys").select("key_value").eq("key_name", "cerebras_api_key").eq("is_active", True).maybe_single().execute()
+        if _pk.data and _pk.data.get("key_value"):
+            llm_provider = CerebrasProvider(_pk.data["key_value"], model="zai-glm-4.7")
+            logger.info("Lore: using platform Cerebras API key (GLM 4.7)")
+    except Exception as exc:
+        logger.warning(f"Failed to load platform Cerebras key: {exc}")
+
+    # 2. Client-level keys
+    if not llm_provider:
+        try:
+            client_ids = admin_user.get("visible_client_ids", [])
+            primary_client_id = admin_user.get("primary_client_id") or (client_ids[0] if client_ids else None)
+            if primary_client_id:
+                from app.core.dependencies import get_client_service
+                client_service = get_client_service()
+                client_obj = await client_service.get_client(primary_client_id)
+                if client_obj and client_obj.settings and client_obj.settings.api_keys:
+                    keys = client_obj.settings.api_keys
+                    cerebras_key = getattr(keys, "cerebras_api_key", None)
+                    openai_key = getattr(keys, "openai_api_key", None)
+                    anthropic_key = getattr(keys, "anthropic_api_key", None)
+                    groq_key = getattr(keys, "groq_api_key", None)
+                    if cerebras_key:
+                        llm_provider = CerebrasProvider(cerebras_key, model="zai-glm-4.7")
+                    elif anthropic_key:
+                        llm_provider = AnthropicProvider(anthropic_key)
+                    elif openai_key:
+                        llm_provider = OpenAIProvider(openai_key)
+                        openai_api_key = openai_key
+                    elif groq_key:
+                        llm_provider = GroqProvider(groq_key)
+                    if openai_key:
+                        openai_api_key = openai_key
+        except Exception as exc:
+            logger.warning(f"Failed to resolve LLM provider from client: {exc}")
+
+    # 3. Env vars
+    if not llm_provider:
+        for env_key, ProviderCls, model in [
+            ("CEREBRAS_API_KEY", CerebrasProvider, "zai-glm-4.7"),
+            ("ANTHROPIC_API_KEY", AnthropicProvider, None),
+            ("OPENAI_API_KEY", OpenAIProvider, None),
+            ("GROQ_API_KEY", GroqProvider, None),
+        ]:
+            val = os.getenv(env_key)
+            if val:
+                llm_provider = ProviderCls(val) if not model else ProviderCls(val, model=model)
+                if env_key == "OPENAI_API_KEY":
+                    openai_api_key = val
+                break
+
+    return llm_provider, openai_api_key
+
+
+async def _resolve_lore_target(admin_user: dict) -> Tuple[str, Dict[str, str]]:
+    """Resolve the current user's Lore target (user_id + target_url/target_key).
+
+    Returns a tuple: (user_id, params_dict) where params_dict contains
+    the query params to pass to the Lore MCP admin API calls.
+
+    The user's Lore lives in their home client's Supabase instance:
+    - Champion/Paragon: their dedicated instance (target_url + target_key)
+    - Adventurer/platform: the platform Supabase (no overrides needed)
+    - Superadmin with no home client: defaults to Leandrew Dixon dedicated
+    """
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+
+    # Prefer explicit primary_client_id; fall back to visible_client_ids
+    client_ids = admin_user.get("visible_client_ids", [])
+    primary_client_id = admin_user.get("primary_client_id") or (client_ids[0] if client_ids else None)
+
+    # Superadmin fallback: use the Leandrew Dixon client so superadmins have
+    # a home for their own Lore while testing
+    if not primary_client_id and admin_user.get("is_super_admin"):
+        try:
+            from app.integrations.supabase_client import supabase_manager
+            result = (
+                supabase_manager.admin_client
+                .table("clients")
+                .select("id")
+                .eq("name", "Leandrew Dixon")
+                .maybe_single()
+                .execute()
+            )
+            if result and result.data:
+                primary_client_id = result.data["id"]
+        except Exception as exc:
+            logger.warning(f"Failed to resolve superadmin home client: {exc}")
+
+    params: Dict[str, str] = {"user_id": user_id}
+    if primary_client_id:
+        try:
+            from app.utils.supabase_credentials import SupabaseCredentialManager
+            target_url, _anon, target_key = await SupabaseCredentialManager.get_client_supabase_credentials(primary_client_id)
+            # Only override if the client has its own dedicated instance
+            # (different from the platform default)
+            platform_url = os.getenv("SUPABASE_URL", "")
+            if target_url and target_key and target_url != platform_url:
+                params["target_url"] = target_url
+                params["target_key"] = target_key
+        except Exception as exc:
+            logger.warning(f"Failed to resolve Lore target for client {primary_client_id}: {exc}")
+
+    return user_id, params
+
+
+@router.get("/lore", response_class=HTMLResponse)
+async def lore_page(request: Request):
+    """Lore personal context editor page."""
+    admin_user = await get_admin_user(request)
+    user_id, target_params = await _resolve_lore_target(admin_user)
+
+    has_content_map = {}
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/categories",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                for item in resp.json():
+                    has_content_map[item["key"]] = item["has_content"]
+    except Exception:
+        pass
+
+    categories = [{**cat, "has_content": has_content_map.get(cat["key"], False)} for cat in _LORE_CATEGORIES]
+
+    active_category = "identity"
+    active_content = ""
+    active_label = _LORE_CATEGORIES[0]["label"]
+    active_description = _LORE_CATEGORIES[0]["description"]
+
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/category/{active_category}",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                active_content = resp.json().get("content", "")
+    except Exception:
+        pass
+
+    return templates.TemplateResponse("admin/lore.html", {
+        "request": request,
+        "user": admin_user,
+        "categories": categories,
+        "active_category": active_category,
+        "active_content": active_content,
+        "active_label": active_label,
+        "active_description": active_description,
+        "disable_stats_poll": True,
+    })
+
+
+@router.get("/lore/v2", response_class=HTMLResponse)
+async def lore_page_v2(request: Request):
+    """Prototype v2 layout for the Lore page — side-by-side comparison route.
+    Renders the same data as /admin/lore but through the tab-split template."""
+    admin_user = await get_admin_user(request)
+    user_id, target_params = await _resolve_lore_target(admin_user)
+
+    has_content_map: Dict[str, bool] = {}
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/categories",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                for item in resp.json():
+                    has_content_map[item["key"]] = item["has_content"]
+    except Exception:
+        pass
+
+    categories = [{**cat, "has_content": has_content_map.get(cat["key"], False)} for cat in _LORE_CATEGORIES]
+
+    active_category = "identity"
+    active_content = ""
+    active_label = _LORE_CATEGORIES[0]["label"]
+    active_description = _LORE_CATEGORIES[0]["description"]
+
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/category/{active_category}",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                active_content = resp.json().get("content", "")
+    except Exception:
+        pass
+
+    return templates.TemplateResponse("admin/lore_v2.html", {
+        "request": request,
+        "user": admin_user,
+        "categories": categories,
+        "active_category": active_category,
+        "active_content": active_content,
+        "active_label": active_label,
+        "active_description": active_description,
+        "disable_stats_poll": True,
+    })
+
+
+@router.get("/lore/api/status")
+async def lore_api_status(request: Request):
+    """Check Lore MCP connectivity."""
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{_LORE_MCP_BASE}/healthz")
+            if resp.status_code == 200:
+                return {"status": "ok"}
+            return {"status": "error", "detail": f"HTTP {resp.status_code}"}
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}
+
+
+@router.get("/lore/api/category/{category}")
+async def lore_api_get_category(category: str, request: Request):
+    """Proxy read from Lore MCP for a specific category."""
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/category/{category}",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+
+@router.put("/lore/api/category/{category}")
+async def lore_api_update_category(category: str, request: Request):
+    """Proxy write to Lore MCP for a specific category."""
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    body = await request.json()
+    content = body.get("content", "")
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.put(
+                f"{_LORE_MCP_BASE}/admin-api/category/{category}",
+                params=target_params,
+                headers=_lore_internal_headers(),
+                json={"content": content},
+            )
+            if resp.status_code != 200:
+                return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+            result = resp.json()
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+    # Fire-and-forget LLM regrade for this category
+    _schedule_depth_grade(admin_user, [category])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Lore MCP API keys — list / create / revoke
+# ---------------------------------------------------------------------------
+
+@router.get("/lore/api/keys")
+async def lore_api_keys_list(request: Request):
+    """List the current user's Lore MCP access keys (without the raw token)."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    try:
+        from app.integrations.supabase_client import supabase_manager
+        rows = (
+            supabase_manager.admin_client
+            .table("lore_api_keys")
+            .select("id,name,prefix,created_at,last_used_at,revoked_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return {"keys": rows.data or []}
+    except Exception as exc:
+        logger.error(f"lore_api_keys_list failed: {exc}")
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@router.post("/lore/api/keys")
+async def lore_api_keys_create(request: Request):
+    """Generate a new Lore MCP access key. Returns the raw token ONCE."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    body = await request.json()
+    name = (body.get("name") or "Unnamed key").strip()[:64]
+
+    import hashlib as _hashlib
+    import secrets as _secrets
+    raw = f"slf_lore_{_secrets.token_urlsafe(32)}"
+    key_hash = _hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    prefix = raw[: len("slf_lore_") + 4]
+
+    try:
+        from app.integrations.supabase_client import supabase_manager
+        row = (
+            supabase_manager.admin_client
+            .table("lore_api_keys")
+            .insert({
+                "user_id": user_id,
+                "name": name,
+                "key_hash": key_hash,
+                "prefix": prefix,
+            })
+            .execute()
+        )
+        inserted = row.data[0] if row.data else {}
+        return {
+            "id": inserted.get("id"),
+            "name": name,
+            "prefix": prefix,
+            "raw_token": raw,  # Shown to user ONCE
+            "created_at": inserted.get("created_at"),
+        }
+    except Exception as exc:
+        logger.error(f"lore_api_keys_create failed: {exc}")
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@router.delete("/lore/api/keys/{key_id}")
+async def lore_api_keys_revoke(key_id: str, request: Request):
+    """Revoke an API key (soft delete — sets revoked_at)."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    try:
+        from app.integrations.supabase_client import supabase_manager
+        from datetime import datetime, timezone
+        supabase_manager.admin_client.table("lore_api_keys").update(
+            {"revoked_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("id", key_id).eq("user_id", user_id).execute()
+        return {"status": "revoked", "id": key_id}
+    except Exception as exc:
+        logger.error(f"lore_api_keys_revoke failed: {exc}")
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Lore external endpoint — user-registered self-host URL + Bearer token.
+# When an enabled row exists in lore_external_endpoints, the lore_mcp
+# runtime proxies all reads/writes for that user to their self-host server
+# instead of touching the platform Supabase tables.
+# ---------------------------------------------------------------------------
+
+def _mask_token(token: str) -> str:
+    if not token:
+        return ""
+    if len(token) <= 8:
+        return "•" * len(token)
+    return f"{token[:4]}{'•' * (len(token) - 8)}{token[-4:]}"
+
+
+@router.get("/lore/api/external-endpoint")
+async def lore_api_external_endpoint_get(request: Request):
+    """Return the user's self-host endpoint config (token masked)."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    try:
+        row = (
+            supabase_manager.admin_client
+            .table("lore_external_endpoints")
+            .select("base_url,auth_token,enabled,last_tested_at,last_tested_status,updated_at")
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"lore_api_external_endpoint_get failed: {exc}")
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    if not row or not row.data:
+        return {"configured": False}
+    data = row.data
+    return {
+        "configured": True,
+        "base_url": data.get("base_url"),
+        "token_masked": _mask_token(data.get("auth_token") or ""),
+        "enabled": data.get("enabled", True),
+        "last_tested_at": data.get("last_tested_at"),
+        "last_tested_status": data.get("last_tested_status"),
+        "updated_at": data.get("updated_at"),
+    }
+
+
+@router.post("/lore/api/external-endpoint")
+async def lore_api_external_endpoint_save(request: Request):
+    """Create or update the user's self-host endpoint. Body:
+        { base_url: "...", auth_token: "...", enabled: true }
+    Runs a connectivity test BEFORE committing — if the test fails, nothing
+    is written and the error is returned so the user knows their server
+    isn't reachable or their token is wrong."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    body = await request.json()
+    base_url = (body.get("base_url") or "").strip().rstrip("/")
+    auth_token = (body.get("auth_token") or "").strip()
+    enabled = bool(body.get("enabled", True))
+
+    if not base_url or not auth_token:
+        return JSONResponse(status_code=400, content={"error": "base_url and auth_token are required"})
+    if not (base_url.startswith("https://") or base_url.startswith("http://")):
+        return JSONResponse(status_code=400, content={"error": "base_url must start with http:// or https://"})
+
+    # Pre-flight test — refuse to save an unreachable endpoint
+    ok, detail = await _test_remote_endpoint(base_url, auth_token)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": f"Connection test failed: {detail}"})
+
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        supabase_manager.admin_client.table("lore_external_endpoints").upsert(
+            {
+                "user_id": user_id,
+                "base_url": base_url,
+                "auth_token": auth_token,
+                "enabled": enabled,
+                "updated_at": now_iso,
+                "last_tested_at": now_iso,
+                "last_tested_status": "ok",
+            },
+            on_conflict="user_id",
+        ).execute()
+    except Exception as exc:
+        logger.error(f"lore_api_external_endpoint_save failed: {exc}")
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    # Flush the lore_mcp cache so the new endpoint is picked up immediately
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{_LORE_MCP_BASE}/admin-api/external-endpoint/invalidate",
+                params={"user_id": user_id},
+                headers=_lore_internal_headers(),
+            )
+    except Exception:
+        pass
+
+    return {"status": "ok", "enabled": enabled, "base_url": base_url, "token_masked": _mask_token(auth_token)}
+
+
+@router.delete("/lore/api/external-endpoint")
+async def lore_api_external_endpoint_delete(request: Request):
+    """Remove the user's self-host endpoint — platform reverts to Supabase storage."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    try:
+        supabase_manager.admin_client.table("lore_external_endpoints").delete().eq("user_id", user_id).execute()
+    except Exception as exc:
+        logger.error(f"lore_api_external_endpoint_delete failed: {exc}")
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{_LORE_MCP_BASE}/admin-api/external-endpoint/invalidate",
+                params={"user_id": user_id},
+                headers=_lore_internal_headers(),
+            )
+    except Exception:
+        pass
+    return {"status": "removed"}
+
+
+@router.post("/lore/api/external-endpoint/test")
+async def lore_api_external_endpoint_test(request: Request):
+    """Run a connectivity test without committing. Body same as save."""
+    _admin_user = await get_admin_user(request)
+    body = await request.json()
+    base_url = (body.get("base_url") or "").strip().rstrip("/")
+    auth_token = (body.get("auth_token") or "").strip()
+    if not base_url or not auth_token:
+        return JSONResponse(status_code=400, content={"error": "base_url and auth_token are required"})
+    ok, detail = await _test_remote_endpoint(base_url, auth_token)
+    return {"ok": ok, "detail": detail}
+
+
+async def _test_remote_endpoint(base_url: str, auth_token: str) -> Tuple[bool, str]:
+    """Hits /healthz and /admin-api/categories on the user's self-host server.
+    Returns (ok, detail) — detail is "ok" on success or an error description."""
+    headers = {"Authorization": f"Bearer {auth_token}"}
+    try:
+        async with _httpx.AsyncClient(timeout=8.0) as client:
+            hz = await client.get(f"{base_url}/healthz")
+            if hz.status_code != 200:
+                return False, f"healthz returned HTTP {hz.status_code}"
+            cats = await client.get(f"{base_url}/admin-api/categories", headers=headers)
+            if cats.status_code == 401:
+                return False, "auth_token rejected (HTTP 401)"
+            if cats.status_code != 200:
+                return False, f"admin-api/categories returned HTTP {cats.status_code}"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, "ok"
+
+
+# ---------------------------------------------------------------------------
+# Lore export — markdown, JSON, self-host ZIP. All three proxy through to
+# the lore-mcp container which owns the Supabase access. The main app just
+# authenticates the user and forwards the binary response as an attachment.
+# ---------------------------------------------------------------------------
+
+@router.get("/lore/api/export/{fmt}")
+async def lore_api_export(fmt: str, request: Request):
+    from fastapi.responses import StreamingResponse
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    if fmt not in ("markdown", "json", "self-host"):
+        return JSONResponse(status_code=400, content={"error": f"Unknown format '{fmt}'"})
+
+    try:
+        async with _httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/export/{fmt}",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code != 200:
+                return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+            # Forward filename + content-type from the upstream response
+            content_type = resp.headers.get("content-type", "application/octet-stream")
+            disposition = resp.headers.get("content-disposition", f'attachment; filename="lore-export.{ "json" if fmt == "json" else "zip" }"')
+            return StreamingResponse(
+                iter([resp.content]),
+                media_type=content_type,
+                headers={"Content-Disposition": disposition},
+            )
+    except Exception as exc:
+        logger.error(f"lore export proxy failed: {exc}")
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+
+# ---------------------------------------------------------------------------
+# Lore OAuth 2.1 shim — /authorize + /consent
+#
+# Flow:
+#   1. Claude.ai redirects the user to /admin/lore/oauth/authorize?...
+#   2. We require login. If not logged in, bounce to /admin/login?next=<this url>.
+#   3. We look up the registered client from lore_oauth_clients and render a
+#      consent page showing the client_name + requested scope, with a Deny/
+#      Approve form.
+#   4. On Approve POST, we generate a random authorization_code, store it in
+#      lore_oauth_authorization_codes with the stashed PKCE challenge, and
+#      redirect the user back to the client's redirect_uri with ?code=&state=.
+# ---------------------------------------------------------------------------
+
+def _lore_oauth_error_redirect(redirect_uri: str, state: Optional[str], error: str, description: str) -> RedirectResponse:
+    from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
+    parsed = urlparse(redirect_uri)
+    params = dict(parse_qsl(parsed.query))
+    params["error"] = error
+    params["error_description"] = description
+    if state:
+        params["state"] = state
+    new_url = urlunparse(parsed._replace(query=urlencode(params)))
+    return RedirectResponse(url=new_url, status_code=303)
+
+
+@router.get("/lore/oauth/authorize", response_class=HTMLResponse)
+async def lore_oauth_authorize(
+    request: Request,
+    client_id: str = Query(...),
+    redirect_uri: str = Query(...),
+    response_type: str = Query("code"),
+    scope: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    code_challenge: str = Query(...),
+    code_challenge_method: str = Query("S256"),
+):
+    """Consent page for Lore MCP OAuth. User must be logged in to Sidekick
+    Forge; the approved code is scoped to their own user_id only."""
+    from urllib.parse import urlencode
+    try:
+        admin_user = await get_admin_user(request)
+    except HTTPException:
+        # Not logged in — bounce to login with the full authorize URL as next
+        next_qs = urlencode({
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": response_type,
+            "scope": scope or "",
+            "state": state or "",
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+        })
+        from urllib.parse import quote
+        next_url = f"/admin/lore/oauth/authorize?{next_qs}"
+        return RedirectResponse(
+            url=f"/admin/login?next={quote(next_url, safe='')}",
+            status_code=303,
+        )
+
+    if response_type != "code":
+        return _lore_oauth_error_redirect(redirect_uri, state, "unsupported_response_type", "Only 'code' is supported")
+    if code_challenge_method != "S256":
+        return _lore_oauth_error_redirect(redirect_uri, state, "invalid_request", "Only S256 PKCE is supported")
+
+    # Validate client + redirect_uri
+    try:
+        row = (
+            supabase_manager.admin_client
+            .table("lore_oauth_clients")
+            .select("client_id,client_name,redirect_uris,scope")
+            .eq("client_id", client_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"lore oauth authorize: client lookup failed: {exc}")
+        return HTMLResponse("<h1>OAuth error</h1><p>Client lookup failed.</p>", status_code=500)
+
+    if not row or not row.data:
+        return HTMLResponse("<h1>OAuth error</h1><p>Unknown client_id.</p>", status_code=400)
+    oauth_client = row.data
+
+    if redirect_uri not in (oauth_client.get("redirect_uris") or []):
+        return HTMLResponse("<h1>OAuth error</h1><p>redirect_uri does not match any registered URI for this client.</p>", status_code=400)
+
+    effective_scope = scope or oauth_client.get("scope") or "lore:read lore:write"
+
+    return templates.TemplateResponse("admin/lore_consent.html", {
+        "request": request,
+        "user": admin_user,
+        "client_name": oauth_client.get("client_name") or "MCP Client",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": state or "",
+        "scope": effective_scope,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+    })
+
+
+@router.post("/lore/oauth/consent")
+async def lore_oauth_consent(
+    request: Request,
+    client_id: str = Form(...),
+    redirect_uri: str = Form(...),
+    scope: str = Form(...),
+    state: str = Form(""),
+    code_challenge: str = Form(...),
+    code_challenge_method: str = Form("S256"),
+    decision: str = Form(...),
+):
+    """Handles the Approve/Deny decision. Writes an authorization_code to
+    lore_oauth_authorization_codes and redirects back to the client."""
+    from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
+    import secrets as _secrets
+    from datetime import datetime, timezone, timedelta
+
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required")
+
+    if decision != "approve":
+        return _lore_oauth_error_redirect(redirect_uri, state, "access_denied", "User denied access")
+
+    # Verify client + redirect_uri still match (defense in depth)
+    try:
+        row = (
+            supabase_manager.admin_client
+            .table("lore_oauth_clients")
+            .select("redirect_uris")
+            .eq("client_id", client_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"lore oauth consent: client lookup failed: {exc}")
+        return HTMLResponse("<h1>OAuth error</h1>", status_code=500)
+    if not row or not row.data or redirect_uri not in (row.data.get("redirect_uris") or []):
+        return HTMLResponse("<h1>OAuth error</h1><p>Invalid client or redirect_uri.</p>", status_code=400)
+
+    code = _secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+
+    try:
+        supabase_manager.admin_client.table("lore_oauth_authorization_codes").insert({
+            "code": code,
+            "client_id": client_id,
+            "user_id": user_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "expires_at": expires_at,
+        }).execute()
+    except Exception as exc:
+        logger.error(f"lore oauth consent: failed to write auth code: {exc}")
+        return _lore_oauth_error_redirect(redirect_uri, state, "server_error", "Failed to issue code")
+
+    parsed = urlparse(redirect_uri)
+    params = dict(parse_qsl(parsed.query))
+    params["code"] = code
+    if state:
+        params["state"] = state
+    new_url = urlunparse(parsed._replace(query=urlencode(params)))
+    return RedirectResponse(url=new_url, status_code=303)
+
+
+async def _background_grade_nodes(admin_user: Dict[str, Any], node_keys: List[str]) -> None:
+    """Run LLM grading for a set of nodes in the background. Never raises —
+    grading failures are logged and the cached scores simply stay stale.
+    """
+    from app.services.lore_depth_grader import grade_nodes_parallel
+    try:
+        llm_provider, _openai_key = await _resolve_lore_llm(admin_user)
+        if not llm_provider:
+            logger.info("Lore depth grade: no LLM provider available — skipping")
+            return
+        _uid, target_params = await _resolve_lore_target(admin_user)
+        await grade_nodes_parallel(
+            _LORE_MCP_BASE,
+            _lore_internal_headers(),
+            target_params,
+            node_keys,
+            llm_provider=llm_provider,
+            concurrency=4,
+        )
+    except Exception as exc:
+        logger.warning(f"Lore depth background grading failed: {exc}")
+
+
+def _schedule_depth_grade(admin_user: Dict[str, Any], node_keys: List[str]) -> None:
+    """Fire-and-forget wrapper around the background grader."""
+    if not node_keys:
+        return
+    try:
+        asyncio.create_task(_background_grade_nodes(admin_user, list(node_keys)))
+    except Exception as exc:
+        logger.warning(f"Failed to schedule depth grade: {exc}")
+
+
+@router.get("/lore/api/depth-score")
+async def lore_api_depth_score(request: Request):
+    """Proxy depth score from Lore MCP.
+
+    Fetches the current (possibly heuristic) breakdown, then fires an async
+    background task to LLM-grade any nodes whose cached grade is stale or
+    missing. The next page load will serve the fresh grades.
+    """
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/depth-score",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code != 200:
+                return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+            data = resp.json()
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+    stale = data.get("stale_nodes") or []
+    if stale:
+        _schedule_depth_grade(admin_user, stale)
+    return data
+
+
+@router.post("/lore/api/depth-score/regrade")
+async def lore_api_depth_score_regrade(request: Request):
+    """Force a re-grade of every node (or a subset via body). Runs
+    synchronously so the caller gets the new totals immediately."""
+    from app.services.lore_depth_grader import grade_nodes_parallel
+    admin_user = await get_admin_user(request)
+
+    llm_provider, _openai_key = await _resolve_lore_llm(admin_user)
+    if not llm_provider:
+        return JSONResponse(status_code=400, content={
+            "error": "No LLM API key available. Configure a Cerebras, Anthropic, OpenAI, or Groq key to grade Lore."
+        })
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    nodes = body.get("nodes") if isinstance(body, dict) else None
+    if not nodes:
+        nodes = [
+            "identity", "roles_and_responsibilities", "current_projects",
+            "team_and_relationships", "tools_and_systems", "communication_style",
+            "goals_and_priorities", "preferences_and_constraints",
+            "domain_knowledge", "decision_log",
+            "birth_chart", "human_design", "mbti", "big5",
+        ]
+
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    try:
+        await grade_nodes_parallel(
+            _LORE_MCP_BASE,
+            _lore_internal_headers(),
+            target_params,
+            nodes,
+            llm_provider=llm_provider,
+            concurrency=4,
+        )
+    except Exception as exc:
+        logger.exception("Depth regrade failed")
+        return JSONResponse(status_code=502, content={"error": f"Regrade failed: {exc}"})
+
+    # Fetch the refreshed breakdown
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/depth-score",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+
+# In-memory import job storage (single-tenant; upgrade to DB for multi-tenant)
+_import_jobs: Dict[str, Dict[str, Any]] = {}
+# Chunked upload sessions: upload_id -> {"path": str, "total_bytes": int}
+_upload_sessions: Dict[str, Dict[str, Any]] = {}
+
+import tempfile as _tempfile
+
+
+@router.post("/lore/api/import/init")
+async def lore_api_import_init(request: Request):
+    """Initialize a chunked upload session. Returns an upload_id."""
+    admin_user = await get_admin_user(request)
+    body = await request.json()
+    filename = body.get("filename", "")
+    file_size = body.get("file_size", 0)
+
+    if not filename.lower().endswith(".zip"):
+        return JSONResponse(status_code=400, content={"error": "Please upload a ZIP file."})
+    if file_size > 2 * 1024 * 1024 * 1024:
+        return JSONResponse(status_code=400, content={"error": "File too large (max 2GB)."})
+
+    upload_id = str(uuid.uuid4())
+    tmp = _tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    tmp.close()
+    _upload_sessions[upload_id] = {"path": tmp.name, "total_bytes": 0, "expected_size": file_size}
+    return {"upload_id": upload_id}
+
+
+@router.post("/lore/api/import/chunk/{upload_id}")
+async def lore_api_import_chunk(upload_id: str, request: Request, file: UploadFile = File(...)):
+    """Append a chunk to an in-progress upload session."""
+    admin_user = await get_admin_user(request)
+    session = _upload_sessions.get(upload_id)
+    if not session:
+        return JSONResponse(status_code=404, content={"error": "Upload session not found."})
+
+    chunk_data = await file.read()
+    with open(session["path"], "ab") as f:
+        f.write(chunk_data)
+    session["total_bytes"] += len(chunk_data)
+
+    return {"upload_id": upload_id, "bytes_received": session["total_bytes"]}
+
+
+@router.post("/lore/api/import/finalize/{upload_id}")
+async def lore_api_import_finalize(upload_id: str, request: Request):
+    """Finalize the upload and start the import pipeline."""
+    admin_user = await get_admin_user(request)
+    session = _upload_sessions.pop(upload_id, None)
+    if not session:
+        return JSONResponse(status_code=404, content={"error": "Upload session not found."})
+
+    tmp_path = session["path"]
+    try:
+        with open(tmp_path, "rb") as f:
+            zip_bytes = f.read()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    llm_provider, openai_api_key = await _resolve_lore_llm(admin_user)
+    if not llm_provider:
+        return JSONResponse(status_code=400, content={
+            "error": "No LLM API key available. Configure a Cerebras, Anthropic, OpenAI, or Groq key."
+        })
+
+    # Resolve Lore target (user_id + target_url/target_key)
+    lore_user_id, lore_params = await _resolve_lore_target(admin_user)
+    _lore_target_url = lore_params.get("target_url")
+    _lore_target_key = lore_params.get("target_key")
+
+    from app.services.lore_import_service import run_import_pipeline
+
+    job_id = str(uuid.uuid4())
+    _import_jobs[job_id] = {
+        "status": "running",
+        "step": "starting",
+        "detail": "Initializing...",
+        "_lore_user_id": lore_user_id,
+        "_lore_target_url": _lore_target_url,
+        "_lore_target_key": _lore_target_key,
+    }
+
+    async def progress_callback(step: str, detail: str):
+        _import_jobs[job_id]["step"] = step
+        _import_jobs[job_id]["detail"] = detail
+
+    async def run_job():
+        try:
+            result = await run_import_pipeline(
+                zip_bytes=zip_bytes,
+                llm_provider=llm_provider,
+                openai_api_key=openai_api_key,
+                progress_callback=progress_callback,
+                user_id=lore_user_id,
+                target_url=_lore_target_url,
+                target_key=_lore_target_key,
+            )
+            _import_jobs[job_id]["status"] = "complete"
+            _import_jobs[job_id]["result"] = result
+        except Exception as exc:
+            logger.error(f"Import job {job_id} failed: {exc}", exc_info=True)
+            _import_jobs[job_id]["status"] = "error"
+            _import_jobs[job_id]["detail"] = str(exc)
+
+    asyncio.create_task(run_job())
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.get("/lore/api/import/{job_id}")
+async def lore_api_import_status(job_id: str, request: Request):
+    """Check import job status and get results."""
+    admin_user = await get_admin_user(request)
+    job = _import_jobs.get(job_id)
+    if not job:
+        return JSONResponse(status_code=404, content={"error": "Job not found."})
+    return job
+
+
+@router.post("/lore/api/import/{job_id}/apply")
+async def lore_api_import_apply(job_id: str, request: Request):
+    """Apply approved import proposals to the Lore."""
+    admin_user = await get_admin_user(request)
+    job = _import_jobs.get(job_id)
+    if not job:
+        return JSONResponse(status_code=404, content={"error": "Job not found."})
+    if job.get("status") != "complete":
+        return JSONResponse(status_code=400, content={"error": "Job is not complete yet."})
+
+    body = await request.json()
+    selected_categories = body.get("categories", [])
+
+    proposals = job.get("result", {}).get("proposals", {})
+    to_apply = {
+        cat: prop for cat, prop in proposals.items()
+        if cat in selected_categories
+    }
+
+    if not to_apply:
+        return JSONResponse(status_code=400, content={"error": "No categories selected."})
+
+    # Retrieve the Lore target stored on the job (set when the import was started)
+    lore_user_id = job.get("_lore_user_id", "")
+    lore_target_url = job.get("_lore_target_url")
+    lore_target_key = job.get("_lore_target_key")
+
+    # Fall back to resolving from current admin user if missing (shouldn't happen)
+    if not lore_user_id:
+        lore_user_id, _params = await _resolve_lore_target(admin_user)
+        lore_target_url = _params.get("target_url")
+        lore_target_key = _params.get("target_key")
+
+    from app.services.lore_import_service import apply_proposals
+    results = await apply_proposals(
+        to_apply,
+        user_id=lore_user_id,
+        target_url=lore_target_url,
+        target_key=lore_target_key,
+    )
+    return {"status": "applied", "results": results}
+
+
+@router.post("/lore/api/add-content")
+async def lore_api_add_content(request: Request, file: UploadFile = File(...)):
+    """Process a single text or audio file and extract Lore insights."""
+    admin_user = await get_admin_user(request)
+
+    llm_provider, openai_api_key = await _resolve_lore_llm(admin_user)
+    if not llm_provider:
+        return JSONResponse(status_code=400, content={
+            "error": "No LLM API key available. Configure a Cerebras, Anthropic, OpenAI, or Groq key."
+        })
+
+    filename = (file.filename or "").lower()
+    file_bytes = await file.read()
+
+    audio_extensions = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".mp4", ".flac"}
+    text_extensions = {".txt", ".md", ".csv", ".srt", ".json", ".jsonl"}
+    suffix = os.path.splitext(filename)[1]
+
+    texts = []
+    source_label = "file"
+
+    if suffix in audio_extensions:
+        if not openai_api_key:
+            return JSONResponse(status_code=400, content={
+                "error": "Audio transcription requires an OpenAI API key."
+            })
+        source_label = "audio"
+        import httpx as _hx
+        try:
+            async with _hx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {openai_api_key}"},
+                    files={"file": (file.filename, file_bytes, f"audio/{suffix.lstrip('.')}")},
+                    data={"model": "whisper-1"},
+                )
+                if resp.status_code == 200:
+                    text = resp.json().get("text", "").strip()
+                    if text:
+                        texts.append(text)
+                else:
+                    return JSONResponse(status_code=502, content={
+                        "error": f"Whisper transcription failed: HTTP {resp.status_code}"
+                    })
+        except Exception as exc:
+            return JSONResponse(status_code=502, content={"error": f"Transcription failed: {exc}"})
+
+    elif suffix in text_extensions:
+        source_label = "text"
+        try:
+            content = file_bytes.decode("utf-8", errors="replace")
+            if suffix in {".json", ".jsonl"}:
+                for line in content.strip().splitlines():
+                    try:
+                        data = json.loads(line)
+                        if isinstance(data, str):
+                            texts.append(data)
+                        elif isinstance(data, dict):
+                            for val in data.values():
+                                if isinstance(val, str) and len(val) > 20:
+                                    texts.append(val)
+                    except json.JSONDecodeError:
+                        pass
+                if not texts:
+                    texts.append(content)
+            else:
+                texts.append(content)
+        except Exception:
+            texts.append(file_bytes.decode("latin-1", errors="replace"))
+
+    elif suffix == ".pdf":
+        source_label = "document"
+        try:
+            import PyPDF2
+            import io as _io
+            reader = PyPDF2.PdfReader(_io.BytesIO(file_bytes))
+            for page in reader.pages:
+                text = page.extract_text()
+                if text and text.strip():
+                    texts.append(text.strip())
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"error": f"Failed to read PDF: {exc}"})
+
+    elif suffix in {".doc", ".docx"}:
+        source_label = "document"
+        try:
+            import docx
+            import io as _io
+            doc = docx.Document(_io.BytesIO(file_bytes))
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    texts.append(para.text.strip())
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"error": f"Failed to read document: {exc}"})
+
+    else:
+        return JSONResponse(status_code=400, content={
+            "error": f"Unsupported file type '{suffix}'. Supported: audio (.mp3, .wav, .m4a, .ogg, .webm, .flac), text (.txt, .md, .csv, .srt), documents (.pdf, .docx), or data (.json, .jsonl)."
+        })
+
+    if not texts:
+        return JSONResponse(status_code=400, content={"error": "No content could be extracted from the file."})
+
+    lore_user_id, lore_params = await _resolve_lore_target(admin_user)
+    _lore_target_url = lore_params.get("target_url")
+    _lore_target_key = lore_params.get("target_key")
+
+    from app.services.lore_import_service import run_text_pipeline
+
+    job_id = str(uuid.uuid4())
+    _import_jobs[job_id] = {
+        "status": "running",
+        "step": "starting",
+        "detail": "Initializing...",
+        "_lore_user_id": lore_user_id,
+        "_lore_target_url": _lore_target_url,
+        "_lore_target_key": _lore_target_key,
+    }
+
+    async def progress_callback(step: str, detail: str):
+        _import_jobs[job_id]["step"] = step
+        _import_jobs[job_id]["detail"] = detail
+
+    async def run_job():
+        try:
+            result = await run_text_pipeline(
+                texts=texts,
+                source_label=source_label,
+                llm_provider=llm_provider,
+                progress_callback=progress_callback,
+                user_id=lore_user_id,
+                target_url=_lore_target_url,
+                target_key=_lore_target_key,
+            )
+            _import_jobs[job_id]["status"] = "complete"
+            _import_jobs[job_id]["result"] = result
+        except Exception as exc:
+            logger.error(f"Add-content job {job_id} failed: {exc}", exc_info=True)
+            _import_jobs[job_id]["status"] = "error"
+            _import_jobs[job_id]["detail"] = str(exc)
+
+    asyncio.create_task(run_job())
+    return {"job_id": job_id, "status": "running"}
+
+
+# ---------------------------------------------------------------------------
+# Lore Social OAuth — LinkedIn, Twitter/X, Facebook
+# ---------------------------------------------------------------------------
+
+@router.get("/lore/api/social/authorize/{provider}")
+async def lore_social_authorize(provider: str, request: Request):
+    """Start OAuth flow for a social provider. Returns authorization URL."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    from app.services.lore_social_oauth_service import (
+        linkedin_authorize_url, twitter_authorize_url, facebook_authorize_url,
+    )
+    try:
+        if provider == "linkedin":
+            url = linkedin_authorize_url(user_id)
+        elif provider == "twitter":
+            url = twitter_authorize_url(user_id)
+        elif provider == "facebook":
+            url = facebook_authorize_url(user_id)
+        else:
+            return JSONResponse(status_code=400, content={"error": f"Unknown provider: {provider}"})
+        return {"authorization_url": url}
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+
+
+@router.get("/oauth/lore/{provider}/callback")
+async def lore_social_callback(provider: str, request: Request,
+                                code: Optional[str] = Query(None),
+                                state: Optional[str] = Query(None),
+                                error: Optional[str] = Query(None)):
+    """OAuth callback — exchanges code for token, fetches profile, starts Lore pipeline."""
+    if error:
+        return HTMLResponse(
+            f"<html><body style='background:#000;color:#f56453;font-family:sans-serif;padding:40px;'>"
+            f"<h2>Authorization Failed</h2><p>{error}</p>"
+            f"<script>setTimeout(()=>window.close(),3000)</script></body></html>",
+            status_code=400,
+        )
+
+    from app.services.lore_social_oauth_service import (
+        decode_state,
+        linkedin_exchange_code, linkedin_fetch_profile,
+        twitter_exchange_code, twitter_fetch_profile,
+        facebook_exchange_code, facebook_fetch_profile,
+    )
+    from app.services.lore_import_service import run_text_pipeline
+
+    try:
+        state_data = decode_state(state)
+    except ValueError as exc:
+        return HTMLResponse(
+            f"<html><body style='background:#000;color:#f56453;font-family:sans-serif;padding:40px;'>"
+            f"<h2>Invalid State</h2><p>{exc}</p></body></html>",
+            status_code=400,
+        )
+
+    try:
+        if provider == "linkedin":
+            token_bundle = await linkedin_exchange_code(code)
+            texts = await linkedin_fetch_profile(token_bundle.access_token)
+        elif provider == "twitter":
+            token_bundle = await twitter_exchange_code(code, state)
+            texts = await twitter_fetch_profile(token_bundle.access_token)
+        elif provider == "facebook":
+            token_bundle = await facebook_exchange_code(code)
+            texts = await facebook_fetch_profile(token_bundle.access_token)
+        else:
+            return HTMLResponse("<p>Unknown provider</p>", status_code=400)
+    except Exception as exc:
+        logger.error(f"Lore OAuth {provider} failed: {exc}", exc_info=True)
+        return HTMLResponse(
+            f"<html><body style='background:#000;color:#f56453;font-family:sans-serif;padding:40px;'>"
+            f"<h2>Connection Failed</h2><p>{exc}</p>"
+            f"<script>setTimeout(()=>window.close(),5000)</script></body></html>",
+            status_code=502,
+        )
+
+    if not texts:
+        return HTMLResponse(
+            "<html><body style='background:#000;color:#fbbf24;font-family:sans-serif;padding:40px;'>"
+            "<h2>Connected</h2><p>No content found to import. The window will close shortly.</p>"
+            "<script>if(window.opener){window.opener.postMessage({type:'lore-social-done',provider:'"
+            + provider + "',job_id:null},'*');}setTimeout(()=>window.close(),3000)</script></body></html>",
+        )
+
+    # Resolve LLM and Lore target from state
+    admin_user_id = state_data.get("admin_user_id", "")
+    admin_user_stub = {"user_id": admin_user_id, "is_super_admin": True}
+    llm_provider, _ = await _resolve_lore_llm(admin_user_stub)
+    lore_user_id, lore_params = await _resolve_lore_target(admin_user_stub)
+    _lore_target_url = lore_params.get("target_url")
+    _lore_target_key = lore_params.get("target_key")
+
+    if not llm_provider:
+        return HTMLResponse(
+            "<html><body style='background:#000;color:#f56453;font-family:sans-serif;padding:40px;'>"
+            "<h2>No LLM Key</h2><p>Cannot process — no LLM API key configured.</p>"
+            "<script>setTimeout(()=>window.close(),5000)</script></body></html>",
+            status_code=400,
+        )
+
+    job_id = str(uuid.uuid4())
+    _import_jobs[job_id] = {
+        "status": "running",
+        "step": "starting",
+        "detail": f"Processing {provider} data...",
+        "_lore_user_id": lore_user_id,
+        "_lore_target_url": _lore_target_url,
+        "_lore_target_key": _lore_target_key,
+    }
+
+    async def progress_callback(step: str, detail: str):
+        _import_jobs[job_id]["step"] = step
+        _import_jobs[job_id]["detail"] = detail
+
+    async def run_job():
+        try:
+            result = await run_text_pipeline(
+                texts=texts,
+                source_label=provider,
+                llm_provider=llm_provider,
+                progress_callback=progress_callback,
+                user_id=lore_user_id,
+                target_url=_lore_target_url,
+                target_key=_lore_target_key,
+            )
+            _import_jobs[job_id]["status"] = "complete"
+            _import_jobs[job_id]["result"] = result
+        except Exception as exc:
+            logger.error(f"Lore social import {provider} failed: {exc}", exc_info=True)
+            _import_jobs[job_id]["status"] = "error"
+            _import_jobs[job_id]["detail"] = str(exc)
+
+    asyncio.create_task(run_job())
+
+    return HTMLResponse(
+        "<html><body style='background:#000;color:#01a4a6;font-family:sans-serif;padding:40px;'>"
+        f"<h2>Connected to {provider.title()}</h2>"
+        "<p>Processing your data... this window will close shortly.</p>"
+        "<script>if(window.opener){window.opener.postMessage({type:'lore-social-done',provider:'"
+        + provider + "',job_id:'" + job_id + "'},'*');}setTimeout(()=>window.close(),2000)</script></body></html>",
+    )
+
+
+@router.post("/lore/api/social/twitter-scrape")
+async def lore_social_twitter_scrape(request: Request):
+    """Scrape public tweets from an X/Twitter username and run Lore extraction."""
+    admin_user = await get_admin_user(request)
+    body = await request.json()
+    username = (body.get("username") or "").strip().lstrip("@")
+    if not username:
+        return JSONResponse(status_code=400, content={"error": "Please provide a username."})
+    if not all(c.isalnum() or c == "_" for c in username):
+        return JSONResponse(status_code=400, content={"error": "Invalid username."})
+
+    llm_provider, _ = await _resolve_lore_llm(admin_user)
+    if not llm_provider:
+        return JSONResponse(status_code=400, content={
+            "error": "No LLM API key available."
+        })
+
+    lore_user_id, lore_params = await _resolve_lore_target(admin_user)
+    _lore_target_url = lore_params.get("target_url")
+    _lore_target_key = lore_params.get("target_key")
+
+    job_id = str(uuid.uuid4())
+    _import_jobs[job_id] = {
+        "status": "running",
+        "step": "starting",
+        "detail": f"Fetching @{username} posts...",
+        "_lore_user_id": lore_user_id,
+        "_lore_target_url": _lore_target_url,
+        "_lore_target_key": _lore_target_key,
+    }
+
+    async def progress_callback(step: str, detail: str):
+        _import_jobs[job_id]["step"] = step
+        _import_jobs[job_id]["detail"] = detail
+
+    async def run_job():
+        try:
+            await progress_callback("parsing", f"Fetching posts from @{username}...")
+
+            texts = []
+
+            # Use Twitter API v2 with bearer token if configured
+            bearer = os.getenv("TWITTER_BEARER_TOKEN", "")
+            if bearer:
+                try:
+                    async with _httpx.AsyncClient(timeout=15.0) as client:
+                        # Look up user ID
+                        resp = await client.get(
+                            f"https://api.twitter.com/2/users/by/username/{username}",
+                            params={"user.fields": "name,description,location"},
+                            headers={"Authorization": f"Bearer {bearer}"},
+                        )
+                        if resp.status_code == 200:
+                            user_data = resp.json().get("data", {})
+                            user_id = user_data.get("id")
+                            name = user_data.get("name", "")
+                            bio = user_data.get("description", "")
+                            loc = user_data.get("location", "")
+                            if name:
+                                texts.append(f"X profile: {name} (@{username}). Bio: {bio}. Location: {loc}.")
+
+                            if user_id:
+                                resp = await client.get(
+                                    f"https://api.twitter.com/2/users/{user_id}/tweets",
+                                    params={"max_results": 100, "tweet.fields": "text,created_at"},
+                                    headers={"Authorization": f"Bearer {bearer}"},
+                                )
+                                if resp.status_code == 200:
+                                    for tweet in resp.json().get("data", []):
+                                        text = tweet.get("text", "")
+                                        if text and not text.startswith("RT @"):
+                                            texts.append(f"Tweet from @{username}: {text}")
+                        elif resp.status_code == 404:
+                            raise ValueError(f"User @{username} not found on X.")
+                        else:
+                            logger.warning(f"Twitter API returned {resp.status_code} for @{username}")
+                except ValueError:
+                    raise
+                except Exception as exc:
+                    logger.warning(f"Twitter API failed for @{username}: {exc}")
+
+            if not texts:
+                raise ValueError(
+                    f"Could not fetch posts for @{username}. "
+                    f"Please ensure TWITTER_BEARER_TOKEN is set in the environment, "
+                    f"or use the 'Document / Text' option to paste tweets directly."
+                )
+
+            logger.info(f"Twitter scrape: fetched {len(texts)} text blocks for @{username}")
+
+            from app.services.lore_import_service import run_text_pipeline
+            result = await run_text_pipeline(
+                texts=texts,
+                source_label=f"x/@{username}",
+                llm_provider=llm_provider,
+                progress_callback=progress_callback,
+                user_id=lore_user_id,
+                target_url=_lore_target_url,
+                target_key=_lore_target_key,
+            )
+            _import_jobs[job_id]["status"] = "complete"
+            _import_jobs[job_id]["result"] = result
+        except Exception as exc:
+            logger.error(f"Twitter scrape job failed: {exc}", exc_info=True)
+            _import_jobs[job_id]["status"] = "error"
+            _import_jobs[job_id]["detail"] = str(exc)
+
+    asyncio.create_task(run_job())
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.get("/lore/api/social/status")
+async def lore_social_status(request: Request):
+    """Check which social providers are configured."""
+    astrology_ready = bool(os.getenv("ASTROLOGY_API_IO_KEY"))
+    return {
+        "linkedin": bool(os.getenv("LINKEDIN_OAUTH_CLIENT_ID")),
+        "twitter": bool(os.getenv("TWITTER_BEARER_TOKEN")),
+        "facebook": bool(os.getenv("FACEBOOK_OAUTH_CLIENT_ID")),
+        "astrology": astrology_ready,
+        "human_design": astrology_ready,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Lore Personality — Myers-Briggs + Big Five
+# ---------------------------------------------------------------------------
+
+@router.get("/lore/api/personality")
+async def lore_api_personality_get(request: Request):
+    """Return the user's current MBTI + Big5. Either half can be None."""
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/personality",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+
+@router.post("/lore/api/personality")
+async def lore_api_personality_save(request: Request):
+    """Manual save — body: {mbti: {type, summary}, big5: {openness, ..., summary}}.
+    Either half can be omitted; unspecified halves are left alone on the row."""
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    body = await request.json()
+
+    # Inject source='manual' unless caller explicitly overrides (e.g. analyze endpoint)
+    if isinstance(body.get("mbti"), dict) and not body["mbti"].get("source"):
+        body["mbti"]["source"] = "manual"
+    if isinstance(body.get("big5"), dict) and not body["big5"].get("source"):
+        body["big5"]["source"] = "manual"
+
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.put(
+                f"{_LORE_MCP_BASE}/admin-api/personality",
+                params=target_params,
+                headers=_lore_internal_headers(),
+                json=body,
+            )
+            if resp.status_code != 200:
+                return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+            result = resp.json()
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+    # Background LLM regrade for whichever halves were touched
+    touched = []
+    if isinstance(body.get("mbti"), dict):
+        touched.append("mbti")
+    if isinstance(body.get("big5"), dict):
+        touched.append("big5")
+    _schedule_depth_grade(admin_user, touched)
+    return result
+
+
+@router.post("/lore/api/personality/analyze")
+async def lore_api_personality_analyze(request: Request):
+    """AI Analysis — pulls all lore categories, runs the configured LLM against
+    them, and persists the inferred MBTI or Big5 (body: {kind: 'mbti'|'big5'})."""
+    from app.services.personality_service import (
+        PersonalityAnalysisError,
+        analyze_big5_from_lore,
+        analyze_mbti_from_lore,
+    )
+
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    body = await request.json()
+    kind = (body.get("kind") or "").strip().lower()
+    if kind not in ("mbti", "big5"):
+        return JSONResponse(status_code=400, content={"error": "kind must be 'mbti' or 'big5'"})
+
+    llm_provider, _openai_key = await _resolve_lore_llm(admin_user)
+    if not llm_provider:
+        return JSONResponse(status_code=400, content={
+            "error": "No LLM API key available. Configure Cerebras, Anthropic, OpenAI, or Groq before running AI analysis."
+        })
+
+    # Pull all 10 category files in parallel
+    categories: Dict[str, str] = {}
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            cats_resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/categories",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if cats_resp.status_code != 200:
+                return JSONResponse(status_code=502, content={"error": f"category list failed: {cats_resp.text}"})
+            cat_keys = [item["key"] for item in cats_resp.json() if item.get("key")]
+
+            async def fetch_one(k: str):
+                r = await client.get(
+                    f"{_LORE_MCP_BASE}/admin-api/category/{k}",
+                    params=target_params,
+                    headers=_lore_internal_headers(),
+                )
+                return k, (r.json().get("content") if r.status_code == 200 else "") or ""
+
+            results = await asyncio.gather(*[fetch_one(k) for k in cat_keys])
+            for k, content in results:
+                categories[k] = content
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Failed to load lore: {exc}"})
+
+    try:
+        if kind == "mbti":
+            result = await analyze_mbti_from_lore(categories, llm_provider=llm_provider)
+            put_body = {
+                "mbti": {
+                    "type": result["mbti_type"],
+                    "summary": result["mbti_summary"],
+                    "source": "ai_analysis",
+                },
+                "analysis_model": result["analysis_model"],
+            }
+        else:
+            result = await analyze_big5_from_lore(categories, llm_provider=llm_provider)
+            put_body = {
+                "big5": {
+                    "openness":          result["big5_openness"],
+                    "conscientiousness": result["big5_conscientiousness"],
+                    "extraversion":      result["big5_extraversion"],
+                    "agreeableness":     result["big5_agreeableness"],
+                    "neuroticism":       result["big5_neuroticism"],
+                    "summary":           result["big5_summary"],
+                    "source":            "ai_analysis",
+                },
+                "analysis_model": result["analysis_model"],
+            }
+    except PersonalityAnalysisError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception as exc:
+        logger.exception("Personality analysis failed")
+        return JSONResponse(status_code=500, content={"error": f"Analysis failed: {exc}"})
+
+    # Persist
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            put_resp = await client.put(
+                f"{_LORE_MCP_BASE}/admin-api/personality",
+                params=target_params,
+                headers=_lore_internal_headers(),
+                json=put_body,
+            )
+            if put_resp.status_code != 200:
+                return JSONResponse(status_code=put_resp.status_code, content={"error": put_resp.text})
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Failed to persist: {exc}"})
+
+    _schedule_depth_grade(admin_user, [kind])
+    return {"status": "ok", "kind": kind, **put_body, "model": result.get("analysis_model")}
+
+
+# ---------------------------------------------------------------------------
+# Lore Astrology — birth chart + Human Design (via astrology-api.io)
+# ---------------------------------------------------------------------------
+
+@router.get("/lore/api/me/profile")
+async def lore_api_me_profile(request: Request):
+    """Return the current user's profile — full name, email, avatar URL."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    profile_full_name = admin_user.get("full_name") or admin_user.get("email") or ""
+    avatar_url = None
+    if user_id and user_id != "dev-admin":
+        try:
+            from app.integrations.supabase_client import supabase_manager
+            resp = (
+                supabase_manager.admin_client
+                .table("profiles")
+                .select("full_name,email,metadata")
+                .eq("user_id", user_id)
+                .execute()
+            )
+            rows = resp.data or []
+            if rows:
+                row = rows[0]
+                profile_full_name = row.get("full_name") or profile_full_name
+                meta = row.get("metadata") or {}
+                if isinstance(meta, dict):
+                    avatar_url = meta.get("avatar_url")
+        except Exception as exc:
+            logger.warning(f"lore_api_me_profile failed: {exc}")
+    return {
+        "user_id": user_id,
+        "full_name": profile_full_name,
+        "email": admin_user.get("email"),
+        "avatar_url": avatar_url,
+    }
+
+
+@router.post("/lore/api/me/avatar")
+async def lore_api_me_avatar_upload(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """Upload a profile avatar. Saved locally under static/images/avatars/profile/
+    and the URL is persisted on `profiles.metadata.avatar_url`."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+    if not user_id or user_id == "dev-admin":
+        return JSONResponse(status_code=400, content={"error": "No user context"})
+
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        return JSONResponse(status_code=400, content={"error": "File must be an image"})
+
+    contents = await file.read()
+    if not contents:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+    if len(contents) > 5 * 1024 * 1024:
+        return JSONResponse(status_code=413, content={"error": "Image exceeds 5 MB limit"})
+
+    # Extension
+    suffix = ".png"
+    if file.filename:
+        original = Path(file.filename).suffix.lower()
+        if original in [".png", ".jpg", ".jpeg", ".webp", ".gif"]:
+            suffix = original
+    elif "jpeg" in content_type or "jpg" in content_type:
+        suffix = ".jpg"
+    elif "webp" in content_type:
+        suffix = ".webp"
+    elif "gif" in content_type:
+        suffix = ".gif"
+
+    # Save locally, one file per user. Cache-bust via a mtime query string on the URL.
+    avatar_dir = Path("/app/app/static/images/avatars/profile")
+    avatar_dir.mkdir(parents=True, exist_ok=True)
+
+    # Remove any prior avatar file for this user (any extension) so we don't leak
+    for prior in avatar_dir.glob(f"{user_id}.*"):
+        try:
+            prior.unlink()
+        except Exception:
+            pass
+
+    destination = avatar_dir / f"{user_id}{suffix}"
+    try:
+        destination.write_bytes(contents)
+    except Exception as exc:
+        logger.error(f"Failed to save profile avatar: {exc}")
+        return JSONResponse(status_code=500, content={"error": "Failed to save image"})
+
+    # Cache-bust so the browser doesn't serve stale versions after a re-upload
+    import time as _time
+    public_url = f"/static/images/avatars/profile/{user_id}{suffix}?v={int(_time.time())}"
+
+    # Persist on profiles.metadata.avatar_url. `profiles.user_id` has no
+    # unique constraint, so we can't use an ON CONFLICT upsert — do an
+    # explicit select-then-insert-or-update instead.
+    try:
+        from app.integrations.supabase_client import supabase_manager
+        sb = supabase_manager.admin_client
+        existing = (
+            sb.table("profiles")
+            .select("id,metadata,full_name,email")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = (existing.data if existing else None) or []
+        row = rows[0] if rows else None
+
+        meta: Dict[str, Any] = {}
+        if row and isinstance(row.get("metadata"), dict):
+            meta = row["metadata"]
+        meta["avatar_url"] = public_url
+
+        if row:
+            sb.table("profiles").update(
+                {"metadata": meta}
+            ).eq("id", row["id"]).execute()
+        else:
+            sb.table("profiles").insert({
+                "user_id": user_id,
+                "full_name": admin_user.get("full_name") or "",
+                "email": admin_user.get("email") or "",
+                "metadata": meta,
+            }).execute()
+    except Exception as exc:
+        logger.warning(f"Failed to persist avatar URL on profile: {exc}", exc_info=True)
+        return JSONResponse(status_code=500, content={
+            "error": f"Saved image but failed to persist URL: {exc}",
+        })
+
+    return {"status": "ok", "avatar_url": public_url}
+
+
+@router.get("/lore/api/mcp-visibility")
+async def lore_api_mcp_visibility_get(request: Request):
+    """Return the per-node visibility flags for the current user."""
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/mcp-visibility",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+
+@router.put("/lore/api/mcp-visibility")
+async def lore_api_mcp_visibility_put(request: Request):
+    """Update one or more node visibility flags. Body: `{node: bool, ...}`."""
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    body = await request.json()
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.put(
+                f"{_LORE_MCP_BASE}/admin-api/mcp-visibility",
+                params=target_params,
+                headers=_lore_internal_headers(),
+                json=body,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+
+@router.get("/lore/api/astrology/city-search")
+async def lore_api_astrology_city_search(request: Request, q: str = ""):
+    """Proxy city autosuggest for the birth-place field. Returns a small list
+    of `{label, city, country_code}` tuples sourced from Nominatim/OSM, so the
+    values we send to astrology-api.io match its expected `city` +
+    `country_code` shape."""
+    await get_admin_user(request)
+    from app.services.astrology_service import search_cities
+    try:
+        results = await search_cities(q)
+    except Exception as exc:
+        logger.warning(f"City search failed: {exc}")
+        results = []
+    return {"results": results}
+
+
+@router.get("/lore/api/astrology")
+async def lore_api_astrology_get(request: Request):
+    """Return the summary fields for the left-sidebar astrology cards."""
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/astrology",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+
+@router.get("/lore/api/astrology/birth-chart")
+async def lore_api_astrology_birth_chart(request: Request):
+    """Full birth chart JSON for the 'View chart' modal."""
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/astrology/full",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code != 200:
+                return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+            data = resp.json()
+            return {
+                "full_name": data.get("full_name"),
+                "birth_date": data.get("birth_date"),
+                "birth_time": data.get("birth_time"),
+                "birth_place": data.get("birth_place"),
+                "sun_sign": data.get("sun_sign"),
+                "chart_json": data.get("chart_json"),
+                "birth_chart_analysis": data.get("birth_chart_analysis"),
+                "updated_at": data.get("updated_at"),
+            }
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+
+@router.get("/lore/api/astrology/human-design")
+async def lore_api_astrology_human_design(request: Request):
+    """Full Human Design JSON + LLM analysis for the 'View report' modal."""
+    admin_user = await get_admin_user(request)
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/astrology/full",
+                params=target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code != 200:
+                return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+            data = resp.json()
+            return {
+                "hd_type": data.get("hd_type"),
+                "hd_strategy": data.get("hd_strategy"),
+                "hd_authority": data.get("hd_authority"),
+                "hd_profile": data.get("hd_profile"),
+                "human_design_json": data.get("human_design_json"),
+                "human_design_analysis": data.get("human_design_analysis"),
+                "analysis_model": data.get("analysis_model"),
+                "updated_at": data.get("updated_at"),
+            }
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+
+@router.post("/lore/api/astrology/connect")
+async def lore_api_astrology_connect(request: Request):
+    """Fetch birth chart + Human Design from astrology-api.io, run LLM analysis,
+    and persist the result via the Lore MCP. Returns the summary fields for
+    immediate sidebar render."""
+    from datetime import date as _date, time as _time
+    from app.services.astrology_service import (
+        AstrologyAPIError,
+        analyze_birth_chart,
+        analyze_human_design,
+        build_subject,
+        extract_hd_summary,
+        extract_sun_sign,
+        fetch_birth_chart_and_hd,
+    )
+
+    admin_user = await get_admin_user(request)
+
+    llm_provider, _openai_api_key = await _resolve_lore_llm(admin_user)
+    if not llm_provider:
+        return JSONResponse(status_code=400, content={
+            "error": "No LLM API key available. Configure a Cerebras, Anthropic, OpenAI, or Groq key before connecting Human Design."
+        })
+
+    body = await request.json()
+    full_name = (body.get("full_name") or "").strip()
+    birth_date_str = (body.get("birth_date") or "").strip()
+    birth_time_str = (body.get("birth_time") or "").strip()
+    birth_place = (body.get("birth_place") or "").strip()
+    resolved_city = (body.get("city") or "").strip() or None
+    resolved_country = (body.get("country_code") or "").strip().upper() or None
+
+    if not birth_date_str or not birth_time_str or not birth_place:
+        return JSONResponse(status_code=400, content={
+            "error": "birth_date, birth_time, and birth_place are required."
+        })
+    if not resolved_city or not resolved_country:
+        return JSONResponse(status_code=400, content={
+            "error": "Please pick a birth place from the suggestions list so we can resolve city + country.",
+        })
+
+    try:
+        birth_date = _date.fromisoformat(birth_date_str)
+        hh, mm = birth_time_str.split(":")[:2]
+        birth_time = _time(int(hh), int(mm))
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={
+            "error": f"Invalid birth_date or birth_time: {exc}"
+        })
+
+    subject = build_subject(
+        full_name,
+        birth_date,
+        birth_time,
+        birth_place,
+        city=resolved_city,
+        country_code=resolved_country,
+    )
+
+    try:
+        chart_json, hd_json = await fetch_birth_chart_and_hd(subject)
+    except AstrologyAPIError as exc:
+        logger.error(f"Astrology API error: {exc}")
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+    except Exception as exc:
+        logger.exception("Unexpected error calling astrology-api.io")
+        return JSONResponse(status_code=502, content={"error": f"astrology-api.io error: {exc}"})
+
+    sun_sign = extract_sun_sign(chart_json)
+    hd_summary = extract_hd_summary(hd_json)
+
+    subject_name_for_llm = full_name or (admin_user.get("full_name") or admin_user.get("email") or "").strip() or None
+
+    try:
+        chart_analysis, _chart_model = await analyze_birth_chart(
+            chart_json,
+            llm_provider=llm_provider,
+            subject_name=subject_name_for_llm,
+        )
+    except AstrologyAPIError as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+    except Exception as exc:
+        logger.exception("Birth chart LLM analysis failed")
+        return JSONResponse(status_code=502, content={"error": f"LLM analysis failed: {exc}"})
+
+    try:
+        hd_analysis, analysis_model = await analyze_human_design(
+            hd_json,
+            llm_provider=llm_provider,
+            subject_name=subject_name_for_llm,
+        )
+    except AstrologyAPIError as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+    except Exception as exc:
+        logger.exception("Human Design LLM analysis failed")
+        return JSONResponse(status_code=502, content={"error": f"LLM analysis failed: {exc}"})
+
+    payload = {
+        "full_name": full_name or None,
+        "birth_date": birth_date_str,
+        "birth_time": birth_time_str if len(birth_time_str.split(":")) == 3 else f"{birth_time_str}:00",
+        "birth_place": birth_place,
+        "city": resolved_city,
+        "country_code": resolved_country,
+        "sun_sign": sun_sign,
+        "hd_type": hd_summary.get("type"),
+        "hd_strategy": hd_summary.get("strategy"),
+        "hd_authority": hd_summary.get("authority"),
+        "hd_profile": hd_summary.get("profile"),
+        "chart_json": chart_json,
+        "human_design_json": hd_json,
+        "birth_chart_analysis": chart_analysis,
+        "human_design_analysis": hd_analysis,
+        "analysis_model": analysis_model,
+    }
+
+    _uid, target_params = await _resolve_lore_target(admin_user)
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.put(
+                f"{_LORE_MCP_BASE}/admin-api/astrology",
+                params=target_params,
+                headers=_lore_internal_headers(),
+                json=payload,
+            )
+            if resp.status_code != 200:
+                return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": f"Lore MCP unreachable: {exc}"})
+
+    _schedule_depth_grade(admin_user, ["birth_chart", "human_design"])
+
+    return {
+        "status": "ok",
+        "sun_sign": sun_sign,
+        "hd_type": hd_summary.get("type"),
+        "hd_strategy": hd_summary.get("strategy"),
+        "hd_authority": hd_summary.get("authority"),
+        "hd_profile": hd_summary.get("profile"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Lore Voice Interview
+# ---------------------------------------------------------------------------
+
+@router.post("/lore/api/interview/start")
+async def lore_interview_start(request: Request):
+    """Start a Lore voice interview session. Returns LiveKit room credentials."""
+    admin_user = await get_admin_user(request)
+    user_id = str(admin_user.get("user_id") or admin_user.get("id") or "")
+
+    # Resolve Lore target (user's home Supabase) — same resolver used everywhere else
+    lore_user_id, lore_target_params = await _resolve_lore_target(admin_user)
+
+    # Resolve client context for the LiveKit room (separate from Lore target)
+    client_ids = admin_user.get("visible_client_ids", [])
+    primary_client_id = admin_user.get("primary_client_id") or (client_ids[0] if client_ids else None)
+
+    if not primary_client_id and admin_user.get("is_super_admin"):
+        try:
+            from app.integrations.supabase_client import supabase_manager
+            result = (
+                supabase_manager.admin_client
+                .table("clients")
+                .select("id")
+                .eq("name", "Leandrew Dixon")
+                .maybe_single()
+                .execute()
+            )
+            if result and result.data:
+                primary_client_id = result.data["id"]
+        except Exception as exc:
+            logger.warning(f"Failed to resolve superadmin home client: {exc}")
+
+    if not primary_client_id:
+        return JSONResponse(status_code=400, content={"error": "No client context available."})
+
+    # Fetch depth score from the user's Lore target to decide interview scope
+    target_categories = []
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{_LORE_MCP_BASE}/admin-api/depth-score",
+                params=lore_target_params,
+                headers=_lore_internal_headers(),
+            )
+            if resp.status_code == 200:
+                for layer in resp.json().get("layers", []):
+                    if layer["level"] in ("not_captured", "emerging", "growing"):
+                        target_categories.append(layer["key"])
+    except Exception:
+        pass
+
+    if not target_categories:
+        return JSONResponse(status_code=200, content={
+            "status": "no_gaps",
+            "message": "All Lore categories have strong coverage. No interview needed.",
+        })
+
+    # Create a wizard session for tracking progress
+    from app.services.wizard_session_service import WizardSessionService
+    session_service = WizardSessionService()
+    session = await session_service.create_session(user_id, primary_client_id)
+    session_id = session["id"]
+
+    # Get client credentials for LiveKit room
+    from app.utils.supabase_credentials import SupabaseCredentialManager
+    client_url, client_anon, client_key = await SupabaseCredentialManager.get_client_supabase_credentials(primary_client_id)
+
+    # Load Farah's live settings — same function the Sidekick Creation Wizard uses.
+    # This gets her voice/sound settings AND the provider API keys she needs
+    # (Deepgram, Cartesia, Cerebras, etc.) from the Autonomite client record.
+    from app.api.v1.wizard import _load_farah_live_settings
+    voice_settings, sound_settings, farah_provider_keys = await _load_farah_live_settings()
+
+    # Merge client API keys with Farah's provider keys (Farah's keys take precedence
+    # for providers she uses — the client's own keys are for their sidekick, not Farah)
+    api_keys = {}
+    try:
+        from app.core.dependencies import get_client_service
+        client_service = get_client_service()
+        client_obj = await client_service.get_client(primary_client_id)
+        if client_obj and client_obj.settings and client_obj.settings.api_keys:
+            keys = client_obj.settings.api_keys
+            for k in ["cerebras_api_key", "openai_api_key", "anthropic_api_key", "groq_api_key",
+                       "cartesia_api_key", "deepgram_api_key", "elevenlabs_api_key", "siliconflow_api_key"]:
+                val = getattr(keys, k, None)
+                if val:
+                    api_keys[k] = val
+    except Exception:
+        pass
+    # Farah's provider keys override — she needs her own keys for whatever providers she's configured with
+    api_keys = {k: v for k, v in {**api_keys, **farah_provider_keys}.items() if v}
+
+    # Create LiveKit room
+    from app.config import settings as app_settings
+    from livekit import api as lk_api
+
+    room_name = f"lore-interview-{session_id[:8]}"
+    conversation_id = str(uuid.uuid4())
+
+    room_metadata = {
+        "type": "wizard_guide",
+        "wizard_config": {
+            "session_id": session_id,
+            "wizard_type": "lore_interview",
+            "current_step": 1,
+            "form_data": {},
+            "target_categories": target_categories,
+            "lore": {
+                "user_id": lore_user_id,
+                "target_url": lore_target_params.get("target_url"),
+                "target_key": lore_target_params.get("target_key"),
+            },
+        },
+        "client_id": primary_client_id,
+        "user_id": user_id,
+        "agent_slug": "lore-interviewer",
+        "agent_name": "Lore Interviewer",
+        "conversation_id": conversation_id,
+        "system_prompt": "",
+        "voice_settings": voice_settings,
+        "sound_settings": sound_settings,
+        "api_keys": api_keys,
+        "supabase_url": client_url,
+        "supabase_anon_key": client_anon,
+        "supabase_service_role_key": client_key,
+        "platform_supabase_url": app_settings.supabase_url,
+        "platform_supabase_service_role_key": app_settings.supabase_service_role_key,
+    }
+
+    lk_url = app_settings.livekit_url
+    lk_key = app_settings.livekit_api_key
+    lk_secret = app_settings.livekit_api_secret
+
+    lk = lk_api.LiveKitAPI(lk_url, lk_key, lk_secret)
+    try:
+        await lk.room.create_room(lk_api.CreateRoomRequest(
+            name=room_name,
+            metadata=json.dumps(room_metadata),
+        ))
+    except Exception as exc:
+        logger.warning(f"Room create (may already exist): {exc}")
+
+    # Dispatch agent
+    agent_name = os.getenv("AGENT_NAME", os.getenv("LIVEKIT_AGENT_NAME", "sidekick-agent"))
+    try:
+        await lk.agent_dispatch.create_dispatch(
+            lk_api.CreateAgentDispatchRequest(
+                room=room_name,
+                agent_name=agent_name,
+                metadata=json.dumps(room_metadata),
+            )
+        )
+    except Exception as exc:
+        logger.warning(f"Agent dispatch: {exc}")
+
+    # Generate participant token
+    token = lk_api.AccessToken(lk_key, lk_secret)
+    token.with_identity(f"user-{user_id[:8]}")
+    token.with_name("Lore Interview User")
+    token.with_grants(lk_api.VideoGrants(
+        room_join=True,
+        room=room_name,
+        can_publish=True,
+        can_subscribe=True,
+    ))
+
+    await lk.aclose()
+
+    return {
+        "status": "started",
+        "session_id": session_id,
+        "room_name": room_name,
+        "token": token.to_jwt(),
+        "ws_url": lk_url,
+        "target_categories": target_categories,
+    }

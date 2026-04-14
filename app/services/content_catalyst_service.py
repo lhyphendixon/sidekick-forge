@@ -165,27 +165,31 @@ class DeepInfraProvider(LLMProvider):
 class CerebrasProvider(LLMProvider):
     """Cerebras LLM provider using OpenAI-compatible API."""
 
-    def __init__(self, api_key: str, model: str = "zai-glm-4.7"):
+    def __init__(self, api_key: str, model: str = "zai-glm-4.7", reasoning_effort: str = "none"):
         self.api_key = api_key
         self.model = model
+        self.reasoning_effort = reasoning_effort
         self.base_url = "https://api.cerebras.ai/v1"
-        logger.info(f"CerebrasProvider initialized with model: {self.model}")
+        logger.info(f"CerebrasProvider initialized with model: {self.model}, reasoning_effort: {self.reasoning_effort}")
 
     async def chat(self, messages: List[Dict[str, str]], max_tokens: int = 4096) -> str:
         logger.info(f"CerebrasProvider.chat called with model={self.model}, max_tokens={max_tokens}")
         async with httpx.AsyncClient() as client:
             try:
+                payload = {
+                    "model": self.model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                }
+                if self.reasoning_effort:
+                    payload["reasoning_effort"] = self.reasoning_effort
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": self.model,
-                        "messages": messages,
-                        "max_tokens": max_tokens,
-                    },
+                    json=payload,
                     timeout=120.0,
                 )
                 response.raise_for_status()

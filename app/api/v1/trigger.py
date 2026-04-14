@@ -462,6 +462,18 @@ async def _build_agent_context_for_dispatch(
     if client_conversation_id:
         agent_context["client_conversation_id"] = client_conversation_id
 
+    # Resolve Lore target — where this user's personal Lore lives.
+    # Handles shadow user → platform user mapping for cross-client embed sessions.
+    try:
+        from app.utils.lore_resolver import resolve_lore_target_for_session
+        agent_context["lore"] = await resolve_lore_target_for_session(
+            session_user_id=user_id,
+            sidekick_client_id=client.id,
+        )
+    except Exception as exc:
+        logger.warning(f"Lore resolver failed: {exc}")
+        agent_context["lore"] = {"user_id": user_id}
+
     # Include Supabase credentials when available for worker-side context
     if client.settings and getattr(client.settings, "supabase", None):
         agent_context["supabase_url"] = client.settings.supabase.url
@@ -1983,6 +1995,10 @@ async def dispatch_agent_job(
             "email_address": getattr(agent, "email_address", None) or "",
             # Phase 3: Carry prewarm flag so worker enters idle mode after init
             "prewarm": bool(context_snapshot.get("prewarm")),
+            # Lore target — where this user's personal Lore lives (real platform
+            # user_id + dedicated Supabase creds when applicable). Resolved by
+            # app.utils.lore_resolver in the trigger flow.
+            "lore": context_snapshot.get("lore") or {"user_id": user_id},
         }
 
         tools_payload = tools if tools is not None else context_snapshot.get("tools") or []

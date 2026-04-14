@@ -800,6 +800,108 @@ class UsageTrackingService:
         is_within = not client_status.is_exceeded
         return (is_within, client_status)
 
+    async def record_agent_session_usage(
+        self,
+        client_id: str,
+        agent_id: str,
+        *,
+        voice_seconds: int = 0,
+        llm_input_tokens: int = 0,
+        llm_output_tokens: int = 0,
+        llm_cached_input_tokens: int = 0,
+        tts_characters: int = 0,
+        tts_audio_seconds: float = 0.0,
+        stt_audio_seconds: float = 0.0,
+    ) -> None:
+        """
+        Roll up a single LiveKit session's cumulative usage into agent_usage.
+
+        Called once from the agent worker shutdown callback with the values read
+        from `session.usage` (LiveKit's authoritative per-model counters). Uses
+        the atomic `record_agent_session_usage` RPC so concurrent sessions can't
+        clobber one another.
+        """
+        self._ensure_initialized()
+
+        try:
+            self.supabase.rpc(
+                "record_agent_session_usage",
+                {
+                    "p_client_id": client_id,
+                    "p_agent_id": agent_id,
+                    "p_voice_seconds": int(voice_seconds or 0),
+                    "p_llm_input_tokens": int(llm_input_tokens or 0),
+                    "p_llm_output_tokens": int(llm_output_tokens or 0),
+                    "p_llm_cached_input_tokens": int(llm_cached_input_tokens or 0),
+                    "p_tts_characters": int(tts_characters or 0),
+                    "p_tts_audio_seconds": float(tts_audio_seconds or 0),
+                    "p_stt_audio_seconds": float(stt_audio_seconds or 0),
+                },
+            ).execute()
+            logger.info(
+                "Recorded session usage: agent=%s voice=%ds llm_in=%d llm_out=%d "
+                "tts_chars=%d tts_audio=%.1fs stt_audio=%.1fs",
+                agent_id, voice_seconds, llm_input_tokens, llm_output_tokens,
+                tts_characters, tts_audio_seconds, stt_audio_seconds,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to record session usage for agent=%s client=%s: %s",
+                agent_id, client_id, e, exc_info=True,
+            )
+
+    async def get_agent_usage_for_period(
+        self,
+        client_id: str,
+        agent_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Return the raw agent_usage row for the current billing period, or a
+        zero-filled stub if no row exists yet. Used by the admin API.
+        """
+        self._ensure_initialized()
+        period_start = self._get_period_start()
+
+        result = self.supabase.table("agent_usage").select("*").eq(
+            "client_id", client_id
+        ).eq("agent_id", agent_id).eq(
+            "period_start", period_start.isoformat()
+        ).execute()
+
+        if result.data:
+            return result.data[0]
+
+        # No row yet — return defaults pulled from the client's tier so the
+        # frontend still has limits to render against.
+        client_result = self.supabase.table("clients").select("tier").eq(
+            "id", client_id
+        ).single().execute()
+        tier = client_result.data.get("tier", "adventurer") if client_result.data else "adventurer"
+        quota_result = self.supabase.table("tier_quotas").select("*").eq(
+            "tier", tier
+        ).single().execute()
+        quotas = quota_result.data if quota_result.data else {}
+
+        return {
+            "client_id": client_id,
+            "agent_id": agent_id,
+            "period_start": period_start.isoformat(),
+            "voice_seconds_used": 0,
+            "voice_seconds_limit": quotas.get("voice_seconds_per_month", self.DEFAULT_VOICE_SECONDS),
+            "text_messages_used": 0,
+            "text_messages_limit": quotas.get("text_messages_per_month", self.DEFAULT_TEXT_MESSAGES),
+            "embedding_chunks_used": 0,
+            "embedding_chunks_limit": quotas.get("embedding_chunks_per_month", self.DEFAULT_EMBEDDING_CHUNKS),
+            "llm_input_tokens": 0,
+            "llm_output_tokens": 0,
+            "llm_cached_input_tokens": 0,
+            "tts_characters": 0,
+            "tts_audio_seconds": 0,
+            "stt_audio_seconds": 0,
+            "session_count": 0,
+            "last_session_at": None,
+        }
+
     async def increment_agent_image_cost(
         self,
         client_id: str,

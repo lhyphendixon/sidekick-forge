@@ -181,30 +181,45 @@ class RemoteEmbedder:
 
 class AgentContextManager:
     """Manages dynamic context generation for AI agents using remote services"""
-    
+
     def __init__(
-        self, 
+        self,
         supabase_client,
         agent_config: Dict[str, Any],
         user_id: str,
         client_id: str,
-        api_keys: Optional[Dict[str, str]] = None
+        api_keys: Optional[Dict[str, str]] = None,
+        lore_target_url: Optional[str] = None,
+        lore_target_key: Optional[str] = None,
+        lore_user_id: Optional[str] = None,
     ):
         """
         Initialize the context manager
-        
+
         Args:
             supabase_client: Initialized Supabase client for the specific client
             agent_config: Agent configuration including system prompt
-            user_id: User identifier for profile lookup
+            user_id: Session user identifier (may be a shadow user in cross-client
+                     embed scenarios) — used for profile/conversation RAG lookups
+                     against the client's Supabase
             client_id: Client identifier for multi-tenant isolation
             api_keys: API keys for embedding services
+            lore_target_url: Optional Supabase URL where this user's Lore lives
+                             (for Champion/Paragon users with dedicated instances).
+                             If None, the Lore MCP uses its default platform DB.
+            lore_target_key: Service role key for the Lore target Supabase
+            lore_user_id: The REAL platform user id for Lore operations. May differ
+                          from user_id in cross-client sessions where the session
+                          uses a shadow user. Defaults to user_id if not set.
         """
         self.supabase = supabase_client
         self.agent_config = agent_config
         self.user_id = user_id
         self.client_id = client_id
         self.api_keys = api_keys or {}
+        self.lore_target_url = lore_target_url
+        self.lore_target_key = lore_target_key
+        self.lore_user_id = lore_user_id or user_id
         
         # Initialize remote embedder - FAIL FAST if not configured
         self.embedder = self._initialize_embedder()
@@ -297,12 +312,20 @@ class AgentContextManager:
         perf_details = {}
 
         try:
-            # Gather user profile and user overview in parallel - no RAG searches
+            # Gather user profile and Lore summary in parallel.
+            # Lore is now the canonical personal context layer. The legacy
+            # user_overviews system is deprecated and no longer loaded unless
+            # ENABLE_LEGACY_USER_OVERVIEW=true is set for rollback.
             start_gather = time.perf_counter()
             profile_task = asyncio.create_task(self._gather_user_profile(user_id))
-            overview_task = asyncio.create_task(self._gather_user_overview(user_id))
+            lore_task = asyncio.create_task(self._gather_user_lore(user_id))
 
-            results = await asyncio.gather(profile_task, overview_task, return_exceptions=True)
+            legacy_overview_enabled = os.getenv("ENABLE_LEGACY_USER_OVERVIEW", "").lower() in ("true", "1", "yes")
+            if legacy_overview_enabled:
+                overview_task = asyncio.create_task(self._gather_user_overview(user_id))
+                results = await asyncio.gather(profile_task, lore_task, overview_task, return_exceptions=True)
+            else:
+                results = await asyncio.gather(profile_task, lore_task, return_exceptions=True)
 
             # Handle profile result
             if isinstance(results[0], Exception):
@@ -311,22 +334,36 @@ class AgentContextManager:
             else:
                 user_profile, profile_duration = results[0]
 
-            # Handle overview result
+            # Handle Lore result (new personal context layer)
             if isinstance(results[1], Exception):
-                logger.warning(f"Overview fetch failed: {results[1]}")
-                user_overview, overview_duration = {}, 0
+                logger.warning(f"Lore fetch failed: {results[1]}")
+                lore_summary, lore_duration = "", 0
             else:
-                user_overview, overview_duration = results[1]
+                lore_summary, lore_duration = results[1]
+
+            # Handle legacy overview only if flag is on
+            if legacy_overview_enabled and len(results) > 2:
+                if isinstance(results[2], Exception):
+                    logger.warning(f"Overview fetch failed: {results[2]}")
+                    user_overview, overview_duration = {}, 0
+                else:
+                    user_overview, overview_duration = results[2]
+            else:
+                user_overview, overview_duration = {}, 0
 
             perf_details['gather_user_profile'] = profile_duration
-            perf_details['gather_user_overview'] = overview_duration
+            perf_details['gather_user_lore'] = lore_duration
+            if legacy_overview_enabled:
+                perf_details['gather_user_overview'] = overview_duration
 
-            # Format user profile and overview as markdown (without RAG results)
+            # Format context — Lore is rendered as the primary "User Lore" section.
+            # user_overview is only populated if the legacy flag is on (rollback only).
             context_markdown = self._format_context_as_markdown(
                 user_profile,
                 [],  # No knowledge results
                 [],  # No conversation results
-                user_overview
+                user_overview,
+                lore_summary=lore_summary,
             )
 
             # Merge with original system prompt
@@ -346,6 +383,8 @@ class AgentContextManager:
                     "duration_seconds": duration,
                     "user_profile_found": bool(user_profile),
                     "user_overview_found": bool(user_overview and any(user_overview.values())),
+                    "lore_loaded": bool(lore_summary and lore_summary.strip()),
+                    "lore_length": len(lore_summary or ""),
                     "knowledge_results_count": 0,  # No knowledge search in initial context
                     "conversation_results_count": 0,  # No conversation search in initial context
                     "context_length": len(context_markdown),
@@ -356,6 +395,7 @@ class AgentContextManager:
                 "raw_context_data": {
                     "user_profile": user_profile,
                     "user_overview": user_overview,
+                    "lore_summary": lore_summary,
                     "knowledge_results": [],
                     "conversation_results": [],
                     "context_markdown": context_markdown
@@ -790,13 +830,67 @@ class AgentContextManager:
             logger.error(f"Conversation RAG error: {e}")
             raise
 
+    async def _gather_user_lore(self, user_id: str) -> Tuple[str, float]:
+        """Fetch the compressed Lore summary for this user from the Lore MCP.
+
+        Uses self.lore_user_id (the REAL platform user id) — which may differ
+        from the session user_id in cross-client embed scenarios where a shadow
+        user is used.
+
+        Returns:
+            Tuple of (summary_markdown, duration_seconds). Empty string on miss.
+        """
+        start_time = time.perf_counter()
+        lore_uid = self.lore_user_id or user_id
+
+        try:
+            import uuid as _uuid
+            _ = _uuid.UUID(str(lore_uid))
+        except Exception:
+            logger.warning(f"Lore user id is not a UUID; skipping Lore lookup: {lore_uid}")
+            return "", time.perf_counter() - start_time
+
+        lore_mcp_base = os.getenv("LORE_MCP_URL", "http://lore-mcp:8082")
+        params: Dict[str, str] = {"user_id": str(lore_uid)}
+        if self.lore_target_url and self.lore_target_key:
+            params["target_url"] = self.lore_target_url
+            params["target_key"] = self.lore_target_key
+
+        headers = {"X-Lore-Internal": os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")}
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"{lore_mcp_base}/admin-api/summary",
+                    params=params,
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = (data.get("content") or "").strip()
+                    duration = time.perf_counter() - start_time
+                    if content:
+                        logger.info(
+                            f"✅ Lore summary loaded for user {lore_uid[:8]} "
+                            f"({len(content)} chars, {duration:.2f}s)"
+                        )
+                    else:
+                        logger.info(f"Lore summary empty for user {lore_uid[:8]}")
+                    return content, duration
+                else:
+                    logger.warning(f"Lore MCP returned {resp.status_code} for summary")
+        except Exception as exc:
+            logger.warning(f"Failed to fetch Lore summary: {exc}")
+
+        return "", time.perf_counter() - start_time
+
     def _format_context_as_markdown(
         self,
         profile: Dict[str, Any],
         knowledge: List[Dict[str, Any]],
         conversations: List[Dict[str, Any]],
         user_overview: Optional[Dict[str, Any]] = None,
-        document_intelligence: Optional[List[Dict[str, Any]]] = None
+        document_intelligence: Optional[List[Dict[str, Any]]] = None,
+        lore_summary: Optional[str] = None,
     ) -> str:
         """
         Generate clean markdown sections with proper headings
@@ -812,14 +906,32 @@ class AgentContextManager:
             Formatted markdown string
         """
         # If nothing to include, return empty string to avoid adding token noise
-        if not profile and not knowledge and not conversations and not user_overview and not document_intelligence:
+        if not profile and not knowledge and not conversations and not user_overview and not document_intelligence and not (lore_summary or "").strip():
             return ""
 
         sections = []
         # Header
         sections.append("# Agent Context\n")
 
-        # User Overview Section (comes first - most important for relationship context)
+        # Lore Section (comes first - this is the user's canonical personal context)
+        if lore_summary and lore_summary.strip():
+            sections.append("## User Lore")
+            sections.append(
+                "*The user's portable personal context — their identity, projects, "
+                "tools, goals, communication style, and preferences. "
+                "This is authoritative and reflects who the user actually is. "
+                "Treat it as ground truth.*\n"
+            )
+            # The Lore MCP returns summary content that already has its own # header.
+            # Strip it so our ## hierarchy is consistent.
+            clean = lore_summary.strip()
+            if clean.startswith("# "):
+                # Drop the first line
+                clean = "\n".join(clean.splitlines()[1:]).strip()
+            sections.append(clean)
+            sections.append("")
+
+        # User Overview Section (legacy — kept during transition)
         if user_overview and any(user_overview.values()):
             sections.append("## User Overview")
             sections.append("*Your persistent notes about this user (shared across all sidekicks):*\n")
@@ -1167,24 +1279,32 @@ When speaking, structure your responses for clarity:
 - Use transition phrases to guide the listener through your explanation
 - Keep individual sentences clear and conversational"""
 
-        # User Overview tool guidance
+        # Lore write-back guidance. The tool is still named update_user_overview
+        # for backwards compatibility with existing agent configs, but it now
+        # routes writes to the user's Lore. The five legacy "sections" map to
+        # the ten Lore categories.
         overview_tool_guidance = """
-## User Overview Tool
+## Updating the User's Lore
 
-You have access to an `update_user_overview` tool to maintain persistent notes about users.
-These notes are shared across all sidekicks for this client - they're your collective memory.
+The user's personal context is stored in their **Lore** — a portable profile they own
+that follows them across all sidekicks. You have access to an `update_user_overview`
+tool which writes directly to their Lore.
 
-**Use this tool when the user shares ENDURING information about:**
-- **Biography:** Life story, background, personal journey, ventures, projects, origin story
-- **Identity:** Their name (ALWAYS store under identity.name when shared), career/role changes, who they are
-- **Goals:** Priority shifts ("My priority is now X instead of Y"), aspirations, missions
-- **Working Style:** Communication preferences, decision-making patterns, neurodivergence
-- **Important Context:** Personal factors affecting interactions, constraints, circumstances
-- **Relationship History:** Key wins, milestones, ongoing threads worth remembering
+**Call it when the user shares ENDURING, IMPORTANT information about:**
+- **identity** — Their name, role, organization, philosophy, background
+- **goals** — What they're trying to achieve (near-term and long-term)
+- **working_style** — Communication preferences, how they like to work with AI
+- **important_context** — Constraints, preferences, rules (always/never)
+- **relationship_history** — Key people, team dynamics, who matters to them
 
-**Do NOT use for:** Routine tasks, today-only info, already-captured details, or speculation.
+**Do NOT use for:** routine tasks, today-only info, things already in their Lore, or speculation.
 
-**Be concise and update (don't just append).** If a goal changes, replace it. If they share biographical details, add them to the biography section."""
+**Be concise. Update rather than append when something changes.** If a goal shifts, replace it.
+If they reveal a new preference, add it to important_context. Your edits shape how every
+sidekick will understand them going forward.
+
+**Never tell the user about "UserSense" or "user overviews" — that's internal naming.**
+Refer to it as their Lore (their personal context) if they ask."""
 
         if not context_markdown or context_markdown.strip() == "# Agent Context":
             # No meaningful context to add, but still include formatting and tool guidelines

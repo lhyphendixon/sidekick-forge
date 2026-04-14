@@ -295,8 +295,12 @@
                     document.cookie = `admin_token=${session.access_token}; path=/; max-age=28800${securePart}; SameSite=Lax`; // 8 hours
                     console.log('[login] Cookie set:', document.cookie.substring(0, 50) + '...');
 
-                    // Redirect to admin dashboard
-                    window.location.href = '/admin/';
+                    // Redirect to admin dashboard (or honor ?next= for OAuth flows)
+                    const nextParam = new URLSearchParams(window.location.search).get('next');
+                    const safeNext = nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//')
+                        ? nextParam
+                        : '/admin/';
+                    window.location.href = safeNext;
                 } else {
                     throw new Error('No session received');
                 }

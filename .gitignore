@@ -160,3 +160,9 @@ secrets/
 credentials/
 *.secret.backup-untracked/
 .applied_migrations
+
+# User-uploaded assets (not source)
+app/static/images/avatars/profile/
+app/static/images/avatars/upload_*.png
+app/static/images/avatars/upload_*.jpg
+app/static/images/agents/franca-2_*.png

@@ -92,8 +92,24 @@ services:
       - ./docker/agent/tool_registry.py:/app/tool_registry.py:ro
       - ./docker/agent/models:/app/models:ro
       - ./docker/agent/wizard_tasks.py:/app/wizard_tasks.py:ro
+      - ./docker/agent/lore_interview_tasks.py:/app/lore_interview_tasks.py:ro
       - ./app:/app/app:ro
       - imx-cache:/tmp/imx_models
+    networks:
+      - platform-network
+
+  lore-mcp:
+    build:
+      context: ./lore_mcp
+      dockerfile: Dockerfile
+    container_name: ${APP_NAME:-sidekick-forge}-lore-mcp
+    ports:
+      - "8082:8082"
+    environment:
+      - LORE_API_KEY=${LORE_API_KEY:-}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    restart: unless-stopped
     networks:
       - platform-network
 

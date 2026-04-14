@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 
 # Build version - updated automatically or manually when deploying
 # This helps verify which code version is actually running
-AGENT_BUILD_VERSION = "2026-04-09T18:19:27Z"
-AGENT_BUILD_HASH = "9f516c0"
+AGENT_BUILD_VERSION = "2026-04-13T00:09:09Z"
+AGENT_BUILD_HASH = "fix-text-mode-emotion-tags"
 
 from livekit import agents, rtc
 from livekit import api as livekit_api
@@ -56,13 +56,17 @@ from io import BytesIO
 from api_key_loader import APIKeyLoader
 from config_validator import ConfigValidator, ConfigurationError
 from context import AgentContextManager
-from sidekick_agent import SidekickAgent
+from sidekick_agent import SidekickAgent, _strip_tts_emotion_tags
 from tool_registry import ToolRegistry
 from supabase import create_client
 try:
     from wizard_tasks import WizardGuideAgent
 except ImportError:
     WizardGuideAgent = None
+try:
+    from lore_interview_tasks import LoreInterviewAgent
+except ImportError:
+    LoreInterviewAgent = None
 
 # Enable SDK debug logging for better diagnostics
 os.environ["LIVEKIT_LOG_LEVEL"] = "debug"
@@ -1257,12 +1261,15 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
                 if chunk_index - last_update_index >= stream_batch_size:
                     last_update_index = chunk_index
                     try:
+                        # Strip TTS emotion tags from partial output so the user
+                        # never sees them flicker in the streaming chat UI.
+                        partial_clean = _strip_tts_emotion_tags(assembled)
                         await _merge_and_update_room_metadata(
                             room_name=room.name,
                             payload={
                                 "mode": "text",
                                 "conversation_id": conversation_id,
-                                "text_response_partial": assembled,
+                                "text_response_partial": partial_clean,
                                 "text_response_stream": list(stream_chunks),
                                 "text_stream_token": delta,
                                 "streaming": True,
@@ -1276,7 +1283,9 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
                     except Exception as partial_err:
                         logger.debug(f"Streaming metadata update skipped: {partial_err}")
 
-            response_text = assembled.strip()
+            # Defense-in-depth: strip any emotion tags the LLM may have emitted
+            # despite the system-prompt injection being skipped in text mode.
+            response_text = _strip_tts_emotion_tags(assembled.strip())
 
             # After stream completes, check for final tool calls on the stream object
             try:
@@ -1320,7 +1329,8 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
                         if tool_name:
                             detected_tool_calls.append({"name": tool_name, "arguments": tool_args})
                             logger.info(f"🧰 TEXT-MODE: Detected tool call (non-stream): {tool_name}")
-            response_text = (text or "").strip()
+            # Defense-in-depth: strip emotion tags from non-streaming output too.
+            response_text = _strip_tts_emotion_tags((text or "").strip())
     except Exception as llm_err:
         logger.error(f"Direct LLM call failed in text mode: {type(llm_err).__name__}: {llm_err}")
         raise
@@ -1449,7 +1459,8 @@ IMPORTANT: Base your answer ONLY on the information provided below. If the conte
                         followup_text = msg.content
 
             if followup_text.strip():
-                response_text = followup_text.strip()
+                # Defense-in-depth: strip emotion tags from tool-followup response too.
+                response_text = _strip_tts_emotion_tags(followup_text.strip())
                 logger.info(f"🧰 TEXT-MODE: Got followup response ({len(response_text)} chars)")
 
         except Exception as tool_err:
@@ -2242,6 +2253,7 @@ async def agent_job_handler(ctx: JobContext):
         # Check for wizard mode (special guided experience)
         room_type = metadata.get("type", "")
         is_wizard_mode = room_type == "wizard_guide"
+        is_lore_interview = is_wizard_mode and metadata.get("wizard_config", {}).get("wizard_type") == "lore_interview"
         wizard_greeting = None  # Will be set if wizard mode
 
         if is_wizard_mode:
@@ -2493,6 +2505,7 @@ async def agent_job_handler(ctx: JobContext):
                 turn_detect = None
             
             # Initialize context manager if we have Supabase credentials
+            # Lore interview doesn't need RAG/embeddings — skip context manager
             context_manager = None
             client_id = metadata.get("client_id")  # Define at outer scope for use throughout
             start_context_manager = time.perf_counter()
@@ -2536,23 +2549,47 @@ async def agent_job_handler(ctx: JobContext):
                         logger.error(f"Failed to create Supabase client: {e}")
                         client_supabase = None
                     
-                    # Create context manager
+                    # Resolve Lore target — where this user's Lore lives (their
+                    # home client's Supabase). Passed in via room metadata by
+                    # the trigger endpoint. Falls back to the platform DB.
+                    _lore_cfg = metadata.get("lore", {}) or {}
+                    lore_target_url = _lore_cfg.get("target_url")
+                    lore_target_key = _lore_cfg.get("target_key")
+                    # lore.user_id is the REAL platform user (may differ from
+                    # metadata.user_id when a shadow user is used for embed access
+                    # across clients). Profile/conversation RAG still use the
+                    # session user_id since those tables are client-scoped.
+                    lore_user_id = _lore_cfg.get("user_id") or metadata.get("user_id")
+
                     context_manager = AgentContextManager(
                         supabase_client=client_supabase,
                         agent_config=metadata,
                         user_id=metadata.get("user_id", "unknown"),
                         client_id=metadata.get("client_id", "unknown"),
-                        api_keys=api_keys
+                        api_keys=api_keys,
+                        lore_target_url=lore_target_url,
+                        lore_target_key=lore_target_key,
+                        lore_user_id=lore_user_id,
                     )
-                    logger.info("✅ Context manager initialized successfully")
+                    logger.info(
+                        f"✅ Context manager initialized "
+                        f"(session_user={metadata.get('user_id','?')[:8]}, "
+                        f"lore_user={(lore_user_id or '?')[:8]}, "
+                        f"target: {'dedicated' if lore_target_url else 'platform'})"
+                    )
                 else:
                     # This branch should not be reached since we check both URL and key above
                     logger.warning("No client Supabase credentials found - context features disabled")
             except ValueError as ve:
-                # Re-raise ValueError for missing credentials - NO FALLBACK POLICY
-                # This ensures the agent doesn't start without transcript storage capability
-                logger.error(f"❌ CRITICAL: Supabase credential error - {ve}")
-                raise
+                if is_lore_interview:
+                    # Lore interview doesn't need context manager / embeddings
+                    logger.info(f"📖 Lore interview: ignoring context manager error ({ve})")
+                    context_manager = None
+                else:
+                    # Re-raise ValueError for missing credentials - NO FALLBACK POLICY
+                    # This ensures the agent doesn't start without transcript storage capability
+                    logger.error(f"❌ CRITICAL: Supabase credential error - {ve}")
+                    raise
             except Exception as e:
                 logger.error(f"Failed to initialize context manager: {e}")
                 logger.error(f"Context initialization error details: {type(e).__name__}: {str(e)}")
@@ -2617,17 +2654,21 @@ async def agent_job_handler(ctx: JobContext):
             )
             enhanced_prompt = enhanced_prompt + voice_instruction
 
-            # Add Cartesia emotion instructions if enabled
-            emotion_instructions = _get_cartesia_emotion_instructions(voice_settings)
-            if emotion_instructions:
-                enhanced_prompt = enhanced_prompt + emotion_instructions
-                logger.info("🎭 Cartesia emotion controls enabled for dynamic expression")
+            # Add Cartesia emotion instructions if enabled — voice modes only.
+            # Text mode bypasses TTS entirely, so emotion tags would leak into
+            # the chat UI as raw text. Skip injection to prevent that.
+            if not is_text_mode:
+                emotion_instructions = _get_cartesia_emotion_instructions(voice_settings)
+                if emotion_instructions:
+                    enhanced_prompt = enhanced_prompt + emotion_instructions
+                    logger.info("🎭 Cartesia emotion controls enabled for dynamic expression")
 
-            # Add Fish Audio emotion instructions if enabled
-            fish_emotion_instructions = _get_fish_audio_emotion_instructions(voice_settings)
-            if fish_emotion_instructions:
-                enhanced_prompt = enhanced_prompt + fish_emotion_instructions
-                logger.info("🎭 Fish Audio emotion controls enabled for dynamic expression")
+                fish_emotion_instructions = _get_fish_audio_emotion_instructions(voice_settings)
+                if fish_emotion_instructions:
+                    enhanced_prompt = enhanced_prompt + fish_emotion_instructions
+                    logger.info("🎭 Fish Audio emotion controls enabled for dynamic expression")
+            else:
+                logger.info("📝 Text mode: skipping emotion-tag prompt injection")
 
             greeting_enhanced_prompt = enhanced_prompt
             
@@ -2641,21 +2682,32 @@ async def agent_job_handler(ctx: JobContext):
                     user_profile = initial_context.get("raw_context_data", {}).get("user_profile")
                     logger.info(f"📊 DIAGNOSTIC: Extracted user_profile: {user_profile}")
             
-            # Extract names for later use in proactive greeting
-            # Prefer user_overview identity name over profile (which may be a username)
+            # Extract names for later use in proactive greeting.
+            # Prefer Lore identity name (primary), then legacy user_overview (if still enabled),
+            # then user_profile (which may be a username).
             user_overview_name = None
             if 'initial_context' in locals() and initial_context and isinstance(initial_context, dict):
                 raw = initial_context.get("raw_context_data", {})
                 if isinstance(raw, dict):
-                    uo = raw.get("user_overview")
-                    if isinstance(uo, dict):
-                        identity = uo.get("identity", {})
-                        if isinstance(identity, dict):
-                            user_overview_name = identity.get("name") or identity.get("preferred_name") or identity.get("first_name")
-                        if not user_overview_name:
-                            bio = uo.get("biography", {})
-                            if isinstance(bio, dict):
-                                user_overview_name = bio.get("name")
+                    # 1. Try Lore summary — parse name from the identity section
+                    lore_summary = raw.get("lore_summary", "")
+                    if isinstance(lore_summary, str) and lore_summary:
+                        import re as _re
+                        # Look for "- **Name**: Foo Bar" patterns in the summary
+                        m = _re.search(r"-\s*\*\*Name\*\*:\s*([^\n\(]+)", lore_summary, _re.IGNORECASE)
+                        if m:
+                            user_overview_name = m.group(1).strip().rstrip(",.")
+                    # 2. Fallback to legacy user_overview if still enabled
+                    if not user_overview_name:
+                        uo = raw.get("user_overview")
+                        if isinstance(uo, dict):
+                            identity = uo.get("identity", {})
+                            if isinstance(identity, dict):
+                                user_overview_name = identity.get("name") or identity.get("preferred_name") or identity.get("first_name")
+                            if not user_overview_name:
+                                bio = uo.get("biography", {})
+                                if isinstance(bio, dict):
+                                    user_overview_name = bio.get("name")
             def _looks_like_real_name(n: str) -> bool:
                 """Heuristic: real names contain spaces or mixed case, usernames don't."""
                 if not n or len(n) < 2:
@@ -2906,7 +2958,40 @@ async def agent_job_handler(ctx: JobContext):
             # ========================================================================
             # CREATE AGENT (WizardGuideAgent for wizard mode, SidekickAgent otherwise)
             # ========================================================================
-            if is_wizard_mode:
+            is_lore_interview = is_wizard_mode and metadata.get("wizard_config", {}).get("wizard_type") == "lore_interview"
+
+            if is_lore_interview:
+                # LORE INTERVIEW MODE: Use LoreInterviewAgent
+                if LoreInterviewAgent is None:
+                    logger.error("❌ Lore interview requested but LoreInterviewAgent is not available (import failed)")
+                    raise ValueError("Lore interview is not available in this version of the agent")
+                wizard_config = metadata.get("wizard_config", {})
+                # Lore target: where this user's Lore actually lives (home client's Supabase)
+                lore_cfg = wizard_config.get("lore", {})
+                agent = LoreInterviewAgent(
+                    session_id=wizard_config.get("session_id"),
+                    current_step=wizard_config.get("current_step", 1),
+                    form_data=wizard_config.get("form_data", {}),
+                    supabase_url=metadata.get("platform_supabase_url") or metadata.get("supabase_url"),
+                    supabase_service_key=metadata.get("platform_supabase_service_role_key") or metadata.get("supabase_service_role_key"),
+                    target_categories=wizard_config.get("target_categories", []),
+                    lore_user_id=lore_cfg.get("user_id") or metadata.get("user_id", ""),
+                    lore_target_url=lore_cfg.get("target_url"),
+                    lore_target_key=lore_cfg.get("target_key"),
+                )
+                logger.info(
+                    f"✅ LoreInterviewAgent created "
+                    f"(user={(lore_cfg.get('user_id') or '')[:8]}, "
+                    f"target={'dedicated' if lore_cfg.get('target_url') else 'platform'})"
+                )
+                agent._room = ctx.room
+                agent._agent_id = None
+                agent._user_id = metadata.get("user_id") or ctx.user_id
+                agent._conversation_id = metadata.get("conversation_id")
+                agent._client_conversation_id = metadata.get("client_conversation_id") or agent._conversation_id
+                agent._supabase_client = client_supabase if 'client_supabase' in locals() else None
+
+            elif is_wizard_mode:
                 # WIZARD MODE: Use WizardGuideAgent with TaskGroup-based flow
                 # Each wizard step is a separate AgentTask with focused tools
                 if WizardGuideAgent is None:
@@ -3037,17 +3122,27 @@ async def agent_job_handler(ctx: JobContext):
                         f"supabase_service_key={bool(metadata.get('supabase_service_key'))}"
                     )
 
+            # Lore target from room metadata — tells the update_user_overview
+            # (now routed to Lore) tool which Supabase + user_id to write to.
+            _lore_meta = metadata.get("lore", {}) or {}
+
             base_tool_context: Dict[str, Any] = {
                 "conversation_id": agent._conversation_id,
                 "client_conversation_id": metadata.get("client_conversation_id") or agent._conversation_id,
                 "client_id": metadata.get("client_id"),  # Required by Trello, HelpScout, and other OAuth-based tools
-                "user_id": agent._user_id,
+                "user_id": agent._user_id,  # Session user (may be shadow) — used by client-scoped tools
                 "agent_id": metadata.get("agent_id"),  # UUID for update_user_overview tool
                 "agent_slug": metadata.get("agent_slug") or metadata.get("agent_id"),
                 "client_id": metadata.get("client_id") or client_id,
                 "session_id": metadata.get("session_id")
                 or metadata.get("voice_session_id")
                 or metadata.get("room_session_id"),
+                # Lore routing — real platform user_id + target Supabase.
+                # The update_user_overview tool uses these to write to the
+                # user's canonical Lore, not a per-client shadow copy.
+                "lore_user_id": _lore_meta.get("user_id") or agent._user_id,
+                "lore_target_url": _lore_meta.get("target_url"),
+                "lore_target_key": _lore_meta.get("target_key"),
             }
             if is_text_mode:
                 user_msg = (metadata.get("user_message") or "").strip()
@@ -4653,6 +4748,95 @@ async def agent_job_handler(ctx: JobContext):
                             logger.info(f"📈 usage: {usage.provider}/{usage.model}: {usage}")
                     except Exception:
                         logger.info("📈 session_usage_updated (unserializable)")
+
+                # Roll the cumulative session.usage into platform agent_usage at
+                # shutdown. Per LiveKit docs (deploy/observability/data), reading
+                # session.usage in a shutdown callback is the recommended pattern
+                # — session_usage_updated is for live dashboards, not durable
+                # billing writes. Capturing once at the end avoids double-counting
+                # if the live event fires multiple times.
+                _captured_client_id = client_id
+                _captured_agent_id = agent_id
+
+                async def _record_session_usage_on_shutdown():
+                    try:
+                        if not (_captured_client_id and _captured_agent_id and PLATFORM_SUPABASE):
+                            return
+                        # agent_id may be a slug for legacy/test agents — only
+                        # write if it's a real UUID matching the agent_usage FK shape.
+                        import uuid as _uuid
+                        try:
+                            _uuid.UUID(str(_captured_agent_id))
+                        except (ValueError, TypeError):
+                            logger.info(
+                                "Skipping usage rollup: agent_id=%s is not a UUID",
+                                _captured_agent_id,
+                            )
+                            return
+
+                        usage_summary = getattr(session, "usage", None)
+                        if usage_summary is None:
+                            logger.info("No session.usage available at shutdown — nothing to record")
+                            return
+
+                        voice_seconds = 0
+                        llm_in = 0
+                        llm_out = 0
+                        llm_cached_in = 0
+                        tts_chars = 0
+                        tts_audio = 0.0
+                        stt_audio = 0.0
+
+                        for u in getattr(usage_summary, "model_usage", []) or []:
+                            cls = type(u).__name__
+                            if cls == "LLMModelUsage":
+                                llm_in += int(getattr(u, "input_tokens", 0) or 0)
+                                llm_out += int(getattr(u, "output_tokens", 0) or 0)
+                                llm_cached_in += int(getattr(u, "input_cached_tokens", 0) or 0)
+                                # Realtime models report session connection time here.
+                                sd = getattr(u, "session_duration", 0) or 0
+                                if sd:
+                                    voice_seconds = max(voice_seconds, int(sd))
+                            elif cls == "TTSModelUsage":
+                                tts_chars += int(getattr(u, "characters_count", 0) or 0)
+                                tts_audio += float(getattr(u, "audio_duration", 0) or 0)
+                            elif cls == "STTModelUsage":
+                                stt_audio += float(getattr(u, "audio_duration", 0) or 0)
+
+                        # STT-LLM-TTS pipeline: LLM has no session_duration, so
+                        # use the duration of audio the STT actually processed
+                        # as the user-facing "voice seconds" figure. Falls back
+                        # to TTS audio if STT is also zero (rare).
+                        if voice_seconds == 0:
+                            voice_seconds = int(stt_audio or tts_audio or 0)
+
+                        if not any([voice_seconds, llm_in, llm_out, tts_chars, tts_audio, stt_audio]):
+                            logger.info("Session ended with zero usage — skipping rollup")
+                            return
+
+                        PLATFORM_SUPABASE.rpc(
+                            "record_agent_session_usage",
+                            {
+                                "p_client_id": _captured_client_id,
+                                "p_agent_id": _captured_agent_id,
+                                "p_voice_seconds": voice_seconds,
+                                "p_llm_input_tokens": llm_in,
+                                "p_llm_output_tokens": llm_out,
+                                "p_llm_cached_input_tokens": llm_cached_in,
+                                "p_tts_characters": tts_chars,
+                                "p_tts_audio_seconds": tts_audio,
+                                "p_stt_audio_seconds": stt_audio,
+                            },
+                        ).execute()
+                        logger.info(
+                            "📊 Recorded session usage: voice=%ds llm_in=%d llm_out=%d "
+                            "tts_chars=%d tts_audio=%.1fs stt_audio=%.1fs",
+                            voice_seconds, llm_in, llm_out, tts_chars, tts_audio, stt_audio,
+                        )
+                    except Exception as exc:
+                        logger.error("Failed to record session usage at shutdown: %s", exc, exc_info=True)
+
+                ctx.add_shutdown_callback(_record_session_usage_on_shutdown)
 
                 @session.on("function_tools_executed")
                 def _on_tools_executed(ev):
