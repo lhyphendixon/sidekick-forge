@@ -75,6 +75,17 @@ async def about(request: Request):
         }
     )
 
+@router.get("/privacy", response_class=HTMLResponse)
+async def privacy(request: Request):
+    """Privacy policy page"""
+    return templates.TemplateResponse(
+        "marketing/privacy.html",
+        {
+            "request": request,
+            "current_year": datetime.now().year
+        }
+    )
+
 @router.get("/contact", response_class=HTMLResponse)
 async def contact(request: Request):
     """Contact page with form"""
