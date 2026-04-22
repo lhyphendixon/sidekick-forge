@@ -105,6 +105,21 @@ best estimate and say so clearly in the summary."""
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+def _try_json_repair(candidate: str) -> Dict[str, Any] | None:
+    """Best-effort repair of lightly malformed LLM JSON (unescaped quotes in
+    string values, trailing commas, smart quotes). Returns None if the
+    json-repair package isn't available or can't produce a dict."""
+    try:
+        from json_repair import repair_json  # lazy: dep may not be installed yet
+    except ImportError:
+        return None
+    try:
+        repaired = repair_json(candidate, return_objects=True)
+    except Exception:
+        return None
+    return repaired if isinstance(repaired, dict) else None
+
+
 def _parse_llm_json(text: str) -> Dict[str, Any]:
     """Salvage a JSON object from an LLM response that may include fences or
     preamble. Raises PersonalityAnalysisError on unrecoverable output."""
@@ -116,14 +131,25 @@ def _parse_llm_json(text: str) -> Dict[str, Any]:
         stripped = re.sub(r"\n?```$", "", stripped)
     try:
         return json.loads(stripped)
-    except json.JSONDecodeError:
-        match = _JSON_BLOCK_RE.search(stripped)
-        if not match:
-            raise PersonalityAnalysisError(f"LLM output was not valid JSON: {stripped[:200]}")
+    except json.JSONDecodeError as first_exc:
+        last_exc: json.JSONDecodeError = first_exc
+
+    match = _JSON_BLOCK_RE.search(stripped)
+    block = match.group(0) if match else stripped
+    if match:
         try:
-            return json.loads(match.group(0))
+            return json.loads(block)
         except json.JSONDecodeError as exc:
-            raise PersonalityAnalysisError(f"LLM JSON parse failed: {exc}")
+            last_exc = exc
+
+    repaired = _try_json_repair(block)
+    if repaired is not None:
+        logger.warning("personality_service: recovered malformed LLM JSON via json-repair")
+        return repaired
+
+    if not match:
+        raise PersonalityAnalysisError(f"LLM output was not valid JSON: {stripped[:200]}")
+    raise PersonalityAnalysisError(f"LLM JSON parse failed: {last_exc}")
 
 
 # ---------------------------------------------------------------------------

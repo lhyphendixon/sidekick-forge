@@ -58,6 +58,11 @@ from config_validator import ConfigValidator, ConfigurationError
 from context import AgentContextManager
 from sidekick_agent import SidekickAgent, _strip_tts_emotion_tags
 from tool_registry import ToolRegistry
+try:
+    import fishaudio_timing  # opt-in TTS chunk timing via TTS_CHUNK_TIMING_LOG=1
+    fishaudio_timing.install()
+except ImportError:
+    pass
 from supabase import create_client
 try:
     from wizard_tasks import WizardGuideAgent
